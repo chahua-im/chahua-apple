@@ -2,8 +2,6 @@
 //  ContentView.swift
 //  chahua-ios
 //
-//  Created by Codetector on 8/23/26.
-//
 
 import SwiftUI
 

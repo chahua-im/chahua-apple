@@ -11,9 +11,9 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		C0985FD0303BCC22003200C0 /* chahua-ios */ = {
+		C0985FD0303BCC22003200C0 /* App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "chahua-ios";
+			path = App;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		C0985FC5303BCC22003200C0 = {
 			isa = PBXGroup;
 			children = (
-				C0985FD0303BCC22003200C0 /* chahua-ios */,
+				C0985FD0303BCC22003200C0 /* App */,
 				C0985FCF303BCC22003200C0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -65,6 +65,7 @@
 			);
 			name = "chahua-ios";
 			packageProductDependencies = (
+				C0AA0001303BCC2200320001 /* ChahuaAPI */,
 			);
 			productName = "chahua-ios";
 			productReference = C0985FCE303BCC22003200C0 /* chahua-ios.app */;
@@ -94,6 +95,9 @@
 			);
 			mainGroup = C0985FC5303BCC22003200C0;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "ChahuaAPI" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C0985FCF303BCC22003200C0 /* Products */;
 			projectDirPath = "";
@@ -247,7 +251,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 100;
 				DEVELOPMENT_TEAM = 9422PL3GFR;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -265,11 +269,11 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 1.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -293,7 +297,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 100;
 				DEVELOPMENT_TEAM = 9422PL3GFR;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -311,11 +315,11 @@
 				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
-				MARKETING_VERSION = 1.0;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -355,6 +359,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "ChahuaAPI" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ChahuaAPI;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C0AA0001303BCC2200320001 /* ChahuaAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ChahuaAPI;
+			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "ChahuaAPI" */;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = C0985FC6303BCC22003200C0 /* Project object */;
 }
