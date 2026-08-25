@@ -1,0 +1,47 @@
+default_platform(:ios)
+
+platform :ios do
+  private_lane :sync_match do |options|
+    match(
+      type: options[:type],
+      git_url: options[:git_url],
+      app_identifier: "app.chahua.chat",
+      team_id: "9422PL3GFR",
+      readonly: options.fetch(:readonly, true)
+    )
+  end
+
+  desc("Fetch development signing assets without modifying Apple or the Match repository")
+  lane :sync_development_signing do
+    sync_match(
+      type: "development",
+      git_url: "git@github.com:Codetector1374/fastlane-development.git"
+    )
+  end
+
+  desc("Fetch App Store distribution signing assets without modifying Apple or the Match repository")
+  lane :sync_distribution_signing do
+    sync_match(
+      type: "appstore",
+      git_url: "git@github.com:Codetector1374/fastlane-distribution.git"
+    )
+  end
+
+  desc("Create or repair development signing assets; intentionally mutable")
+  lane :bootstrap_development_signing do
+    sync_match(
+      type: "development",
+      git_url: "git@github.com:Codetector1374/fastlane-development.git",
+      readonly: false
+    )
+  end
+
+  desc("Create or repair App Store distribution signing assets; intentionally mutable")
+  lane :bootstrap_distribution_signing do
+    sync_match(
+      type: "appstore",
+      git_url: "git@github.com:Codetector1374/fastlane-distribution.git",
+      readonly: false
+    )
+  end
+end
