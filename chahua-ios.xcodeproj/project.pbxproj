@@ -6,8 +6,17 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0AA0001303BCC2200320001 /* ChahuaAPI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		C0985FCE303BCC22003200C0 /* chahua-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "chahua-ios.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C098607430428240003200C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C098607530428240003200C0 /* Info-Local.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-Local.plist"; sourceTree = "<group>"; };
+		C0BB0001303BCC2200320001 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		C0BB0002303BCC2200320001 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+		C0BB0003303BCC2200320001 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -23,6 +32,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -33,6 +43,7 @@
 			isa = PBXGroup;
 			children = (
 				C0985FD0303BCC22003200C0 /* App */,
+				C0BB0006303BCC2200320001 /* Config */,
 				C0985FCF303BCC22003200C0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +54,18 @@
 				C0985FCE303BCC22003200C0 /* chahua-ios.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C0BB0006303BCC2200320001 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				C0BB0001303BCC2200320001 /* Debug.xcconfig */,
+				C0BB0002303BCC2200320001 /* Release.xcconfig */,
+				C0BB0003303BCC2200320001 /* Local.xcconfig */,
+				C098607430428240003200C0 /* Info.plist */,
+				C098607530428240003200C0 /* Info-Local.plist */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -61,7 +84,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				C0985FD0303BCC22003200C0 /* chahua-ios */,
+				C0985FD0303BCC22003200C0 /* App */,
 			);
 			name = "chahua-ios";
 			packageProductDependencies = (
@@ -96,7 +119,7 @@
 			mainGroup = C0985FC5303BCC22003200C0;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "ChahuaAPI" */,
+				C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C0985FCF303BCC22003200C0 /* Products */;
@@ -247,6 +270,7 @@
 		};
 		C0985FDA303BCC24003200C0 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0BB0001303BCC2200320001 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -257,18 +281,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
-				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
@@ -293,6 +308,7 @@
 		};
 		C0985FDB303BCC24003200C0 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0BB0002303BCC2200320001 /* Release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -303,18 +319,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]" = YES;
-				"INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]" = YES;
-				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphoneos*]" = UIStatusBarStyleDefault;
-				"INFOPLIST_KEY_UIStatusBarStyle[sdk=iphonesimulator*]" = UIStatusBarStyleDefault;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
@@ -337,6 +344,61 @@
 			};
 			name = Release;
 		};
+		C0BB0004303BCC2200320001 /* Local */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 9422PL3GFR;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Local;
+		};
+		C0BB0005303BCC2200320001 /* Local */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0BB0003303BCC2200320001 /* Local.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 100;
+				DEVELOPMENT_TEAM = 9422PL3GFR;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/Info-Local.plist";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				XROS_DEPLOYMENT_TARGET = 26.5;
+			};
+			name = Local;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -344,6 +406,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C0985FD7303BCC24003200C0 /* Debug */,
+				C0BB0004303BCC2200320001 /* Local */,
 				C0985FD8303BCC24003200C0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -354,6 +417,7 @@
 			buildConfigurations = (
 				C0985FDA303BCC24003200C0 /* Debug */,
 				C0985FDB303BCC24003200C0 /* Release */,
+				C0BB0005303BCC2200320001 /* Local */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -361,7 +425,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "ChahuaAPI" */ = {
+		C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ChahuaAPI;
 		};
@@ -370,8 +434,8 @@
 /* Begin XCSwiftPackageProductDependency section */
 		C0AA0001303BCC2200320001 /* ChahuaAPI */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */;
 			productName = ChahuaAPI;
-			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "ChahuaAPI" */;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

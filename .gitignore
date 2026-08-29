@@ -70,6 +70,7 @@ fastlane/test_output
 !.env.example
 *.pem
 *.p12
+Config/Local.xcconfig
 *.mobileprovision
 
 # Misc
