@@ -1,26 +1,30 @@
-//
-//  AppCompositionRoot.swift
-//  chahua-ios
-//
-
-import Foundation
 import ChahuaAPI
 import SwiftUI
 
 struct AppCompositionRoot: View {
-    private let apiClient: any ChahuaAPIClient
+    @StateObject private var sessionModel: AuthSessionModel
 
     init(apiConfiguration: ChahuaConfiguration) {
-        apiClient = ChahuaClient(configuration: apiConfiguration)
+        let tokenStorage = KeychainTokenStorage()
+        let apiClient = ChahuaClient(configuration: apiConfiguration)
+        _sessionModel = StateObject(wrappedValue: AuthSessionModel(
+            apiClient: apiClient,
+            credentialLoginClient: PrototypeCredentialLoginClient(),
+            tokenStorage: tokenStorage
+        ))
     }
 
-    var body: some View {
-        ContentView(apiClient: apiClient)
+    init(
+        apiClient: any ChahuaAPIClient,
+        credentialLoginClient: any CredentialLoginProviding,
+        tokenStorage: any SessionTokenStorage
+    ) {
+        _sessionModel = StateObject(wrappedValue: AuthSessionModel(
+            apiClient: apiClient,
+            credentialLoginClient: credentialLoginClient,
+            tokenStorage: tokenStorage
+        ))
     }
-}
 
-#Preview {
-    AppCompositionRoot(
-        apiConfiguration: ChahuaConfiguration(baseURL: URL(string: "https://example.com")!)
-    )
+    var body: some View { ContentView(model: sessionModel) }
 }

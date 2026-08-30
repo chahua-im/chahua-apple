@@ -8,13 +8,16 @@ struct HTTPRequestSpec: Sendable {
     var contentType: String?
     var requiresAuth = true
     var allowsTokenRefresh = true
+    var headers: [String: String] = [:]
 
     static func json<Body: Encodable>(
         _ method: HTTPMethod,
         _ path: String,
         query: [URLQueryItem] = [],
         body: Body,
-        requiresAuth: Bool = true
+        requiresAuth: Bool = true,
+        allowsTokenRefresh: Bool = true,
+        headers: [String: String] = [:]
     ) throws -> HTTPRequestSpec {
         do {
             return HTTPRequestSpec(
@@ -23,7 +26,9 @@ struct HTTPRequestSpec: Sendable {
                 query: query,
                 body: try JSONCoding.encoder.encode(body),
                 contentType: "application/json",
-                requiresAuth: requiresAuth
+                requiresAuth: requiresAuth,
+                allowsTokenRefresh: allowsTokenRefresh,
+                headers: headers
             )
         } catch {
             throw APIError.encoding(description: String(describing: error))

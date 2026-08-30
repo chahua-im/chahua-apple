@@ -3,6 +3,9 @@ import Foundation
 public enum APIError: Error, Sendable {
     case invalidBaseURL(URL)
     case unauthorized
+    case invalidToken
+    case unavailable
+    case invalidResponse(statusCode: Int)
     case http(status: Int, body: Data)
     case decoding(statusCode: Int, description: String)
     case encoding(description: String)
