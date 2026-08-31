@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0AA0001303BCC2200320001 /* ChahuaAPI */; };
+		C098620630463971003200C0 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = C098620530463971003200C0 /* InfoPlist.xcstrings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -22,9 +23,10 @@
 
 /* Begin PBXFileReference section */
 		C0985FCE303BCC22003200C0 /* chahua-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "chahua-ios.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		C098607430428240003200C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C098607530428240003200C0 /* Info-Local.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-Local.plist"; sourceTree = "<group>"; };
 		C09860FE3044841E003200C0 /* chahua-iosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "chahua-iosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C098620430463901003200C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		C098620530463971003200C0 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 		C0BB0001303BCC2200320001 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		C0BB0002303BCC2200320001 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		C0BB0003303BCC2200320001 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
@@ -84,10 +86,11 @@
 		C0BB0006303BCC2200320001 /* Config */ = {
 			isa = PBXGroup;
 			children = (
+				C098620530463971003200C0 /* InfoPlist.xcstrings */,
+				C098620430463901003200C0 /* Info.plist */,
 				C0BB0001303BCC2200320001 /* Debug.xcconfig */,
 				C0BB0002303BCC2200320001 /* Release.xcconfig */,
 				C0BB0003303BCC2200320001 /* Local.xcconfig */,
-				C098607430428240003200C0 /* Info.plist */,
 				C098607530428240003200C0 /* Info-Local.plist */,
 			);
 			path = Config;
@@ -191,6 +194,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C098620630463971003200C0 /* InfoPlist.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -287,6 +291,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -342,6 +347,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
 			name = Release;
 		};
@@ -361,6 +367,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Chahua;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
@@ -400,6 +407,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Chahua;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
@@ -511,6 +519,7 @@
 				GCC_OPTIMIZATION_LEVEL = 0;
 				ONLY_ACTIVE_ARCH = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Local;
@@ -532,6 +541,7 @@
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Config/Info-Local.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Chahua;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 16.6;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
