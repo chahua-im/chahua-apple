@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ContentView: View {
+struct AppRootView: View {
     @ObservedObject var model: AuthSessionModel
     @ObservedObject var chatStore: ChatStore
     var body: some View {
@@ -11,8 +11,8 @@ struct ContentView: View {
             case .signedOut:
                 AuthLoginView(model: model)
             case .authenticated(let me):
-                ChatListView(
-                    store: chatStore,
+                AuthenticatedShell(
+                    chatStore: chatStore,
                     me: me,
                     isSigningOut: model.isSubmitting,
                     onSignOut: { Task { await model.logout() } }

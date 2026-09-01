@@ -37,5 +37,5 @@ struct AppCompositionRoot: View {
         ))
     }
 
-    var body: some View { ContentView(model: sessionModel, chatStore: chatStore) }
+    var body: some View { AppRootView(model: sessionModel, chatStore: chatStore) }
 }

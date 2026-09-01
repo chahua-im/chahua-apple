@@ -3,25 +3,10 @@ import SwiftUI
 
 struct ChatListView: View {
     @ObservedObject var store: ChatStore
-    let me: MeResponse
-    let isSigningOut: Bool
-    let onSignOut: () -> Void
 
     var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("Chats")
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Menu("Account") {
-                            Text(me.username)
-                            Button("Sign out", role: .destructive, action: onSignOut)
-                                .disabled(isSigningOut)
-                        }
-                    }
-                }
-        }
-        .task { await store.loadActiveChats() }
+        content
+            .task { await store.loadActiveChats() }
     }
 
     @ViewBuilder private var content: some View {
