@@ -1,11 +1,20 @@
 import Foundation
 
+/// Actor-backed production implementation of `ChahuaAPIClient`.
+///
+/// A client owns one bearer-token session. Authenticate it once, then share that
+/// instance across callers. Authenticated requests refresh a rejected token once;
+/// callers receiving `APIError.invalidToken` must clear their persisted session.
 public actor ChahuaClient: ChahuaAPIClient {
     private let configuration: ChahuaConfiguration
     private let session: URLSession
     private var token: String?
     private var refreshTask: Task<String, any Error>?
 
+    /// Creates a client with an optional already-validated token.
+    ///
+    /// Supply `session` only for deterministic transport tests. The default
+    /// session disables URL caching and uses `configuration.requestTimeout`.
     public init(
         configuration: ChahuaConfiguration,
         token: String? = nil,

@@ -1,10 +1,20 @@
 import Foundation
 
+/// Query fields accepted by `GET /chats/{chatID}/messages`.
+///
+/// Cursors are opaque server strings. A request may select one position policy
+/// (`before`, `around`, or `after`); callers should preserve server ordering and
+/// use `olderCursor`/`newerCursor` from the response for subsequent paging.
 public struct ListMessagesQuery: Sendable, Equatable {
+    /// Return messages older than this cursor.
     public var before: String?
+    /// Return a page centered on this message cursor.
     public var around: String?
+    /// Return messages newer than this cursor.
     public var after: String?
+    /// Maximum messages in the returned page.
     public var max: Int64?
+    /// Restrict the page to the given thread root ID.
     public var threadID: String?
 
     public init(
@@ -33,8 +43,9 @@ public struct ListMessagesQuery: Sendable, Equatable {
 }
 
 public extension ChahuaClient {
+    /// Fetches a message page with authenticated `GET /chats/{chatID}/messages`.
     func listMessages(
-        chatID: Int64,
+        chatID: String,
         query: ListMessagesQuery = .init()
     ) async throws -> ListMessagesResponse {
         try await send(
@@ -47,8 +58,9 @@ public extension ChahuaClient {
         )
     }
 
+    /// Sends a message with authenticated JSON `POST /chats/{chatID}/messages`.
     func sendMessage(
-        chatID: Int64,
+        chatID: String,
         body: CreateMessageBody
     ) async throws -> MessageResponse {
         try await send(

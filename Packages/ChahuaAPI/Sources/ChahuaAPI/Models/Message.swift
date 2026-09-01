@@ -1,8 +1,16 @@
 import Foundation
 
+/// Full message record returned by chat message endpoints.
+///
+/// Cache this value by its opaque `id` under its `chatId`. A list or reply
+/// preview is represented by `MessagePreview` and must not be treated as a
+/// complete message record.
 public struct MessageResponse: Codable, Hashable, Sendable {
+    /// Stable server message identifier.
     public let id: String
+    /// Opaque identifier of the owning chat.
     public let chatId: String
+    /// Caller-provided idempotency identifier from the send request.
     public let clientGeneratedId: String
     public let messageType: MessageType
     public let sender: User
@@ -12,6 +20,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     public let hasAttachments: Bool
     public let attachments: [AttachmentResponse]
     public let reactions: [ReactionSummary]
+    /// Missing wire values decode as an empty array.
     public let mentions: [MentionInfo]
     public let message: String?
     public let replyRootId: String?
@@ -41,6 +50,10 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     }
 }
 
+/// Reduced message projection embedded in chat-list and reply-context responses.
+///
+/// It carries display context only; fetch `MessageResponse` values for a
+/// timeline or cache.
 public struct MessagePreview: Codable, Hashable, Sendable {
     public let id: String
     public let clientGeneratedId: String
@@ -109,15 +122,23 @@ public struct ThreadInfo: Codable, Hashable, Sendable {
     public let replyCount: Int64
 }
 
+/// One message page returned by `GET /chats/{chatID}/messages`.
+///
+/// Use `olderCursor` and `newerCursor` for new paging code. `nextCursor` and
+/// `prevCursor` remain for backend compatibility only.
 public struct ListMessagesResponse: Codable, Hashable, Sendable {
     public let messages: [MessageResponse]
-    /// Use `olderCursor` and `newerCursor`; these fields are retained for backend compatibility.
     public let olderCursor: String?
     public let newerCursor: String?
     public let nextCursor: String?
     public let prevCursor: String?
 }
 
+/// JSON body accepted by `POST /chats/{chatID}/messages`.
+///
+/// `messageType` and `clientGeneratedId` are always encoded. Empty
+/// `attachmentIds` are omitted; all other optional fields are emitted only when
+/// non-`nil`.
 public struct CreateMessageBody: Codable, Hashable, Sendable {
     public var messageType: MessageType
     public var clientGeneratedId: String
