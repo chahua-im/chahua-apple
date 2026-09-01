@@ -22,9 +22,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		C0985FCE303BCC22003200C0 /* chahua-ios.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "chahua-ios.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0985FCE303BCC22003200C0 /* chahua-apple.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "chahua-apple.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C098607530428240003200C0 /* Info-Local.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-Local.plist"; sourceTree = "<group>"; };
-		C09860FE3044841E003200C0 /* chahua-iosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "chahua-iosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C09860FE3044841E003200C0 /* chahua-appleTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "chahua-appleTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C098620430463901003200C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C098620530463971003200C0 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
 		C0BB0001303BCC2200320001 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
@@ -77,8 +77,8 @@
 		C0985FCF303BCC22003200C0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C0985FCE303BCC22003200C0 /* chahua-ios.app */,
-				C09860FE3044841E003200C0 /* chahua-iosTests.xctest */,
+				C0985FCE303BCC22003200C0 /* chahua-apple.app */,
+				C09860FE3044841E003200C0 /* chahua-appleTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -99,9 +99,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C0985FCD303BCC22003200C0 /* chahua-ios */ = {
+		C0985FCD303BCC22003200C0 /* chahua-apple */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C0985FD9303BCC24003200C0 /* Build configuration list for PBXNativeTarget "chahua-ios" */;
+			buildConfigurationList = C0985FD9303BCC24003200C0 /* Build configuration list for PBXNativeTarget "chahua-apple" */;
 			buildPhases = (
 				C0985FCA303BCC22003200C0 /* Sources */,
 				C0985FCB303BCC22003200C0 /* Frameworks */,
@@ -114,17 +114,17 @@
 			fileSystemSynchronizedGroups = (
 				C0985FD0303BCC22003200C0 /* App */,
 			);
-			name = "chahua-ios";
+			name = "chahua-apple";
 			packageProductDependencies = (
 				C0AA0001303BCC2200320001 /* ChahuaAPI */,
 			);
 			productName = "chahua-ios";
-			productReference = C0985FCE303BCC22003200C0 /* chahua-ios.app */;
+			productReference = C0985FCE303BCC22003200C0 /* chahua-apple.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C09860FD3044841E003200C0 /* chahua-iosTests */ = {
+		C09860FD3044841E003200C0 /* chahua-appleTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C09861073044841E003200C0 /* Build configuration list for PBXNativeTarget "chahua-iosTests" */;
+			buildConfigurationList = C09861073044841E003200C0 /* Build configuration list for PBXNativeTarget "chahua-appleTests" */;
 			buildPhases = (
 				C09860FA3044841E003200C0 /* Sources */,
 				C09860FB3044841E003200C0 /* Frameworks */,
@@ -138,11 +138,11 @@
 			fileSystemSynchronizedGroups = (
 				C09860FF3044841E003200C0 /* Tests */,
 			);
-			name = "chahua-iosTests";
+			name = "chahua-appleTests";
 			packageProductDependencies = (
 			);
 			productName = "chahua-iosTests";
-			productReference = C09860FE3044841E003200C0 /* chahua-iosTests.xctest */;
+			productReference = C09860FE3044841E003200C0 /* chahua-appleTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -164,7 +164,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C0985FC9303BCC22003200C0 /* Build configuration list for PBXProject "chahua-ios" */;
+			buildConfigurationList = C0985FC9303BCC22003200C0 /* Build configuration list for PBXProject "chahua-apple" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -183,8 +183,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C0985FCD303BCC22003200C0 /* chahua-ios */,
-				C09860FD3044841E003200C0 /* chahua-iosTests */,
+				C0985FCD303BCC22003200C0 /* chahua-apple */,
+				C09860FD3044841E003200C0 /* chahua-appleTests */,
 			);
 		};
 /* End PBXProject section */
@@ -227,7 +227,7 @@
 /* Begin PBXTargetDependency section */
 		C09861033044841E003200C0 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C0985FCD303BCC22003200C0 /* chahua-ios */;
+			target = C0985FCD303BCC22003200C0 /* chahua-apple */;
 			targetProxy = C09861023044841E003200C0 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -452,7 +452,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-ios.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-ios";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-apple.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-apple";
 				XROS_DEPLOYMENT_TARGET = 26.5;
 			};
 			name = Debug;
@@ -478,7 +478,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-ios.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-ios";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-apple.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-apple";
 				XROS_DEPLOYMENT_TARGET = 26.5;
 			};
 			name = Local;
@@ -504,7 +504,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-ios.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-ios";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-apple.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-apple";
 				XROS_DEPLOYMENT_TARGET = 26.5;
 			};
 			name = Release;
@@ -570,7 +570,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		C0985FC9303BCC22003200C0 /* Build configuration list for PBXProject "chahua-ios" */ = {
+		C0985FC9303BCC22003200C0 /* Build configuration list for PBXProject "chahua-apple" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C0985FD7303BCC24003200C0 /* Debug */,
@@ -580,7 +580,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C0985FD9303BCC24003200C0 /* Build configuration list for PBXNativeTarget "chahua-ios" */ = {
+		C0985FD9303BCC24003200C0 /* Build configuration list for PBXNativeTarget "chahua-apple" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C0985FDA303BCC24003200C0 /* Debug */,
@@ -590,7 +590,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C09861073044841E003200C0 /* Build configuration list for PBXNativeTarget "chahua-iosTests" */ = {
+		C09861073044841E003200C0 /* Build configuration list for PBXNativeTarget "chahua-appleTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C09861043044841E003200C0 /* Debug */,
