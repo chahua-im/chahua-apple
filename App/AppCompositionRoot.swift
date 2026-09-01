@@ -3,14 +3,20 @@ import SwiftUI
 
 struct AppCompositionRoot: View {
     @StateObject private var sessionModel: AuthSessionModel
+    @StateObject private var chatStore: ChatStore
 
     init(apiConfiguration: ChahuaConfiguration) {
         let tokenStorage = KeychainTokenStorage()
         let apiClient = ChahuaClient(configuration: apiConfiguration)
-        _sessionModel = StateObject(wrappedValue: AuthSessionModel(
+        let sessionModel = AuthSessionModel(
             apiClient: apiClient,
             credentialLoginClient: PrototypeCredentialLoginClient(),
             tokenStorage: tokenStorage
+        )
+        _sessionModel = StateObject(wrappedValue: sessionModel)
+        _chatStore = StateObject(wrappedValue: ChatStore(
+            apiClient: apiClient,
+            onInvalidToken: { [weak sessionModel] in await sessionModel?.sessionDidExpire() }
         ))
     }
 
@@ -19,12 +25,17 @@ struct AppCompositionRoot: View {
         credentialLoginClient: any CredentialLoginProviding,
         tokenStorage: any SessionTokenStorage
     ) {
-        _sessionModel = StateObject(wrappedValue: AuthSessionModel(
+        let sessionModel = AuthSessionModel(
             apiClient: apiClient,
             credentialLoginClient: credentialLoginClient,
             tokenStorage: tokenStorage
+        )
+        _sessionModel = StateObject(wrappedValue: sessionModel)
+        _chatStore = StateObject(wrappedValue: ChatStore(
+            apiClient: apiClient,
+            onInvalidToken: { [weak sessionModel] in await sessionModel?.sessionDidExpire() }
         ))
     }
 
-    var body: some View { ContentView(model: sessionModel) }
+    var body: some View { ContentView(model: sessionModel, chatStore: chatStore) }
 }

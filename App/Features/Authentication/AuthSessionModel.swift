@@ -113,6 +113,14 @@ final class AuthSessionModel: ObservableObject {
         }
     }
 
+    func sessionDidExpire() async {
+        guard case .authenticated = state else { return }
+        logger.notice("Authenticated session expired")
+        try? await tokenStorage.deleteToken()
+        validationMessage = nil
+        state = .signedOut(.invalidOrRevoked)
+    }
+
     private func logFailure(operation: String, error: Error) {
         switch error {
         case let APIError.invalidResponse(statusCode):

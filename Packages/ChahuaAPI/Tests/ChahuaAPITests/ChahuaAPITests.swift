@@ -36,6 +36,87 @@ final class ChahuaAPITests: XCTestCase {
         catch APIError.invalidToken { }
     }
 
+    func testListChatsRequestsActiveChatsAndDecodesResponse() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (200, #"""
+            {
+              "chats": [
+                {
+                  "id": "10",
+                  "name": "Engineering",
+                  "avatar": "https://cdn.example/group.png",
+                  "lastMessageAt": "2026-08-31T12:34:56Z",
+                  "unreadCount": 3,
+                  "lastReadMessageId": "99",
+                  "lastMessage": {
+                    "id": "100",
+                    "clientGeneratedId": "client-100",
+                    "createdAt": "2026-08-31T12:34:56Z",
+                    "sender": {"uid": 1, "gender": 0, "name": "Ada", "avatarUrl": null, "userGroup": null},
+                    "messageType": "text",
+                    "attachments": [],
+                    "mentions": [],
+                    "isDeleted": false,
+                    "message": "Ship it",
+                    "sticker": null
+                  },
+                  "mutedUntil": null,
+                  "archived": false,
+                  "kind": "group",
+                  "peer": null
+                },
+                {
+                  "id": "11",
+                  "name": null,
+                  "avatar": null,
+                  "lastMessageAt": null,
+                  "unreadCount": 0,
+                  "lastReadMessageId": null,
+                  "lastMessage": null,
+                  "mutedUntil": null,
+                  "archived": false,
+                  "kind": "dm",
+                  "peer": {
+                    "uid": 2,
+                    "username": "Grace",
+                    "avatarUrl": "https://cdn.example/grace.png",
+                    "gender": 1,
+                    "userGroup": {"groupId": 7, "name": "Staff", "chatGroupColor": "#111111", "chatGroupColorDark": "#eeeeee"}
+                  }
+                }
+              ],
+              "nextCursor": "11"
+            }
+            """#)
+        }
+        let client = ChahuaClient(
+            configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
+            token: "candidate",
+            session: testSession()
+        )
+
+        let response = try await client.listChats(query: ListChatsQuery(archived: false))
+
+        XCTAssertEqual(response.chats.map(\.id), ["10", "11"])
+        XCTAssertEqual(response.chats[0].kind, .group)
+        XCTAssertEqual(response.chats[0].lastMessage?.message, "Ship it")
+        XCTAssertEqual(response.chats[1].kind, .dm)
+        XCTAssertEqual(response.chats[1].peer?.username, "Grace")
+        XCTAssertEqual(response.chats[1].peer?.userGroup?.groupId, 7)
+        XCTAssertEqual(response.nextCursor, "11")
+
+        XCTAssertEqual(requests.values.count, 1)
+        let request = try XCTUnwrap(requests.values.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.path, "/chats")
+        XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems, [
+            URLQueryItem(name: "archived", value: "false"),
+        ])
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+    }
+
     private func testSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

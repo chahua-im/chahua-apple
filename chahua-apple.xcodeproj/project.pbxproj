@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0AA0001303BCC2200320001 /* ChahuaAPI */; };
 		C098620630463971003200C0 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = C098620530463971003200C0 /* InfoPlist.xcstrings */; };
+		C0AA0003303BCC2200320001 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0AA0002303BCC2200320001 /* ChahuaAPI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,6 +60,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0AA0003303BCC2200320001 /* ChahuaAPI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -142,6 +144,7 @@
 			);
 			name = "chahua-appleTests";
 			packageProductDependencies = (
+				C0AA0002303BCC2200320001 /* ChahuaAPI */,
 			);
 			productName = "chahua-iosTests";
 			productReference = C09860FE3044841E003200C0 /* chahua-appleTests.xctest */;
@@ -661,6 +664,11 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		C0AA0001303BCC2200320001 /* ChahuaAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */;
+			productName = ChahuaAPI;
+		};
+		C0AA0002303BCC2200320001 /* ChahuaAPI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */;
 			productName = ChahuaAPI;

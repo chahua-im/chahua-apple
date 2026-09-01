@@ -59,19 +59,3 @@ struct AuthLoginView: View {
     }
 }
 
-struct AuthenticatedAccountView: View {
-    @ObservedObject var model: AuthSessionModel
-    let me: MeResponse
-
-    var body: some View {
-        VStack(spacing: ChahuaTheme.Spacing.xLarge) {
-            AvatarView(url: URL(string: me.avatarUrl ?? ""), displayName: me.username, diameter: 72)
-            Text(me.username).font(.title.bold())
-            Text("Signed in").foregroundStyle(ChahuaTheme.secondaryText)
-            Button("Sign out", role: .destructive) { Task { await model.logout() } }
-                .buttonStyle(.bordered)
-                .disabled(model.isSubmitting)
-        }
-        .padding()
-    }
-}
