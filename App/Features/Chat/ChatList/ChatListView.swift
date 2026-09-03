@@ -28,7 +28,9 @@ struct ChatListView: View {
             )
         case .loaded:
             List(store.state.chats) { chat in
-                ChatListRow(chat: chat)
+                NavigationLink(value: chat) {
+                    ChatListRow(chat: chat)
+                }
             }
         }
     }
@@ -49,22 +51,28 @@ private struct ChatListRow: View {
         }
     }
 
-    private var displayName: String {
-        switch chat.kind {
+    private var displayName: String { chat.chatDisplayName }
+
+    private var avatarURL: URL? { chat.chatAvatarURL }
+}
+
+extension ChatListItem {
+    var chatDisplayName: String {
+        switch kind {
         case .dm:
-            return nonEmpty(chat.peer?.username) ?? nonEmpty(chat.name) ?? String(localized: "Direct Message \(chat.id)")
+            return nonEmpty(peer?.username) ?? nonEmpty(name) ?? String(localized: "Direct Message \(id)")
         case .group:
-            return nonEmpty(chat.name) ?? String(localized: "Chat \(chat.id)")
+            return nonEmpty(name) ?? String(localized: "Chat \(id)")
         }
     }
 
-    private var avatarURL: URL? {
+    var chatAvatarURL: URL? {
         let value: String?
-        switch chat.kind {
+        switch kind {
         case .dm:
-            value = chat.peer?.avatarUrl ?? chat.avatar
+            value = peer?.avatarUrl ?? avatar
         case .group:
-            value = chat.avatar
+            value = avatar
         }
         return value.flatMap(URL.init(string:))
     }

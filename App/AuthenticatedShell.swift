@@ -15,6 +15,9 @@ struct AuthenticatedShell: View {
         NavigationStack {
             ChatListView(store: chatStore)
                 .navigationTitle("Chats")
+                .navigationDestination(for: ChatListItem.self) { chat in
+                    ChatDetailView(chat: chat)
+                }
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Menu("Account") {
