@@ -4,7 +4,6 @@ import Foundation
 
 struct ConversationProjection: Hashable {
     let entries: [ConversationTimelineEntry]
-    let deferredLiveCount: Int
 }
 
 @MainActor
@@ -91,16 +90,39 @@ final class ConversationMessageStore: ObservableObject {
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.stableKey.sortValue < $1.stableKey.sortValue
         }
-        return ConversationProjection(
-            entries: entries,
-            deferredLiveCount: deferredLiveByChatID[chatID, default: [:]].count
-        )
+        return ConversationProjection(entries: entries)
     }
+
 
     func consumeDeferredLive(chatID: String, projectedKeys: Set<ConversationMessageStableKey>) {
         guard var deferred = deferredLiveByChatID[chatID] else { return }
         let originalCount = deferred.count
         deferred = deferred.filter { !projectedKeys.contains($0.key) }
+        guard deferred.count != originalCount else { return }
+        deferredLiveByChatID[chatID] = deferred
+        publishChange()
+    }
+
+    /// Reconciles the buffer against a freshly installed live window. Drops anything the page
+    /// already contains (server copy wins) and anything older than the page's newest row, which
+    /// is now covered by server history and will arrive in order via older-paging. Keeps arrivals
+    /// at or after the newest row's timestamp that the page did not include: a tie is a message
+    /// created in the same second the page cut off, and nothing newer exists to page toward, so
+    /// dropping it would lose it until the next reload. Identity, not `createdAt`, decides
+    /// duplicates so clock skew cannot resurrect a covered message.
+    ///
+    /// `installedKeys` are the stable keys of every row in the new window; a buffered entry and
+    /// the page's copy of the same message share a stable key, so one set covers identity.
+    func reconcileDeferredLive(
+        chatID: String,
+        installedKeys: Set<ConversationMessageStableKey>,
+        newestCreatedAt: Date
+    ) {
+        guard var deferred = deferredLiveByChatID[chatID] else { return }
+        let originalCount = deferred.count
+        deferred = deferred.filter { key, message in
+            !installedKeys.contains(key) && message.createdAt >= newestCreatedAt
+        }
         guard deferred.count != originalCount else { return }
         deferredLiveByChatID[chatID] = deferred
         publishChange()
@@ -116,6 +138,7 @@ final class ConversationMessageStore: ObservableObject {
         }
         mutation(&pending[index])
         pendingOutgoingByChatID[chatID] = pending
+
         publishChange()
     }
 
@@ -135,3 +158,12 @@ final class ConversationMessageStore: ObservableObject {
         revision &+= 1
     }
 }
+#if DEBUG
+extension ConversationMessageStore {
+    /// Test observation only. Production UI must use server-backed unread state, never this
+    /// ephemeral render-buffer occupancy.
+    func bufferedLiveEventCountForTesting(chatID: String) -> Int {
+        deferredLiveByChatID[chatID, default: [:]].count
+    }
+}
+#endif

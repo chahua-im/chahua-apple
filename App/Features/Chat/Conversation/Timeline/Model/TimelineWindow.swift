@@ -3,14 +3,16 @@ import ChahuaAPI
 /// The loaded, chronologically ordered slice of one conversation.
 struct TimelineWindow: Equatable {
     private(set) var messages: [MessageResponse] = []
-    private(set) var indexByStableKey: [ConversationMessageStableKey: Int] = [:]
-    private(set) var indexByServerID: [String: Int] = [:]
+    private var indexByStableKey: [ConversationMessageStableKey: Int] = [:]
+    private var indexByServerID: [String: Int] = [:]
     private(set) var olderCursor: String?
     private(set) var newerCursor: String?
 
     var isAtLiveEdge: Bool { newerCursor == nil }
     var hasOlder: Bool { olderCursor != nil }
     var count: Int { messages.count }
+    /// Stable keys of every loaded message; used to reconcile buffered live arrivals after a reload.
+    var stableKeys: Set<ConversationMessageStableKey> { Set(indexByStableKey.keys) }
 
     func index(of stableKey: ConversationMessageStableKey) -> Int? { indexByStableKey[stableKey] }
 

@@ -44,13 +44,13 @@ final class ConversationMessageStoreTests: XCTestCase {
 
         let history = store.projection(for: "chat", remoteMessages: [remote], includeDeferredLive: false)
         XCTAssertEqual(history.entries.map(\.serverID), ["server-1"])
-        XCTAssertEqual(history.deferredLiveCount, 1)
+        XCTAssertEqual(store.bufferedLiveEventCountForTesting(chatID: "chat"), 1)
 
         let liveEdge = store.projection(for: "chat", remoteMessages: [remote], includeDeferredLive: true)
         XCTAssertEqual(liveEdge.entries.map(\.serverID), ["server-1", "server-2"])
         store.consumeDeferredLive(chatID: "chat", projectedKeys: Set(liveEdge.entries.map(\.stableKey)))
 
-        XCTAssertEqual(store.projection(for: "chat", remoteMessages: [remote, live], includeDeferredLive: false).deferredLiveCount, 0)
+        XCTAssertEqual(store.bufferedLiveEventCountForTesting(chatID: "chat"), 0)
     }
 
     private func pending(id: String, state: PendingOutgoingMessage.State) -> PendingOutgoingMessage {
