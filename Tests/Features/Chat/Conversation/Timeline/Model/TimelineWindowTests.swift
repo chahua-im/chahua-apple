@@ -58,6 +58,19 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(window.messages[1].message, "updated")
     }
 
+    func testMergeLiveReplacesKnownMessagesAndOrdersBatchChronologically() throws {
+        var window = TimelineWindow()
+        window.replace(with: try page([message("2", at: 2), message("1", at: 1)]))
+
+        window.mergeLive([
+            message("2", at: 2, text: "updated"),
+            message("3", at: 3),
+        ])
+
+        XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3"])
+        XCTAssertEqual(window.messages[1].message, "updated")
+    }
+
     func testClientGeneratedIDKeepsAcknowledgedMessageAtTheSameStableKey() throws {
         let provisional = message("local-1", at: 1, clientGeneratedID: "send-1")
         let acknowledged = message("server-99", at: 2, text: "delivered", clientGeneratedID: "send-1")

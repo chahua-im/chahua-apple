@@ -10,7 +10,7 @@ final class ConversationMessageStoreTests: XCTestCase {
         store.enqueue(pending(id: "send-1", state: .queued))
         store.markSending(chatID: "chat", clientGeneratedID: "send-1")
 
-        let projection = store.projection(for: "chat", remoteMessages: [], includeDeferredLive: false)
+        let projection = store.projection(for: "chat", remoteMessages: [], includePendingOutgoing: true)
 
         XCTAssertEqual(projection.entries.count, 1)
         XCTAssertEqual(projection.entries[0].stableKey, .clientGenerated("send-1"))
@@ -28,7 +28,7 @@ final class ConversationMessageStoreTests: XCTestCase {
         )
 
         store.acknowledge(acknowledgement)
-        let projection = store.projection(for: "chat", remoteMessages: [], includeDeferredLive: true)
+        let projection = store.projection(for: "chat", remoteMessages: [acknowledgement], includePendingOutgoing: true)
 
         XCTAssertEqual(projection.entries.count, 1)
         XCTAssertEqual(projection.entries[0].stableKey, .clientGenerated("send-1"))
@@ -36,20 +36,17 @@ final class ConversationMessageStoreTests: XCTestCase {
         XCTAssertEqual(projection.entries[0].displayState, .delivered)
     }
 
-    func testDeferredLiveMessagesStayOutOfHistoryProjectionUntilLiveEdge() throws {
+    func testDeferredLiveMessagesRemainBufferedUntilTimelineWindowOwnsThem() throws {
         let store = ConversationMessageStore()
         let remote = try TimelineTestFixtures.message(id: "server-1", at: 1)
         let live = try TimelineTestFixtures.message(id: "server-2", at: 2)
         store.receiveLive(live)
 
-        let history = store.projection(for: "chat", remoteMessages: [remote], includeDeferredLive: false)
-        XCTAssertEqual(history.entries.map(\.serverID), ["server-1"])
-        XCTAssertEqual(store.bufferedLiveEventCountForTesting(chatID: "chat"), 1)
+        let projection = store.projection(for: "chat", remoteMessages: [remote], includePendingOutgoing: true)
+        XCTAssertEqual(projection.entries.map(\.serverID), ["server-1"])
+        XCTAssertEqual(store.deferredLiveMessages(chatID: "chat").map(\.id), ["server-2"])
 
-        let liveEdge = store.projection(for: "chat", remoteMessages: [remote], includeDeferredLive: true)
-        XCTAssertEqual(liveEdge.entries.map(\.serverID), ["server-1", "server-2"])
-        store.consumeDeferredLive(chatID: "chat", projectedKeys: Set(liveEdge.entries.map(\.stableKey)))
-
+        store.consumeDeferredLive(chatID: "chat", projectedKeys: [live.timelineStableKey])
         XCTAssertEqual(store.bufferedLiveEventCountForTesting(chatID: "chat"), 0)
     }
 

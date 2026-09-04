@@ -43,6 +43,19 @@ struct TimelineWindow: Equatable {
         return fresh.count
     }
 
+    mutating func mergeLive(_ messages: [MessageResponse]) {
+        guard !messages.isEmpty else { return }
+        var merged = Dictionary(uniqueKeysWithValues: self.messages.map { ($0.timelineStableKey, $0) })
+        for message in messages {
+            merged[message.timelineStableKey] = message
+        }
+        self.messages = merged.values.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.timelineStableKey.sortValue < $1.timelineStableKey.sortValue
+        }
+        rebuildIndexes()
+    }
+
     enum LiveInsertOutcome: Equatable {
         case appended
         case updated

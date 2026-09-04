@@ -19,10 +19,11 @@ final class TimelineRowMeasurer {
         let row: TimelineRow
         let width: CGFloat
         let typographySignature: String
+        let scale: CGFloat
         let height: CGFloat
     }
 
-    private let parent: UIViewController
+    private unowned let parent: UIViewController
     private var host: UIHostingController<TimelineBubbleView>?
     private var cache: [TimelineRowID: CachedMeasurement] = [:]
 
@@ -32,18 +33,20 @@ final class TimelineRowMeasurer {
 
     func height(for row: TimelineRow, width: CGFloat) -> CGFloat {
         let typographySignature = parent.traitCollection.preferredContentSizeCategory.rawValue
-        if let cached = cache[row.id], cached.row == row, cached.width == width, cached.typographySignature == typographySignature { return cached.height }
+        let scale = parent.view.traitCollection.displayScale
+        if let cached = cache[row.id], cached.row == row, cached.width == width, cached.typographySignature == typographySignature, cached.scale == scale { return cached.height }
         let host = hostingController(for: row)
         host.rootView = TimelineBubbleView(row: row, context: .init())
         let measured = host.sizeThatFits(in: CGSize(width: width, height: 10_000)).height
-        let scale = parent.view.traitCollection.displayScale
         let height = ceil(measured * scale) / scale
-        cache[row.id] = .init(row: row, width: width, typographySignature: typographySignature, height: height)
+        cache[row.id] = .init(row: row, width: width, typographySignature: typographySignature, scale: scale, height: height)
         return height
     }
 
     func invalidateAll() { cache.removeAll(keepingCapacity: true) }
-    func retain(only ids: Set<TimelineRowID>) { cache = cache.filter { ids.contains($0.key) } }
+    func remove(_ ids: Set<TimelineRowID>) {
+        for id in ids { cache.removeValue(forKey: id) }
+    }
 
     private func hostingController(for row: TimelineRow) -> UIHostingController<TimelineBubbleView> {
         if let host { return host }
@@ -70,10 +73,11 @@ final class TimelineRowMeasurer {
         let row: TimelineRow
         let width: CGFloat
         let typographySignature: CGFloat
+        let scale: CGFloat
         let height: CGFloat
     }
 
-    private let parent: NSViewController
+    private unowned let parent: NSViewController
     private var host: NSHostingController<TimelineBubbleView>?
     private var cache: [TimelineRowID: CachedMeasurement] = [:]
 
@@ -83,18 +87,20 @@ final class TimelineRowMeasurer {
 
     func height(for row: TimelineRow, width: CGFloat) -> CGFloat {
         let typographySignature = NSFont.preferredFont(forTextStyle: .body).pointSize
-        if let cached = cache[row.id], cached.row == row, cached.width == width, cached.typographySignature == typographySignature { return cached.height }
+        let scale = parent.view.window?.backingScaleFactor ?? 2
+        if let cached = cache[row.id], cached.row == row, cached.width == width, cached.typographySignature == typographySignature, cached.scale == scale { return cached.height }
         let host = hostingController(for: row)
         host.rootView = TimelineBubbleView(row: row, context: .init())
         let measured = host.sizeThatFits(in: CGSize(width: width, height: 10_000)).height
-        let scale = parent.view.window?.backingScaleFactor ?? 2
         let height = ceil(measured * scale) / scale
-        cache[row.id] = .init(row: row, width: width, typographySignature: typographySignature, height: height)
+        cache[row.id] = .init(row: row, width: width, typographySignature: typographySignature, scale: scale, height: height)
         return height
     }
 
     func invalidateAll() { cache.removeAll(keepingCapacity: true) }
-    func retain(only ids: Set<TimelineRowID>) { cache = cache.filter { ids.contains($0.key) } }
+    func remove(_ ids: Set<TimelineRowID>) {
+        for id in ids { cache.removeValue(forKey: id) }
+    }
 
     private func hostingController(for row: TimelineRow) -> NSHostingController<TimelineBubbleView> {
         if let host { return host }

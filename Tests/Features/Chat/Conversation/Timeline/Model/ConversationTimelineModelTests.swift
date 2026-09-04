@@ -15,8 +15,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.state.content, .ready)
         XCTAssertTrue(model.isAtLiveEdge)
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
-        XCTAssertEqual(updates.value.last?.change, .reset)
-        XCTAssertEqual(updates.value.last?.scroll, .bottom(animated: false))
+        XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
     }
 
     func testInitialLoadFailureIsRetryable() async throws {
@@ -52,32 +51,36 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         XCTAssertEqual(model.state.live.unseenCount, 0)
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
-        XCTAssertEqual(updates.value.last?.scroll, .bottom(animated: true))
+        XCTAssertTrue(updates.value.last?.animateFollowing == true)
         XCTAssertEqual(source.store.bufferedLiveEventCountForTesting(chatID: "chat"), 0, "rendered rows are consumed from the deferred buffer")
     }
 
     func testLiveMessageAtUnpinnedLiveEdgeCountsButStillRendersAndConsumes() async throws {
         let (model, source, updates) = try makeModel(pages: [.success(try livePage(ids: 1 ... 1))])
         await model.loadInitial()
-        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 0, distanceToTop: 0, distanceToBottom: 500, height: 400))
+        model.scrollRequestDidFinish(id: model.updates.value.pendingScroll!.id)
+        model.userScrollBegan()
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 0, distanceToTop: 0, distanceToBottom: 500, height: 400), reason: .user, revision: model.updates.value.revision)
         XCTAssertFalse(model.state.live.isPinnedToBottom)
 
         model.receiveLive(try TimelineTestFixtures.message(id: "2", senderID: 2, at: 2))
 
         XCTAssertEqual(model.state.live.unseenCount, 1)
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
-        XCTAssertEqual(updates.value.last?.scroll, .preserveAnchor)
+        XCTAssertNil(updates.value.last?.pendingScroll)
         XCTAssertEqual(source.store.bufferedLiveEventCountForTesting(chatID: "chat"), 0, "a row rendered from the window must not linger in the deferred buffer")
     }
 
     func testPinnedViewportAtLiveEdgeClearsUnseenCount() async throws {
         let (model, _, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 1))])
         await model.loadInitial()
-        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 0, distanceToTop: 0, distanceToBottom: 500, height: 400))
+        model.scrollRequestDidFinish(id: model.updates.value.pendingScroll!.id)
+        model.userScrollBegan()
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 0, distanceToTop: 0, distanceToBottom: 500, height: 400), reason: .user, revision: model.updates.value.revision)
         model.receiveLive(try TimelineTestFixtures.message(id: "2", senderID: 2, at: 2))
         XCTAssertEqual(model.state.live.unseenCount, 1)
 
-        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 0, height: 400))
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 0, height: 400), reason: .user, revision: model.updates.value.revision)
 
         XCTAssertTrue(model.state.live.isPinnedToBottom)
         XCTAssertEqual(model.state.live.unseenCount, 0)
@@ -98,12 +101,11 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.state.content, .ready)
         XCTAssertNil(model.state.repositionFailure)
         XCTAssertTrue(model.isAtLiveEdge)
-        XCTAssertEqual(model.state.live, .init(isPinnedToBottom: true, unseenCount: 0))
+        XCTAssertEqual(model.state.live, .init(isPinnedToBottom: false, followsLatest: true, unseenCount: 1))
         XCTAssertNil(source.queries.last?.after)
         XCTAssertNil(source.queries.last?.before)
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["98", "99", "100"])
-        XCTAssertEqual(updates.value.last?.change, .reset)
-        XCTAssertEqual(updates.value.last?.scroll, .bottom(animated: false))
+        XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
         XCTAssertEqual(source.store.bufferedLiveEventCountForTesting(chatID: "chat"), 0)
     }
 
@@ -164,7 +166,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["10", "11"])
 
         // Paging is still live while the failure banner is showing.
-        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 5_000, height: 400))
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 5_000, height: 400), reason: .user, revision: model.updates.value.revision)
         await source.drain()
         XCTAssertEqual(source.queries.last?.before, "10")
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["8", "9", "10", "11"])
@@ -182,7 +184,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.state.content, .ready)
         XCTAssertEqual(model.state.repositionFailure, .message("404"))
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
-        XCTAssertEqual(updates.value.last?.scroll, .bottom(animated: false))
+        XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
     }
 
     func testOlderEdgeFailureIsSurfacedAndRetryable() async throws {
@@ -193,12 +195,12 @@ final class ConversationTimelineModelTests: XCTestCase {
         ])
         await model.loadInitial()
 
-        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 0, height: 400))
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 0, height: 400), reason: .user, revision: model.updates.value.revision)
         await source.drain()
         XCTAssertEqual(model.state.older, .failed)
         XCTAssertEqual(source.queries.last?.before, "10")
 
-        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 0, height: 400))
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0, distanceToBottom: 0, height: 400), reason: .user, revision: model.updates.value.revision)
         XCTAssertEqual(source.queries.count, 2, "failed edge must not refetch until retried")
 
         model.retryOlder()
@@ -211,7 +213,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     private func makeModel(
         pages: [Result<ListMessagesResponse, Error>]
-    ) throws -> (ConversationTimelineModel, ScriptedTimelineSource, CurrentValueSubject<[TimelineHostUpdate], Never>) {
+    ) throws -> (ConversationTimelineModel, ScriptedTimelineSource, CurrentValueSubject<[TimelineHostSnapshot], Never>) {
         let source = ScriptedTimelineSource(pages: pages)
         let model = ConversationTimelineModel(
             chatID: "chat",
@@ -220,7 +222,7 @@ final class ConversationTimelineModelTests: XCTestCase {
             source: source,
             messageStore: source.store
         )
-        let updates = CurrentValueSubject<[TimelineHostUpdate], Never>([])
+        let updates = CurrentValueSubject<[TimelineHostSnapshot], Never>([])
         model.updates.sink { updates.value.append($0) }.store(in: &cancellables)
         return (model, source, updates)
     }

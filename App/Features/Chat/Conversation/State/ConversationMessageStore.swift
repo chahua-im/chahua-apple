@@ -69,21 +69,25 @@ final class ConversationMessageStore: ObservableObject {
         }
     }
 
+    func deferredLiveMessages(chatID: String) -> [MessageResponse] {
+        deferredLiveByChatID[chatID, default: [:]].values.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.timelineStableKey.sortValue < $1.timelineStableKey.sortValue
+        }
+    }
+
     func projection(
         for chatID: String,
         remoteMessages: [MessageResponse],
-        includeDeferredLive: Bool
+        includePendingOutgoing: Bool
     ) -> ConversationProjection {
         var entriesByKey = Dictionary(uniqueKeysWithValues: remoteMessages.map {
             (ConversationMessageStableKey($0), ConversationTimelineEntry.remote($0))
         })
-        if includeDeferredLive {
-            for message in deferredLiveByChatID[chatID, default: [:]].values where entriesByKey[message.timelineStableKey] == nil {
-                entriesByKey[message.timelineStableKey] = .remote(message)
+        if includePendingOutgoing {
+            for pending in pendingOutgoingByChatID[chatID, default: []] where entriesByKey[.clientGenerated(pending.clientGeneratedID)] == nil {
+                entriesByKey[.clientGenerated(pending.clientGeneratedID)] = .pending(pending)
             }
-        }
-        for pending in pendingOutgoingByChatID[chatID, default: []] where entriesByKey[.clientGenerated(pending.clientGeneratedID)] == nil {
-            entriesByKey[.clientGenerated(pending.clientGeneratedID)] = .pending(pending)
         }
 
         let entries = entriesByKey.values.sorted {

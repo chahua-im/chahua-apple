@@ -22,7 +22,8 @@ struct ConversationTimelineState: Equatable {
     }
 
     struct Live: Equatable {
-        var isPinnedToBottom = true
+        var isPinnedToBottom = false
+        var followsLatest = true
         var unseenCount = 0
     }
 

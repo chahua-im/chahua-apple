@@ -68,7 +68,7 @@ struct ConversationTimelineView: View {
         .font(.caption).padding(ChahuaTheme.Spacing.small).background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)).padding()
     }
 
-    private var canJumpToLiveEdge: Bool { !model.rows.isEmpty && !(model.isAtLiveEdge && model.state.live.isPinnedToBottom) }
+    private var canJumpToLiveEdge: Bool { !model.rows.isEmpty && !(model.isAtLiveEdge && model.state.live.followsLatest) }
 }
 
 #if os(iOS)
