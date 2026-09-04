@@ -7,7 +7,7 @@ import SwiftUI
 /// `NSHostingController` and uses the window backing scale. Keep the branches explicit rather
 /// than hiding those lifecycle differences behind a typealias abstraction.
 
-#if canImport(UIKit)
+#if os(iOS)
 import UIKit
 
 
@@ -58,7 +58,7 @@ final class TimelineRowMeasurer {
         return host
     }
 }
-#elseif canImport(AppKit)
+#elseif os(macOS)
 import AppKit
 
 // AppKit host: NSHostingController follows AppKit containment and backing-scale behavior; it is
