@@ -18,6 +18,8 @@ struct ChatState: Equatable {
 @MainActor
 final class ChatStore: ObservableObject {
     @Published private(set) var state = ChatState()
+    /// App-scoped per-chat outbound/live-event state shared by every detail timeline.
+    let conversationMessages = ConversationMessageStore()
 
     private let apiClient: any ChahuaAPIClient
     private let onInvalidToken: @MainActor @Sendable () async -> Void

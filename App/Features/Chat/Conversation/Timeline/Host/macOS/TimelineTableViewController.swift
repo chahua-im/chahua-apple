@@ -31,6 +31,11 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
 
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
+
+#if DEBUG
+    var renderedRowCountForTesting: Int { tableView.numberOfRows }
+    func measuredHeightForTesting(row: Int) -> CGFloat { tableView(tableView, heightOfRow: row) }
+#endif
     private let column = NSTableColumn(identifier: .init("timeline"))
 
     init(model: ConversationTimelineModel) { self.model = model; super.init(nibName: nil, bundle: nil) }
