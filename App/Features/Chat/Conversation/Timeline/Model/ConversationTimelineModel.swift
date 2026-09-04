@@ -28,6 +28,8 @@ final class ConversationTimelineModel: ObservableObject {
     @Published private(set) var isAtLiveEdge = true
     @Published private(set) var isPinnedToBottom = true
     @Published private(set) var unseenLiveMessageCount = 0
+    @Published private(set) var isLoadingOlder = false
+    @Published private(set) var isLoadingNewer = false
     let updates = PassthroughSubject<TimelineHostUpdate, Never>()
 
     private let source: any TimelineMessageSource
@@ -37,6 +39,8 @@ final class ConversationTimelineModel: ObservableObject {
     private var storeRevision: AnyCancellable?
     private var generation = 0
     private var lastViewport = TimelineViewport.empty
+    private var olderTask: Task<Void, Never>?
+    private var newerTask: Task<Void, Never>?
 
     init(
         chatID: String,
@@ -101,6 +105,9 @@ final class ConversationTimelineModel: ObservableObject {
             unseenLiveMessageCount = 0
             consumeProjectedDeferredLive()
         }
+        let threshold = viewport.height * 2
+        if viewport.distanceToTop < threshold { loadOlder() }
+        if viewport.distanceToBottom < threshold { loadNewer() }
     }
 
     func jumpToLiveEdge() async {
@@ -144,6 +151,42 @@ final class ConversationTimelineModel: ObservableObject {
             consumeProjectedDeferredLive()
         } else {
             unseenLiveMessageCount += 1
+        }
+    }
+
+    func loadOlder() {
+        guard phase == .ready, window.hasOlder, !isLoadingOlder, let cursor = window.olderCursor else { return }
+        isLoadingOlder = true
+        olderTask = Task { [weak self] in
+            guard let self else { return }
+            defer { isLoadingOlder = false }
+            do {
+                let page = try await source.fetchMessages(chatID: chatID, query: .init(before: cursor, max: Self.pageSize, threadID: threadID))
+                guard !Task.isCancelled else { return }
+                window.prependOlder(page)
+                publish(scroll: .preserveAnchor, reset: false)
+            } catch is CancellationError {
+            } catch {
+                // Edge failures remain non-destructive; retry state is added next.
+            }
+        }
+    }
+
+    func loadNewer() {
+        guard phase == .ready, !window.isAtLiveEdge, !isLoadingNewer, let cursor = window.newerCursor else { return }
+        isLoadingNewer = true
+        newerTask = Task { [weak self] in
+            guard let self else { return }
+            defer { isLoadingNewer = false }
+            do {
+                let page = try await source.fetchMessages(chatID: chatID, query: .init(after: cursor, max: Self.pageSize, threadID: threadID))
+                guard !Task.isCancelled else { return }
+                window.appendNewer(page)
+                publish(scroll: .preserveAnchor, reset: false)
+            } catch is CancellationError {
+            } catch {
+                // Edge failures remain non-destructive; retry state is added next.
+            }
         }
     }
 
