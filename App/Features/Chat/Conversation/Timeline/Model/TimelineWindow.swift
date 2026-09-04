@@ -3,7 +3,8 @@ import ChahuaAPI
 /// The loaded, chronologically ordered slice of one conversation.
 struct TimelineWindow: Equatable {
     private(set) var messages: [MessageResponse] = []
-    private(set) var indexByID: [String: Int] = [:]
+    private(set) var indexByStableKey: [ConversationMessageStableKey: Int] = [:]
+    private(set) var indexByServerID: [String: Int] = [:]
     private(set) var olderCursor: String?
     private(set) var newerCursor: String?
 
@@ -11,30 +12,32 @@ struct TimelineWindow: Equatable {
     var hasOlder: Bool { olderCursor != nil }
     var count: Int { messages.count }
 
-    func index(of id: String) -> Int? { indexByID[id] }
+    func index(of stableKey: ConversationMessageStableKey) -> Int? { indexByStableKey[stableKey] }
+
+    func index(ofServerID id: String) -> Int? { indexByServerID[id] }
 
     mutating func replace(with page: ListMessagesResponse) {
         messages = Self.chronological(page.messages)
         olderCursor = page.olderCursor
         newerCursor = page.newerCursor
-        rebuildIndex()
+        rebuildIndexes()
     }
 
     @discardableResult
     mutating func prependOlder(_ page: ListMessagesResponse) -> Int {
-        let fresh = Self.chronological(page.messages).filter { indexByID[$0.id] == nil }
+        let fresh = Self.chronological(page.messages).filter { indexByStableKey[$0.timelineStableKey] == nil }
         messages = fresh + messages
         olderCursor = page.messages.isEmpty ? nil : page.olderCursor
-        rebuildIndex()
+        rebuildIndexes()
         return fresh.count
     }
 
     @discardableResult
     mutating func appendNewer(_ page: ListMessagesResponse) -> Int {
-        let fresh = Self.chronological(page.messages).filter { indexByID[$0.id] == nil }
+        let fresh = Self.chronological(page.messages).filter { indexByStableKey[$0.timelineStableKey] == nil }
         messages += fresh
         newerCursor = page.messages.isEmpty ? nil : page.newerCursor
-        rebuildIndex()
+        rebuildIndexes()
         return fresh.count
     }
 
@@ -47,28 +50,38 @@ struct TimelineWindow: Equatable {
     mutating func insertLive(_ message: MessageResponse) -> LiveInsertOutcome {
         guard isAtLiveEdge else { return .deferred }
 
-        if let index = indexByID[message.id] {
+        if let index = indexByStableKey[message.timelineStableKey] {
             messages[index] = message
+            rebuildIndexes()
             return .updated
         }
 
         messages.append(message)
-        indexByID[message.id] = messages.index(before: messages.endIndex)
+        rebuildIndexes()
         return .appended
     }
 
     @discardableResult
     mutating func upsert(_ message: MessageResponse) -> Bool {
-        guard let index = indexByID[message.id] else { return false }
+        guard let index = indexByStableKey[message.timelineStableKey] else { return false }
         messages[index] = message
+        rebuildIndexes()
         return true
     }
 
     @discardableResult
-    mutating func remove(id: String) -> Bool {
-        guard let index = indexByID[id] else { return false }
+    mutating func remove(serverID: String) -> Bool {
+        guard let index = indexByServerID[serverID] else { return false }
         messages.remove(at: index)
-        rebuildIndex()
+        rebuildIndexes()
+        return true
+    }
+
+    @discardableResult
+    mutating func remove(stableKey: ConversationMessageStableKey) -> Bool {
+        guard let index = indexByStableKey[stableKey] else { return false }
+        messages.remove(at: index)
+        rebuildIndexes()
         return true
     }
 
@@ -91,7 +104,7 @@ struct TimelineWindow: Equatable {
             messages.removeLast(removedCount)
             newerCursor = messages.last?.id
         }
-        rebuildIndex()
+        rebuildIndexes()
         return removedCount
     }
 
@@ -102,7 +115,8 @@ struct TimelineWindow: Equatable {
         return page.reversed()
     }
 
-    private mutating func rebuildIndex() {
-        indexByID = Dictionary(uniqueKeysWithValues: messages.enumerated().map { ($0.element.id, $0.offset) })
+    private mutating func rebuildIndexes() {
+        indexByStableKey = Dictionary(uniqueKeysWithValues: messages.enumerated().map { ($0.element.timelineStableKey, $0.offset) })
+        indexByServerID = Dictionary(uniqueKeysWithValues: messages.enumerated().map { ($0.element.id, $0.offset) })
     }
 }

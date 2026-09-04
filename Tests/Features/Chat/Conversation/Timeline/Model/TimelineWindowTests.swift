@@ -10,7 +10,7 @@ final class TimelineWindowTests: XCTestCase {
         window.replace(with: try page([message("3", at: 3), message("2", at: 2), message("1", at: 1)]))
 
         XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3"])
-        XCTAssertEqual(window.index(of: "2"), 1)
+        XCTAssertEqual(window.index(ofServerID: "2"), 1)
     }
 
     func testPrependOlderDeduplicatesAndUpdatesCursor() throws {
@@ -58,6 +58,26 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(window.messages[1].message, "updated")
     }
 
+    func testClientGeneratedIDKeepsAcknowledgedMessageAtTheSameStableKey() throws {
+        let provisional = message("local-1", at: 1, clientGeneratedID: "send-1")
+        let acknowledged = message("server-99", at: 2, text: "delivered", clientGeneratedID: "send-1")
+        var window = TimelineWindow()
+        window.replace(with: try page([provisional]))
+
+        XCTAssertEqual(window.insertLive(acknowledged), .updated)
+        XCTAssertEqual(window.count, 1)
+        XCTAssertEqual(window.messages[0].id, "server-99")
+        XCTAssertEqual(window.index(of: .clientGenerated("send-1")), 0)
+        XCTAssertEqual(window.index(ofServerID: "server-99"), 0)
+        XCTAssertNil(window.index(ofServerID: "local-1"))
+    }
+
+    func testEmptyClientGeneratedIDFallsBackToServerID() throws {
+        let response = message("server-1", at: 1, clientGeneratedID: "")
+
+        XCTAssertEqual(response.timelineStableKey, .server("server-1"))
+    }
+
     func testUpsertAndRemoveOnlyAffectLoadedMessages() throws {
         var window = TimelineWindow()
         window.replace(with: try page([message("1", at: 1)]))
@@ -65,8 +85,8 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertFalse(window.upsert(message("2", at: 2)))
         XCTAssertTrue(window.upsert(message("1", at: 1, text: "edited")))
         XCTAssertEqual(window.messages[0].message, "edited")
-        XCTAssertFalse(window.remove(id: "2"))
-        XCTAssertTrue(window.remove(id: "1"))
+        XCTAssertFalse(window.remove(serverID: "2"))
+        XCTAssertTrue(window.remove(serverID: "1"))
         XCTAssertTrue(window.messages.isEmpty)
     }
 
@@ -89,12 +109,17 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(window.olderCursor, "3")
     }
 
-    private func message(_ id: String, at second: Int, text: String? = nil) -> MessageResponse {
+    private func message(
+        _ id: String,
+        at second: Int,
+        text: String? = nil,
+        clientGeneratedID: String? = nil
+    ) -> MessageResponse {
         try! JSONDecoder.messageFixtureDecoder.decode(
             MessageResponse.self,
             from: Data("""
             {
-              "id": "\(id)", "chatId": "chat", "clientGeneratedId": "client-\(id)", "messageType": "text",
+              "id": "\(id)", "chatId": "chat", "clientGeneratedId": "\(clientGeneratedID ?? "client-\(id)")", "messageType": "text",
               "sender": {"uid": 1, "gender": 0, "name": "Ada", "avatarUrl": null, "userGroup": null},
               "createdAt": "2026-09-01T00:00:\(String(format: "%02d", second))Z", "isEdited": false, "isDeleted": false,
               "hasAttachments": false, "attachments": [], "reactions": [], "mentions": [], "message": \(jsonString(text ?? "message \(id)"))
