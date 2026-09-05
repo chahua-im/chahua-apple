@@ -80,9 +80,7 @@ struct TimelineRowsBuilder {
                 groupedWithNext: groupedWithNext
             )
             let isOutgoing = entry.senderID == currentUserID
-            let showsSenderName = isGroupChat
-                && !isOutgoing
-                && entry.messageType != .system
+            let showsSenderName = entry.messageType != .system
                 && (groupPosition == .single || groupPosition == .first)
 
             rows.append(.message(.init(

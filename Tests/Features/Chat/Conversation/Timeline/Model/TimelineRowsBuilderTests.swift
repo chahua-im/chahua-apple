@@ -43,7 +43,7 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.single, .single, .single])
     }
 
-    func testBuildMarksOutgoingAndIncomingGroupSenderNames() throws {
+    func testBuildShowsSenderNamesAtTheStartOfEveryNonSystemGroup() throws {
         let rows = builder().build([
             try TimelineTestFixtures.message(id: "1", senderID: 1, at: 0),
             try TimelineTestFixtures.message(id: "2", senderID: 2, at: 10),
@@ -51,9 +51,8 @@ final class TimelineRowsBuilderTests: XCTestCase {
         ])
         let messages = rows.compactMap(messageRow)
 
-
         XCTAssertEqual(messages.map(\.isOutgoing), [true, false, false])
-        XCTAssertEqual(messages.map(\.showsSenderName), [false, true, false])
+        XCTAssertEqual(messages.map(\.showsSenderName), [true, true, false])
     }
 
     func testMessageRowUsesClientGeneratedIDAsItsStableIdentity() throws {
@@ -84,12 +83,12 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertEqual(messageRow(rows[1])?.entry.displayState, .sending)
     }
 
-    func testDirectMessagesNeverShowSenderNames() throws {
+    func testDirectMessagesShowSenderNamesAtTheStartOfEachGroup() throws {
         let rows = builder(isGroupChat: false).build([
             try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
         ])
 
-        XCTAssertFalse(rows.compactMap(messageRow)[0].showsSenderName)
+        XCTAssertTrue(rows.compactMap(messageRow)[0].showsSenderName)
     }
 
     private func builder(isGroupChat: Bool = true) -> TimelineRowsBuilder {

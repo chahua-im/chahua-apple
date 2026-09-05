@@ -6,39 +6,39 @@ struct TextMessageBubble: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        TextBubbleRowLayout(isOutgoing: row.isOutgoing) {
-            VStack(alignment: .leading, spacing: 4) {
-                if row.showsSenderName {
-                    senderName
-                        .font(.caption.weight(.semibold))
-                        .opacity(0.85)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                if (row.entry.text ?? "").isEmpty {
-                    timestamp
-                } else {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .bottom, spacing: 8) {
-                            messageText
-                            timestamp
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
-                        VStack(alignment: .leading, spacing: 0) {
-                            messageText
-                            timestamp.frame(maxWidth: .infinity, alignment: .trailing)
+        TimelineMessageRowLayout(row: row) {
+            TextBubbleRowLayout(isOutgoing: row.isOutgoing) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if row.showsSenderName {
+                        senderName
+                            .font(.caption.weight(.semibold))
+                            .opacity(0.85)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    if (row.entry.text ?? "").isEmpty {
+                        timestamp
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .bottom, spacing: 8) {
+                                messageText
+                                timestamp
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                            VStack(alignment: .leading, spacing: 0) {
+                                messageText
+                                timestamp.frame(maxWidth: .infinity, alignment: .trailing)
+                            }
                         }
                     }
                 }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .foregroundStyle(row.isOutgoing ? ChahuaTheme.ChatBubble.outgoingForeground : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme))
+                    .background(row.isOutgoing ? ChahuaTheme.ChatBubble.outgoingBackground : ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+                                in: TextBubbleShape(isOutgoing: row.isOutgoing))
             }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .foregroundStyle(row.isOutgoing ? ChahuaTheme.ChatBubble.outgoingForeground : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme))
-                .background(row.isOutgoing ? ChahuaTheme.ChatBubble.outgoingBackground : ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
-                            in: TextBubbleShape(isOutgoing: row.isOutgoing))
         }
-        .padding(.horizontal, 12)
-        .padding(.top, row.groupPosition == .first || row.groupPosition == .single ? 8 : 2)
     }
 
     private var messageText: some View {
@@ -56,10 +56,14 @@ struct TextMessageBubble: View {
     }
 
     private var senderName: Text {
+        Text(senderDisplayName)
+    }
+
+    private var senderDisplayName: String {
         if let name = row.entry.remoteMessage?.sender.name, !name.isEmpty {
-            Text(name)
+            name
         } else {
-            Text("User \(row.entry.senderID)")
+            "User \(row.entry.senderID)"
         }
     }
 }
