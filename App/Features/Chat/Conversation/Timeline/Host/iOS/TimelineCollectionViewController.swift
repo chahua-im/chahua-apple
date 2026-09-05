@@ -18,7 +18,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     private var applying = false
 
     private let collectionView: UICollectionView = {
-        let layout = UICollectionViewFlowLayout()
+        let layout = TimelineFlowLayout()
         layout.minimumLineSpacing = 0
         layout.sectionInset = .zero
         return UICollectionView(frame: .zero, collectionViewLayout: layout)
@@ -38,10 +38,29 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         cancellable = model.updates.sink { [weak self] in self?.receive($0) }
     }
 
+    private var availableRowWidth: CGFloat {
+        max(0, collectionView.bounds.width - collectionView.adjustedContentInset.left - collectionView.adjustedContentInset.right)
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        let width = max(0, collectionView.bounds.width - collectionView.adjustedContentInset.left - collectionView.adjustedContentInset.right)
-        if width != measuredWidth { measuredWidth = width; measurer.invalidateAll(); collectionView.collectionViewLayout.invalidateLayout() }
+        let width = availableRowWidth
+        if width != measuredWidth {
+            let anchor = captureAnchor()
+            let wasApplying = applying
+            applying = true
+            measuredWidth = width
+            measurer.invalidateAll()
+            collectionView.reconfigureItems(at: collectionView.indexPathsForVisibleItems)
+            collectionView.collectionViewLayout.invalidateLayout()
+            collectionView.layoutIfNeeded()
+            if model.state.live.followsLatest && model.isAtLiveEdge {
+                scrollToBottom(animated: false)
+            } else {
+                restore(anchor)
+            }
+            applying = wasApplying
+        }
         installIfPossible()
         reportViewport(reason: .layout)
     }
@@ -53,7 +72,11 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         cell.contentConfiguration = UIHostingConfiguration { TimelineBubbleView(row: row, context: .init(isHighlighted: row.id == highlightedRowID)) }.margins(.all, 0)
         return cell
     }
-    func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize { .init(width: measuredWidth, height: measurer.height(for: rows[indexPath.item], width: measuredWidth)) }
+    func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
+        // Flow layout can request metrics before the parent's viewDidLayoutSubviews runs.
+        let width = availableRowWidth
+        return .init(width: width, height: measurer.height(for: rows[indexPath.item], width: width))
+    }
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { model.userScrollBegan() }
     func scrollViewDidScroll(_ scrollView: UIScrollView) { guard !applying else { return }; reportViewport(reason: .user) }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) { if !decelerate { reportViewport(reason: .user) } }
@@ -96,5 +119,16 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     private func reveal(_ id: TimelineRowID, animated: Bool, highlight: Bool) { guard let index = rows.firstIndex(where: { $0.id == id }) else { return }; collectionView.scrollToItem(at: .init(item: index, section: 0), at: .centeredVertically, animated: animated); guard highlight else { return }; highlightedRowID = id; collectionView.reconfigureItems(at: [.init(item: index, section: 0)]); highlightTask?.cancel(); highlightTask = Task { [weak self] in do { try await Task.sleep(for: .seconds(1.5)) } catch { return }; guard let self, self.highlightedRowID == id, let current = self.rows.firstIndex(where: { $0.id == id }) else { return }; self.highlightedRowID = nil; self.collectionView.reconfigureItems(at: [.init(item: current, section: 0)]) } }
     private func finishRequestIfCurrent() { if let request = model.updates.value.pendingScroll, installedRevision == model.updates.value.revision { model.scrollRequestDidFinish(id: request.id) } }
     private func reportViewport(reason: TimelineViewportChangeReason) { let visible = collectionView.indexPathsForVisibleItems; let top = max(0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top); let height = max(0, collectionView.bounds.height - collectionView.adjustedContentInset.top - collectionView.adjustedContentInset.bottom); model.viewportDidChange(.init(firstVisibleIndex: visible.map(\.item).min(), lastVisibleIndex: visible.map(\.item).max(), distanceToTop: top, distanceToBottom: max(0, collectionView.contentSize.height - top - height), height: height), reason: reason, revision: installedRevision) }
+}
+
+private final class TimelineFlowLayout: UICollectionViewFlowLayout {
+    override func invalidationContext(forBoundsChange newBounds: CGRect) -> UICollectionViewLayoutInvalidationContext {
+        let context = super.invalidationContext(forBoundsChange: newBounds)
+        if newBounds.width != collectionView?.bounds.width,
+           let context = context as? UICollectionViewFlowLayoutInvalidationContext {
+            context.invalidateFlowLayoutDelegateMetrics = true
+        }
+        return context
+    }
 }
 #endif

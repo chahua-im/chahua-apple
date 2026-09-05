@@ -6,6 +6,26 @@ struct FixtureGalleryView: View {
     var body: some View {
         NavigationStack {
             List {
+                #if DEBUG
+                Section("Text bubbles") {
+                    VStack(spacing: 0) {
+                        ForEach(DesignSystemFixtures.textBubbleRows) { row in
+                            TimelineBubbleView(row: row, context: .init())
+                        }
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
+                }
+                Section("Direct chat text bubbles") {
+                    VStack(spacing: 0) {
+                        ForEach(DesignSystemFixtures.directTextBubbleRows) { row in
+                            TimelineBubbleView(row: row, context: .init())
+                        }
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
+                }
+                #endif
                 Section("Form controls") {
                     ChahuaTextField(title: "Username", prompt: "Username", text: .constant("fixture-user"))
                     ChahuaSecureField(title: "Password", prompt: "Password", text: .constant(""), validationMessage: "Invalid credentials.")
@@ -37,3 +57,6 @@ struct FixtureGalleryView: View {
 #Preview("English") { FixtureGalleryView().environment(\.locale, Locale(identifier: "en")) }
 #Preview("Simplified Chinese") { FixtureGalleryView().environment(\.locale, Locale(identifier: "zh-Hans")) }
 #Preview("Traditional Chinese") { FixtureGalleryView().environment(\.locale, Locale(identifier: "zh-Hant")) }
+#Preview("Light text bubbles") { FixtureGalleryView().preferredColorScheme(.light) }
+#Preview("Dark text bubbles") { FixtureGalleryView().preferredColorScheme(.dark) }
+#Preview("Accessible text bubbles") { FixtureGalleryView().environment(\.dynamicTypeSize, .accessibility3) }
