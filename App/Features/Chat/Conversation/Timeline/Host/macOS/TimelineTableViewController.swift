@@ -30,7 +30,37 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     init(model: ConversationTimelineModel) { self.model = model; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func loadView() { view = NSView() }
-    override func viewDidLoad() { super.viewDidLoad(); scrollView.translatesAutoresizingMaskIntoConstraints = false; scrollView.hasVerticalScroller = true; scrollView.drawsBackground = false; scrollView.contentView.postsBoundsChangedNotifications = true; tableView.headerView = nil; tableView.addTableColumn(column); tableView.intercellSpacing = .zero; tableView.selectionHighlightStyle = .none; tableView.usesAutomaticRowHeights = false; tableView.delegate = self; tableView.dataSource = self; scrollView.documentView = tableView; view.addSubview(scrollView); NSLayoutConstraint.activate([scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor), scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor), scrollView.topAnchor.constraint(equalTo: view.topAnchor), scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)]); measurer = TimelineRowMeasurer(parent: self); cancellable = model.updates.sink { [weak self] in self?.receive($0) }; NotificationCenter.default.addObserver(self, selector: #selector(boundsChanged), name: NSView.boundsDidChangeNotification, object: scrollView.contentView) }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.horizontalScrollElasticity = .none
+        scrollView.drawsBackground = false
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        tableView.headerView = nil
+        // The column fills the viewport; automatic table styles add overflowing row padding.
+        tableView.style = .plain
+        tableView.addTableColumn(column)
+        tableView.intercellSpacing = .zero
+        tableView.selectionHighlightStyle = .none
+        tableView.usesAutomaticRowHeights = false
+        tableView.delegate = self
+        tableView.dataSource = self
+        scrollView.documentView = tableView
+        view.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        measurer = TimelineRowMeasurer(parent: self)
+        cancellable = model.updates.sink { [weak self] in self?.receive($0) }
+        let notifications = NotificationCenter.default
+        notifications.addObserver(self, selector: #selector(boundsChanged), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
+        notifications.addObserver(self, selector: #selector(userWillScroll), name: NSScrollView.willStartLiveScrollNotification, object: scrollView)
+        notifications.addObserver(self, selector: #selector(userDidScroll), name: NSScrollView.didLiveScrollNotification, object: scrollView)
+    }
     deinit { NotificationCenter.default.removeObserver(self) }
     override func viewDidLayout() { super.viewDidLayout(); let width = scrollView.contentView.bounds.width; column.width = width; if width != measuredWidth { measuredWidth = width; measurer.invalidateAll(); tableView.noteHeightOfRows(withIndexesChanged: IndexSet(0 ..< rows.count)) }; installIfPossible(); reportViewport(reason: .layout) }
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -46,6 +76,13 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private func reveal(_ id: TimelineRowID, animated: Bool, highlight: Bool) { guard let index = rows.firstIndex(where: { $0.id == id }) else { return }; let rect = tableView.rect(ofRow: index); scrollView.contentView.scroll(to: .init(x: 0, y: max(0, rect.midY - scrollView.contentView.bounds.height / 2))); scrollView.reflectScrolledClipView(scrollView.contentView); guard highlight else { return }; highlightedRowID = id; tableView.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0)); highlightTask?.cancel(); highlightTask = Task { [weak self] in do { try await Task.sleep(for: .seconds(1.5)) } catch { return }; guard let self, self.highlightedRowID == id, let current = self.rows.firstIndex(where: { $0.id == id }) else { return }; self.highlightedRowID = nil; self.tableView.reloadData(forRowIndexes: IndexSet(integer: current), columnIndexes: IndexSet(integer: 0)) } }
     private func finishRequest() { if let request = model.updates.value.pendingScroll, installedRevision == model.updates.value.revision { model.scrollRequestDidFinish(id: request.id) } }
     @objc private func boundsChanged() { guard !applying else { return }; reportViewport(reason: .layout) }
+    @objc private func userWillScroll() { model.userScrollBegan() }
+    @objc private func userDidScroll() {
+        guard !applying else { return }
+        // Legacy mouse wheels do not send willStart/didEnd live-scroll notifications.
+        model.userScrollBegan()
+        reportViewport(reason: .user)
+    }
     private func reportViewport(reason: TimelineViewportChangeReason) { let visible = scrollView.documentVisibleRect; let range = tableView.rows(in: visible); model.viewportDidChange(.init(firstVisibleIndex: range.location == NSNotFound ? nil : range.location, lastVisibleIndex: range.location == NSNotFound ? nil : range.location + range.length - 1, distanceToTop: max(0, visible.minY), distanceToBottom: max(0, tableView.bounds.height - visible.maxY), height: visible.height), reason: reason, revision: installedRevision) }
 }
 #endif
