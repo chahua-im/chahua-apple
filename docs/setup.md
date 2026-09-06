@@ -31,3 +31,16 @@ Follow these steps to prepare the Ruby and Fastlane tooling used by the project.
    ```sh
    bundle exec fastlane ios sync_development_signing
    ```
+
+## Unit tests
+
+The Xcode unit-test target runs inside the platform application. `ChahuaApp` detects the hosted XCTest process and supplies an empty window instead of constructing the production composition root. Unit-test startup must not restore a real session, access the Keychain, or start network requests.
+
+Tests construct the models and views they exercise with injected dependencies. Authentication tests should use `InMemorySessionTokenStorage` (or a purpose-built storage test double), not `KeychainTokenStorage`. Real Keychain integration should be a separate, explicitly opted-in check.
+
+Run the app's unit-test suite on either platform:
+
+```sh
+xcodebuild test -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=macOS,arch=arm64'
+xcodebuild test -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17'
+```
