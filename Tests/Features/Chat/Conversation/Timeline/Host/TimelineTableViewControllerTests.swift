@@ -23,6 +23,110 @@ final class TimelineTableViewControllerTests: XCTestCase {
         try await checkSameDayPrepend(scrollY: 100)
     }
 
+    func testLiveArrivalDuringInitialScrollCompletionIsRenderedWithoutAnotherLayout() async throws {
+        let page = try TimelineTestFixtures.page([TimelineTestFixtures.message(id: "0", at: 0)])
+        let live = try TimelineTestFixtures.message(id: "1", at: 1)
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore()
+        )
+        let controller = TimelineTableViewController(model: model)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        var delivered = false
+        let subscription = model.updates.sink { snapshot in
+            guard !delivered, snapshot.pendingScroll == nil, !snapshot.rows.isEmpty else { return }
+            delivered = true
+            model.receiveLive(live)
+        }
+        defer { subscription.cancel() }
+
+        await model.loadInitial()
+        XCTAssertEqual(model.rows.compactMap(\.messageID), ["0", "1"])
+        XCTAssertEqual(table.numberOfRows, model.rows.count,
+                       "A reentrant live update must not wait for an unrelated future layout")
+        XCTAssertNil(model.updates.value.pendingScroll)
+    }
+
+    func testResizingPreservesBottomAttachmentAndHistoryAnchor() async throws {
+        let page = try TimelineTestFixtures.page((0 ..< 40).map {
+            try TimelineTestFixtures.message(
+                id: "\($0)", senderID: 2, at: $0,
+                text: String(repeating: "Wrapping text changes the height of this message. ", count: 4)
+            )
+        })
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: true,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore()
+        )
+        let controller = TimelineTableViewController(model: model)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 500)
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        await model.loadInitial()
+        let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+
+        controller.view.setFrameSize(NSSize(width: 600, height: 300))
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1,
+                       "A height-only resize must keep the latest message attached to the bottom")
+
+        model.userScrollBegan()
+        let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "10" })
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: index).minY + 12))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        let offset = table.rect(ofRow: index).minY - scroll.documentVisibleRect.minY
+
+        controller.view.setFrameSize(NSSize(width: 320, height: 400))
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        XCTAssertEqual(table.rect(ofRow: index).minY - scroll.documentVisibleRect.minY, offset, accuracy: 1,
+                       "Reflow must preserve the partially visible message, not the old absolute offset")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(table.rect(ofRow: index).minY - scroll.documentVisibleRect.minY, offset, accuracy: 1,
+                       "A delayed row-height animation must not move the reader after restoration")
+        XCTAssertFalse(model.state.live.followsLatest)
+    }
+
+    func testUserScrollCancelsAnimatedJumpWithoutLaterMovement() async throws {
+        let page = try TimelineTestFixtures.page((0 ..< 25).map {
+            try TimelineTestFixtures.message(id: "\($0)", at: $0)
+        })
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore()
+        )
+        let controller = TimelineTableViewController(model: model)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        await model.loadInitial()
+        let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        model.userScrollBegan()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
+        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        await model.jumpToLiveEdge()
+        XCTAssertNotNil(model.updates.value.pendingScroll)
+        try await Task.sleep(for: .milliseconds(50))
+
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 80))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+        XCTAssertNil(model.updates.value.pendingScroll)
+        let userPosition = scroll.documentVisibleRect.minY
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(scroll.documentVisibleRect.minY, userPosition, accuracy: 1,
+                       "Cancelled navigation must not overwrite the user's new position")
+        XCTAssertFalse(model.state.live.followsLatest)
+    }
+
     private func checkSameDayPrepend(scrollY: CGFloat) async throws {
         func page(_ ids: ClosedRange<Int>, olderCursor: String?) throws -> ListMessagesResponse {
             try TimelineTestFixtures.page(ids.map {

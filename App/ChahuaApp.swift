@@ -7,15 +7,25 @@ import SwiftUI
 
 @main
 struct ChahuaApp: App {
-    private let compositionRoot: AppCompositionRoot
+    private let compositionRoot: AppCompositionRoot?
 
     init() {
-        compositionRoot = AppCompositionRoot(apiConfiguration: AppConfiguration.apiConfiguration)
+        // Hosted unit tests need a platform application/window, not production startup.
+        // Do not construct authentication or network dependencies in the XCTest process.
+        if NSClassFromString("XCTestCase") != nil {
+            compositionRoot = nil
+        } else {
+            compositionRoot = AppCompositionRoot(apiConfiguration: AppConfiguration.apiConfiguration)
+        }
     }
 
     var body: some Scene {
         WindowGroup {
-            compositionRoot
+            if let compositionRoot {
+                compositionRoot
+            } else {
+                Color.clear
+            }
         }
     }
 }

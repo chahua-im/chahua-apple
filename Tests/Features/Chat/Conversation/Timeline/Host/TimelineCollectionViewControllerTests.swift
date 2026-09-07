@@ -1,11 +1,92 @@
 #if os(iOS)
 import ChahuaAPI
+import Combine
 import UIKit
 import XCTest
 @testable import chahua_apple
 
 @MainActor
 final class TimelineCollectionViewControllerTests: XCTestCase {
+    func testSameDayPrependAndViewportChangesPreserveReaderPosition() async throws {
+        let messages = try (0 ..< 50).map {
+            try TimelineTestFixtures.message(
+                id: "\($0)", senderID: 2, at: $0,
+                text: String(repeating: "A wrapping message keeps its position while history loads. ", count: 3)
+            )
+        }
+        let source = CollectionHistorySource(
+            initial: try TimelineTestFixtures.page(Array(messages[20...]), olderCursor: "20"),
+            older: try TimelineTestFixtures.page(Array(messages[..<20]))
+        )
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: true,
+            source: source, messageStore: ConversationMessageStore()
+        )
+        let parent = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = parent
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let controller = TimelineCollectionViewController(model: model)
+        parent.addChild(controller)
+        parent.view.addSubview(controller.view)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 600)
+        controller.didMove(toParent: parent)
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.contentInsetAdjustmentBehavior = .never
+        parent.view.layoutIfNeeded()
+        await model.loadInitial()
+        controller.viewDidLayoutSubviews()
+        try await Task.sleep(for: .milliseconds(100))
+        await model.jumpToLiveEdge()
+        XCTAssertNil(model.updates.value.pendingScroll,
+                     "A jump already at its destination must finish without an animation callback")
+
+        controller.view.frame.size.height = 350
+        parent.view.layoutIfNeeded()
+        controller.viewDidLayoutSubviews()
+        XCTAssertEqual(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height, 0, accuracy: 1)
+        collection.contentInset.bottom = 80
+        controller.viewDidLayoutSubviews()
+        XCTAssertEqual(collection.contentSize.height + collection.adjustedContentInset.bottom
+                       - collection.contentOffset.y - collection.bounds.height, 0, accuracy: 1,
+                       "Bottom attachment must account for a changing composer inset")
+
+        controller.scrollViewWillBeginDragging(collection)
+        collection.setContentOffset(.zero, animated: false)
+        XCTAssertEqual(model.state.older, .loading, "Prefetch must start during the gesture, not only at its end")
+        let messageID = try XCTUnwrap(model.rows.first { $0.messageID == "20" }).id
+        func messageOffset() throws -> CGFloat {
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.id == messageID })
+            let frame = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))).frame
+            return frame.minY - collection.contentOffset.y - collection.adjustedContentInset.top
+        }
+        let offset = try messageOffset()
+        for _ in 0 ..< 50 {
+            if model.rows.contains(where: { $0.messageID == "0" }) { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(model.rows.compactMap(\.messageID), messages.map(\.id))
+        collection.layoutIfNeeded()
+        XCTAssertEqual(try messageOffset(), offset, accuracy: 1,
+                       "Anchor the message, not the same-day separator above inserted history")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(try messageOffset(), offset, accuracy: 1,
+                       "Batch animations must not move the reader after anchor restoration")
+        controller.scrollViewDidEndDragging(collection, willDecelerate: false)
+        let index = try XCTUnwrap(model.rows.firstIndex { $0.id == messageID })
+        let frame = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))).frame
+        collection.setContentOffset(CGPoint(x: 0, y: frame.minY + 12), animated: false)
+        let resizeOffset = try messageOffset()
+
+        controller.view.frame.size = CGSize(width: 300, height: 450)
+        parent.view.layoutIfNeeded()
+        controller.viewDidLayoutSubviews()
+        XCTAssertEqual(try messageOffset(), resizeOffset, accuracy: 1)
+        XCTAssertFalse(model.state.live.followsLatest)
+    }
+
     func testRowHeightsFollowWidthAndDynamicTypeWhileReadingHistory() async throws {
         let messages = try (0 ..< 15).map {
             try TimelineTestFixtures.message(
@@ -84,5 +165,20 @@ private final class BubbleSource: TimelineMessageSource {
     let page: ListMessagesResponse
     init(page: ListMessagesResponse) { self.page = page }
     func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { page }
+}
+
+@MainActor
+private final class CollectionHistorySource: TimelineMessageSource {
+    let initial: ListMessagesResponse
+    let older: ListMessagesResponse
+
+    init(initial: ListMessagesResponse, older: ListMessagesResponse) {
+        self.initial = initial
+        self.older = older
+    }
+
+    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse {
+        query.before == nil ? initial : older
+    }
 }
 #endif
