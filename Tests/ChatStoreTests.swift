@@ -40,24 +40,6 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(invalidTokenCalls, 1)
     }
 
-    func testFetchedMessagesAreScopedAndUpserted() async throws {
-        let original = try message(id: "a", chatID: "1", text: "original")
-        let replacement = try message(id: "a", chatID: "1", text: "replacement")
-        let other = try message(id: "b", chatID: "2", text: "other")
-        let api = FakeChatAPI(messageResults: [
-            "1": [.success(try listResponse(messages: [original])), .success(try listResponse(messages: [replacement]))],
-            "2": [.success(try listResponse(messages: [other]))],
-        ])
-        let store = ChatStore(apiClient: api, onInvalidToken: {})
-
-        _ = try await store.fetchMessages(chatID: "1")
-        _ = try await store.fetchMessages(chatID: "2")
-        _ = try await store.fetchMessages(chatID: "1")
-
-        XCTAssertEqual(store.state.messagesByChatID["1"]?.count, 1)
-        XCTAssertEqual(store.state.messagesByChatID["1"]?["a"]?.message, "replacement")
-        XCTAssertEqual(store.state.messagesByChatID["2"]?["b"]?.message, "other")
-    }
 
     func testResetClearsStateAndIgnoresPriorRequest() async {
         let api = FakeChatAPI(suspendChatRequests: true)
@@ -71,37 +53,86 @@ final class ChatStoreTests: XCTestCase {
 
         XCTAssertEqual(store.state.chatListLoadPhase, .idle)
         XCTAssertTrue(store.state.chats.isEmpty)
-        XCTAssertTrue(store.state.messagesByChatID.isEmpty)
     }
 
     private func chat(id: String) -> ChatListItem {
         ChatListItem(id: id, name: "Chat \(id)", unreadCount: 0, archived: false, kind: .group)
     }
 
-    private func message(id: String, chatID: String, text: String) throws -> MessageResponse {
-        let data = Data(#"""
-        {
-          "id": "\#(id)", "chatId": "\#(chatID)", "clientGeneratedId": "client-\#(id)", "messageType": "text",
-          "sender": {"uid": 1, "gender": 0, "name": "Ada", "avatarUrl": null, "userGroup": null},
-          "createdAt": "2026-08-31T12:34:56Z", "isEdited": false, "isDeleted": false,
-          "hasAttachments": false, "attachments": [], "reactions": [], "mentions": [], "message": "\#(text)"
-        }
-        """#.utf8)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(MessageResponse.self, from: data)
+    func testRefreshReplacesLoadedAndEmptyListsAndRetainsRowsOnFailure() async {
+        let api = FakeChatAPI(chatResults: [
+            .success(ListChatsResponse(chats: [])),
+            .success(ListChatsResponse(chats: [chat(id: "2")], nextCursor: "next")),
+            .success(ListChatsResponse(chats: [chat(id: "2"), chat(id: "1")])),
+            .failure(FakeChatAPIError.failed),
+        ])
+        let store = ChatStore(apiClient: api, onInvalidToken: {})
+        await store.loadActiveChats()
+        await store.refreshActiveChats()
+        XCTAssertEqual(store.state.chats.map(\.id), ["2", "1"])
+        await store.refreshActiveChats()
+        XCTAssertEqual(store.state.chats.map(\.id), ["2", "1"])
+        XCTAssertEqual(store.state.chatListLoadPhase, .loaded)
+        XCTAssertTrue(store.state.chatListRefreshFailed)
     }
 
-    private func listResponse(messages: [MessageResponse]) throws -> ListMessagesResponse {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        let messagesJSON = try String(decoding: encoder.encode(messages), as: UTF8.self)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(
-            ListMessagesResponse.self,
-            from: Data("{\"messages\":\(messagesJSON)}".utf8)
+    func testRepeatedCursorRetainsPreviousSnapshot() async {
+        let api = FakeChatAPI(chatResults: [
+            .success(ListChatsResponse(chats: [chat(id: "original")])),
+            .success(ListChatsResponse(chats: [chat(id: "partial")], nextCursor: "same")),
+            .success(ListChatsResponse(chats: [], nextCursor: "same")),
+        ])
+        let store = ChatStore(apiClient: api, onInvalidToken: {})
+        await store.loadActiveChats()
+        await store.refreshActiveChats()
+        XCTAssertEqual(store.state.chats.map(\.id), ["original"])
+        XCTAssertTrue(store.state.chatListRefreshFailed)
+    }
+
+    func testEventDuringRefreshRequiresTrailingSnapshot() async throws {
+        let api = FakeChatAPI(suspendChatRequests: true)
+        let store = ChatStore(apiClient: api, onInvalidToken: {})
+        let load = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        let event = try JSONDecoder().decode(
+            RealtimeServerEvent.self,
+            from: Data(#"{"type":"chatArchiveStateChanged","payload":{"chatId":"1","archived":true}}"#.utf8)
         )
+        store.applyRealtimeEvent(event, currentUserID: 1)
+        await api.resumeChatRequest(with: .success(ListChatsResponse(chats: [chat(id: "old")])))
+        await api.waitForChatRequest()
+        await api.resumeChatRequest(with: .success(ListChatsResponse(chats: [chat(id: "new")])))
+        await load.value
+        XCTAssertEqual(store.state.chats.map(\.id), ["new"])
+    }
+
+    func testOldSessionErrorCannotExpireReplacementSession() async {
+        let api = FakeChatAPI(suspendChatRequests: true)
+        var expired = false
+        let store = ChatStore(apiClient: api, onInvalidToken: { expired = true })
+        let load = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        store.reset()
+        await api.resumeChatRequest(with: .failure(APIError.invalidToken))
+        await load.value
+        XCTAssertFalse(expired)
+        XCTAssertEqual(store.state.chatListLoadPhase, .idle)
+    }
+
+    func testForegroundRefreshDoesNotReuseCanceledBackgroundSnapshot() async {
+        let api = FakeChatAPI(suspendChatRequests: true)
+        let store = ChatStore(apiClient: api, onInvalidToken: {})
+        let oldRefresh = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        store.cancelRealtimeRecovery()
+        await api.resumeChatRequest(with: .success(ListChatsResponse(chats: [chat(id: "stale")])))
+        await oldRefresh.value
+        XCTAssertTrue(store.state.chats.isEmpty)
+        let foregroundRefresh = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        await api.resumeChatRequest(with: .success(ListChatsResponse(chats: [chat(id: "fresh")])))
+        await foregroundRefresh.value
+        XCTAssertEqual(store.state.chats.map(\.id), ["fresh"])
     }
 }
 
@@ -137,6 +168,7 @@ private actor FakeChatAPI: ChahuaAPIClient {
             return try await withCheckedThrowingContinuation { pendingChatRequest = $0 }
         }
 
+        guard !chatResults.isEmpty else { throw APIError.unavailable }
         return try chatResults.removeFirst().get()
     }
 

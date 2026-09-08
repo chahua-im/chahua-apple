@@ -5,6 +5,9 @@ struct AppRootView: View {
     @ObservedObject var model: AuthSessionModel
     @ObservedObject var chatStore: ChatStore
     let mediaContext: AppMediaContext
+    let realtimeCoordinator: RealtimeCoordinator
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var sceneID = UUID()
     var body: some View {
         Group {
             switch model.state {
@@ -29,14 +32,10 @@ struct AppRootView: View {
                 )
             }
         }
-        .task { model.bootstrap() }
-        .onReceive(model.$state) { state in
-            if case .authenticated(let me) = state {
-                mediaContext.activate(uid: me.uid)
-            } else {
-                mediaContext.activate(uid: nil)
-                chatStore.reset()
-            }
+        .onAppear { realtimeCoordinator.setSceneActive(id: sceneID, active: scenePhase == .active) }
+        .onChange(of: scenePhase) { phase in
+            realtimeCoordinator.setSceneActive(id: sceneID, active: phase == .active)
         }
+        .onDisappear { realtimeCoordinator.removeScene(id: sceneID) }
     }
 }

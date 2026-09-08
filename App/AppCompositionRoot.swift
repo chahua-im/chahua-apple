@@ -1,55 +1,58 @@
 import ChahuaAPI
+import Combine
 import Foundation
-import SwiftUI
 
-struct AppCompositionRoot: View {
-    @StateObject private var sessionModel: AuthSessionModel
-    @StateObject private var chatStore: ChatStore
-    @StateObject private var mediaContext: AppMediaContext
+@MainActor
+final class AppCompositionRoot {
+    let sessionModel: AuthSessionModel
+    let chatStore: ChatStore
+    let mediaContext: AppMediaContext
+    let realtimeCoordinator: RealtimeCoordinator
+    private var sessionObservation: AnyCancellable?
 
-    init(apiConfiguration: ChahuaConfiguration) {
-        let tokenStorage = KeychainTokenStorage()
-        let apiClient = ChahuaClient(configuration: apiConfiguration)
-        let sessionModel = AuthSessionModel(
-            apiClient: apiClient,
+    convenience init(apiConfiguration: ChahuaConfiguration) {
+        let client = ChahuaClient(configuration: apiConfiguration)
+        self.init(
+            apiClient: client,
+            realtimeProvider: client,
             credentialLoginClient: PrototypeCredentialLoginClient(),
-            tokenStorage: tokenStorage
-        )
-        _sessionModel = StateObject(wrappedValue: sessionModel)
-        _chatStore = StateObject(wrappedValue: ChatStore(
-            apiClient: apiClient,
-            onInvalidToken: { [weak sessionModel] in await sessionModel?.sessionDidExpire() }
-        ))
-        _mediaContext = StateObject(wrappedValue: AppMediaContext(
-            rootDirectory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            tokenStorage: KeychainTokenStorage(),
+            mediaDirectory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("app.chahua.chat/MediaCache", isDirectory: true),
-            namespace: apiConfiguration.baseURL.absoluteString
-        ))
+            mediaNamespace: apiConfiguration.baseURL.absoluteString
+        )
     }
 
     init(
         apiClient: any ChahuaAPIClient,
+        realtimeProvider: any RealtimeConnectionProviding,
         credentialLoginClient: any CredentialLoginProviding,
         tokenStorage: any SessionTokenStorage,
-        mediaDirectory: URL? = nil
+        mediaDirectory: URL? = nil,
+        mediaNamespace: String = "injected"
     ) {
         let sessionModel = AuthSessionModel(
             apiClient: apiClient,
             credentialLoginClient: credentialLoginClient,
             tokenStorage: tokenStorage
         )
-        _sessionModel = StateObject(wrappedValue: sessionModel)
-        _chatStore = StateObject(wrappedValue: ChatStore(
-            apiClient: apiClient,
-            onInvalidToken: { [weak sessionModel] in await sessionModel?.sessionDidExpire() }
-        ))
-        _mediaContext = StateObject(wrappedValue: AppMediaContext(
-            rootDirectory: mediaDirectory,
-            namespace: "injected"
-        ))
-    }
-
-    var body: some View {
-        AppRootView(model: sessionModel, chatStore: chatStore, mediaContext: mediaContext)
+        self.sessionModel = sessionModel
+        let invalidToken: @MainActor @Sendable () async -> Void = { [weak sessionModel] in
+            await sessionModel?.sessionDidExpire()
+        }
+        chatStore = ChatStore(apiClient: apiClient, onInvalidToken: invalidToken)
+        mediaContext = AppMediaContext(rootDirectory: mediaDirectory, namespace: mediaNamespace)
+        realtimeCoordinator = RealtimeCoordinator(provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
+        sessionObservation = sessionModel.$state.sink { [weak self] state in
+            guard let self else { return }
+            if case .authenticated(let me) = state {
+                self.mediaContext.activate(uid: me.uid)
+                self.realtimeCoordinator.setSession(uid: me.uid)
+            } else {
+                self.mediaContext.activate(uid: nil)
+                self.realtimeCoordinator.setSession(uid: nil)
+            }
+        }
+        sessionModel.bootstrap()
     }
 }

@@ -45,7 +45,7 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(window.newerCursor, "3")
     }
 
-    func testLiveInsertionDefersOffLiveEdgeAndUpdatesExistingMessage() throws {
+    func testLiveInsertionDefersOffLiveEdgeAndNeverReplacesDuplicateContent() throws {
         var window = TimelineWindow()
         window.replace(with: try page([message("1", at: 1)], newerCursor: "1"))
         XCTAssertEqual(window.insertLive(message("2", at: 2)), .deferred)
@@ -53,21 +53,18 @@ final class TimelineWindowTests: XCTestCase {
 
         window.replace(with: try page([message("1", at: 1)]))
         XCTAssertEqual(window.insertLive(message("2", at: 2)), .appended)
-        XCTAssertEqual(window.insertLive(message("2", at: 2, text: "updated")), .updated)
+        XCTAssertEqual(window.insertLive(message("2", at: 2, text: "stale echo")), .duplicate)
         XCTAssertEqual(window.messages.map(\.id), ["1", "2"])
-        XCTAssertEqual(window.messages[1].message, "updated")
+        XCTAssertEqual(window.messages[1].message, "message 2")
     }
 
-    func testMergeLiveReplacesKnownMessagesAndOrdersBatchChronologically() throws {
+    func testAuthoritativePageReplacesKnownContentAndOrdersEqualTimeMessages() throws {
         var window = TimelineWindow()
         window.replace(with: try page([message("2", at: 2), message("1", at: 1)]))
-
-        window.mergeLive([
-            message("2", at: 2, text: "updated"),
-            message("3", at: 3),
-        ])
-
-        XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3"])
+        window.appendNewer(try page([
+            message("3b", at: 3), message("2", at: 2, text: "updated"), message("3a", at: 3),
+        ]))
+        XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3a", "3b"])
         XCTAssertEqual(window.messages[1].message, "updated")
     }
 
@@ -77,12 +74,24 @@ final class TimelineWindowTests: XCTestCase {
         var window = TimelineWindow()
         window.replace(with: try page([provisional]))
 
-        XCTAssertEqual(window.insertLive(acknowledged), .updated)
+        window.appendNewer(try page([acknowledged]))
         XCTAssertEqual(window.count, 1)
         XCTAssertEqual(window.messages[0].id, "server-99")
         XCTAssertEqual(window.index(of: .clientGenerated("send-1")), 0)
         XCTAssertEqual(window.index(ofServerID: "server-99"), 0)
         XCTAssertNil(window.index(ofServerID: "local-1"))
+    }
+
+    func testServerIdentityWinsWhenClientIdentityChangesAndPagesContainDuplicates() throws {
+        var window = TimelineWindow()
+        window.replace(with: try page([
+            message("server", at: 1, clientGeneratedID: ""),
+            message("server", at: 1, text: "current", clientGeneratedID: "send"),
+        ]))
+        XCTAssertEqual(window.messages.map(\.message), ["current"])
+        XCTAssertEqual(window.insertLive(message("server", at: 1, text: "old", clientGeneratedID: "other")), .duplicate)
+        XCTAssertEqual(window.messages.map(\.message), ["current"])
+        XCTAssertEqual(window.index(of: .clientGenerated("send")), 0)
     }
 
     func testEmptyClientGeneratedIDFallsBackToServerID() throws {

@@ -11,77 +11,94 @@ struct TimelineWindow: Equatable {
     var isAtLiveEdge: Bool { newerCursor == nil }
     var hasOlder: Bool { olderCursor != nil }
     var count: Int { messages.count }
-    /// Stable keys of every loaded message; used to reconcile buffered live arrivals after a reload.
+    /// Identities in this loaded slice, independent of any other window.
     var stableKeys: Set<ConversationMessageStableKey> { Set(indexByStableKey.keys) }
 
     func index(of stableKey: ConversationMessageStableKey) -> Int? { indexByStableKey[stableKey] }
 
     func index(ofServerID id: String) -> Int? { indexByServerID[id] }
 
-    mutating func replace(with page: ListMessagesResponse) {
-        messages = Self.chronological(page.messages)
+    func index(matching message: MessageResponse) -> Int? {
+        indexByServerID[message.id] ?? (message.clientGeneratedId.isEmpty ? nil : indexByStableKey[message.timelineStableKey])
+    }
+
+    mutating func replace(with page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }) {
+        messages = []
+        rebuildIndexes()
+        mergeAuthoritative(page.messages.filter(accepting))
         olderCursor = page.olderCursor
         newerCursor = page.newerCursor
-        rebuildIndexes()
     }
 
     @discardableResult
-    mutating func prependOlder(_ page: ListMessagesResponse) -> Int {
-        let fresh = Self.chronological(page.messages).filter { indexByStableKey[$0.timelineStableKey] == nil }
-        messages = fresh + messages
+    mutating func prependOlder(_ page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }) -> Int {
+        let previousCount = count
+        mergeAuthoritative(page.messages.filter(accepting))
         olderCursor = page.messages.isEmpty ? nil : page.olderCursor
-        rebuildIndexes()
-        return fresh.count
+        return count - previousCount
     }
 
     @discardableResult
-    mutating func appendNewer(_ page: ListMessagesResponse) -> Int {
-        let fresh = Self.chronological(page.messages).filter { indexByStableKey[$0.timelineStableKey] == nil }
-        messages += fresh
+    mutating func appendNewer(_ page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }) -> Int {
+        let previousCount = count
+        mergeAuthoritative(page.messages.filter(accepting))
         newerCursor = page.messages.isEmpty ? nil : page.newerCursor
-        rebuildIndexes()
-        return fresh.count
-    }
-
-    mutating func mergeLive(_ messages: [MessageResponse]) {
-        guard !messages.isEmpty else { return }
-        var merged = Dictionary(uniqueKeysWithValues: self.messages.map { ($0.timelineStableKey, $0) })
-        for message in messages {
-            merged[message.timelineStableKey] = message
-        }
-        self.messages = merged.values.sorted {
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.timelineStableKey.sortValue < $1.timelineStableKey.sortValue
-        }
-        rebuildIndexes()
+        return count - previousCount
     }
 
     enum LiveInsertOutcome: Equatable {
         case appended
-        case updated
+        case duplicate
         case deferred
     }
 
     mutating func insertLive(_ message: MessageResponse) -> LiveInsertOutcome {
+        // A duplicate create is not a mutable snapshot, even in a historical window.
+        guard index(matching: message) == nil else { return .duplicate }
         guard isAtLiveEdge else { return .deferred }
-
-        if let index = indexByStableKey[message.timelineStableKey] {
-            messages[index] = message
-            rebuildIndexes()
-            return .updated
-        }
-
         messages.append(message)
+        messages = Self.chronological(messages)
         rebuildIndexes()
         return .appended
     }
 
     @discardableResult
     mutating func upsert(_ message: MessageResponse) -> Bool {
-        guard let index = indexByStableKey[message.timelineStableKey] else { return false }
-        messages[index] = message
+        guard let index = index(matching: message) else { return false }
+        replaceRecord(at: index, with: message)
+        messages = Self.chronological(messages)
         rebuildIndexes()
         return true
+    }
+
+    private mutating func mergeAuthoritative(_ incoming: [MessageResponse]) {
+        for message in incoming {
+            if let index = index(matching: message) {
+                replaceRecord(at: index, with: message)
+            } else {
+                let index = messages.count
+                messages.append(message)
+                indexByServerID[message.id] = index
+                indexByStableKey[message.timelineStableKey] = index
+            }
+        }
+        messages = Self.chronological(messages)
+        rebuildIndexes()
+    }
+
+    private mutating func replaceRecord(at index: Int, with message: MessageResponse) {
+        let conflictingIndex = indexByStableKey[message.timelineStableKey]
+        let previous = messages[index]
+        indexByServerID.removeValue(forKey: previous.id)
+        indexByStableKey.removeValue(forKey: previous.timelineStableKey)
+        messages[index] = message
+        if let conflictingIndex, conflictingIndex != index {
+            messages.remove(at: conflictingIndex)
+            rebuildIndexes()
+        } else {
+            indexByServerID[message.id] = index
+            indexByStableKey[message.timelineStableKey] = index
+        }
     }
 
     @discardableResult
@@ -124,10 +141,10 @@ struct TimelineWindow: Equatable {
     }
 
     static func chronological(_ page: [MessageResponse]) -> [MessageResponse] {
-        guard page.count >= 2, let first = page.first, let last = page.last, first.createdAt > last.createdAt else {
-            return page
+        page.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.timelineStableKey.sortValue < $1.timelineStableKey.sortValue
         }
-        return page.reversed()
     }
 
     private mutating func rebuildIndexes() {

@@ -5,6 +5,7 @@ struct ConversationTimelineView: View {
     @Environment(\.mediaContext) private var mediaContext
     @Environment(\.colorScheme) private var colorScheme
     var initialPosition: TimelineInitialPosition = .liveEdge
+    var loadsInitialAutomatically = true
     var actions = TimelineBubbleActions()
 
     var body: some View {
@@ -28,7 +29,7 @@ struct ConversationTimelineView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ChahuaTheme.conversationBackground(for: colorScheme))
-        .task { await model.loadInitial(position: initialPosition) }
+        .task { if loadsInitialAutomatically { await model.loadInitial(position: initialPosition) } }
     }
 
     @ViewBuilder
@@ -49,6 +50,17 @@ struct ConversationTimelineView: View {
                 .overlay(alignment: .bottom) { newerEdgeOverlay }
                 .overlay { if case .repositioning = model.state.content { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.medium)) } }
                 .overlay(alignment: .top) { if let failure = model.state.repositionFailure { failureBanner(failure) } }
+                .overlay(alignment: .top) {
+                    if model.state.reconciliationFailed {
+                        HStack {
+                            Text("Couldn’t refresh messages.")
+                            Spacer()
+                            Button("Retry") { Task { await model.reconcileAfterReconnect() } }
+                        }
+                        .font(.caption).padding(ChahuaTheme.Spacing.small)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)).padding()
+                    }
+                }
 
         }
     }
@@ -83,7 +95,9 @@ struct ConversationTimelineView: View {
         .font(.caption).padding(ChahuaTheme.Spacing.small).background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)).padding()
     }
 
-    private var canJumpToLiveEdge: Bool { !model.rows.isEmpty && !(model.isAtLiveEdge && model.state.live.followsLatest) }
+    private var canJumpToLiveEdge: Bool {
+        model.state.content == .ready && !(model.isAtLiveEdge && model.state.live.followsLatest)
+    }
 }
 
 #if os(iOS)

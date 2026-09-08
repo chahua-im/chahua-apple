@@ -136,8 +136,9 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
             value["clientGeneratedId"] = "diagnostic-pending"
             value["sender"] = sender(1)
             value["createdAt"] = ISO8601DateFormatter().string(from: Date())
+            if let threadID = timeline?.threadID { value["replyRootId"] = threadID }
             let message = try decoder.decode(MessageResponse.self, from: JSONSerialization.data(withJSONObject: value))
-            timeline?.receiveLive(message)
+            store.apply(.message(message))
         } catch { self.error = String(describing: error) }
     }
     func setThreadScope(_ enabled: Bool) {
@@ -148,7 +149,11 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
     func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse {
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         let data = try JSONSerialization.data(withJSONObject: [
-            "messages": try messages.map { try JSONSerialization.jsonObject(with: encoder.encode($0)) },
+            "messages": try messages.map { message in
+                var object = try JSONSerialization.jsonObject(with: encoder.encode(message)) as! [String: Any]
+                if let threadID = query.threadID { object["replyRootId"] = threadID }
+                return object
+            },
             "olderCursor": NSNull(), "newerCursor": NSNull(), "nextCursor": NSNull(), "prevCursor": NSNull()
         ])
         return try decoder.decode(ListMessagesResponse.self, from: data)

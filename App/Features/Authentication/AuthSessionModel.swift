@@ -8,7 +8,9 @@ enum AuthSessionState { case bootstrapping, signedOut(SignedOutReason), authenti
 
 @MainActor
 final class AuthSessionModel: ObservableObject {
-    @Published private(set) var state: AuthSessionState = .bootstrapping
+    @Published private(set) var state: AuthSessionState = .bootstrapping {
+        didSet { stateGeneration &+= 1 }
+    }
     @Published private(set) var validationMessage: LocalizedStringKey?
     @Published private(set) var isSubmitting = false
 
@@ -16,6 +18,7 @@ final class AuthSessionModel: ObservableObject {
     private let credentialLoginClient: any CredentialLoginProviding
     private let tokenStorage: any SessionTokenStorage
     private var bootstrapTask: Task<Void, Never>?
+    private var stateGeneration = 0
 
     private let logger = Logger(subsystem: "app.chahua.chat", category: "authentication")
 
@@ -115,8 +118,10 @@ final class AuthSessionModel: ObservableObject {
 
     func sessionDidExpire() async {
         guard case .authenticated = state else { return }
+        let expiredGeneration = stateGeneration
         logger.notice("Authenticated session expired")
         try? await tokenStorage.deleteToken()
+        guard stateGeneration == expiredGeneration else { return }
         validationMessage = nil
         state = .signedOut(.invalidOrRevoked)
     }

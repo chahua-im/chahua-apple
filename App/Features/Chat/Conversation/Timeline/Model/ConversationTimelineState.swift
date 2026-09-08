@@ -33,4 +33,6 @@ struct ConversationTimelineState: Equatable {
     var newer: Edge = .idle
     /// Non-blocking overlay: the last reposition that could not complete. Rows remain interactive.
     var repositionFailure: RepositionTarget?
+    /// HTTP recovery failed; the previous window remains browsable.
+    var reconciliationFailed = false
 }

@@ -27,9 +27,10 @@ final class TimelineTableViewControllerTests: XCTestCase {
     func testLiveArrivalDuringInitialScrollCompletionIsRenderedWithoutAnotherLayout() async throws {
         let page = try TimelineTestFixtures.page([TimelineTestFixtures.message(id: "0", at: 0)])
         let live = try TimelineTestFixtures.message(id: "1", at: 1)
+        let store = ConversationMessageStore()
         let model = ConversationTimelineModel(
             chatID: "chat", currentUserID: 1, isGroupChat: false,
-            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore()
+            source: HistorySource(initial: page, older: page), messageStore: store
         )
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
@@ -41,7 +42,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         let subscription = model.updates.sink { snapshot in
             guard !delivered, snapshot.pendingScroll == nil, !snapshot.rows.isEmpty else { return }
             delivered = true
-            model.receiveLive(live)
+            store.apply(.message(live))
         }
         defer { subscription.cancel() }
 

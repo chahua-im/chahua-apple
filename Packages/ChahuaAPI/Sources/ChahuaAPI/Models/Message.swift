@@ -16,17 +16,17 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     public let sender: User
     public let createdAt: Date
     public let isEdited: Bool
-    public let isDeleted: Bool
-    public let hasAttachments: Bool
-    public let attachments: [AttachmentResponse]
-    public let reactions: [ReactionSummary]
+    public private(set) var isDeleted: Bool
+    public private(set) var hasAttachments: Bool
+    public private(set) var attachments: [AttachmentResponse]
+    public private(set) var reactions: [ReactionSummary]
     /// Missing wire values decode as an empty array.
-    public let mentions: [MentionInfo]
-    public let message: String?
+    public private(set) var mentions: [MentionInfo]
+    public private(set) var message: String?
     public let replyRootId: String?
-    public let replyToMessage: MessagePreview?
-    public let sticker: MessageStickerResponse?
-    public let threadInfo: ThreadInfo?
+    public private(set) var replyToMessage: MessagePreview?
+    public private(set) var sticker: MessageStickerResponse?
+    public private(set) var threadInfo: ThreadInfo?
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -48,6 +48,45 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         sticker = try container.decodeIfPresent(MessageStickerResponse.self, forKey: .sticker)
         threadInfo = try container.decodeIfPresent(ThreadInfo.self, forKey: .threadInfo)
     }
+
+    public func replacingReactions(_ reactions: [ReactionSummary]) -> Self {
+        guard !isDeleted else { return self }
+        var copy = self
+        copy.reactions = reactions
+        return copy
+    }
+
+    public func replacingThreadReplyCount(_ count: Int64) -> Self {
+        var copy = self
+        copy.threadInfo = ThreadInfo(replyCount: count)
+        return copy
+    }
+
+    public func redactedForDeletion() -> Self {
+        var copy = self
+        copy.isDeleted = true
+        copy.message = nil
+        copy.sticker = nil
+        copy.hasAttachments = false
+        copy.attachments = []
+        copy.reactions = []
+        copy.mentions = []
+        return copy
+    }
+
+    public func normalizedForRealtime(currentUserID: Int32) -> Self {
+        var copy = isDeleted ? redactedForDeletion() : self
+        copy.reactions = copy.reactions.map { $0.normalizedForRealtime(currentUserID: currentUserID) }
+        copy.sticker = copy.sticker?.normalizedForRealtime()
+        return copy
+    }
+
+    public func redactingReplyPreview(messageIDs: Set<String>) -> Self {
+        guard let preview = replyToMessage, messageIDs.contains(preview.id) else { return self }
+        var copy = self
+        copy.replyToMessage = preview.redactedForDeletion()
+        return copy
+    }
 }
 
 /// Reduced message projection embedded in chat-list and reply-context responses.
@@ -60,11 +99,21 @@ public struct MessagePreview: Codable, Hashable, Sendable {
     public let createdAt: Date
     public let sender: User
     public let messageType: MessageType
-    public let attachments: [MessagePreviewAttachment]
-    public let mentions: [MentionInfo]
-    public let isDeleted: Bool
-    public let message: String?
-    public let sticker: MessagePreviewSticker?
+    public private(set) var attachments: [MessagePreviewAttachment]
+    public private(set) var mentions: [MentionInfo]
+    public private(set) var isDeleted: Bool
+    public private(set) var message: String?
+    public private(set) var sticker: MessagePreviewSticker?
+
+    public func redactedForDeletion() -> Self {
+        var copy = self
+        copy.isDeleted = true
+        copy.message = nil
+        copy.sticker = nil
+        copy.attachments = []
+        copy.mentions = []
+        return copy
+    }
 }
 
 public struct MessagePreviewAttachment: Codable, Hashable, Sendable {
@@ -89,10 +138,17 @@ public struct MessageStickerResponse: Codable, Hashable, Sendable {
     public let id: String
     public let emoji: String
     public let createdAt: Date
-    public let isFavorited: Bool
+    /// HTTP supplies recipient preference; realtime hydration cannot establish it.
+    public private(set) var isFavorited: Bool?
     public let media: MessageStickerMediaResponse
     public let name: String?
     public let description: String?
+
+    fileprivate func normalizedForRealtime() -> Self {
+        var copy = self
+        copy.isFavorited = nil
+        return copy
+    }
 }
 
 public struct MessageStickerMediaResponse: Codable, Hashable, Sendable {
@@ -107,8 +163,15 @@ public struct MessageStickerMediaResponse: Codable, Hashable, Sendable {
 public struct ReactionSummary: Codable, Hashable, Sendable {
     public let emoji: String
     public let count: Int64
-    public let reactedByMe: Bool?
+    public private(set) var reactedByMe: Bool?
     public let reactors: [ReactionReactor]?
+
+    public func normalizedForRealtime(currentUserID: Int32) -> Self {
+        var copy = self
+        // Reactor lists are truncated: absence is unknown, never proof of false.
+        copy.reactedByMe = reactors?.contains { $0.uid == currentUserID } == true ? true : nil
+        return copy
+    }
 }
 
 public struct ReactionReactor: Codable, Hashable, Sendable {

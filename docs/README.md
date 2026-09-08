@@ -8,3 +8,7 @@ use
 ```bash
 curl "https://wchat.codetector.org/_api/api-docs/openapi.json" -o openapi.json
 ```
+
+## Architecture
+
+- [Realtime messaging architecture](arch/realtime-messaging.md)

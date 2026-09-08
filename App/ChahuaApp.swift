@@ -59,7 +59,12 @@ struct ChahuaApp: App {
     @ViewBuilder
     private var productionRoot: some View {
         if let compositionRoot {
-            compositionRoot
+            AppRootView(
+                model: compositionRoot.sessionModel,
+                chatStore: compositionRoot.chatStore,
+                mediaContext: compositionRoot.mediaContext,
+                realtimeCoordinator: compositionRoot.realtimeCoordinator
+            )
                 #if os(macOS)
                 .frame(minWidth: ChatSplitMetrics.splitThreshold)
                 #endif

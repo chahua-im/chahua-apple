@@ -10,6 +10,16 @@ struct ChatListView: View {
     var body: some View {
         content
             .task { await store.loadActiveChats() }
+            #if os(macOS)
+            .toolbar {
+                Button {
+                    Task { await store.refreshActiveChats() }
+                } label: {
+                    Label("Refresh chats", systemImage: "arrow.clockwise")
+                }
+                .disabled(store.state.isRefreshingChats)
+            }
+            #endif
     }
 
     @ViewBuilder private var content: some View {
@@ -23,30 +33,41 @@ struct ChatListView: View {
                 retryTitle: "Try again",
                 onRetry: { Task { await store.loadActiveChats() } }
             )
-        case .loaded where store.state.chats.isEmpty:
-            ChahuaEmptyStateView(
-                title: "No active chats",
-                message: "Active chats will appear here.",
-                systemImage: "bubble.left.and.bubble.right"
-            )
         case .loaded:
-            List(store.state.chats) { chat in
-                Button {
-                    guard selectedChatID != chat.id else { return }
-                    onSelectChat(chat)
-                } label: {
-                    ChatListRow(chat: chat, showsDisclosureIndicator: showsDisclosureIndicator)
-                        .contentShape(Rectangle())
+            List {
+                if store.state.chatListRefreshFailed {
+                    HStack {
+                        Text("Couldn’t refresh chats.")
+                        Spacer()
+                        Button("Retry") { Task { await store.refreshActiveChats() } }
+                    }
                 }
-                .buttonStyle(.plain)
-                .listRowBackground(
-                    selectedChatID == chat.id
-                        ? ChahuaTheme.accent.opacity(0.14)
-                        : Color.clear
-                )
-                .accessibilityAddTraits(selectedChatID == chat.id ? .isSelected : [])
+                if store.state.chats.isEmpty {
+                    ChahuaEmptyStateView(
+                        title: "No active chats",
+                        message: "Active chats will appear here.",
+                        systemImage: "bubble.left.and.bubble.right"
+                    )
+                }
+                ForEach(store.state.chats) { chat in
+                    Button {
+                        guard selectedChatID != chat.id else { return }
+                        onSelectChat(chat)
+                    } label: {
+                        ChatListRow(chat: chat, showsDisclosureIndicator: showsDisclosureIndicator)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        selectedChatID == chat.id
+                            ? ChahuaTheme.accent.opacity(0.14)
+                            : Color.clear
+                    )
+                    .accessibilityAddTraits(selectedChatID == chat.id ? .isSelected : [])
+                }
             }
             .listStyle(.plain)
+            .refreshable { await store.refreshActiveChats() }
         }
     }
 }

@@ -15,7 +15,8 @@ enum TimelineTestFixtures {
         type: MessageType = .text,
         text: String? = nil,
         isDeleted: Bool = false,
-        clientGeneratedID: String? = nil
+        clientGeneratedID: String? = nil,
+        fields: [String: Any] = [:]
     ) throws -> MessageResponse {
         let data = Data("""
         {
@@ -25,7 +26,10 @@ enum TimelineTestFixtures {
           "hasAttachments": false, "attachments": [], "reactions": [], "mentions": [], "message": \(jsonString(text ?? "message \(id)"))
         }
         """.utf8)
-        return try decoder.decode(MessageResponse.self, from: data)
+        guard !fields.isEmpty else { return try decoder.decode(MessageResponse.self, from: data) }
+        var object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        object.merge(fields) { _, new in new }
+        return try decoder.decode(MessageResponse.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
     static func page(

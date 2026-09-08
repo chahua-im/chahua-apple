@@ -6,12 +6,29 @@ struct ConversationProjection: Hashable {
     let entries: [ConversationTimelineEntry]
 }
 
+enum ConversationChange {
+    case pendingChanged(chatID: String)
+    case realtime(RealtimeServerEvent)
+    case reset
+}
+
+/// Shared pending sends and synchronous ingress, not a canonical message database.
 @MainActor
 final class ConversationMessageStore: ObservableObject {
-    @Published private(set) var revision = 0
+    let changes = PassthroughSubject<ConversationChange, Never>()
 
     private var pendingOutgoingByChatID: [String: [PendingOutgoingMessage]] = [:]
-    private var deferredLiveByChatID: [String: [ConversationMessageStableKey: MessageResponse]] = [:]
+    private var receiveRevision: UInt64 = 0
+    private struct Snapshot {
+        let chatID: String
+        let revision: UInt64
+    }
+    private struct JournalEntry {
+        let revision: UInt64
+        let event: RealtimeServerEvent
+    }
+    private var snapshots: [UUID: Snapshot] = [:]
+    private var journals: [String: [JournalEntry]] = [:]
 
     func enqueue(_ pending: PendingOutgoingMessage) {
         precondition(!pending.clientGeneratedID.isEmpty, "Queued messages require a client-generated ID.")
@@ -21,7 +38,7 @@ final class ConversationMessageStore: ObservableObject {
             "A client-generated ID may be queued only once per chat."
         )
         pendingOutgoingByChatID[pending.chatID, default: []].append(pending)
-        publishChange()
+        changes.send(.pendingChanged(chatID: pending.chatID))
     }
 
     func markSending(chatID: String, clientGeneratedID: String) {
@@ -33,47 +50,50 @@ final class ConversationMessageStore: ObservableObject {
     }
 
     func discard(chatID: String, clientGeneratedID: String) {
-        guard var pending = pendingOutgoingByChatID[chatID], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else {
+        guard removePending(chatID: chatID, clientGeneratedID: clientGeneratedID) else { return }
+        changes.send(.pendingChanged(chatID: chatID))
+    }
+
+    func acknowledge(_ message: MessageResponse) { apply(.message(message)) }
+
+    func apply(_ event: RealtimeServerEvent) {
+        // Acknowledgement and remote insertion are one observable transition.
+        if case .message(let message) = event {
+            removePending(chatID: message.chatId, clientGeneratedID: message.clientGeneratedId)
+        }
+        receiveRevision &+= 1
+        if let chatID = event.conversationChatID, snapshots.values.contains(where: { $0.chatID == chatID }) {
+            journals[chatID, default: []].append(.init(revision: receiveRevision, event: event))
+        }
+        changes.send(.realtime(event))
+    }
+
+    func beginSnapshot(chatID: String) -> UUID {
+        let token = UUID()
+        snapshots[token] = Snapshot(chatID: chatID, revision: receiveRevision)
+        return token
+    }
+
+    func eventsDuringSnapshot(_ token: UUID) -> [RealtimeServerEvent] {
+        guard let snapshot = snapshots[token] else { return [] }
+        return journals[snapshot.chatID, default: []].compactMap { $0.revision > snapshot.revision ? $0.event : nil }
+    }
+
+    func endSnapshot(_ token: UUID) {
+        guard let snapshot = snapshots.removeValue(forKey: token) else { return }
+        guard let oldest = snapshots.values.filter({ $0.chatID == snapshot.chatID }).map(\.revision).min() else {
+            journals.removeValue(forKey: snapshot.chatID)
             return
         }
-        pending.remove(at: index)
-        pendingOutgoingByChatID[chatID] = pending
-        publishChange()
+        journals[snapshot.chatID]?.removeAll { $0.revision <= oldest }
     }
 
-    func acknowledge(_ message: MessageResponse) {
-        removePending(chatID: message.chatId, clientGeneratedID: message.clientGeneratedId)
-        upsertDeferredLive(message)
-        publishChange()
-    }
-
-    func receiveLive(_ message: MessageResponse) {
-        removePending(chatID: message.chatId, clientGeneratedID: message.clientGeneratedId)
-        upsertDeferredLive(message)
-        publishChange()
-    }
-
-    func applyLiveUpdate(_ message: MessageResponse) {
-        upsertDeferredLive(message)
-        publishChange()
-    }
-
-    func applyLiveRemoval(chatID: String, serverMessageID: String) {
-        guard var deferred = deferredLiveByChatID[chatID] else { return }
-        let keys = deferred.compactMap { $0.value.id == serverMessageID ? $0.key : nil }
-        let removed = !keys.isEmpty
-        keys.forEach { deferred.removeValue(forKey: $0) }
-        if removed {
-            deferredLiveByChatID[chatID] = deferred
-            publishChange()
-        }
-    }
-
-    func deferredLiveMessages(chatID: String) -> [MessageResponse] {
-        deferredLiveByChatID[chatID, default: [:]].values.sorted {
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.timelineStableKey.sortValue < $1.timelineStableKey.sortValue
-        }
+    func reset() {
+        pendingOutgoingByChatID.removeAll()
+        snapshots.removeAll()
+        journals.removeAll()
+        receiveRevision = 0
+        changes.send(.reset)
     }
 
     func projection(
@@ -81,55 +101,17 @@ final class ConversationMessageStore: ObservableObject {
         remoteMessages: [MessageResponse],
         includePendingOutgoing: Bool
     ) -> ConversationProjection {
-        var entriesByKey = Dictionary(uniqueKeysWithValues: remoteMessages.map {
-            (ConversationMessageStableKey($0), ConversationTimelineEntry.remote($0))
-        })
+        var entriesByKey: [ConversationMessageStableKey: ConversationTimelineEntry] = [:]
+        for message in remoteMessages { entriesByKey[message.timelineStableKey] = .remote(message) }
         if includePendingOutgoing {
             for pending in pendingOutgoingByChatID[chatID, default: []] where entriesByKey[.clientGenerated(pending.clientGeneratedID)] == nil {
                 entriesByKey[.clientGenerated(pending.clientGeneratedID)] = .pending(pending)
             }
         }
-
-        let entries = entriesByKey.values.sorted {
+        return ConversationProjection(entries: entriesByKey.values.sorted {
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.stableKey.sortValue < $1.stableKey.sortValue
-        }
-        return ConversationProjection(entries: entries)
-    }
-
-
-    func consumeDeferredLive(chatID: String, projectedKeys: Set<ConversationMessageStableKey>) {
-        guard var deferred = deferredLiveByChatID[chatID] else { return }
-        let originalCount = deferred.count
-        deferred = deferred.filter { !projectedKeys.contains($0.key) }
-        guard deferred.count != originalCount else { return }
-        deferredLiveByChatID[chatID] = deferred
-        publishChange()
-    }
-
-    /// Reconciles the buffer against a freshly installed live window. Drops anything the page
-    /// already contains (server copy wins) and anything older than the page's newest row, which
-    /// is now covered by server history and will arrive in order via older-paging. Keeps arrivals
-    /// at or after the newest row's timestamp that the page did not include: a tie is a message
-    /// created in the same second the page cut off, and nothing newer exists to page toward, so
-    /// dropping it would lose it until the next reload. Identity, not `createdAt`, decides
-    /// duplicates so clock skew cannot resurrect a covered message.
-    ///
-    /// `installedKeys` are the stable keys of every row in the new window; a buffered entry and
-    /// the page's copy of the same message share a stable key, so one set covers identity.
-    func reconcileDeferredLive(
-        chatID: String,
-        installedKeys: Set<ConversationMessageStableKey>,
-        newestCreatedAt: Date
-    ) {
-        guard var deferred = deferredLiveByChatID[chatID] else { return }
-        let originalCount = deferred.count
-        deferred = deferred.filter { key, message in
-            !installedKeys.contains(key) && message.createdAt >= newestCreatedAt
-        }
-        guard deferred.count != originalCount else { return }
-        deferredLiveByChatID[chatID] = deferred
-        publishChange()
+        })
     }
 
     private func mutatePending(
@@ -137,37 +119,32 @@ final class ConversationMessageStore: ObservableObject {
         clientGeneratedID: String,
         mutation: (inout PendingOutgoingMessage) -> Void
     ) {
-        guard var pending = pendingOutgoingByChatID[chatID], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else {
-            return
-        }
+        guard var pending = pendingOutgoingByChatID[chatID], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else { return }
         mutation(&pending[index])
         pendingOutgoingByChatID[chatID] = pending
-
-        publishChange()
+        changes.send(.pendingChanged(chatID: chatID))
     }
 
-    private func removePending(chatID: String, clientGeneratedID: String) {
-        guard var pending = pendingOutgoingByChatID[chatID], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else {
-            return
-        }
+    @discardableResult
+    private func removePending(chatID: String, clientGeneratedID: String) -> Bool {
+        guard !clientGeneratedID.isEmpty, var pending = pendingOutgoingByChatID[chatID], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else { return false }
         pending.remove(at: index)
         pendingOutgoingByChatID[chatID] = pending
-    }
-
-    private func upsertDeferredLive(_ message: MessageResponse) {
-        deferredLiveByChatID[message.chatId, default: [:]][message.timelineStableKey] = message
-    }
-
-    private func publishChange() {
-        revision &+= 1
+        return true
     }
 }
-#if DEBUG
-extension ConversationMessageStore {
-    /// Test observation only. Production UI must use server-backed unread state, never this
-    /// ephemeral render-buffer occupancy.
-    func bufferedLiveEventCountForTesting(chatID: String) -> Int {
-        deferredLiveByChatID[chatID, default: [:]].count
+
+extension RealtimeServerEvent {
+    /// Only mutations relevant to message snapshots belong in the request journal.
+    var conversationChatID: String? {
+        switch self {
+        case .message(let message), .messageUpdated(let message), .messageDeleted(let message): message.chatId
+        case .messagesBulkDeleted(let payload): payload.chatId
+        case .reactionUpdated(let payload): payload.chatId
+        case .threadUpdate(let payload): payload.chatId
+        case .pong, .chatArchiveStateChanged, .presenceUpdate, .threadMembershipChanged,
+             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
+             .friendRequestReceived, .friendRequestResolved, .friendshipRemoved, .unknown: nil
+        }
     }
 }
-#endif
