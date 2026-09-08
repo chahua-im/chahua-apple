@@ -1,5 +1,6 @@
 #if os(macOS)
 import ChahuaAPI
+import ChahuaMediaCache
 import SwiftUI
 
 struct MacBubbleMedia: View {
@@ -41,7 +42,8 @@ struct MacBubbleMedia: View {
                     url: URL(string: attachment.url),
                     contentMode: gallery ? .fill : .fit,
                     animates: true,
-                    showsBlurredBackdrop: !gallery
+                    showsBlurredBackdrop: !gallery,
+                    tag: CacheTag(rawValue: "chatMedia")
                 )
             }
         }

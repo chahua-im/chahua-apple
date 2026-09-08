@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConversationTimelineView: View {
     @ObservedObject var model: ConversationTimelineModel
+    @Environment(\.mediaContext) private var mediaContext
     var initialPosition: TimelineInitialPosition = .liveEdge
     var actions = TimelineBubbleActions()
 
@@ -51,9 +52,9 @@ struct ConversationTimelineView: View {
     @ViewBuilder
     private var timelineHost: some View {
         #if os(macOS)
-        TimelineHostView(model: model, actions: actions)
+        TimelineHostView(model: model, actions: actions, mediaContext: mediaContext)
         #else
-        TimelineHostView(model: model)
+        TimelineHostView(model: model, mediaContext: mediaContext)
         #endif
     }
 
@@ -86,15 +87,34 @@ struct ConversationTimelineView: View {
 import UIKit
 struct TimelineHostView: UIViewControllerRepresentable {
     let model: ConversationTimelineModel
-    func makeUIViewController(context: Context) -> TimelineCollectionViewController { TimelineCollectionViewController(model: model) }
-    func updateUIViewController(_ controller: TimelineCollectionViewController, context: Context) {}
+    var mediaContext: AppMediaContext?
+
+    func makeUIViewController(context: Context) -> TimelineCollectionViewController {
+        let controller = TimelineCollectionViewController(model: model)
+        controller.mediaContext = mediaContext
+        return controller
+    }
+
+    func updateUIViewController(_ controller: TimelineCollectionViewController, context: Context) {
+        controller.mediaContext = mediaContext
+    }
 }
 #elseif os(macOS)
 import AppKit
 struct TimelineHostView: NSViewControllerRepresentable {
     let model: ConversationTimelineModel
     var actions = TimelineBubbleActions()
-    func makeNSViewController(context: Context) -> TimelineTableViewController { TimelineTableViewController(model: model, actions: actions) }
-    func updateNSViewController(_ controller: TimelineTableViewController, context: Context) { controller.actions = actions }
+    var mediaContext: AppMediaContext?
+
+    func makeNSViewController(context: Context) -> TimelineTableViewController {
+        let controller = TimelineTableViewController(model: model, actions: actions)
+        controller.mediaContext = mediaContext
+        return controller
+    }
+
+    func updateNSViewController(_ controller: TimelineTableViewController, context: Context) {
+        controller.mediaContext = mediaContext
+        controller.actions = actions
+    }
 }
 #endif

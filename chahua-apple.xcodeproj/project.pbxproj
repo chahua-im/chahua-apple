@@ -10,6 +10,10 @@
 		C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0AA0001303BCC2200320001 /* ChahuaAPI */; };
 		C098620630463971003200C0 /* InfoPlist.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = C098620530463971003200C0 /* InfoPlist.xcstrings */; };
 		C0AA0003303BCC2200320001 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0AA0002303BCC2200320001 /* ChahuaAPI */; };
+		C0CC0001303BCC2200320001 /* ChahuaMediaCache in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0005303BCC2200320001 /* ChahuaMediaCache */; };
+		C0CC0002303BCC2200320001 /* ChahuaMediaCache in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0006303BCC2200320001 /* ChahuaMediaCache */; };
+		C0CC0003303BCC2200320001 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0007303BCC2200320001 /* Nuke */; };
+		C0CC0004303BCC2200320001 /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0008303BCC2200320001 /* Nuke */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -53,6 +57,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */,
+				C0CC0001303BCC2200320001 /* ChahuaMediaCache in Frameworks */,
+				C0CC0003303BCC2200320001 /* Nuke in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -61,6 +67,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0AA0003303BCC2200320001 /* ChahuaAPI in Frameworks */,
+				C0CC0002303BCC2200320001 /* ChahuaMediaCache in Frameworks */,
+				C0CC0004303BCC2200320001 /* Nuke in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -121,6 +129,8 @@
 			name = "chahua-apple";
 			packageProductDependencies = (
 				C0AA0001303BCC2200320001 /* ChahuaAPI */,
+				C0CC0005303BCC2200320001 /* ChahuaMediaCache */,
+				C0CC0007303BCC2200320001 /* Nuke */,
 			);
 			productName = "chahua-ios";
 			productReference = C0985FCE303BCC22003200C0 /* chahua-apple.app */;
@@ -145,6 +155,8 @@
 			name = "chahua-appleTests";
 			packageProductDependencies = (
 				C0AA0002303BCC2200320001 /* ChahuaAPI */,
+				C0CC0006303BCC2200320001 /* ChahuaMediaCache */,
+				C0CC0008303BCC2200320001 /* Nuke */,
 			);
 			productName = "chahua-iosTests";
 			productReference = C09860FE3044841E003200C0 /* chahua-appleTests.xctest */;
@@ -182,6 +194,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */,
+				C0CC0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaMediaCache" */,
+				C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Nuke" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C0985FCF303BCC22003200C0 /* Products */;
@@ -663,7 +677,22 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ChahuaAPI;
 		};
+		C0CC0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaMediaCache" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ChahuaMediaCache;
+		};
 /* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Nuke" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kean/Nuke.git";
+			requirement = {
+				kind = exactVersion;
+				version = 13.2.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		C0AA0001303BCC2200320001 /* ChahuaAPI */ = {
@@ -675,6 +704,26 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */;
 			productName = ChahuaAPI;
+		};
+		C0CC0005303BCC2200320001 /* ChahuaMediaCache */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0CC0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaMediaCache" */;
+			productName = ChahuaMediaCache;
+		};
+		C0CC0006303BCC2200320001 /* ChahuaMediaCache */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0CC0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaMediaCache" */;
+			productName = ChahuaMediaCache;
+		};
+		C0CC0007303BCC2200320001 /* Nuke */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = Nuke;
+		};
+		C0CC0008303BCC2200320001 /* Nuke */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = Nuke;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

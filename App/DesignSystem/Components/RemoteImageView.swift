@@ -1,3 +1,4 @@
+import ChahuaMediaCache
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -15,22 +16,23 @@ struct RemoteImageView: View {
     let contentMode: ContentMode
     let animates: Bool
     let showsBlurredBackdrop: Bool
-#if os(macOS)
-    @State private var nativePhase: NativeRemoteImagePhase = .empty
-#endif
+    let tag: CacheTag
+    @Environment(\.mediaContext) private var mediaContext
 
     init(
         url: URL?,
         phaseOverride: RemoteImagePhase? = nil,
         contentMode: ContentMode = .fill,
         animates: Bool = false,
-        showsBlurredBackdrop: Bool = false
+        showsBlurredBackdrop: Bool = false,
+        tag: CacheTag = CacheTag(rawValue: "chatMedia")
     ) {
         self.url = url
         self.phaseOverride = phaseOverride
         self.contentMode = contentMode
         self.animates = animates
         self.showsBlurredBackdrop = showsBlurredBackdrop
+        self.tag = tag
     }
 
     var body: some View {
@@ -40,7 +42,6 @@ struct RemoteImageView: View {
 #if os(macOS)
             if animates {
                 animatedContent
-                    .task(id: url) { await loadNativeImage() }
             } else {
                 staticContent
             }
@@ -50,17 +51,8 @@ struct RemoteImageView: View {
         }
     }
 
-    @ViewBuilder private var staticContent: some View {
-        if let url {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty: content(.empty)
-                case .success(let image): content(.success(image))
-                case .failure: content(.failure)
-                @unknown default: content(.failure)
-                }
-            }
-        } else { content(.failure) }
+    private var staticContent: some View {
+        CachedImageView(url: url, tag: tag, content: content)
     }
 
     @ViewBuilder private func content(_ phase: RemoteImagePhase) -> some View {
@@ -87,8 +79,8 @@ struct RemoteImageView: View {
     }
 
 #if os(macOS)
-    @ViewBuilder private var animatedContent: some View {
-        switch nativePhase {
+    @ViewBuilder private func nativeContent(_ phase: NativeRemoteImagePhase) -> some View {
+        switch phase {
         case .empty:
             content(.empty)
         case .failure:
@@ -124,41 +116,23 @@ struct RemoteImageView: View {
         }
     }
 
-    private func loadNativeImage() async {
-        nativePhase = .empty
-        guard let url else {
-            nativePhase = .failure
-            return
-        }
-        do {
-            let data: Data
+    @ViewBuilder private var animatedContent: some View {
+        if let url {
             if url.isFileURL {
-                let readTask = Task.detached(priority: .utility) {
-                    try Task.checkCancellation()
-                    return try Data(contentsOf: url)
-                }
-                data = try await withTaskCancellationHandler {
-                    try await readTask.value
-                } onCancel: {
-                    readTask.cancel()
-                }
+                NativeImageLoadingView(
+                    url: url,
+                    tag: tag,
+                    context: nil,
+                    activationID: nil,
+                    content: nativeContent
+                )
+            } else if let mediaContext {
+                ObservedNativeImageView(context: mediaContext, url: url, tag: tag, content: nativeContent)
             } else {
-                let (responseData, response) = try await URLSession.shared.data(from: url)
-                if let response = response as? HTTPURLResponse, !(200 ..< 300).contains(response.statusCode) {
-                    throw URLError(.badServerResponse)
-                }
-                data = responseData
+                content(.failure)
             }
-            try Task.checkCancellation()
-            guard let image = NSImage(data: data), image.isValid,
-                  image.size.width > 0, image.size.height > 0 else {
-                nativePhase = .failure
-                return
-            }
-            nativePhase = .success(image)
-        } catch {
-            guard !Task.isCancelled else { return }
-            nativePhase = .failure
+        } else {
+            content(.failure)
         }
     }
 #endif
@@ -169,6 +143,89 @@ private enum NativeRemoteImagePhase {
     case empty
     case success(NSImage)
     case failure
+}
+
+private struct ObservedNativeImageView<Content: View>: View {
+    @ObservedObject var context: AppMediaContext
+    let url: URL
+    let tag: CacheTag
+    @ViewBuilder var content: (NativeRemoteImagePhase) -> Content
+
+    var body: some View {
+        NativeImageLoadingView(
+            url: url,
+            tag: tag,
+            context: context,
+            activationID: context.activationID,
+            content: content
+        )
+    }
+}
+
+private struct NativeImageLoadingView<Content: View>: View {
+    let url: URL
+    let tag: CacheTag
+    let context: AppMediaContext?
+    let activationID: UUID?
+    @ViewBuilder var content: (NativeRemoteImagePhase) -> Content
+    @State private var phase: NativeRemoteImagePhase = .empty
+    @State private var loadedID: MediaImageTaskID?
+
+    var body: some View {
+        let identity = MediaImageTaskID(url: url, tag: tag, activationID: activationID, animates: true)
+        content(loadedID == identity ? phase : .empty)
+            .task(id: identity) { await loadNativeImage(identity: identity) }
+    }
+
+    private func loadNativeImage(identity: MediaImageTaskID) async {
+        guard !Task.isCancelled else { return }
+        loadedID = identity
+        phase = .empty
+        var lease: CachedFile?
+        do {
+            let fileURL: URL
+            if url.isFileURL {
+                fileURL = url
+            } else {
+                guard let context, let activationID else { throw MediaCacheError.invalidRequest }
+                let resources = try await context.resources(for: activationID)
+                try Task.checkCancellation()
+                let file = try await resources.cache.file(
+                    for: MediaRequest(request: URLRequest(url: url), tags: [tag])
+                )
+                lease = file
+                fileURL = file.url
+            }
+            let readTask = Task.detached(priority: .utility) {
+                try Task.checkCancellation()
+                return try Data(contentsOf: fileURL)
+            }
+            let data = try await withTaskCancellationHandler {
+                try await readTask.value
+            } onCancel: {
+                readTask.cancel()
+            }
+            try Task.checkCancellation()
+            guard let image = NSImage(data: data), image.isValid,
+                  image.size.width > 0, image.size.height > 0 else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            if let lease { try await lease.checkValidity() }
+            try Task.checkCancellation()
+            if isCurrent(identity) {
+                phase = .success(image)
+            }
+        } catch {
+            if !Task.isCancelled, isCurrent(identity) {
+                phase = .failure
+            }
+        }
+        if let lease { await lease.release() }
+    }
+
+    private func isCurrent(_ identity: MediaImageTaskID) -> Bool {
+        loadedID == identity && context?.activationID == identity.activationID
+    }
 }
 
 private struct NativeRemoteImageSurface: NSViewRepresentable {

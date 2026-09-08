@@ -51,6 +51,12 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             refreshVisibleRoots()
         }
     }
+    var mediaContext: AppMediaContext? {
+        didSet {
+            guard mediaContext !== oldValue, isViewLoaded else { return }
+            refreshVisibleRoots()
+        }
+    }
     private var measurer: TimelineRowMeasurer!
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
@@ -161,7 +167,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         let cell = tableView.makeView(withIdentifier: id, owner: self) as? TimelineTableCellView ?? TimelineTableCellView()
         cell.identifier = id
         let item = rows[row]
-        cell.hosting.rootView = TimelineBubbleView(row: item, context: rowContext(for: item), actions: actions)
+        cell.hosting.rootView = TimelineBubbleView(row: item, context: rowContext(for: item), actions: actions, mediaContext: mediaContext)
         return cell
     }
 
@@ -421,7 +427,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private func refreshHighlight(_ id: TimelineRowID) {
         guard let index = rows.firstIndex(where: { $0.id == id }),
               let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView else { return }
-        cell.hosting.rootView = TimelineBubbleView(row: rows[index], context: rowContext(for: rows[index]), actions: actions)
+        cell.hosting.rootView = TimelineBubbleView(row: rows[index], context: rowContext(for: rows[index]), actions: actions, mediaContext: mediaContext)
     }
 
     private var heightRefreshIndexes: IndexSet {
@@ -464,7 +470,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             guard let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView else { continue }
             let context = rowContext(for: rows[index])
             if geometryOnly, cell.hosting.rootView.context == context { continue }
-            cell.hosting.rootView = TimelineBubbleView(row: rows[index], context: context, actions: actions)
+            cell.hosting.rootView = TimelineBubbleView(row: rows[index], context: context, actions: actions, mediaContext: mediaContext)
         }
     }
 

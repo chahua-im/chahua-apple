@@ -1,8 +1,10 @@
+import ChahuaAPI
 import SwiftUI
 
 struct AppRootView: View {
     @ObservedObject var model: AuthSessionModel
     @ObservedObject var chatStore: ChatStore
+    let mediaContext: AppMediaContext
     var body: some View {
         Group {
             switch model.state {
@@ -17,6 +19,7 @@ struct AppRootView: View {
                     isSigningOut: model.isSubmitting,
                     onSignOut: { Task { await model.logout() } }
                 )
+                .environment(\.mediaContext, mediaContext)
             case .networkUnavailable:
                 ChahuaRecoverableErrorView(
                     title: "Connection unavailable",
@@ -28,8 +31,12 @@ struct AppRootView: View {
         }
         .task { model.bootstrap() }
         .onReceive(model.$state) { state in
-            if case .authenticated = state { return }
-            chatStore.reset()
+            if case .authenticated(let me) = state {
+                mediaContext.activate(uid: me.uid)
+            } else {
+                mediaContext.activate(uid: nil)
+                chatStore.reset()
+            }
         }
     }
 }

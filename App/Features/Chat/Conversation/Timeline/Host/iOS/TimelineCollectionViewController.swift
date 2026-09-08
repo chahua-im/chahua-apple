@@ -27,6 +27,12 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
 
     private let model: ConversationTimelineModel
     private var rows: [TimelineRow] = []
+    var mediaContext: AppMediaContext? {
+        didSet {
+            guard mediaContext !== oldValue, isViewLoaded else { return }
+            collectionView.reconfigureItems(at: collectionView.indexPathsForVisibleItems)
+        }
+    }
     private var measurer: TimelineRowMeasurer!
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
@@ -131,7 +137,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "timeline", for: indexPath)
         let row = rows[indexPath.item]
         cell.contentConfiguration = UIHostingConfiguration {
-            TimelineBubbleView(row: row, context: .init(isHighlighted: row.id == highlightedRowID))
+            TimelineBubbleView(row: row, context: .init(isHighlighted: row.id == highlightedRowID), mediaContext: mediaContext)
         }.margins(.all, 0)
         return cell
     }

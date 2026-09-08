@@ -1,9 +1,11 @@
+import ChahuaMediaCache
 import SwiftUI
 
 struct AvatarView: View {
     let url: URL?
     let displayName: String
     @ScaledMetric(relativeTo: .body) private var scaledDiameter: CGFloat = 40
+    @Environment(\.displayScale) private var displayScale
 
     init(url: URL?, displayName: String, diameter: CGFloat = 40) {
         self.url = url
@@ -14,7 +16,14 @@ struct AvatarView: View {
     var body: some View {
         Group {
             if let url {
-                AsyncImage(url: url) { phase in
+                CachedImageView(
+                    url: url,
+                    tag: CacheTag(rawValue: "avatars"),
+                    thumbnailPixelSize: CGSize(
+                        width: ceil(scaledDiameter * displayScale),
+                        height: ceil(scaledDiameter * displayScale)
+                    )
+                ) { phase in
                     if case .success(let image) = phase {
                         image.resizable().scaledToFill()
                     } else {

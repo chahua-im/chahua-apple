@@ -23,11 +23,13 @@ struct TimelineBubbleView: View {
     let row: TimelineRow
     let context: TimelineRowContext
     let actions: TimelineBubbleActions
+    let mediaContext: AppMediaContext?
 
-    init(row: TimelineRow, context: TimelineRowContext, actions: TimelineBubbleActions = .init()) {
+    init(row: TimelineRow, context: TimelineRowContext, actions: TimelineBubbleActions = .init(), mediaContext: AppMediaContext? = nil) {
         self.row = row
         self.context = context
         self.actions = actions
+        self.mediaContext = mediaContext
     }
 
     var body: some View {
@@ -41,6 +43,7 @@ struct TimelineBubbleView: View {
         }
         .background(context.isHighlighted ? ChahuaTheme.accent.opacity(0.15) : .clear)
         .animation(.easeOut(duration: 0.3), value: context.isHighlighted)
+        .environment(\.mediaContext, mediaContext)
     }
 
     @ViewBuilder
