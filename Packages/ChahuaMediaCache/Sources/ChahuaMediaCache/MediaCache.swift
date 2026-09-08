@@ -1,5 +1,4 @@
 import Foundation
-import os
 
 /// The single owner of raw image files, HTTP work, tags, and revocable file leases.
 public actor MediaCache {
@@ -59,8 +58,6 @@ public actor MediaCache {
             if storageError != nil { cachedContents.close() }
         }
     }
-    private let logger = Logger(subsystem: "app.chahua.chat", category: "media-cache")
-    private let logID = UUID()
 
     public init(configuration: CacheConfiguration) async throws {
         try await self.init(configuration: configuration, protocolClasses: [], clock: { Date() })
@@ -81,9 +78,7 @@ public actor MediaCache {
             }
             try await initializeCapacity()
             for entry in entries.values { publishCachedContent(entry) }
-            logger.debug("open cache=\(self.logID, privacy: .public) recovered=\(self.entries.count) limit=\(configuration.maximumDiskBytes)")
         } catch {
-            logger.debug("open-failed cache=\(self.logID, privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
             await disk.close()
             throw error
         }
@@ -100,7 +95,6 @@ public actor MediaCache {
         try checkOpen()
         let normalized = try request.normalized()
         let id = UUID()
-        logger.debug("request cache=\(self.logID, privacy: .public) key=\(normalized.key, privacy: .public) waiter=\(id, privacy: .public) tags=\(request.tags.map(\.rawValue).sorted().joined(separator: ","), privacy: .public)")
         let file = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CachedFile, any Error>) in
                 guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
@@ -188,7 +182,6 @@ public actor MediaCache {
         if let shutdownTask { return try await shutdownTask.value }
         closed = true
         cachedContents.close()
-        logger.debug("shutdown cache=\(self.logID, privacy: .public) removingFiles=\(removingFiles) entries=\(self.entries.count) waiters=\(self.waiters.count)")
         let selected = Array(entries.values)
         let discard = selected.filter { removingFiles || !$0.valid || !$0.ready || !$0.record.retained }
         for entry in selected { invalidate(entry, error: MediaCacheError.closed) }
@@ -226,17 +219,14 @@ public actor MediaCache {
             return
         }
         guard barriers[waiter.key] == nil else {
-            logger.debug("barrier-wait cache=\(self.logID, privacy: .public) key=\(waiter.key, privacy: .public) waiter=\(id, privacy: .public)")
             return
         }
         let entry: Entry
         if let generation = joinable[waiter.key], let existing = entries[generation], existing.valid {
             entry = existing
-            logger.debug("lookup cache=\(self.logID, privacy: .public) key=\(waiter.key, privacy: .public) generation=\(generation, privacy: .public) ready=\(existing.ready) producerActive=\(existing.work != nil)")
             entry.tags.formUnion(waiter.tags)
             if entry.request == nil { entry.request = waiter.request }
         } else {
-            logger.debug("disk-miss cache=\(self.logID, privacy: .public) key=\(waiter.key, privacy: .public) reason=no-retained-entry")
             entry = makeEntry(key: waiter.key, tags: waiter.tags, request: waiter.request)
         }
         waiter.generation = entry.record.generation
@@ -269,7 +259,6 @@ public actor MediaCache {
 
     private func cancelWaiter(_ id: UUID) {
         guard let waiter = waiters[id] else { return }
-        logger.debug("cancel-waiter cache=\(self.logID, privacy: .public) key=\(waiter.key, privacy: .public) waiter=\(id, privacy: .public)")
         failWaiter(id, error: CancellationError())
         guard let generation = waiter.generation, let entry = entries[generation], entry.valid,
               entry.waiters.isEmpty else { return }
@@ -289,7 +278,6 @@ public actor MediaCache {
         try requireValid(entry)
         guard entry.ready, entry.record.complete else { throw MediaCacheError.invalidResponse }
         publishCachedContent(entry)
-        logger.debug("deliver cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) generation=\(entry.record.generation, privacy: .public) bytes=\(entry.record.committedBytes) retained=\(entry.record.retained) waiters=\(entry.waiters.count)")
         for id in entry.waiters {
             guard let waiter = waiters.removeValue(forKey: id) else { continue }
             let lease = UUID()
@@ -330,7 +318,6 @@ public actor MediaCache {
         if entry.valid, !entry.record.retained, entry.leases.isEmpty, entry.waiters.isEmpty,
            !entries.values.contains(where: { $0.valid && $0.previous == generation }) {
             invalidate(entry, error: MediaCacheError.invalidated)
-            logger.debug("discard-transient cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) reason=last-lease-released")
             scheduleCleanup(entry)
             await cleanupTasks[generation]?.value
         }
@@ -342,7 +329,6 @@ public actor MediaCache {
         guard let entry = entries[generation] else { return }
         do {
             guard let request = try await prepare(entry) else { return }
-            logger.debug("http-start cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) generation=\(generation, privacy: .public) conditional=\(entry.conditional) hasETag=\(request.value(forHTTPHeaderField: "If-None-Match") != nil) hasLastModified=\(request.value(forHTTPHeaderField: "If-Modified-Since") != nil)")
             try await transport.execute(request: request, onResponse: { response, sentAt, receivedAt in
                 try await self.receiveResponse(generation, response: response, sentAt: sentAt, receivedAt: receivedAt)
             }, onData: { data in
@@ -350,7 +336,6 @@ public actor MediaCache {
             })
             try await finish(entry)
         } catch {
-            logger.debug("producer-failed cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) cancelled=\(error is CancellationError) cacheError=\(String(describing: error as? MediaCacheError), privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
             await failProduction(entry, error: error)
         }
     }
@@ -364,14 +349,12 @@ public actor MediaCache {
             let valid = try await disk.validate(record: entry.record)
             try requireValid(entry)
             if valid, entry.record.freshUntil > clock() {
-                logger.debug("disk-hit cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) generation=\(entry.record.generation, privacy: .public) freshForSeconds=\(entry.record.freshUntil.timeIntervalSince(self.clock()))")
                 entry.record.lastAccess = clock()
                 try await flushTags(entry, force: true)
                 try deliver(entry)
                 entry.work = nil
                 return nil
             }
-            logger.debug("disk-reload cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) reason=\(valid ? "stale" : "missing-or-corrupt", privacy: .public) freshForSeconds=\(entry.record.freshUntil.timeIntervalSince(self.clock()))")
             guard let request = entry.request else { throw MediaCacheError.invalidRequest }
             let replacement = makeEntry(key: entry.record.key, tags: entry.tags, request: request)
             replacement.previous = valid ? entry.record.generation : nil
@@ -408,7 +391,6 @@ public actor MediaCache {
         try requireValid(entry)
         guard entry.response == nil else { throw MediaCacheError.invalidResponse }
         entry.response = representation
-        logger.debug("http-response cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) generation=\(generation, privacy: .public) status=\(representation.statusCode) retained=\(representation.retained) freshForSeconds=\(representation.freshUntil.timeIntervalSince(receivedAt)) hasETag=\(representation.etag != nil) hasLastModified=\(representation.lastModified != nil)")
         if !representation.retained, joinable[entry.record.key] == generation {
             joinable.removeValue(forKey: entry.record.key)
         }
@@ -527,7 +509,6 @@ public actor MediaCache {
             } else if joinable[previous.record.key] == entry.record.generation {
                 joinable.removeValue(forKey: previous.record.key)
             }
-            logger.debug("revalidated cache=\(self.logID, privacy: .public) key=\(previous.record.key, privacy: .public) generation=\(previousID, privacy: .public) status=304")
             try deliver(previous)
             return
         }
@@ -540,7 +521,6 @@ public actor MediaCache {
         try requireValid(entry)
         entry.ready = true
         entry.work = nil
-        logger.debug("stored cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) generation=\(entry.record.generation, privacy: .public) bytes=\(entry.record.committedBytes) retained=\(entry.record.retained)")
         try deliver(entry)
     }
 
@@ -674,7 +654,6 @@ public actor MediaCache {
             // A caller may have acquired the candidate while allocation IO was suspended.
             guard entry.valid, entry.leases.isEmpty, entry.waiters.isEmpty, entry.work == nil,
                   !entries.values.contains(where: { $0.valid && $0.previous == entry.record.generation }) else { continue }
-            logger.debug("evict-lru cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) bytes=\(entry.record.committedBytes) target=\(limit)")
             invalidate(entry, error: MediaCacheError.invalidated)
             beginBarrier(entry.record.key)
             do {
@@ -711,7 +690,6 @@ public actor MediaCache {
     private func removeMatching(_ matches: (Set<CacheTag>) -> Bool) async throws -> CacheRemoval {
         try checkOpen()
         let selected = entries.values.filter { $0.valid && matches($0.tags) }
-        logger.debug("remove cache=\(self.logID, privacy: .public) selected=\(selected.count)")
         let selectedKeys = Set(selected.map { $0.record.key })
         let producers = selected.compactMap(\.work)
         let pendingCleanup = entries.values.filter { !$0.valid && matches($0.tags) }
@@ -752,7 +730,6 @@ public actor MediaCache {
     private func invalidate(_ entry: Entry, error: any Error) {
         guard entry.valid else { return }
         cachedContents.remove(key: entry.record.key, generation: entry.record.generation)
-        logger.debug("invalidate cache=\(self.logID, privacy: .public) key=\(entry.record.key, privacy: .public) generation=\(entry.record.generation, privacy: .public) cancelled=\(error is CancellationError) cacheError=\(String(describing: error as? MediaCacheError), privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
         entry.valid = false
         entry.work?.cancel()
         entry.leases.removeAll()

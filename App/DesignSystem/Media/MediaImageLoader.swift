@@ -43,17 +43,17 @@ final class MediaImageLoader {
         guard !isClosed else { throw MediaCacheError.closed }
         let started = ContinuousClock.now
         let loadID = UUID()
-        logger.debug("load-start load=\(loadID, privacy: .public) tags=\(request.tags.map(\.rawValue).sorted().joined(separator: ","), privacy: .public) thumbnailWidth=\(thumbnailPixelSize?.width ?? 0, privacy: .public) thumbnailHeight=\(thumbnailPixelSize?.height ?? 0, privacy: .public)")
 
         // Even decoded-memory hits must register tags and acquire the current generation.
         let file: CachedFile
         do {
             file = try await cache.file(for: request)
+        } catch let error as CancellationError {
+            throw error
         } catch {
-            logger.debug("file-failed load=\(loadID, privacy: .public) cancelled=\(error is CancellationError) cacheError=\(String(describing: error as? MediaCacheError), privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
+            logger.debug("file-failed load=\(loadID, privacy: .public) cacheError=\(String(describing: error as? MediaCacheError), privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
             throw error
         }
-        logger.debug("file-ready load=\(loadID, privacy: .public) key=\(file.key, privacy: .public) elapsed=\(String(describing: started.duration(to: .now)), privacy: .public)")
         do {
             try Task.checkCancellation()
             guard !isClosed else { throw MediaCacheError.closed }
@@ -65,10 +65,8 @@ final class MediaImageLoader {
             await file.release()
             try Task.checkCancellation()
             guard !isClosed else { throw MediaCacheError.closed }
-            logger.debug("image-ready load=\(loadID, privacy: .public) key=\(file.key, privacy: .public) decodedMemoryHit=\(response.cacheType == .memory) elapsed=\(String(describing: started.duration(to: .now)), privacy: .public)")
             return response
         } catch {
-            logger.debug("image-failed load=\(loadID, privacy: .public) key=\(file.key, privacy: .public) cancelled=\(error is CancellationError) cacheError=\(String(describing: error as? MediaCacheError), privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
             await file.release()
             try Task.checkCancellation()
             guard !isClosed else { throw MediaCacheError.closed }
@@ -90,7 +88,6 @@ final class MediaImageLoader {
 
     func close() {
         guard !isClosed else { return }
-        logger.debug("loader-close clearingDecodedMemory=true")
         isClosed = true
         pipeline.invalidate()
         imageCache.removeAll()

@@ -111,14 +111,6 @@ private struct ObservedCachedImageView<Content: View>: View {
         }
         loadedID = identity
         phase = firstPhase
-        let showsPlaceholder: Bool
-        if case .success = firstPhase {
-            showsPlaceholder = false
-        } else {
-            showsPlaceholder = true
-        }
-        Logger(subsystem: "app.chahua.chat", category: "media-images")
-            .debug("view-loading activation=\(activationID, privacy: .public) tag=\(tag.rawValue, privacy: .public) placeholder=\(showsPlaceholder)")
         do {
             let resources = try await context.resources(for: activationID)
             try Task.checkCancellation()
@@ -129,11 +121,7 @@ private struct ObservedCachedImageView<Content: View>: View {
             try Task.checkCancellation()
             guard context.activationID == activationID, loadedID == identity else { return }
             phase = imagePhase(response)
-            Logger(subsystem: "app.chahua.chat", category: "media-images")
-                .debug("view-ready activation=\(activationID, privacy: .public) tag=\(tag.rawValue, privacy: .public)")
         } catch {
-            Logger(subsystem: "app.chahua.chat", category: "media-images")
-                .debug("view-failed activation=\(activationID, privacy: .public) tag=\(tag.rawValue, privacy: .public) cancelled=\(Task.isCancelled) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
             guard !Task.isCancelled, context.activationID == activationID, loadedID == identity else { return }
             phase = .failure
         }

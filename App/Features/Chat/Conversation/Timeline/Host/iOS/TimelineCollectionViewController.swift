@@ -80,6 +80,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         super.viewDidLoad()
         applyConversationBackground()
         collectionView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(collectionView)
         NSLayoutConstraint.activate([
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),

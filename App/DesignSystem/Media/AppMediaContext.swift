@@ -38,11 +38,9 @@ final class AppMediaContext: ObservableObject {
 
     func activate(uid: Int32?) {
         guard self.uid != uid else { return }
-        Self.logger.debug("activation-change old=\(self.activationID, privacy: .public) authenticated=\(uid != nil) configured=\(self.rootDirectory != nil) purgingOldCache=\(self.activeResources != nil)")
         self.uid = uid
         let activation = UUID()
         activationID = activation
-        Self.logger.debug("activation-start activation=\(activation, privacy: .public)")
         isReady = false
         error = nil
 
@@ -65,13 +63,11 @@ final class AppMediaContext: ObservableObject {
                 guard let directory else { throw MediaCacheError.invalidConfiguration }
                 let cache = try await makeCache(CacheConfiguration(directory: directory))
                 guard let self, self.activationID == activation else {
-                    Self.logger.debug("initialization-discarded activation=\(activation, privacy: .public)")
                     try await cache.shutdown(removingFiles: true)
                     return
                 }
                 self.activeResources = (cache, MediaImageLoader(cache: cache))
                 self.isReady = true
-                Self.logger.debug("activation-ready activation=\(activation, privacy: .public) partition=\(directory.lastPathComponent, privacy: .public)")
             } catch {
                 guard let self, self.activationID == activation else { return }
                 Self.logger.debug("activation-failed activation=\(activation, privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
@@ -110,7 +106,6 @@ final class AppMediaContext: ObservableObject {
     deinit {
         let previous = transition
         let resources = activeResources
-        Self.logger.debug("context-deinit purgingCache=\(resources != nil)")
         Task { @MainActor in
             resources?.images.close()
             await previous?.value
