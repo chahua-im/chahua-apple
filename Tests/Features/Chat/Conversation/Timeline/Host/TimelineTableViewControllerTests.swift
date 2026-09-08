@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import Combine
+import SwiftUI
 import XCTest
 import ChahuaAPI
 @testable import chahua_apple
@@ -49,6 +50,217 @@ final class TimelineTableViewControllerTests: XCTestCase {
         XCTAssertEqual(table.numberOfRows, model.rows.count,
                        "A reentrant live update must not wait for an unrelated future layout")
         XCTAssertNil(model.updates.value.pendingScroll)
+    }
+
+    func testShortMessagesStayCompactAndGlyphsRemainInsideTheirRows() async throws {
+        for sender: Int32 in [1, 2] {
+            for text in ["Hello", "Hi\nBye"] {
+                try await inspectRenderedMessage(text: text, senderID: sender, widths: [320, 600, 900]) { cell, textView, bitmap in
+                    self.assertGlyphsVisible(textView, in: cell)
+                    let bubbleWidth = self.backgroundWidth(in: bitmap, outgoing: sender == 1)
+                    XCTAssertGreaterThan(bubbleWidth, 30, "The rendered bubble background must be present.")
+                    XCTAssertLessThan(bubbleWidth, 180, "Short lines must not fill the maximum conversation lane.")
+                }
+            }
+        }
+    }
+
+    func testWrappedMessageGlyphsFitAfterNarrowingAndWideningTheTimeline() async throws {
+        let text = "First line\n你好，世界 👨‍👩‍👧‍👦\n" + String(repeating: "Wrapping text remains visible. ", count: 4)
+            + "\n" + String(repeating: "x", count: 160) + "\nFinal line"
+        try await inspectRenderedMessage(text: text, senderID: 2, widths: [900, 320, 600]) { cell, textView, _ in
+            self.assertGlyphsVisible(textView, in: cell)
+            XCTAssertEqual(textView.string, text)
+        }
+    }
+
+    func testReplyGalleryCaptionAndThreadStayInsideTheResizedMessage() async throws {
+        let caption = "Caption after gallery\nFinal visible caption line"
+        try await inspectRenderedMessage(
+            text: caption, senderID: 2, widths: [900, 320, 600],
+            enrich: { object in
+                object["isEdited"] = true
+                object["threadInfo"] = ["replyCount": 7]
+                object["replyToMessage"] = [
+                    "id": "quoted-target", "clientGeneratedId": "quoted-client",
+                    "createdAt": object["createdAt"]!, "sender": object["sender"]!,
+                    "messageType": "text", "message": "A long quoted message " + String(repeating: "that must truncate ", count: 10),
+                    "attachments": [], "mentions": [], "isDeleted": false
+                ]
+                object["hasAttachments"] = true
+                object["attachments"] = (0 ..< 7).map { index in
+                    ["id": "image-\(index)", "url": "file:///chahua-test-missing-\(index).png", "kind": "image/png",
+                     "size": 1, "fileName": "image.png", "width": 200 + index * 100, "height": 300] as [String: Any]
+                }
+            }
+        ) { cell, textView, bitmap in
+            self.assertGlyphsVisible(textView, in: cell)
+            XCTAssertLessThanOrEqual(self.backgroundWidth(in: bitmap, outgoing: false), (cell.bounds.width - 68) * 0.75 + 1)
+        }
+    }
+
+    func testIncomingMetadataRemainsReadableInDarkAppearance() async throws {
+        try await inspectRenderedMessage(text: "Hello", senderID: 2, widths: [320], appearance: .darkAqua) { cell, textView, bitmap in
+            guard let native = textView as? MacBubbleTextView else { return XCTFail("Missing native text view") }
+            let frame = cell.convert(native.contentLayout.geometry(for: native.bounds.width).metadataFrame, from: native)
+            let scaleX = CGFloat(bitmap.pixelsWide) / cell.bounds.width
+            let scaleY = CGFloat(bitmap.pixelsHigh) / cell.bounds.height
+            let top = cell.isFlipped ? frame.minY : cell.bounds.height - frame.maxY
+            var brightest: CGFloat = 0
+            for y in max(0, Int(top * scaleY)) ..< min(bitmap.pixelsHigh, Int(ceil((top + frame.height) * scaleY))) {
+                for x in max(0, Int(frame.minX * scaleX)) ..< min(bitmap.pixelsWide, Int(ceil(frame.maxX * scaleX))) {
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), color.alphaComponent > 0.5 else { continue }
+                    brightest = max(brightest, color.redComponent, color.greenComponent, color.blueComponent)
+                }
+            }
+            XCTAssertGreaterThan(brightest, 0.4, "Timestamp ink must be visible against the dark incoming bubble.")
+        }
+    }
+
+    private func inspectRenderedMessage(
+        text: String, senderID: Int32, widths: [CGFloat],
+        appearance: NSAppearance.Name = .aqua,
+        enrich: ((inout [String: Any]) -> Void)? = nil,
+        check: (NSView, NSTextView, NSBitmapImageRep) -> Void
+    ) async throws {
+        let base = try TimelineTestFixtures.message(id: "visible-text", senderID: senderID, at: 0, text: "Fixture")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(base)) as? [String: Any])
+        object["message"] = text
+        enrich?(&object)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let message = try decoder.decode(MessageResponse.self, from: JSONSerialization.data(withJSONObject: object))
+        let page = try TimelineTestFixtures.page([message])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore()
+        )
+        let controller = TimelineTableViewController(model: model)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: widths[0], height: 1100),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.backgroundColor = .white
+        window.contentViewController = controller
+        window.orderFront(nil)
+        defer { window.close() }
+        await model.loadInitial()
+        window.appearance = NSAppearance(named: appearance)
+        for width in widths {
+            window.setContentSize(NSSize(width: width, height: 1100))
+            controller.view.layoutSubtreeIfNeeded()
+            controller.viewDidLayout()
+            controller.view.layoutSubtreeIfNeeded()
+            let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+            let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "visible-text" })
+            table.scrollRowToVisible(index)
+            let cell = try XCTUnwrap(table.view(atColumn: 0, row: index, makeIfNecessary: true))
+            cell.layoutSubtreeIfNeeded()
+            let textView = try XCTUnwrap(textViews(in: cell).first { $0.string == text })
+            let bitmap = try XCTUnwrap(cell.bitmapImageRepForCachingDisplay(in: cell.bounds))
+            cell.cacheDisplay(in: cell.bounds, to: bitmap)
+            if let png = bitmap.representation(using: .png, properties: [:]) {
+                let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
+                attachment.name = "native-bubble-\(senderID)-\(Int(width))"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            check(cell, textView, bitmap)
+        }
+    }
+
+    private func assertGlyphsVisible(_ textView: NSTextView, in cell: NSView, file: StaticString = #filePath, line: UInt = #line) {
+        guard let manager = textView.layoutManager, let container = textView.textContainer else {
+            return XCTFail("Selectable text must have a laid-out text container.", file: file, line: line)
+        }
+        manager.ensureLayout(for: container)
+        let glyphs = manager.glyphRange(for: container)
+        XCTAssertEqual(NSMaxRange(manager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)),
+                       (textView.string as NSString).length, "Every character must be laid out.", file: file, line: line)
+        let rect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            .offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+        XCTAssertGreaterThan(rect.height, 0, file: file, line: line)
+        var ancestor: NSView? = textView
+        while let view = ancestor {
+            if view === textView || view === cell || view is NSHostingView<TimelineBubbleView> || view.clipsToBounds {
+                let converted = view.convert(rect, from: textView)
+                XCTAssertTrue(view.bounds.insetBy(dx: -1, dy: -1).contains(converted),
+                              "Glyphs \(converted) are clipped by \(type(of: view)) bounds \(view.bounds).", file: file, line: line)
+            }
+            if view === cell { break }
+            ancestor = view.superview
+        }
+    }
+
+    private func backgroundWidth(in bitmap: NSBitmapImageRep, outgoing: Bool) -> CGFloat {
+        var longest = 0
+        for y in 0 ..< bitmap.pixelsHigh {
+            var run = 0
+            for x in 0 ..< bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let matches = outgoing
+                    ? color.blueComponent > color.redComponent + 0.2 && color.greenComponent > 0.3 && color.greenComponent < 0.7
+                    : abs(color.redComponent - color.greenComponent) < 0.02 && abs(color.greenComponent - color.blueComponent) < 0.02 && color.redComponent > 0.8 && color.redComponent < 0.97
+                run = matches ? run + 1 : 0
+                longest = max(longest, run)
+            }
+        }
+        return CGFloat(longest) * bitmap.size.width / CGFloat(bitmap.pixelsWide)
+    }
+
+
+    func testLiveResizeSettlesEveryRowAtFinalWidth() async throws {
+        let page = try TimelineTestFixtures.page((0 ..< 40).map {
+            try TimelineTestFixtures.message(id: "\($0)", senderID: 2, at: $0,
+                text: String(repeating: "Wrapping text during interactive resizing. ", count: 4))
+        })
+        let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: true,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore())
+        let controller = TimelineTableViewController(model: model)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.orderFront(nil)
+        defer { window.close() }
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        await model.loadInitial()
+        let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        NotificationCenter.default.post(name: NSWindow.willStartLiveResizeNotification, object: window)
+        for width: CGFloat in [600, 900, 320] {
+            window.setContentSize(NSSize(width: width, height: 600))
+            controller.view.layoutSubtreeIfNeeded()
+            controller.viewDidLayout()
+            let visible = table.rows(in: scroll.documentVisibleRect)
+            for index in visible.location ..< min(NSMaxRange(visible), model.rows.count) {
+                guard let cell = table.view(atColumn: 0, row: index, makeIfNecessary: true) else { continue }
+                cell.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(cell.bitmapImageRepForCachingDisplay(in: cell.bounds))
+                cell.cacheDisplay(in: cell.bounds, to: bitmap)
+                for text in textViews(in: cell) { assertGlyphsVisible(text, in: cell) }
+            }
+        }
+        NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: window)
+        XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1)
+
+        let referenceModel = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: true,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore())
+        let reference = TimelineTableViewController(model: referenceModel)
+        reference.view.frame = controller.view.frame
+        reference.view.layoutSubtreeIfNeeded()
+        reference.viewDidLayout()
+        await referenceModel.loadInitial()
+        let referenceScroll = try XCTUnwrap(reference.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let referenceTable = try XCTUnwrap(referenceScroll.documentView as? NSTableView)
+        for index in model.rows.indices {
+            XCTAssertEqual(table.rect(ofRow: index).height, referenceTable.rect(ofRow: index).height, accuracy: 1,
+                           "Offscreen rows must settle to the same geometry as a fresh timeline at the final width.")
+        }
     }
 
     func testResizingPreservesBottomAttachmentAndHistoryAnchor() async throws {
@@ -282,6 +494,10 @@ final class TimelineTableViewControllerTests: XCTestCase {
         XCTAssertGreaterThan(scrollView.documentVisibleRect.minY, 0, "prepending history preserves the reader's position")
         XCTAssertGreaterThan(tableView.bounds.height - scrollView.documentVisibleRect.maxY, 400, "history loading must not jump to the bottom")
     }
+}
+
+private func textViews(in view: NSView) -> [NSTextView] {
+    (view as? NSTextView).map { [$0] } ?? [] + view.subviews.flatMap(textViews)
 }
 
 @MainActor

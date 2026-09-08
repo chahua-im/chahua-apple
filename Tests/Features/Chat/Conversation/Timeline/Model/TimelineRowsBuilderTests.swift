@@ -22,7 +22,7 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertEqual(rows.compactMap(messageRow).map(\.entry.serverID), ["1", "2"])
     }
 
-    func testBuildDerivesGroupPositionsFromSenderAndGap() throws {
+    func testBuildDerivesPlatformGroupingPositions() throws {
         let rows = builder().build([
             try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
             try TimelineTestFixtures.message(id: "2", senderID: 2, at: 30),
@@ -30,7 +30,11 @@ final class TimelineRowsBuilderTests: XCTestCase {
             try TimelineTestFixtures.message(id: "4", senderID: 2, at: 0, minute: 6),
         ])
 
+        #if os(macOS)
+        XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .middle, .last])
+        #else
         XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .last, .single])
+        #endif
     }
 
     func testSystemMessageBreaksGrouping() throws {
@@ -83,12 +87,16 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertEqual(messageRow(rows[1])?.entry.displayState, .sending)
     }
 
-    func testDirectMessagesShowSenderNamesAtTheStartOfEachGroup() throws {
+    func testDirectMessageSenderMetadataMatchesPlatformContract() throws {
         let rows = builder(isGroupChat: false).build([
             try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
         ])
 
+        #if os(macOS)
+        XCTAssertFalse(rows.compactMap(messageRow)[0].showsSenderName)
+        #else
         XCTAssertTrue(rows.compactMap(messageRow)[0].showsSenderName)
+        #endif
     }
 
     private func builder(isGroupChat: Bool = true) -> TimelineRowsBuilder {

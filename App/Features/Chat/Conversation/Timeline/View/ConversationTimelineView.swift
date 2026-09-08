@@ -3,6 +3,7 @@ import SwiftUI
 struct ConversationTimelineView: View {
     @ObservedObject var model: ConversationTimelineModel
     var initialPosition: TimelineInitialPosition = .liveEdge
+    var actions = TimelineBubbleActions()
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -39,13 +40,23 @@ struct ConversationTimelineView: View {
                 Button("Try again") { Task { await model.retryInitial() } }
             }
         case .ready, .repositioning:
-            TimelineHostView(model: model)
+            timelineHost
                 .overlay(alignment: .top) { olderEdgeOverlay }
                 .overlay(alignment: .bottom) { newerEdgeOverlay }
                 .overlay { if case .repositioning = model.state.content { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.medium)) } }
                 .overlay(alignment: .top) { if let failure = model.state.repositionFailure { failureBanner(failure) } }
+
         }
     }
+    @ViewBuilder
+    private var timelineHost: some View {
+        #if os(macOS)
+        TimelineHostView(model: model, actions: actions)
+        #else
+        TimelineHostView(model: model)
+        #endif
+    }
+
 
     @ViewBuilder
     private var olderEdgeOverlay: some View {
@@ -82,7 +93,8 @@ struct TimelineHostView: UIViewControllerRepresentable {
 import AppKit
 struct TimelineHostView: NSViewControllerRepresentable {
     let model: ConversationTimelineModel
-    func makeNSViewController(context: Context) -> TimelineTableViewController { TimelineTableViewController(model: model) }
-    func updateNSViewController(_ controller: TimelineTableViewController, context: Context) {}
+    var actions = TimelineBubbleActions()
+    func makeNSViewController(context: Context) -> TimelineTableViewController { TimelineTableViewController(model: model, actions: actions) }
+    func updateNSViewController(_ controller: TimelineTableViewController, context: Context) { controller.actions = actions }
 }
 #endif

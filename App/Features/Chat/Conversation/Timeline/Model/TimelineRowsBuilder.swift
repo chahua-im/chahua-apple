@@ -80,9 +80,14 @@ struct TimelineRowsBuilder {
                 groupedWithNext: groupedWithNext
             )
             let isOutgoing = entry.senderID == currentUserID
+            #if os(macOS)
+            let showsSenderName = isGroupChat
+                && entry.messageType != .system
+                && (groupPosition == .single || groupPosition == .first)
+            #else
             let showsSenderName = entry.messageType != .system
                 && (groupPosition == .single || groupPosition == .first)
-
+            #endif
             rows.append(.message(.init(
                 entry: entry,
                 isOutgoing: isOutgoing,
@@ -95,11 +100,15 @@ struct TimelineRowsBuilder {
     }
 
     private func grouped(_ earlier: ConversationTimelineEntry, _ later: ConversationTimelineEntry) -> Bool {
-        earlier.senderID == later.senderID
-            && earlier.messageType != .system
-            && later.messageType != .system
-            && calendar.isDate(earlier.createdAt, inSameDayAs: later.createdAt)
-            && later.createdAt.timeIntervalSince(earlier.createdAt) <= groupingGap
+        guard earlier.senderID == later.senderID,
+              earlier.messageType != .system,
+              later.messageType != .system,
+              calendar.isDate(earlier.createdAt, inSameDayAs: later.createdAt) else { return false }
+        #if os(macOS)
+        return true
+        #else
+        return later.createdAt.timeIntervalSince(earlier.createdAt) <= groupingGap
+        #endif
     }
 
     private func groupPosition(

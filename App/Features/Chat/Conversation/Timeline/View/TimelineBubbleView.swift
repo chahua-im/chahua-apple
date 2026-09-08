@@ -3,6 +3,18 @@ import SwiftUI
 
 struct TimelineRowContext: Equatable {
     var isHighlighted = false
+    var viewportSize: CGSize = .zero
+    var currentUserID: Int32?
+    var isThreadTimeline = false
+    var isMeasuring = false
+}
+
+struct TimelineBubbleActions {
+    var openMedia: ((String, [AttachmentResponse], String) -> Void)?
+    var openReply: ((String) -> Void)?
+    var openThread: ((String) -> Void)?
+    var openLink: ((URL) -> Void)?
+    var openMention: ((Int32) -> Void)?
 }
 
 /// Closed rendering surface. Per-kind components live under `View/Bubble/`; adding a new row
@@ -10,6 +22,13 @@ struct TimelineRowContext: Equatable {
 struct TimelineBubbleView: View {
     let row: TimelineRow
     let context: TimelineRowContext
+    let actions: TimelineBubbleActions
+
+    init(row: TimelineRow, context: TimelineRowContext, actions: TimelineBubbleActions = .init()) {
+        self.row = row
+        self.context = context
+        self.actions = actions
+    }
 
     var body: some View {
         Group {
@@ -31,7 +50,11 @@ struct TimelineBubbleView: View {
         } else if row.entry.messageType == .system {
             SystemMessageBubble(row: row)
         } else if row.entry.messageType == .text {
+            #if os(macOS)
+            MacTextMessageBubble(row: row, context: context, actions: actions)
+            #else
             TextMessageBubble(row: row)
+            #endif
         } else {
             UnsupportedMessageBubble(row: row)
         }

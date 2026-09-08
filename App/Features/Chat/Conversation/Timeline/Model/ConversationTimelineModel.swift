@@ -16,6 +16,7 @@ final class ConversationTimelineModel: ObservableObject {
 
     let chatID: String
     let threadID: String?
+    let currentUserID: Int32
     @Published private(set) var state = ConversationTimelineState()
     @Published private(set) var rows: [TimelineRow] = []
     var isAtLiveEdge: Bool { window.isAtLiveEdge }
@@ -41,6 +42,7 @@ final class ConversationTimelineModel: ObservableObject {
     init(chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource, messageStore: ConversationMessageStore, threadID: String? = nil, calendar: Calendar = .autoupdatingCurrent) {
         self.chatID = chatID
         self.threadID = threadID
+        self.currentUserID = currentUserID
         self.source = source
         self.messageStore = messageStore
         builder = TimelineRowsBuilder(currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar)

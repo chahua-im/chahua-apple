@@ -44,3 +44,20 @@ Run the app's unit-test suite on either platform:
 xcodebuild test -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=macOS,arch=arm64'
 xcodebuild test -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
+
+## Native macOS bubble checks
+
+The DEBUG-only native bubble timeline uses the production table host with local messages and generated PNG, GIF, and HEIC files. It does not initialize authentication or production networking:
+
+```sh
+xcodebuild build -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath /tmp/chahua-bubbles
+open -n /tmp/chahua-bubbles/Build/Products/Debug/chahua-apple.app --args -bubble-timeline
+```
+
+The component gallery also links to this timeline. Toggle dark appearance, action hooks, and thread scope; use Queue, Sending, Fail, and Acknowledge to inspect pending-message transitions. Queue is intentionally single-use per fixture session. Video playback is deferred.
+
+For a targeted launch, set `CHAHUA_FIXTURE_MESSAGE` to a fixture ID (for example, `fixture-0` for text, `fixture-10` for GIF/HEIC, or `fixture-19` for overflow galleries). The `-fixture-dark` argument starts in dark appearance.
+
+`TimelineTableViewControllerTests` renders real native cells at 320, 600, and 900 points and retains PNG attachments in the XCTest result bundle. Its regressions check compact single/multiline bubbles, rendered glyph containment, caption/reply/thread reflow, dark timestamp visibility, scroll anchors, and complete row-height settlement after live resize. `MacBubbleTextLayoutTests` checks final-line metadata and drawing-appearance changes; `MacBubbleMediaLayoutTests` checks image bounds, missing dimensions, justified rows, and sixth-tile overflow.
+
+Do not treat finding an `NSTextView`, a successful build, or a passing measurement-only test as visual proof. Inspect the native window or rendered XCTest attachments. Keep animated-image windows unoccluded while checking animation: AppKit can suspend animations in covered windows.

@@ -12,6 +12,13 @@ struct ChahuaApp: App {
     init() {
         // Hosted unit tests need a platform application/window, not production startup.
         // Do not construct authentication or network dependencies in the XCTest process.
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-fixture-gallery")
+            || ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
+            compositionRoot = nil
+            return
+        }
+        #endif
         if NSClassFromString("XCTestCase") != nil {
             compositionRoot = nil
         } else {
@@ -21,11 +28,37 @@ struct ChahuaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if let compositionRoot {
-                compositionRoot
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-fixture-gallery") {
+                FixtureGalleryView()
             } else {
-                Color.clear
+                appRoot
             }
+            #else
+            appRoot
+            #endif
+        }
+    }
+
+    @ViewBuilder
+    private var appRoot: some View {
+        #if DEBUG && os(macOS)
+        if ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
+            TimelineBubbleFixtureView()
+        } else {
+            productionRoot
+        }
+        #else
+        productionRoot
+        #endif
+    }
+
+    @ViewBuilder
+    private var productionRoot: some View {
+        if let compositionRoot {
+            compositionRoot
+        } else {
+            Color.clear
         }
     }
 }
