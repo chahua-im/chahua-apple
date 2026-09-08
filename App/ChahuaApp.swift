@@ -38,6 +38,9 @@ struct ChahuaApp: App {
             appRoot
             #endif
         }
+        #if os(macOS)
+        .windowResizability(.contentMinSize)
+        #endif
     }
 
     @ViewBuilder
@@ -57,8 +60,14 @@ struct ChahuaApp: App {
     private var productionRoot: some View {
         if let compositionRoot {
             compositionRoot
+                #if os(macOS)
+                .frame(minWidth: ChatSplitMetrics.splitThreshold)
+                #endif
         } else {
             Color.clear
+                #if os(macOS)
+                .frame(minWidth: ChatSplitMetrics.splitThreshold)
+                #endif
         }
     }
 }

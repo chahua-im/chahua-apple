@@ -3,6 +3,9 @@ import SwiftUI
 
 struct ChatListView: View {
     @ObservedObject var store: ChatStore
+    let selectedChatID: String?
+    let showsDisclosureIndicator: Bool
+    let onSelectChat: (ChatListItem) -> Void
 
     var body: some View {
         content
@@ -28,9 +31,20 @@ struct ChatListView: View {
             )
         case .loaded:
             List(store.state.chats) { chat in
-                NavigationLink(value: chat) {
-                    ChatListRow(chat: chat)
+                Button {
+                    guard selectedChatID != chat.id else { return }
+                    onSelectChat(chat)
+                } label: {
+                    ChatListRow(chat: chat, showsDisclosureIndicator: showsDisclosureIndicator)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .listRowBackground(
+                    selectedChatID == chat.id
+                        ? ChahuaTheme.accent.opacity(0.14)
+                        : Color.clear
+                )
+                .accessibilityAddTraits(selectedChatID == chat.id ? .isSelected : [])
             }
         }
     }
@@ -38,6 +52,7 @@ struct ChatListView: View {
 
 private struct ChatListRow: View {
     let chat: ChatListItem
+    let showsDisclosureIndicator: Bool
 
     var body: some View {
         ChahuaListRow {
@@ -47,7 +62,11 @@ private struct ChatListRow: View {
                 .font(.headline)
                 .lineLimit(1)
         } trailing: {
-            EmptyView()
+            if showsDisclosureIndicator {
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(ChahuaTheme.secondaryText)
+                    .accessibilityHidden(true)
+            }
         }
     }
 
