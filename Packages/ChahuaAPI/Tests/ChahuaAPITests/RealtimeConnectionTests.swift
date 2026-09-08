@@ -16,7 +16,7 @@ final class RealtimeConnectionTests: XCTestCase {
             let connection = try await client.openRealtimeConnection()
             guard case .pong = try await connection.receive() else { return XCTFail("Expected first pong") }
             let requests = await server.requests
-            XCTAssertEqual(requests.map(\.path), ["/api/ws/"])
+            XCTAssertEqual(requests.map(\.path), ["/api/ws"])
             XCTAssertEqual(requests.first?.headers["user-agent"], "RealtimeTests")
             XCTAssertNil(requests.first?.headers["authorization"])
             let frames = await server.authentications
@@ -41,7 +41,7 @@ final class RealtimeConnectionTests: XCTestCase {
             guard case .pong = try await second.receive() else { return XCTFail("Expected pong") }
             await second.close()
             let requests = await server.requests
-            XCTAssertEqual(requests.map(\.path), ["/users/me", "/auth/refresh", "/users/me", "/ws/", "/ws/"])
+            XCTAssertEqual(requests.map(\.path), ["/users/me", "/auth/refresh", "/users/me", "/ws", "/ws"])
             XCTAssertEqual(requests[2].headers["authorization"], "Bearer refreshed")
             let auth = await server.authentications
             XCTAssertEqual(auth, ["refreshed", "refreshed"])
@@ -229,7 +229,8 @@ private actor RealtimeLoopbackServer {
         do {
             let request = try await wire.readRequest()
             requests.append(request)
-            if request.path.hasSuffix("/ws/") {
+            // The nested backend upgrade route is /ws, not /ws/.
+            if request.path == "/ws" || request.path == "/api/ws" {
                 guard let key = request.headers["sec-websocket-key"] else { throw APIError.unexpectedResponse }
                 let digest = Insecure.SHA1.hash(data: Data((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").utf8))
                 let accept = Data(digest).base64EncodedString()

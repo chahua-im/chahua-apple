@@ -82,8 +82,8 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             default: throw APIError.invalidBaseURL(configuration.baseURL)
             }
             components.path = components.path.hasSuffix("/")
-                ? components.path + "ws/"
-                : components.path + "/ws/"
+                ? components.path + "ws"
+                : components.path + "/ws"
             components.query = nil
             components.fragment = nil
             components.user = nil

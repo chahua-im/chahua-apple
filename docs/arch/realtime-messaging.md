@@ -56,7 +56,7 @@ One connection is shared by all windows for the authenticated account. It exists
 Connection setup:
 
 1. Wait for normal authentication to install the shared session JWT. Existing authentication and HTTP refresh behavior remains unchanged. Use `ChahuaClient`'s current credential for WS just as for HTTP; do not call `/ws/ticket` or read a separate credential from Keychain. Opening WS does not initiate refresh; if shared refresh is already running, await it before reading the credential.
-2. Open API-root-relative `/ws/`, mapping HTTP(S) to WS(S) and preserving the API path prefix.
+2. Open API-root-relative `/ws` without a trailing slash, mapping HTTP(S) to WS(S) and preserving the API path prefix. The backend's nested upgrade route does not accept `/ws/`.
 3. Send the first text frame `{"type":"auth","ticket":"<current session JWT>"}` within the server's five-second deadline. `ticket` remains the backend's wire field name; its value is the ordinary session JWT, not a separately issued WS ticket.
 4. Send `{"type":"ping","state":"active"}`. The first `{"type":"pong"}` confirms readiness; the server has no separate authentication acknowledgement.
 5. Continue JSON pings every 30 seconds with a 10-second outstanding-pong timeout. Reconnect on close, transport/protocol failure or timeout with capped exponential backoff. A ready connection triggers HTTP recovery.
