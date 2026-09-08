@@ -9,6 +9,12 @@ enum ChahuaTheme {
     static let accent = Color.accentColor
     static let destructive = Color.red
 
+    static func conversationBackground(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark
+            ? .black
+            : Color(.sRGB, red: 236.0 / 255, green: 229.0 / 255, blue: 221.0 / 255, opacity: 1)
+    }
+
     enum ChatBubble {
         static let outgoingBackground = Color(.sRGB, red: 43.0 / 255, green: 122.0 / 255, blue: 205.0 / 255, opacity: 1)
         static let outgoingForeground: Color = .white

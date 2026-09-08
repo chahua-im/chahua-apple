@@ -57,6 +57,13 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             refreshVisibleRoots()
         }
     }
+
+    var colorScheme: ColorScheme = .light {
+        didSet {
+            guard isViewLoaded else { return }
+            applyConversationBackground()
+        }
+    }
     private var measurer: TimelineRowMeasurer!
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
@@ -97,6 +104,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     override func loadView() { view = NSView() }
     override func viewDidLoad() {
         super.viewDidLoad()
+        applyConversationBackground()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.horizontalScrollElasticity = .none
@@ -140,6 +148,13 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         notifications.addObserver(self, selector: #selector(backingPropertiesChanged(_:)), name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
         notifications.addObserver(self, selector: #selector(windowWillResize(_:)), name: NSWindow.willStartLiveResizeNotification, object: nil)
         notifications.addObserver(self, selector: #selector(windowDidResize(_:)), name: NSWindow.didEndLiveResizeNotification, object: nil)
+    }
+
+    private func applyConversationBackground() {
+        let backgroundColor = NSColor(ChahuaTheme.conversationBackground(for: colorScheme))
+        view.wantsLayer = true
+        view.layer?.backgroundColor = backgroundColor.cgColor
+        tableView.backgroundColor = backgroundColor
     }
 
     deinit {

@@ -46,6 +46,7 @@ struct ChatListView: View {
                 )
                 .accessibilityAddTraits(selectedChatID == chat.id ? .isSelected : [])
             }
+            .listStyle(.plain)
         }
     }
 }

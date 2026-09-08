@@ -3,6 +3,7 @@ import SwiftUI
 struct ConversationTimelineView: View {
     @ObservedObject var model: ConversationTimelineModel
     @Environment(\.mediaContext) private var mediaContext
+    @Environment(\.colorScheme) private var colorScheme
     var initialPosition: TimelineInitialPosition = .liveEdge
     var actions = TimelineBubbleActions()
 
@@ -25,6 +26,8 @@ struct ConversationTimelineView: View {
                 .padding(ChahuaTheme.Spacing.large)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ChahuaTheme.conversationBackground(for: colorScheme))
         .task { await model.loadInitial(position: initialPosition) }
     }
 
@@ -86,22 +89,26 @@ struct ConversationTimelineView: View {
 #if os(iOS)
 import UIKit
 struct TimelineHostView: UIViewControllerRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let model: ConversationTimelineModel
     var mediaContext: AppMediaContext?
 
     func makeUIViewController(context: Context) -> TimelineCollectionViewController {
         let controller = TimelineCollectionViewController(model: model)
         controller.mediaContext = mediaContext
+        controller.colorScheme = colorScheme
         return controller
     }
 
     func updateUIViewController(_ controller: TimelineCollectionViewController, context: Context) {
         controller.mediaContext = mediaContext
+        controller.colorScheme = colorScheme
     }
 }
 #elseif os(macOS)
 import AppKit
 struct TimelineHostView: NSViewControllerRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let model: ConversationTimelineModel
     var actions = TimelineBubbleActions()
     var mediaContext: AppMediaContext?
@@ -109,12 +116,14 @@ struct TimelineHostView: NSViewControllerRepresentable {
     func makeNSViewController(context: Context) -> TimelineTableViewController {
         let controller = TimelineTableViewController(model: model, actions: actions)
         controller.mediaContext = mediaContext
+        controller.colorScheme = colorScheme
         return controller
     }
 
     func updateNSViewController(_ controller: TimelineTableViewController, context: Context) {
         controller.mediaContext = mediaContext
         controller.actions = actions
+        controller.colorScheme = colorScheme
     }
 }
 #endif

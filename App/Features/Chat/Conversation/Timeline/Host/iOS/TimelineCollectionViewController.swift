@@ -33,6 +33,13 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
             collectionView.reconfigureItems(at: collectionView.indexPathsForVisibleItems)
         }
     }
+
+    var colorScheme: ColorScheme = .light {
+        didSet {
+            guard isViewLoaded else { return }
+            applyConversationBackground()
+        }
+    }
     private var measurer: TimelineRowMeasurer!
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
@@ -71,7 +78,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.addSubview(collectionView)
+        applyConversationBackground()
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -85,6 +92,12 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "timeline")
         measurer = TimelineRowMeasurer(parent: self)
         cancellable = model.updates.sink { [weak self] in self?.receive($0) }
+    }
+
+    private func applyConversationBackground() {
+        let color = UIColor(ChahuaTheme.conversationBackground(for: colorScheme))
+        view.backgroundColor = color
+        collectionView.backgroundColor = color
     }
 
     private var currentGeometry: Geometry {
