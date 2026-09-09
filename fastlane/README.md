@@ -21,7 +21,7 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 [bundle exec] fastlane ios sync_development_signing
 ```
 
-Fetch development signing assets without modifying Apple or the Match repository
+Fetch iOS development signing assets without modifying Apple or the Match repository
 
 ### ios sync_distribution_signing
 
@@ -29,7 +29,7 @@ Fetch development signing assets without modifying Apple or the Match repository
 [bundle exec] fastlane ios sync_distribution_signing
 ```
 
-Fetch App Store distribution signing assets without modifying Apple or the Match repository
+Fetch iOS App Store signing assets without modifying Apple or the Match repository
 
 ### ios bootstrap_development_signing
 
@@ -37,7 +37,7 @@ Fetch App Store distribution signing assets without modifying Apple or the Match
 [bundle exec] fastlane ios bootstrap_development_signing
 ```
 
-Create or repair development signing assets; intentionally mutable
+Create or repair iOS development signing assets; intentionally mutable
 
 ### ios bootstrap_distribution_signing
 
@@ -45,7 +45,44 @@ Create or repair development signing assets; intentionally mutable
 [bundle exec] fastlane ios bootstrap_distribution_signing
 ```
 
-Create or repair App Store distribution signing assets; intentionally mutable
+Create or repair iOS App Store signing assets; intentionally mutable
+
+----
+
+
+## Mac
+
+### mac sync_development_signing
+
+```sh
+[bundle exec] fastlane mac sync_development_signing
+```
+
+Fetch macOS development signing assets without modifying Apple or the Match repository
+
+### mac sync_distribution_signing
+
+```sh
+[bundle exec] fastlane mac sync_distribution_signing
+```
+
+Fetch macOS Developer ID signing assets without modifying Apple or the Match repository
+
+### mac bootstrap_development_signing
+
+```sh
+[bundle exec] fastlane mac bootstrap_development_signing
+```
+
+Create or repair macOS development signing assets; intentionally mutable
+
+### mac bootstrap_distribution_signing
+
+```sh
+[bundle exec] fastlane mac bootstrap_distribution_signing
+```
+
+Create or repair macOS Developer ID signing assets; intentionally mutable
 
 ----
 
