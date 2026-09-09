@@ -73,6 +73,13 @@ public struct CacheConfiguration: Sendable {
     }
 }
 
+/// Semantic revocation of presented content, independent of file lease lifetime.
+public enum CacheInvalidation: Sendable {
+    case all
+    case tags(Set<CacheTag>)
+    case contentIdentifier(String)
+}
+
 public struct CacheUsage: Sendable {
     public let total: CacheUsageBucket
     public let byTag: [CacheTag: CacheUsageBucket]

@@ -1,5 +1,18 @@
 import Foundation
 
+private struct AvatarHTTPTrace: Sendable {
+    let key: String
+    let load: String?
+    let request: String
+    let queuedAt: ContinuousClock.Instant
+
+    func event(_ message: @autoclosure () -> String) {
+        AvatarCacheTrace.$load.withValue(load) {
+            AvatarCacheTrace.event("key=\(key) http=\(request) \(message())")
+        }
+    }
+}
+
 /// Admission is global to this transport; cancellation also removes requests that
 /// have not yet acquired one of its four network slots.
 actor HTTPMediaTransport {
@@ -9,6 +22,7 @@ actor HTTPMediaTransport {
         let onResponse: @Sendable (HTTPURLResponse, Date, Date) async throws -> Void
         let onData: @Sendable (Data) async throws -> Void
         let continuation: CheckedContinuation<Void, any Error>
+        let trace: AvatarHTTPTrace?
     }
 
     private let protocolClasses: [AnyClass]?
@@ -38,8 +52,16 @@ actor HTTPMediaTransport {
                     continuation.resume(throwing: MediaCacheError.invalidRequest)
                     return
                 }
+                let trace: AvatarHTTPTrace?
+                if AvatarCacheTrace.enabled, let key = AvatarCacheTrace.transportKey {
+                    trace = AvatarHTTPTrace(key: key, load: AvatarCacheTrace.load,
+                                            request: String(id.uuidString.prefix(8)), queuedAt: .now)
+                } else {
+                    trace = nil
+                }
                 pending.append(Pending(id: id, request: request, onResponse: onResponse,
-                                       onData: onData, continuation: continuation))
+                                       onData: onData, continuation: continuation, trace: trace))
+                trace?.event("event=http_queued active=\(active.count) pending=\(pending.count)")
                 admit()
             }
         } onCancel: {
@@ -52,7 +74,12 @@ actor HTTPMediaTransport {
         closed = true
         let waiting = pending
         pending.removeAll()
-        for request in waiting { request.continuation.resume(throwing: MediaCacheError.closed) }
+        for request in waiting {
+            if let trace = request.trace {
+                trace.event("event=http_end outcome=closed stage=queued duration_ms=\(AvatarCacheTrace.milliseconds(since: trace.queuedAt))")
+            }
+            request.continuation.resume(throwing: MediaCacheError.closed)
+        }
         for execution in active.values { execution.cancel(with: MediaCacheError.closed) }
         if !active.isEmpty {
             await withCheckedContinuation { shutdownWaiters.append($0) }
@@ -61,7 +88,11 @@ actor HTTPMediaTransport {
 
     private func cancel(_ id: UUID) {
         if let index = pending.firstIndex(where: { $0.id == id }) {
-            pending.remove(at: index).continuation.resume(throwing: CancellationError())
+            let request = pending.remove(at: index)
+            if let trace = request.trace {
+                trace.event("event=http_end outcome=cancel stage=queued duration_ms=\(AvatarCacheTrace.milliseconds(since: trace.queuedAt))")
+            }
+            request.continuation.resume(throwing: CancellationError())
         } else {
             active[id]?.cancel(with: CancellationError())
         }
@@ -70,8 +101,12 @@ actor HTTPMediaTransport {
     private func admit() {
         while !closed && active.count < 4 && !pending.isEmpty {
             let request = pending.removeFirst()
+            if let trace = request.trace {
+                trace.event("event=http_admitted wait_ms=\(AvatarCacheTrace.milliseconds(since: trace.queuedAt)) active=\(active.count + 1)")
+            }
             let execution = HTTPExecution(request: request.request, protocolClasses: protocolClasses,
-                                          clock: clock, onResponse: request.onResponse, onData: request.onData) { result in
+                                          clock: clock, trace: request.trace,
+                                          onResponse: request.onResponse, onData: request.onData) { result in
                 Task { await self.completed(request.id, continuation: request.continuation, result: result) }
             }
             active[request.id] = execution
@@ -110,6 +145,7 @@ private final class HTTPExecution: NSObject, URLSessionDataDelegate, @unchecked 
     private let onResponse: @Sendable (HTTPURLResponse, Date, Date) async throws -> Void
     private let onData: @Sendable (Data) async throws -> Void
     private let onFinish: @Sendable (Result<Void, any Error>) -> Void
+    private let trace: AvatarHTTPTrace?
     private let lock = NSLock()
     private var session: URLSession?
     private var task: URLSessionDataTask?
@@ -125,6 +161,7 @@ private final class HTTPExecution: NSObject, URLSessionDataDelegate, @unchecked 
     private var receivedBodyBytes: Int64 = 0
 
     init(request: URLRequest, protocolClasses: [AnyClass]?, clock: @escaping @Sendable () -> Date,
+         trace: AvatarHTTPTrace?,
          onResponse: @escaping @Sendable (HTTPURLResponse, Date, Date) async throws -> Void,
          onData: @escaping @Sendable (Data) async throws -> Void,
          onFinish: @escaping @Sendable (Result<Void, any Error>) -> Void) {
@@ -132,6 +169,7 @@ private final class HTTPExecution: NSObject, URLSessionDataDelegate, @unchecked 
         self.protocolClasses = protocolClasses
         self.clock = clock
         self.onResponse = onResponse
+        self.trace = trace
         self.onData = onData
         self.onFinish = onFinish
         sentAt = clock()
@@ -160,6 +198,9 @@ private final class HTTPExecution: NSObject, URLSessionDataDelegate, @unchecked 
             self.task = task
         }
         task.resume()
+        if let trace {
+            trace.event("event=http_resumed queue_to_resume_ms=\(AvatarCacheTrace.milliseconds(since: trace.queuedAt))")
+        }
     }
 
     func cancel(with error: any Error) {
@@ -183,6 +224,9 @@ private final class HTTPExecution: NSObject, URLSessionDataDelegate, @unchecked 
         receivedResponse = true
         let receivedAt = clock()
         let sentAt = sentAt
+        if let trace {
+            trace.event("event=http_response status=\(response.statusCode) queue_to_response_ms=\(AvatarCacheTrace.milliseconds(since: trace.queuedAt))")
+        }
         do {
             let contentLength = try HTTPRepresentation.validatedContentLength(of: response)
             deliversBody = response.statusCode == 200
@@ -298,10 +342,14 @@ private final class HTTPExecution: NSObject, URLSessionDataDelegate, @unchecked 
         try lock.withLock {
             if let failure { throw failure }
             guard !finished else { throw CancellationError() }
-            callback = Task.detached(priority: .utility) {
+            callback = Task.detached(priority: .utility) { [trace] in
                 do {
                     try Task.checkCancellation()
-                    try await operation()
+                    if let trace {
+                        try await AvatarCacheTrace.$load.withValue(trace.load) { try await operation() }
+                    } else {
+                        try await operation()
+                    }
                     try Task.checkCancellation()
                     result.set(.success(()))
                 } catch { result.set(.failure(error)) }
@@ -332,6 +380,22 @@ private final class HTTPExecution: NSObject, URLSessionDataDelegate, @unchecked 
             return (session, result)
         }
         guard let completion else { return }
+        if let trace {
+            let outcome: String
+            switch completion.1 {
+            case .success:
+                outcome = "complete"
+            case .failure(let failure):
+                if failure is CancellationError || (failure as? URLError)?.code == .cancelled {
+                    outcome = "cancel"
+                } else if failure as? MediaCacheError == .closed {
+                    outcome = "closed"
+                } else {
+                    outcome = "error"
+                }
+            }
+            trace.event("event=http_end outcome=\(outcome) stage=active duration_ms=\(AvatarCacheTrace.milliseconds(since: trace.queuedAt))")
+        }
         completion.0?.finishTasksAndInvalidate()
         onFinish(completion.1)
     }

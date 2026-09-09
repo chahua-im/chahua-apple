@@ -10,6 +10,8 @@ struct HTTPRepresentation: Sendable {
     let lastModified: String?
     let freshUntil: Date
     let retained: Bool
+    let requiresRevalidation: Bool
+    let hasCacheControl: Bool
 
     init(response: HTTPURLResponse, sentAt: Date, receivedAt: Date) throws {
         statusCode = response.statusCode
@@ -21,6 +23,8 @@ struct HTTPRepresentation: Sendable {
             Self.httpDate($0) == nil ? nil : $0
         }
         let directives = Self.cacheDirectives(Self.field("Cache-Control", response) ?? "")
+        hasCacheControl = Self.field("Cache-Control", response) != nil
+        requiresRevalidation = directives.contains { $0.name == "no-cache" || $0.name == "must-revalidate" }
         retained = !directives.contains { $0.name == "no-store" }
             && !(Self.field("Vary", response)?.split(separator: ",").contains { Self.trim(String($0)) == "*" } ?? false)
         freshUntil = Self.expiration(response, directives: directives, sentAt: sentAt, receivedAt: receivedAt)

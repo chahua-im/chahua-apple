@@ -89,6 +89,8 @@ The component gallery also links to this timeline. Toggle dark appearance, actio
 
 For a targeted launch, set `CHAHUA_FIXTURE_MESSAGE` to a fixture ID (for example, `fixture-0` for text, `fixture-10` for GIF/HEIC, or `fixture-19` for overflow galleries). The `-fixture-dark` argument starts in dark appearance.
 
+Use `fixture-6` to inspect image-only sender headers in both appearances: incoming headers use the normal incoming bubble background, and outgoing headers use blue with white text. Images retain their overlaid timestamps and tail-free shape; bare media without a sender, reply, or thread section remains background-free.
+
 `TimelineTableViewControllerTests` renders real native cells at 320, 600, and 900 points and retains PNG attachments in the XCTest result bundle. Its regressions check compact single/multiline bubbles, rendered glyph containment, caption/reply/thread reflow, dark timestamp visibility, scroll anchors, and complete row-height settlement after live resize. `MacBubbleTextLayoutTests` checks final-line metadata and drawing-appearance changes; `MacBubbleMediaLayoutTests` checks image bounds, missing dimensions, justified rows, and sixth-tile overflow.
 
 Do not treat finding an `NSTextView`, a successful build, or a passing measurement-only test as visual proof. Inspect the native window or rendered XCTest attachments. Keep animated-image windows unoccluded while checking animation: AppKit can suspend animations in covered windows.
@@ -118,3 +120,11 @@ xcrun xctrace record --template 'Animation Hitches' --attach "$fixture_pid" --ti
 Use an unoccluded window and a fresh trace output path. Inspect rendered-update cadence and main-thread stalls, including mouse-up—not just average CPU use. A 60 fps frame budget is 16.7 ms; passing correctness checks or observing no stalls above the template's 33 ms reporting threshold does not establish that every frame meets that budget.
 
 The macOS host measures visible/overscan rows during resizing. After release, offscreen corrections run in cooperative batches (at most 32 rows, with a 4 ms measurement budget), preserving the current reader anchor between batches. A new resize cancels the previous settlement pass; data or geometry changes restart it against the current revision. The budget bounds measurement work between yields, not the cost of a single complex row or AppKit layout.
+
+## Cached image revalidation
+
+`CachedImageView` displays eligible expired images while refreshing through the shared media cache. A decoded-memory hit is immediately available; a disk-only hit is validated and decoded before waiting for HTTP. Failed refreshes retain the displayed image. Explicit removal, corruption, eviction, and account changes revoke it. `no-store` remains non-retained, and `no-cache` / `must-revalidate` do not permit stale reuse.
+
+The raw `MediaCache.file(for:)` API still requires freshness. Image presentation uses the separate cache-only `cachedFile(for:allowingStale:)` path and observes semantic invalidations. Old cache metadata without a recorded revalidation policy conservatively requires a response establishing that policy before expired reuse is allowed.
+
+Run `swift test --package-path Packages/ChahuaMediaCache` for cache/lease regressions. Run the app suites `MediaImageLoaderTests`, `CachedAvatarPresentationTests`, and `MediaHostingTests` on both macOS and iOS Simulator. The hosted scenarios check old pixels during a suspended shared refresh, replacement pixels after completion, offline retention, explicit removal, and account isolation—not just loader completion.

@@ -38,11 +38,16 @@ final class AppMediaContext: ObservableObject {
 
     func activate(uid: Int32?) {
         guard self.uid != uid else { return }
+        let previousActivation = AvatarCacheTrace.enabled ? activationID : nil
+        let traceStarted: ContinuousClock.Instant? = AvatarCacheTrace.enabled ? .now : nil
         self.uid = uid
         let activation = UUID()
         activationID = activation
         isReady = false
         error = nil
+        if let previousActivation {
+            AvatarCacheTrace.event("context_activation_start activation=\(activation.uuidString) previous_activation=\(previousActivation.uuidString) ready=false")
+        }
 
         let oldResources = activeResources
         activeResources = nil
@@ -55,11 +60,27 @@ final class AppMediaContext: ObservableObject {
 
         // A stale initializer finishes and closes its own store before its successor starts.
         transition = Task { @MainActor [weak self] in
+            var outcome = "superseded"
+            defer {
+                if let traceStarted {
+                    AvatarCacheTrace.event("context_activation_end activation=\(activation.uuidString) outcome=\(outcome) ms=\(AvatarCacheTrace.milliseconds(since: traceStarted))")
+                }
+            }
+            let waitStarted: ContinuousClock.Instant? = traceStarted == nil ? nil : .now
+            if traceStarted != nil {
+                AvatarCacheTrace.event("context_transition_wait_start activation=\(activation.uuidString)")
+            }
             await previous?.value
+            if let waitStarted {
+                AvatarCacheTrace.event("context_transition_wait_end activation=\(activation.uuidString) ms=\(AvatarCacheTrace.milliseconds(since: waitStarted))")
+            }
             do {
                 try await oldResources?.cache.shutdown(removingFiles: true)
                 guard self?.activationID == activation else { return }
-                guard uid != nil else { return }
+                guard uid != nil else {
+                    outcome = "inactive"
+                    return
+                }
                 guard let directory else { throw MediaCacheError.invalidConfiguration }
                 let cache = try await makeCache(CacheConfiguration(directory: directory))
                 guard let self, self.activationID == activation else {
@@ -68,16 +89,28 @@ final class AppMediaContext: ObservableObject {
                 }
                 self.activeResources = (cache, MediaImageLoader(cache: cache))
                 self.isReady = true
+                outcome = "ready"
+                AvatarCacheTrace.event("context_resources_ready activation=\(activation.uuidString)")
             } catch {
+                if traceStarted != nil {
+                    outcome = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled ? "cancelled" : "error"
+                }
                 guard let self, self.activationID == activation else { return }
-                Self.logger.debug("activation-failed activation=\(activation, privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
+                if outcome != "cancelled" {
+                    Self.logger.debug("activation-failed activation=\(activation, privacy: .public) domain=\((error as NSError).domain, privacy: .public) code=\((error as NSError).code)")
+                }
                 self.error = error
             }
         }
     }
 
     func cachedImage(for request: MediaRequest, thumbnailPixelSize: CGSize? = nil) -> ImageResponse? {
-        guard isReady else { return nil }
+        guard isReady else {
+            if AvatarCacheTrace.enabled, AvatarCacheTrace.load != nil, let key = AvatarCacheTrace.key(for: request) {
+                AvatarCacheTrace.event("context_sync_unavailable key=\(key) activation=\(activationID.uuidString) reason=not-ready")
+            }
+            return nil
+        }
         return activeResources?.images.cachedImage(for: request, thumbnailPixelSize: thumbnailPixelSize)
     }
 

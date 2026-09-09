@@ -18,11 +18,15 @@ final class CachedAvatarPresentationTests: XCTestCase {
     private let chatMedia = CacheTag(rawValue: "chatMedia")
     private let thumbnailSize = CGSize(width: 32, height: 32)
 
-    func testWarmedAvatarFirstSynchronousViewPhaseIsImage() async throws {
+    func testExpiredMemoryAvatarFirstSynchronousViewPhaseIsImage() async throws {
+        let clock = MediaImageClock()
         let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
-        let context = makeContext(fixture: fixture)
+        let context = makeContext(fixture: fixture, clock: { clock.now() })
         let resources = try await context.resources(for: context.activationID)
         _ = try await resources.images.image(for: request(fixture), thumbnailPixelSize: thumbnailSize)
+        clock.advance(by: 3601)
+        fixture.suspend()
+        defer { fixture.resume() }
         let recorder = AvatarPhaseRecorder()
 
         // No suspension between constructing the fresh view and checking its first phase.
@@ -41,7 +45,10 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(recorder.phases.first, .success,
                        "A warmed avatar must not offer its placeholder to the content closure first.")
         XCTAssertTrue(try containsColor(firstFrame, red: 255, green: 0, blue: 255))
-        XCTAssertEqual(fixture.requestCount, 1)
+        try await waitUntil("The immediate expired image must still start freshness acquisition") {
+            fixture.requestCount == 2
+        }
+        XCTAssertTrue(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255))
     }
 
     func testImmediateImageRequiresMatchingThumbnailAndDurableTagsAndOpenLoader() async throws {
@@ -103,27 +110,33 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 2)
     }
 
-    func testNewActivationCannotPresentOldAccountDecodedAvatar() async throws {
+    func testNewActivationCannotKeepPreviouslyDisplayedAccountAvatar() async throws {
         let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
         let context = makeContext(fixture: fixture)
         let oldResources = try await context.resources(for: context.activationID)
         let avatarRequest = request(fixture)
         _ = try await oldResources.images.image(for: avatarRequest, thumbnailPixelSize: thumbnailSize)
         XCTAssertNotNil(context.cachedImage(for: avatarRequest, thumbnailPixelSize: thumbnailSize))
+        let recorder = AvatarPhaseRecorder()
+        let host = try makeHost(context: context, fixture: fixture, recorder: recorder)
+        defer { host.close() }
+        try await waitUntil("The first account's avatar did not appear") {
+            try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
 
         fixture.replaceBody(try makeMediaPNG(red: 0, green: 0, blue: 255))
+        fixture.suspend()
+        defer { fixture.resume() }
         let oldActivation = context.activationID
         context.activate(uid: 2)
         XCTAssertNotEqual(context.activationID, oldActivation)
         // These checks run before the ordered shutdown/new-cache initialization can finish.
         XCTAssertNil(context.cachedImage(for: avatarRequest, thumbnailPixelSize: thumbnailSize))
         XCTAssertNil(oldResources.images.cachedImage(for: avatarRequest, thumbnailPixelSize: thumbnailSize))
-        let recorder = AvatarPhaseRecorder()
-        let host = try makeHost(context: context, fixture: fixture, recorder: recorder)
-        defer { host.close() }
-        _ = try host.snapshot()
-        XCTAssertEqual(recorder.phases.first, .empty,
-                       "The new activation must not borrow a decoded avatar from the old account.")
+        try await waitUntil("The held old-account pixels survived an activation change") {
+            try !self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
+        fixture.resume()
 
         try await waitUntil("The new account's avatar did not appear") {
             try self.containsColor(host.snapshot(), red: 0, green: 0, blue: 255)
@@ -133,7 +146,7 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 2)
     }
 
-    func testReappearingAvatarKeepsDisplayedImageWhileFileReacquisitionWaits() async throws {
+    func testReappearingAvatarDropsCorruptGenerationWhileRepairWaits() async throws {
         let gate = AvatarResponseGate()
         defer { gate.open() }
         let fixture = MediaImageFixture(
@@ -163,7 +176,6 @@ final class CachedAvatarPresentationTests: XCTestCase {
         try FileManager.default.removeItem(at: payloadURL)
         fixture.replaceBody(try makeMediaPNG(red: 0, green: 0, blue: 255))
         XCTAssertNotNil(context.cachedImage(for: request(fixture), thumbnailPixelSize: thumbnailSize))
-        let replayStart = recorder.phases.count
         host.mount()
 
         try await waitUntil("Reappearance did not acquire the file again") {
@@ -174,10 +186,9 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 2, "A memory image must not bypass the asynchronous file acquisition.")
         XCTAssertNil(context.cachedImage(for: request(fixture), thumbnailPixelSize: thumbnailSize),
                      "Acquisition must revoke the missing generation before fetching its replacement.")
-        XCTAssertTrue(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255),
-                      "The already displayed avatar must remain visible while the replacement is blocked.")
-        XCTAssertFalse(recorder.phases.dropFirst(replayStart).contains { $0 != .success },
-                       "Reappearance must not clear a same-identity success back to a placeholder.")
+        try await waitUntil("A repaired missing generation must revoke previously displayed pixels") {
+            try !self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
 
         gate.open()
         try await waitUntil("The replay did not finish with the replacement avatar") {
@@ -187,13 +198,127 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 2)
     }
 
-    private func makeContext(fixture: MediaImageFixture) -> AppMediaContext {
+    func testDiskWarmExpiredAvatarsShowOldThenNewPixelsDuringSharedRefresh() async throws {
+        let clock = MediaImageClock()
+        let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
+        let context = makeContext(fixture: fixture, clock: { clock.now() })
+        let resources = try await context.resources(for: context.activationID)
+        let file = try await resources.cache.file(for: request(fixture))
+        await file.release()
+        clock.advance(by: 3601)
+        XCTAssertNil(context.cachedImage(for: request(fixture), thumbnailPixelSize: thumbnailSize),
+                     "This scenario must start decoded-memory cold, not just expired.")
+        fixture.replaceBody(try makeMediaPNG(red: 0, green: 255, blue: 0))
+        fixture.suspend()
+        defer { fixture.resume() }
+        let first = try makeHost(context: context, fixture: fixture, recorder: AvatarPhaseRecorder())
+        defer { first.close() }
+        let second = try makeHost(context: context, fixture: fixture, recorder: AvatarPhaseRecorder())
+        defer { second.close() }
+
+        try await waitUntil("Both disk-warm avatars must decode while HTTP is suspended") {
+            try self.containsColor(first.snapshot(), red: 255, green: 0, blue: 255)
+                && self.containsColor(second.snapshot(), red: 255, green: 0, blue: 255)
+                && fixture.requestCount == 2
+        }
+        XCTAssertFalse(try containsColor(first.snapshot(), red: 0, green: 255, blue: 0))
+        fixture.resume()
+        try await waitUntil("Both hosted avatars must display the refreshed generation") {
+            try self.containsColor(first.snapshot(), red: 0, green: 255, blue: 0)
+                && self.containsColor(second.snapshot(), red: 0, green: 255, blue: 0)
+        }
+        XCTAssertFalse(try containsColor(first.snapshot(), red: 255, green: 0, blue: 255))
+        XCTAssertEqual(fixture.requestCount, 2, "Simultaneous views must share one package HTTP producer.")
+    }
+
+    func testFailedRefreshKeepsHostedStalePixelsUntilExplicitRemoval() async throws {
+        let clock = MediaImageClock()
+        let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
+        let context = makeContext(fixture: fixture, clock: { clock.now() })
+        let resources = try await context.resources(for: context.activationID)
+        _ = try await resources.images.image(for: request(fixture), thumbnailPixelSize: thumbnailSize)
+        clock.advance(by: 3601)
+        fixture.suspend()
+        fixture.fail(with: .notConnectedToInternet)
+        defer { fixture.resume() }
+        let recorder = AvatarPhaseRecorder()
+        let host = try makeHost(context: context, fixture: fixture, recorder: recorder)
+        defer { host.close() }
+        try await waitUntil("The stale image must remain visible while offline refresh waits") {
+            try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+                && fixture.requestCount == 2
+        }
+        fixture.resume()
+        // Poll rendered frames after delivering the failure, not just the optimistic first frame.
+        for _ in 0 ..< 10 {
+            try await Task.sleep(for: .milliseconds(20))
+            XCTAssertTrue(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255))
+        }
+        XCTAssertFalse(recorder.phases.contains(.failure), "A failed refresh must not replace valid stale pixels.")
+        XCTAssertEqual(fixture.requestCount, 2)
+        _ = try await resources.cache.remove(tag: avatars)
+        try await waitUntil("Explicit removal must revoke a settled failed-refresh image") {
+            try !self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
+    }
+
+    func testRemovalDuringSuspendedRefreshRevokesAlreadyDisplayedStalePixels() async throws {
+        let clock = MediaImageClock()
+        let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
+        let context = makeContext(fixture: fixture, clock: { clock.now() })
+        let resources = try await context.resources(for: context.activationID)
+        _ = try await resources.images.image(for: request(fixture), thumbnailPixelSize: thumbnailSize)
+        clock.advance(by: 3601)
+        fixture.suspend()
+        defer { fixture.resume() }
+        let host = try makeHost(context: context, fixture: fixture, recorder: AvatarPhaseRecorder())
+        defer { host.close() }
+        try await waitUntil("The stale image must be displayed before revocation") {
+            try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+                && fixture.requestCount == 2
+        }
+        _ = try await resources.cache.remove(tag: avatars)
+        try await waitUntil("Removing a tag must fence an in-flight stale presentation") {
+            try !self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
+        fixture.resume()
+        for _ in 0 ..< 10 {
+            try await Task.sleep(for: .milliseconds(20))
+            XCTAssertFalse(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255))
+        }
+    }
+
+    func testExplicitRemovalRevokesDisplayedNoStorePixelsAfterLeaseCleanup() async throws {
+        let fixture = MediaImageFixture(
+            data: try makeMediaPNG(red: 255, green: 0, blue: 255), cacheControl: "no-store"
+        )
+        let context = makeContext(fixture: fixture)
+        let resources = try await context.resources(for: context.activationID)
+        let host = try makeHost(context: context, fixture: fixture, recorder: AvatarPhaseRecorder())
+        defer { host.close() }
+        try await waitUntil("A newly fetched no-store image must still be displayable") {
+            try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
+        let usage = try await resources.cache.usage()
+        XCTAssertEqual(usage.total.itemCount, 0, "Displaying pixels must not pin no-store disk leases.")
+        _ = try await resources.cache.remove(tag: chatMedia)
+        XCTAssertTrue(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255),
+                      "An unrelated category removal must not clear this image.")
+        _ = try await resources.cache.remove(tag: avatars)
+        try await waitUntil("Explicit removal must revoke pixels even after automatic no-store cleanup") {
+            try !self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
+    }
+
+    private func makeContext(
+        fixture: MediaImageFixture, clock: @escaping @Sendable () -> Date = { Date() }
+    ) -> AppMediaContext {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CachedAvatarPresentation-\(UUID().uuidString)", isDirectory: true)
         MediaImageURLProtocol.install(fixture)
         let context = AppMediaContext(rootDirectory: directory, namespace: "avatar-presentation-tests") { configuration in
             try await MediaCache(configuration: configuration,
-                                 protocolClasses: [MediaImageURLProtocol.self], clock: { Date() })
+                                 protocolClasses: [MediaImageURLProtocol.self], clock: clock)
         }
         addTeardownBlock { @MainActor in
             context.activate(uid: nil)

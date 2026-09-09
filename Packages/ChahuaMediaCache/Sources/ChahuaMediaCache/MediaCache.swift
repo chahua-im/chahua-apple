@@ -18,7 +18,13 @@ public actor MediaCache {
         var notModified = false
         var waiters: Set<UUID> = []
         var leases: Set<UUID> = []
+        var cacheOnlyLeases: Set<UUID> = []
         var work: Task<Void, Never>?
+
+        var avatarTraceKey: String? {
+            guard AvatarCacheTrace.enabled, tags.contains(CacheTag(rawValue: "avatars")) else { return nil }
+            return AvatarCacheTrace.key(forNormalizedKey: record.key)
+        }
 
         init(record: EntryRecord, stored: Bool, ready: Bool, request: URLRequest? = nil) {
             self.record = record
@@ -35,6 +41,7 @@ public actor MediaCache {
         let key: String
         let tags: Set<CacheTag>
         let continuation: CheckedContinuation<CachedFile, any Error>
+        let traceLoad: String?
         var generation: UUID?
     }
 
@@ -53,9 +60,13 @@ public actor MediaCache {
     private var reservedBytes: Int64 = 0
     private var closed = false
     private var shutdownTask: Task<Void, any Error>?
+    private var invalidationObservers: [UUID: AsyncStream<CacheInvalidation>.Continuation] = [:]
     private var storageError: (any Error)? {
         didSet {
-            if storageError != nil { cachedContents.close() }
+            if storageError != nil {
+                cachedContents.close()
+                emitInvalidation(.all)
+            }
         }
     }
 
@@ -84,11 +95,69 @@ public actor MediaCache {
         }
     }
 
+    /// Subscribe before loading images. Ordinary replacement does not revoke pixels.
+    public func invalidations() -> AsyncStream<CacheInvalidation> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<CacheInvalidation>.makeStream()
+        guard !closed, storageError == nil else {
+            continuation.yield(.all)
+            continuation.finish()
+            return stream
+        }
+        invalidationObservers[id] = continuation
+        continuation.onTermination = { @Sendable _ in
+            Task { await self.removeInvalidationObserver(id) }
+        }
+        return stream
+    }
+
+    private func removeInvalidationObserver(_ id: UUID) {
+        invalidationObservers.removeValue(forKey: id)
+    }
+
+    private func emitInvalidation(_ event: CacheInvalidation) {
+        for continuation in invalidationObservers.values { continuation.yield(event) }
+    }
+
     /// An opaque decoded-memory cache key, not a file URL lease. This lookup performs
-    /// no IO or tag registration; every load must still acquire and validate `file(for:)`.
-    public nonisolated func cachedContentIdentifier(for request: MediaRequest) -> String? {
+    /// no IO or tag registration; acquire `cachedFile(for:allowingStale:)` or `file(for:)`
+    /// to validate the payload. Stale lookup bypasses expiry, never HTTP restrictions.
+    public nonisolated func cachedContentIdentifier(for request: MediaRequest, allowingStale: Bool = false) -> String? {
         guard let normalized = try? request.normalized() else { return nil }
-        return cachedContents.identifier(for: normalized.key, tags: request.tags)
+        return cachedContents.identifier(for: normalized.key, tags: request.tags, allowingStale: allowingStale)
+    }
+
+    /// Cache-only acquisition: validates bytes and durably joins tags without starting HTTP.
+    /// Cache-only leases survive ordinary replacement, but removal and shutdown revoke them.
+    public func cachedFile(for request: MediaRequest, allowingStale: Bool = false) async throws -> CachedFile? {
+        try checkOpen()
+        try Task.checkCancellation()
+        let normalized = try request.normalized()
+        await lockDisk()
+        defer { unlockDisk() }
+        try checkOpen()
+        try Task.checkCancellation()
+        guard barriers[normalized.key] == nil,
+              let current = joinable[normalized.key].flatMap({ entries[$0] }), current.valid,
+              let entry = current.ready ? current : current.previous.flatMap({ entries[$0] }),
+              entry.valid, entry.stored, entry.ready, entry.record.complete,
+              entry.record.permitsCachedRead(at: clock(), allowingStale: allowingStale) else { return nil }
+        // Register before suspension so category removal also fences an in-flight refresh.
+        entry.tags.formUnion(request.tags)
+        current.tags.formUnion(request.tags)
+        let valid = try await disk.validate(record: entry.record)
+        try requireValid(entry)
+        guard valid else {
+            invalidate(entry, error: MediaCacheError.invalidated)
+            scheduleCleanup(entry)
+            return nil
+        }
+        try await flushTags(entry)
+        try requireValid(entry)
+        try Task.checkCancellation()
+        guard entry.record.permitsCachedRead(at: clock(), allowingStale: allowingStale) else { return nil }
+        publishCachedContent(entry)
+        return makeLease(entry, cacheOnly: true)
     }
 
     public func file(for request: MediaRequest) async throws -> CachedFile {
@@ -99,7 +168,8 @@ public actor MediaCache {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CachedFile, any Error>) in
                 guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
                 waiters[id] = Waiter(request: normalized.request, key: normalized.key, tags: request.tags,
-                                     continuation: continuation)
+                                     continuation: continuation,
+                                     traceLoad: AvatarCacheTrace.enabled ? AvatarCacheTrace.load : nil)
                 admit(id)
             }
         } onCancel: {
@@ -161,11 +231,11 @@ public actor MediaCache {
 
     public func remove(tag: CacheTag) async throws -> CacheRemoval {
         try MediaRequest.validate(tags: [tag])
-        return try await removeMatching { $0.contains(tag) }
+        return try await removeMatching(event: .tags([tag])) { $0.contains(tag) }
     }
 
     public func removeAll() async throws -> CacheRemoval {
-        try await removeMatching { _ in true }
+        try await removeMatching(event: .all) { _ in true }
     }
 
     public func trim(toDiskBytes bytes: Int64) async throws -> CacheRemoval {
@@ -184,7 +254,10 @@ public actor MediaCache {
         cachedContents.close()
         let selected = Array(entries.values)
         let discard = selected.filter { removingFiles || !$0.valid || !$0.ready || !$0.record.retained }
-        for entry in selected { invalidate(entry, error: MediaCacheError.closed) }
+        for entry in selected { invalidate(entry, error: MediaCacheError.closed, notifying: false) }
+        emitInvalidation(.all)
+        for continuation in invalidationObservers.values { continuation.finish() }
+        invalidationObservers.removeAll()
         for id in Array(waiters.keys) { failWaiter(id, error: MediaCacheError.closed) }
         let work = selected.compactMap(\.work)
         let cleanup = Array(cleanupTasks.values)
@@ -232,14 +305,17 @@ public actor MediaCache {
         waiter.generation = entry.record.generation
         waiters[id] = waiter
         entry.waiters.insert(id)
-        start(entry)
+        if AvatarCacheTrace.enabled, waiter.tags.contains(CacheTag(rawValue: "avatars")) {
+            AvatarCacheTrace.$load.withValue(waiter.traceLoad) {
+                AvatarCacheTrace.event("event=file_admit key=\(AvatarCacheTrace.key(forNormalizedKey: waiter.key)) gen=\(entry.record.generation.uuidString.prefix(8)) producer=\(entry.work == nil ? "start" : "join") ready=\(entry.ready) waiters=\(entry.waiters.count)")
+            }
+        }
+        start(entry, traceLoad: waiter.traceLoad)
     }
 
     private func makeEntry(key: String, tags: Set<CacheTag>, request: URLRequest) -> Entry {
         let now = clock()
-        if let generation = joinable[key] {
-            cachedContents.remove(key: key, generation: generation)
-        }
+        // Keep the last complete representation published until refresh commits.
         // An unclassified producer is crash-disposable and visible to category removal
         // before its first disk operation or HTTP callback.
         let record = EntryRecord(key: key, generation: UUID(), tags: tags, committedBytes: 0,
@@ -251,10 +327,16 @@ public actor MediaCache {
         return entry
     }
 
-    private func start(_ entry: Entry) {
+    private func start(_ entry: Entry, traceLoad: String?) {
         guard entry.work == nil else { return }
         let id = entry.record.generation
-        entry.work = Task { await self.produce(id) }
+        if AvatarCacheTrace.enabled {
+            entry.work = Task {
+                await AvatarCacheTrace.$load.withValue(traceLoad) { await self.produce(id) }
+            }
+        } else {
+            entry.work = Task { await self.produce(id) }
+        }
     }
 
     private func cancelWaiter(_ id: UUID) {
@@ -271,6 +353,13 @@ public actor MediaCache {
     private func failWaiter(_ id: UUID, error: any Error) {
         guard let waiter = waiters.removeValue(forKey: id) else { return }
         if let generation = waiter.generation { entries[generation]?.waiters.remove(id) }
+        if AvatarCacheTrace.enabled, waiter.tags.contains(CacheTag(rawValue: "avatars")) {
+            AvatarCacheTrace.$load.withValue(waiter.traceLoad) {
+                let generation = waiter.generation.map { String($0.uuidString.prefix(8)) } ?? "-"
+                let outcome = error is CancellationError || (error as? URLError)?.code == .cancelled ? "cancel" : "error"
+                AvatarCacheTrace.event("event=file_waiter_end key=\(AvatarCacheTrace.key(forNormalizedKey: waiter.key)) gen=\(generation) outcome=\(outcome)")
+            }
+        }
         waiter.continuation.resume(throwing: error)
     }
 
@@ -280,29 +369,42 @@ public actor MediaCache {
         publishCachedContent(entry)
         for id in entry.waiters {
             guard let waiter = waiters.removeValue(forKey: id) else { continue }
-            let lease = UUID()
             let generation = entry.record.generation
-            entry.leases.insert(lease)
-            let file = CachedFile(url: disk.payloadURL(for: entry.record), key: entry.record.key,
-                                  validate: { try await self.validateLease(lease, generation: generation) },
-                                  release: { await self.releaseLease(lease, generation: generation) })
+            let file = makeLease(entry)
+            if AvatarCacheTrace.enabled, waiter.tags.contains(CacheTag(rawValue: "avatars")) {
+                AvatarCacheTrace.$load.withValue(waiter.traceLoad) {
+                    AvatarCacheTrace.event("event=file_delivery key=\(AvatarCacheTrace.key(forNormalizedKey: waiter.key)) gen=\(generation.uuidString.prefix(8)) retained=\(entry.record.retained)")
+                }
+            }
             waiter.continuation.resume(returning: file)
         }
         entry.waiters.removeAll()
         entry.request = nil
     }
 
+    private func makeLease(_ entry: Entry, cacheOnly: Bool = false) -> CachedFile {
+        let lease = UUID()
+        let generation = entry.record.generation
+        entry.leases.insert(lease)
+        if cacheOnly { entry.cacheOnlyLeases.insert(lease) }
+        return CachedFile(url: disk.payloadURL(for: entry.record), key: entry.record.key,
+                          validate: { try await self.validateLease(lease, generation: generation) },
+                          release: { await self.releaseLease(lease, generation: generation) })
+    }
+
     private func publishCachedContent(_ entry: Entry) {
         guard !closed, storageError == nil, entry.valid, entry.stored, entry.ready,
               entry.record.retained, entry.record.complete,
-              joinable[entry.record.key] == entry.record.generation,
+              (joinable[entry.record.key] == entry.record.generation ||
+               joinable[entry.record.key].flatMap({ entries[$0]?.previous }) == entry.record.generation),
               let record = entry.durableRecord, record.retained, record.complete else {
             cachedContents.remove(key: entry.record.key, generation: entry.record.generation)
             return
         }
         cachedContents.publish(.init(generation: record.generation,
                                      identifier: disk.payloadURL(for: record).absoluteString,
-                                     tags: record.tags, freshUntil: record.freshUntil), for: record.key)
+                                     tags: record.tags, freshUntil: record.freshUntil,
+                                     allowsStale: record.requiresRevalidation == false), for: record.key)
     }
 
     private func validateLease(_ lease: UUID, generation: UUID) throws {
@@ -315,9 +417,10 @@ public actor MediaCache {
     private func releaseLease(_ lease: UUID, generation: UUID) async {
         guard let entry = entries[generation] else { return }
         entry.leases.remove(lease)
+        entry.cacheOnlyLeases.remove(lease)
         if entry.valid, !entry.record.retained, entry.leases.isEmpty, entry.waiters.isEmpty,
            !entries.values.contains(where: { $0.valid && $0.previous == generation }) {
-            invalidate(entry, error: MediaCacheError.invalidated)
+            invalidate(entry, error: MediaCacheError.invalidated, notifying: false)
             scheduleCleanup(entry)
             await cleanupTasks[generation]?.value
         }
@@ -327,32 +430,100 @@ public actor MediaCache {
 
     private func produce(_ generation: UUID) async {
         guard let entry = entries[generation] else { return }
+        let traceKey = entry.avatarTraceKey
+        let started = traceKey == nil ? nil : ContinuousClock.now
+        var outcome = "complete"
+        var usedHTTP = false
+        if let traceKey {
+            AvatarCacheTrace.event("event=producer_start key=\(traceKey) gen=\(generation.uuidString.prefix(8)) ready=\(entry.ready)")
+        }
+        defer {
+            if let traceKey, let started {
+                AvatarCacheTrace.event("event=producer_end key=\(traceKey) gen=\(generation.uuidString.prefix(8)) outcome=\(outcome) http=\(usedHTTP) duration_ms=\(AvatarCacheTrace.milliseconds(since: started))")
+            }
+        }
         do {
             guard let request = try await prepare(entry) else { return }
-            try await transport.execute(request: request, onResponse: { response, sentAt, receivedAt in
+            if let traceKey {
+                AvatarCacheTrace.event("event=transport_execute key=\(traceKey) gen=\(generation.uuidString.prefix(8)) conditional=\(entry.conditional)")
+            }
+            usedHTTP = true
+            let onResponse: @Sendable (HTTPURLResponse, Date, Date) async throws -> Void = { response, sentAt, receivedAt in
                 try await self.receiveResponse(generation, response: response, sentAt: sentAt, receivedAt: receivedAt)
-            }, onData: { data in
+            }
+            let onData: @Sendable (Data) async throws -> Void = { data in
                 try await self.receiveData(generation, data: data)
-            })
+            }
+            if let traceKey {
+                try await AvatarCacheTrace.$transportKey.withValue(traceKey) {
+                    try await transport.execute(request: request, onResponse: onResponse, onData: onData)
+                }
+            } else {
+                try await transport.execute(request: request, onResponse: onResponse, onData: onData)
+            }
             try await finish(entry)
         } catch {
+            outcome = error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled ? "cancel" : "error"
+            if let traceKey, case MediaCacheError.httpStatus(let status) = error {
+                AvatarCacheTrace.event("event=http_rejected key=\(traceKey) gen=\(generation.uuidString.prefix(8)) status=\(status)")
+            }
             await failProduction(entry, error: error)
         }
     }
 
     private func prepare(_ entry: Entry) async throws -> URLRequest? {
+        let traceKey = entry.avatarTraceKey
+        let gateStarted = traceKey == nil ? nil : ContinuousClock.now
+        let gateWasLocked = diskLocked
         await lockDisk()
         defer { unlockDisk() }
+        if let traceKey, let gateStarted {
+            AvatarCacheTrace.event("event=prepare_disk_gate key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) queued=\(gateWasLocked) wait_ms=\(AvatarCacheTrace.milliseconds(since: gateStarted))")
+        }
         try requireValid(entry)
-        guard !entry.waiters.isEmpty else { entry.work = nil; return nil }
+        guard !entry.waiters.isEmpty else {
+            if let traceKey {
+                AvatarCacheTrace.event("event=prepare_result key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) outcome=no-waiters")
+            }
+            entry.work = nil
+            return nil
+        }
         if entry.ready {
-            let valid = try await disk.validate(record: entry.record)
+            let validationStarted = traceKey == nil ? nil : ContinuousClock.now
+            let valid: Bool
+            do {
+                valid = try await disk.validate(record: entry.record)
+                if let traceKey, let validationStarted {
+                    AvatarCacheTrace.event("event=disk_validate key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) result=\(valid ? "valid" : "invalid") duration_ms=\(AvatarCacheTrace.milliseconds(since: validationStarted))")
+                }
+            } catch {
+                if let traceKey, let validationStarted {
+                    let outcome = error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled ? "cancel" : "error"
+                    AvatarCacheTrace.event("event=disk_validate key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) result=\(outcome) duration_ms=\(AvatarCacheTrace.milliseconds(since: validationStarted))")
+                }
+                throw error
+            }
             try requireValid(entry)
             if valid, entry.record.freshUntil > clock() {
                 entry.record.lastAccess = clock()
-                try await flushTags(entry, force: true)
+                let flushStarted = traceKey == nil ? nil : ContinuousClock.now
+                do {
+                    try await flushTags(entry, force: true)
+                    if let traceKey, let flushStarted {
+                        AvatarCacheTrace.event("event=fresh_metadata_flush key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) result=complete duration_ms=\(AvatarCacheTrace.milliseconds(since: flushStarted))")
+                    }
+                } catch {
+                    if let traceKey, let flushStarted {
+                        let outcome = error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled ? "cancel" : "error"
+                        AvatarCacheTrace.event("event=fresh_metadata_flush key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) result=\(outcome) duration_ms=\(AvatarCacheTrace.milliseconds(since: flushStarted))")
+                    }
+                    throw error
+                }
                 try deliver(entry)
                 entry.work = nil
+                if let traceKey {
+                    AvatarCacheTrace.event("event=prepare_result key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) outcome=fresh")
+                }
                 return nil
             }
             guard let request = entry.request else { throw MediaCacheError.invalidRequest }
@@ -365,7 +536,10 @@ public actor MediaCache {
                 invalidate(entry, error: MediaCacheError.invalidated)
                 entries.removeValue(forKey: entry.record.generation)
             }
-            start(replacement)
+            if let traceKey {
+                AvatarCacheTrace.event("event=prepare_result key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) outcome=\(valid ? "stale" : "invalid-file") next_gen=\(replacement.record.generation.uuidString.prefix(8))")
+            }
+            start(replacement, traceLoad: AvatarCacheTrace.enabled ? AvatarCacheTrace.load : nil)
             return nil
         }
         try await ensureStored(entry)
@@ -391,8 +565,15 @@ public actor MediaCache {
         try requireValid(entry)
         guard entry.response == nil else { throw MediaCacheError.invalidResponse }
         entry.response = representation
+        if let traceKey = entry.avatarTraceKey {
+            let ttl = representation.freshUntil.timeIntervalSince(receivedAt)
+            AvatarCacheTrace.event("event=http_policy key=\(traceKey) gen=\(generation.uuidString.prefix(8)) status=\(representation.statusCode) ttl_s=\(String(format: "%.3f", ttl)) fresh=\(representation.freshUntil > receivedAt) retained=\(representation.retained) etag=\(representation.etag != nil) last_modified=\(representation.lastModified != nil)")
+        }
         if !representation.retained, joinable[entry.record.key] == generation {
             joinable.removeValue(forKey: entry.record.key)
+            if let previous = entry.previous.flatMap({ entries[$0] }) {
+                cachedContents.remove(key: previous.record.key, generation: previous.record.generation)
+            }
         }
         await lockDisk()
         defer { unlockDisk() }
@@ -403,49 +584,63 @@ public actor MediaCache {
                   representation.contentLength == nil || representation.contentLength == previous.record.contentLength else {
                 throw MediaCacheError.invalidResponse
             }
-            guard try await disk.validate(record: previous.record) else { throw MediaCacheError.invalidResponse }
+            let traceKey = entry.avatarTraceKey
+            let validationStarted = traceKey == nil ? nil : ContinuousClock.now
+            let valid: Bool
+            do {
+                valid = try await disk.validate(record: previous.record)
+                if let traceKey, let validationStarted {
+                    AvatarCacheTrace.event("event=disk_validate_304 key=\(traceKey) gen=\(generation.uuidString.prefix(8)) previous_gen=\(previousID.uuidString.prefix(8)) result=\(valid ? "valid" : "invalid") duration_ms=\(AvatarCacheTrace.milliseconds(since: validationStarted))")
+                }
+            } catch {
+                if let traceKey, let validationStarted {
+                    let outcome = error is CancellationError || Task.isCancelled || (error as? URLError)?.code == .cancelled ? "cancel" : "error"
+                    AvatarCacheTrace.event("event=disk_validate_304 key=\(traceKey) gen=\(generation.uuidString.prefix(8)) previous_gen=\(previousID.uuidString.prefix(8)) result=\(outcome) duration_ms=\(AvatarCacheTrace.milliseconds(since: validationStarted))")
+                }
+                throw error
+            }
+            guard valid else { throw MediaCacheError.invalidResponse }
             try requireValid(entry)
             try requireValid(previous)
             entry.notModified = true
-            if !representation.retained {
-                previous.record.retained = false
-                do {
-                    try await flushTags(previous, force: true)
-                } catch {
-                    // A failed transient-marker write must not restore retained lookup.
-                    invalidate(previous, error: error)
-                    do {
-                        try await disk.remove(record: previous.record)
-                        entries.removeValue(forKey: previousID)
-                    } catch {
-                        storageError = error
-                        throw error
-                    }
-                    throw error
-                }
-                try requireValid(entry)
-            }
         } else {
-            if let previousID = entry.previous, let previous = entries[previousID], previous.valid {
-                // Replacement never overwrites a leased generation. Revocation precedes
-                // the asynchronous unlink and all later decoder results must check it.
-                invalidate(previous, error: MediaCacheError.invalidated)
-                do {
-                    try await disk.remove(record: previous.record)
-                } catch {
-                    storageError = error
-                    throw error
-                }
-                entries.removeValue(forKey: previousID)
-                try requireValid(entry)
-            }
-            entry.previous = nil
             entry.record.contentLength = representation.contentLength
+            if let previous = entry.previous.flatMap({ entries[$0] }), previous.valid {
+                // Raw acquisitions retain their existing replacement-revocation semantics.
+                previous.leases.formIntersection(previous.cacheOnlyLeases)
+            }
             entry.record.mimeType = representation.mimeType
             entry.record.etag = representation.etag
             entry.record.lastModified = representation.lastModified
             entry.record.freshUntil = representation.freshUntil
             entry.record.retained = representation.retained
+            entry.record.requiresRevalidation = representation.requiresRevalidation
+        }
+        if let previousID = entry.previous, let previous = entries[previousID], previous.valid,
+           !representation.retained || (entry.notModified && representation.requiresRevalidation) {
+            // A restriction applies as soon as it is received, even if body delivery
+            // subsequently fails. Never recover a formerly permissive policy.
+            cachedContents.remove(key: previous.record.key, generation: previousID)
+            if !representation.retained { previous.record.retained = false }
+            if entry.notModified && representation.requiresRevalidation {
+                previous.record.requiresRevalidation = true
+            }
+            emitInvalidation(.contentIdentifier(disk.payloadURL(for: previous.record).absoluteString))
+            do {
+                try await flushTags(previous, force: true)
+            } catch {
+                invalidate(previous, error: error)
+                do {
+                    try await disk.remove(record: previous.record)
+                    entries.removeValue(forKey: previousID)
+                } catch {
+                    storageError = error
+                    throw error
+                }
+                throw error
+            }
+            try requireValid(entry)
+            publishCachedContent(previous)
         }
         try await flushTags(entry, force: true)
     }
@@ -488,6 +683,9 @@ public actor MediaCache {
             previous.record.freshUntil = response.freshUntil
             previous.record.lastAccess = clock()
             previous.record.retained = response.retained
+            if response.hasCacheControl {
+                previous.record.requiresRevalidation = response.requiresRevalidation
+            }
             try await flushTags(previous, force: true)
             try requireValid(entry)
             try await disk.remove(record: entry.record)
@@ -519,6 +717,22 @@ public actor MediaCache {
         entry.record.lastAccess = clock()
         try await flushTags(entry, force: true)
         try requireValid(entry)
+        if let previous = entry.previous.flatMap({ entries[$0] }), previous.valid {
+            // Retire durably before publication: recovery must not resurrect an older
+            // representation. Cache-only decoders retain their immutable old payload.
+            previous.record.retained = false
+            try await flushTags(previous, force: true)
+            try requireValid(entry)
+            previous.leases.formIntersection(previous.cacheOnlyLeases)
+            cachedContents.remove(key: previous.record.key, generation: previous.record.generation)
+            entry.previous = nil
+            if previous.leases.isEmpty {
+                invalidate(previous, error: MediaCacheError.invalidated, notifying: false)
+                try await disk.remove(record: previous.record)
+                entries.removeValue(forKey: previous.record.generation)
+                try requireValid(entry)
+            }
+        }
         entry.ready = true
         entry.work = nil
         try deliver(entry)
@@ -687,7 +901,7 @@ public actor MediaCache {
 
     // MARK: Invalidation barriers and repair
 
-    private func removeMatching(_ matches: (Set<CacheTag>) -> Bool) async throws -> CacheRemoval {
+    private func removeMatching(event: CacheInvalidation, _ matches: (Set<CacheTag>) -> Bool) async throws -> CacheRemoval {
         try checkOpen()
         let selected = entries.values.filter { $0.valid && matches($0.tags) }
         let selectedKeys = Set(selected.map { $0.record.key })
@@ -695,7 +909,8 @@ public actor MediaCache {
         let pendingCleanup = entries.values.filter { !$0.valid && matches($0.tags) }
             .compactMap { cleanupTasks[$0.record.generation] }
         for key in selectedKeys { beginBarrier(key) }
-        for entry in selected { invalidate(entry, error: MediaCacheError.invalidated) }
+        for entry in selected { invalidate(entry, error: MediaCacheError.invalidated, notifying: false) }
+        emitInvalidation(event)
         for (id, waiter) in Array(waiters) where waiter.generation == nil && matches(waiter.tags) {
             failWaiter(id, error: MediaCacheError.invalidated)
         }
@@ -727,14 +942,31 @@ public actor MediaCache {
                             remainingAllocatedDiskBytes: remaining)
     }
 
-    private func invalidate(_ entry: Entry, error: any Error) {
+    private func invalidate(_ entry: Entry, error: any Error, notifying: Bool = true) {
         guard entry.valid else { return }
         cachedContents.remove(key: entry.record.key, generation: entry.record.generation)
+        if let traceKey = entry.avatarTraceKey {
+            let cause: String
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                cause = "cancel"
+            } else if error as? MediaCacheError == .closed {
+                cause = "closed"
+            } else if error as? MediaCacheError == .invalidated {
+                cause = "invalidated"
+            } else {
+                cause = "error"
+            }
+            AvatarCacheTrace.event("event=entry_invalidated key=\(traceKey) gen=\(entry.record.generation.uuidString.prefix(8)) cause=\(cause)")
+        }
         entry.valid = false
         entry.work?.cancel()
         entry.leases.removeAll()
+        entry.cacheOnlyLeases.removeAll()
         if joinable[entry.record.key] == entry.record.generation { joinable.removeValue(forKey: entry.record.key) }
         for id in Array(entry.waiters) { failWaiter(id, error: error) }
+        if notifying {
+            emitInvalidation(.contentIdentifier(disk.payloadURL(for: entry.record).absoluteString))
+        }
     }
 
     private func scheduleCleanup(_ entry: Entry) {
@@ -763,13 +995,14 @@ public actor MediaCache {
         guard joinable[entry.record.key] == nil, let previousID = entry.previous,
               let previous = entries[previousID], previous.valid, previous.record.retained else { return }
         joinable[entry.record.key] = previousID
+        publishCachedContent(previous)
     }
 
     private func discardUnusedTransientPrevious(_ entry: Entry) async throws {
         guard let previousID = entry.previous, let previous = entries[previousID], previous.valid,
               !previous.record.retained, previous.leases.isEmpty, previous.waiters.isEmpty,
               !entries.values.contains(where: { $0.valid && $0.previous == previousID }) else { return }
-        invalidate(previous, error: MediaCacheError.invalidated)
+        invalidate(previous, error: MediaCacheError.invalidated, notifying: false)
         try await disk.remove(record: previous.record)
         entries.removeValue(forKey: previousID)
     }

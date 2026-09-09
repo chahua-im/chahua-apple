@@ -15,6 +15,13 @@ struct EntryRecord: Codable, Sendable {
     var lastAccess: Date
     var retained: Bool
 
+    // Missing in legacy metadata: expiry may not be bypassed until HTTP supplies policy.
+    var requiresRevalidation: Bool? = nil
+
+    func permitsCachedRead(at date: Date, allowingStale: Bool) -> Bool {
+        retained && (freshUntil > date || (allowingStale && requiresRevalidation == false))
+    }
+
     var complete: Bool {
         contentLength == committedBytes
     }

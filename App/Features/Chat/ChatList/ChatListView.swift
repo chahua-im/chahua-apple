@@ -1,4 +1,5 @@
 import ChahuaAPI
+import ChahuaMediaCache
 import SwiftUI
 
 struct ChatListView: View {
@@ -90,11 +91,21 @@ private struct ChatListRow: View {
                     .accessibilityHidden(true)
             }
         }
+        .onAppear { traceVisibility("row-appear") }
+        .onDisappear { traceVisibility("row-disappear") }
     }
 
     private var displayName: String { chat.chatDisplayName }
 
     private var avatarURL: URL? { chat.chatAvatarURL }
+
+    private func traceVisibility(_ event: String) {
+        guard AvatarCacheTrace.enabled, case .group = chat.kind, let url = avatarURL,
+              let key = AvatarCacheTrace.key(for: MediaRequest(
+                  request: URLRequest(url: url), tags: [CacheTag(rawValue: "avatars")]
+              )) else { return }
+        AvatarCacheTrace.event("scope=chat-list-group event=\(event) key=\(key)")
+    }
 }
 
 extension ChatListItem {

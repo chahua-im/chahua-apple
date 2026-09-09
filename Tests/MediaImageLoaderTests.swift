@@ -162,11 +162,113 @@ final class MediaImageLoaderTests: XCTestCase {
         XCTAssertFalse(context.isReady)
     }
 
-    private func makeContext(fixture: MediaImageFixture) -> AppMediaContext {
+    func testDiskWarmExpiredImageEmitsBeforeRefreshAndRawCallerStillWaits() async throws {
+        let clock = MediaImageClock()
+        let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 0))
+        let context = makeContext(fixture: fixture, clock: { clock.now() })
+        context.activate(uid: 1)
+        let resources = try await context.resources(for: context.activationID)
+        let mediaRequest = request(fixture, tag: avatars)
+        let file = try await resources.cache.file(for: mediaRequest)
+        await file.release()
+        clock.advance(by: 3601)
+        XCTAssertNil(resources.images.cachedImage(for: mediaRequest), "Only the raw file was warmed.")
+        fixture.replaceBody(try makeMediaPNG(red: 0, green: 255, blue: 0))
+        fixture.suspend()
+        defer { fixture.resume() }
+        let emitted = expectation(description: "Expired file decoded before HTTP completes")
+        var cached: ImageResponse?
+        let presentation = Task {
+            try await resources.images.image(for: mediaRequest) { response in
+                cached = response
+                emitted.fulfill()
+            }
+        }
+        defer { presentation.cancel() }
+        var rawFinished = false
+        let raw = Task {
+            let response = try await resources.images.image(for: mediaRequest)
+            rawFinished = true
+            return response
+        }
+        defer { raw.cancel() }
+        await fulfillment(of: [emitted], timeout: 5)
+        XCTAssertEqual(try pixel(XCTUnwrap(cached)), [255, 0, 0, 255])
+        for _ in 0 ..< 250 where fixture.requestCount < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(fixture.requestCount, 2)
+        XCTAssertFalse(rawFinished, "The raw image API must still wait for freshness.")
+        fixture.resume()
+        let refreshed = try await presentation.value
+        let freshRaw = try await raw.value
+        XCTAssertEqual(try pixel(refreshed), [0, 255, 0, 255])
+        XCTAssertEqual(try pixel(freshRaw), [0, 255, 0, 255])
+        XCTAssertEqual(fixture.requestCount, 2, "Both image paths must join one refresh producer.")
+    }
+
+    func testFailedRefreshLeavesExpiredImageEligibleForPresentation() async throws {
+        let clock = MediaImageClock()
+        let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 0))
+        let context = makeContext(fixture: fixture, clock: { clock.now() })
+        context.activate(uid: 1)
+        let resources = try await context.resources(for: context.activationID)
+        let mediaRequest = request(fixture, tag: avatars)
+        _ = try await resources.images.image(for: mediaRequest)
+        clock.advance(by: 3601)
+        fixture.fail(with: .notConnectedToInternet)
+        var cached: ImageResponse?
+        do {
+            _ = try await resources.images.image(for: mediaRequest) { cached = $0 }
+            XCTFail("The freshness acquisition must report the real network failure.")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .notConnectedToInternet)
+        }
+        XCTAssertEqual(try pixel(XCTUnwrap(cached)), [255, 0, 0, 255])
+        let retained = try XCTUnwrap(resources.images.cachedImage(for: mediaRequest))
+        XCTAssertEqual(try pixel(retained), [255, 0, 0, 255])
+        _ = try await resources.cache.remove(tag: avatars)
+        XCTAssertNil(resources.images.cachedImage(for: mediaRequest),
+                     "Failure retention must not override explicit revocation.")
+    }
+
+    func testNoCacheResponseNeverEmitsAnUnvalidatedFirstFrame() async throws {
+        let fixture = MediaImageFixture(
+            data: try makeMediaPNG(red: 255, green: 0, blue: 0),
+            cacheControl: "no-cache, max-age=3600"
+        )
+        let context = makeContext(fixture: fixture)
+        context.activate(uid: 1)
+        let resources = try await context.resources(for: context.activationID)
+        let mediaRequest = request(fixture, tag: avatars)
+        _ = try await resources.images.image(for: mediaRequest)
+        XCTAssertNil(resources.images.cachedImage(for: mediaRequest))
+        fixture.replaceBody(try makeMediaPNG(red: 0, green: 255, blue: 0))
+        fixture.suspend()
+        defer { fixture.resume() }
+        var emitted = false
+        let presentation = Task {
+            try await resources.images.image(for: mediaRequest) { _ in emitted = true }
+        }
+        defer { presentation.cancel() }
+        for _ in 0 ..< 250 where fixture.requestCount < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(fixture.requestCount, 2)
+        XCTAssertFalse(emitted)
+        fixture.resume()
+        let refreshed = try await presentation.value
+        XCTAssertEqual(try pixel(refreshed), [0, 255, 0, 255])
+        XCTAssertFalse(emitted)
+    }
+
+    private func makeContext(
+        fixture: MediaImageFixture, clock: @escaping @Sendable () -> Date = { Date() }
+    ) -> AppMediaContext {
         let directory = temporaryDirectory()
         MediaImageURLProtocol.install(fixture)
         let context = AppMediaContext(rootDirectory: directory, namespace: "injected") { configuration in
-            try await MediaCache(configuration: configuration, protocolClasses: [MediaImageURLProtocol.self], clock: { Date() })
+            try await MediaCache(configuration: configuration, protocolClasses: [MediaImageURLProtocol.self], clock: clock)
         }
         registerCleanup(context: context, directory: directory, fixture: fixture)
         return context
@@ -252,17 +354,28 @@ func makeMediaPNG(red: UInt8, green: UInt8, blue: UInt8, width: Int = 16, height
 }
 
 final class MediaImageFixture: @unchecked Sendable {
+    struct Response: Sendable {
+        let data: Data
+        let cacheControl: String
+    }
+
     let url = URL(string: "https://image.invalid/\(UUID().uuidString).png")!
     private let lock = NSLock()
     private var body: Data
     private var suspended: Bool
+    private let cacheControl: String
+    private var failure: URLError.Code?
     private var count = 0
-    private var pending: [UUID: @Sendable (Data) -> Void] = [:]
+    private var pending: [UUID: @Sendable (Result<Response, URLError>) -> Void] = [:]
     private let onRequest: (@Sendable () -> Void)?
 
-    init(data: Data, suspended: Bool = false, onRequest: (@Sendable () -> Void)? = nil) {
+    init(
+        data: Data, cacheControl: String = "max-age=3600", suspended: Bool = false,
+        onRequest: (@Sendable () -> Void)? = nil
+    ) {
         body = data
         self.suspended = suspended
+        self.cacheControl = cacheControl
         self.onRequest = onRequest
     }
 
@@ -270,27 +383,36 @@ final class MediaImageFixture: @unchecked Sendable {
 
     func replaceBody(_ data: Data) { lock.withLock { body = data } }
 
+    func suspend() { lock.withLock { suspended = true } }
+
+    func fail(with code: URLError.Code) { lock.withLock { failure = code } }
+
+    private func response() -> Result<Response, URLError> {
+        if let failure { return .failure(URLError(failure)) }
+        return .success(Response(data: body, cacheControl: cacheControl))
+    }
+
     func resume() {
-        let (callbacks, data) = lock.withLock {
+        let (callbacks, result) = lock.withLock {
             suspended = false
             let callbacks = Array(pending.values)
             pending.removeAll()
-            return (callbacks, body)
+            return (callbacks, response())
         }
-        for callback in callbacks { callback(data) }
+        for callback in callbacks { callback(result) }
     }
 
-    fileprivate func begin(id: UUID, completion: @escaping @Sendable (Data) -> Void) {
-        let data: Data? = lock.withLock {
+    fileprivate func begin(id: UUID, completion: @escaping @Sendable (Result<Response, URLError>) -> Void) {
+        let result: Result<Response, URLError>? = lock.withLock {
             count += 1
             if suspended {
                 pending[id] = completion
                 return nil
             }
-            return body
+            return response()
         }
         onRequest?()
-        if let data { completion(data) }
+        if let result { completion(result) }
     }
 
     fileprivate func cancel(id: UUID) { _ = lock.withLock { pending.removeValue(forKey: id) } }
@@ -317,17 +439,25 @@ final class MediaImageURLProtocol: URLProtocol, @unchecked Sendable {
                 return
             }
             self.fixture = fixture
-            fixture.begin(id: self.id) { [weak self] data in
+            fixture.begin(id: self.id) { [weak self] result in
                 guard let self else { return }
                 self.queue.async {
                     guard !self.stopped else { return }
+                    let received: MediaImageFixture.Response
+                    switch result {
+                    case .success(let response):
+                        received = response
+                    case .failure(let error):
+                        self.client?.urlProtocol(self, didFailWithError: error)
+                        return
+                    }
                     let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: [
                         "Content-Type": "image/png",
-                        "Content-Length": String(data.count),
-                        "Cache-Control": "max-age=3600"
+                        "Content-Length": String(received.data.count),
+                        "Cache-Control": received.cacheControl
                     ])!
                     self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                    self.client?.urlProtocol(self, didLoad: data)
+                    self.client?.urlProtocol(self, didLoad: received.data)
                     self.client?.urlProtocolDidFinishLoading(self)
                 }
             }
@@ -348,4 +478,12 @@ private final class MediaImageFixtureRegistry: @unchecked Sendable {
     private var fixtures: [URL: MediaImageFixture] = [:]
     func get(_ url: URL) -> MediaImageFixture? { lock.withLock { fixtures[url] } }
     func set(_ fixture: MediaImageFixture?, for url: URL) { lock.withLock { fixtures[url] = fixture } }
+}
+
+final class MediaImageClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Date()
+
+    func now() -> Date { lock.withLock { value } }
+    func advance(by seconds: TimeInterval) { lock.withLock { value.addTimeInterval(seconds) } }
 }

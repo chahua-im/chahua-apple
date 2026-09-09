@@ -40,8 +40,9 @@ struct MacTextMessageBubble: View {
         return preview
     }
     private var threadCount: Int64? { context.isThreadTimeline ? nil : message?.threadInfo?.replyCount }
+    private var hasBackground: Bool { !mediaOnly || row.showsSenderName || replyPreview != nil || threadCount != nil }
     private var hasTail: Bool { !mediaOnly && (row.groupPosition == .single || row.groupPosition == .last) }
-    private var foreground: Color { row.isOutgoing && !mediaOnly ? ChahuaTheme.ChatBubble.outgoingForeground : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme) }
+    private var foreground: Color { row.isOutgoing && hasBackground ? ChahuaTheme.ChatBubble.outgoingForeground : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme) }
     private var background: Color { row.isOutgoing ? ChahuaTheme.ChatBubble.outgoingBackground : ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme) }
 
     // Context carries the actual row width, not screen/window width. This is the
@@ -116,7 +117,7 @@ struct MacTextMessageBubble: View {
         // Clip the content, never the background droplet extending outside it.
         .clipShape(MacBubbleShape(isOutgoing: row.isOutgoing, hasTail: hasTail, drawsTail: false))
         .background {
-            if !mediaOnly {
+            if hasBackground {
                 MacBubbleShape(isOutgoing: row.isOutgoing, hasTail: hasTail)
                     .fill(background)
             }
@@ -156,7 +157,7 @@ struct MacTextMessageBubble: View {
         HStack(spacing: 8) {
             Text(senderName)
                 .font(.system(size: senderSize, weight: .semibold))
-                .foregroundStyle(row.isOutgoing && !mediaOnly ? .white : macColorForUser(name: senderName, dark: colorScheme == .dark))
+                .foregroundStyle(row.isOutgoing && hasBackground ? .white : macColorForUser(name: senderName, dark: colorScheme == .dark))
                 .opacity(0.85)
                 .lineLimit(1)
             if let group = message?.sender.userGroup, let name = group.name, !name.isEmpty {

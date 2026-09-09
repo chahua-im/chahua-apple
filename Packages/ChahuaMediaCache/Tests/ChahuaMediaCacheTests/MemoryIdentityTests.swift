@@ -145,9 +145,10 @@ final class MemoryIdentityTests: XCTestCase {
         requests.values[2].respond(headers: Self.headers(length: 4096), body: Data(repeating: 0x63, count: 4096), finish: false)
         try await eventually {
             let usage = try await cache.usage()
-            return usage.total.itemCount == 1 && usage.total.cachedBytes == 4096
+            return usage.total.itemCount == 2 && usage.total.cachedBytes == 4099
         }
         XCTAssertNil(cache.cachedContentIdentifier(for: image))
+        XCTAssertEqual(cache.cachedContentIdentifier(for: image, allowingStale: true), original.url.absoluteString)
         requests.values[2].complete()
         let replaced = try await replacement.value
         XCTAssertNotEqual(replaced.url, original.url)
@@ -178,6 +179,7 @@ final class MemoryIdentityTests: XCTestCase {
         XCTAssertNil(cache.cachedContentIdentifier(for: image))
         await assertError(.httpStatus(503)) { _ = try await cache.file(for: image) }
         XCTAssertNil(cache.cachedContentIdentifier(for: image))
+        XCTAssertEqual(cache.cachedContentIdentifier(for: image, allowingStale: true), original.url.absoluteString)
         await original.release()
     }
 

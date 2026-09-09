@@ -351,6 +351,346 @@ final class MediaCacheTests: XCTestCase {
         try await cache.shutdown(removingFiles: true)
     }
 
+    func testCacheOnlyStaleReadSurvivesSuspendedReplacementAndRegistersTagsDurably() async throws {
+        let requests = FixtureRequests()
+        let url = FixtureURLProtocol.install { fixture in
+            requests.append(fixture)
+            if requests.values.count == 1 {
+                fixture.respond(headers: Self.headers(length: 3, maxAge: 0), body: Data("old".utf8))
+            }
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let directory = temporaryDirectory()
+        let cache = try await makeCache(directory)
+        let image = request(url, tags: [avatars])
+        let missing = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(missing)
+        XCTAssertTrue(requests.values.isEmpty)
+        let raw = try await cache.file(for: image)
+        let freshOnly = try await cache.cachedFile(for: image)
+        XCTAssertNil(freshOnly)
+        let cached = try await cache.cachedFile(for: image, allowingStale: true)
+        let old = try XCTUnwrap(cached)
+        XCTAssertEqual(try Data(contentsOf: old.url), Data("old".utf8))
+        XCTAssertEqual(requests.values.count, 1)
+
+        let refresh = Task { try await cache.file(for: image) }
+        try await eventually { requests.values.count == 2 }
+        let joinedRequest = request(url, tags: [chat])
+        let joinedCached = try await cache.cachedFile(for: joinedRequest, allowingStale: true)
+        let joined = try XCTUnwrap(joinedCached)
+        XCTAssertEqual(joined.url, old.url)
+        XCTAssertEqual(cache.cachedContentIdentifier(for: joinedRequest, allowingStale: true), old.url.absoluteString)
+        requests.values[1].respond(headers: Self.headers(length: 8192), body: Data(repeating: 0x62, count: 4096), finish: false)
+        try await eventually { try await cache.usage().total.cachedBytes == 4099 }
+        try await old.checkValidity()
+        await assertError(.invalidated) { try await raw.checkValidity() }
+        let during = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertEqual(during?.url, old.url)
+        await during?.release()
+        requests.values[1].send(Data(repeating: 0x63, count: 4096))
+        requests.values[1].complete()
+        let new = try await refresh.value
+        XCTAssertNotEqual(new.url, old.url)
+        XCTAssertEqual(cache.cachedContentIdentifier(for: joinedRequest), new.url.absoluteString)
+        try await old.checkValidity()
+        XCTAssertEqual(try Data(contentsOf: old.url), Data("old".utf8))
+        await old.release()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: joined.url.path))
+        await joined.release()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: joined.url.path))
+        await raw.release()
+        await new.release()
+        try await cache.shutdown(removingFiles: false)
+        let reopened = try await makeCache(directory)
+        let recovered = try await reopened.cachedFile(for: joinedRequest)
+        XCTAssertEqual(recovered?.url, new.url)
+        XCTAssertEqual(requests.values.count, 2)
+        await recovered?.release()
+        _ = try await reopened.remove(tag: chat)
+        let removed = try await reopened.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(removed)
+    }
+
+    func testFailedReplacementRetainsStalePayloadAcrossRecovery() async throws {
+        let requests = FixtureRequests()
+        let url = FixtureURLProtocol.install { fixture in
+            requests.append(fixture)
+            if requests.values.count == 1 {
+                fixture.respond(headers: Self.headers(length: 3, maxAge: 0), body: Data("old".utf8))
+            } else {
+                fixture.respond(headers: Self.headers(length: 100), body: Data("short".utf8))
+            }
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let directory = temporaryDirectory()
+        let cache = try await makeCache(directory)
+        let image = request(url, tags: [avatars])
+        let original = try await cache.file(for: image)
+        await original.release()
+        await assertError(.invalidResponse) { _ = try await cache.file(for: image) }
+        let stale = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertEqual(stale?.url, original.url)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(stale).url), Data("old".utf8))
+        XCTAssertNil(cache.cachedContentIdentifier(for: image))
+        XCTAssertEqual(cache.cachedContentIdentifier(for: image, allowingStale: true), original.url.absoluteString)
+        await stale?.release()
+        try await cache.shutdown(removingFiles: false)
+        let reopened = try await makeCache(directory)
+        let recovered = try await reopened.cachedFile(for: image, allowingStale: true)
+        XCTAssertEqual(recovered?.url, original.url)
+        XCTAssertEqual(requests.values.count, 2)
+        await recovered?.release()
+    }
+
+    func testStalePolicyRestrictionsSurviveRecoveryAndHeaderless304() async throws {
+        for policy in ["no-cache", "must-revalidate", "no-store"] {
+            let requests = FixtureRequests()
+            let url = FixtureURLProtocol.install { fixture in
+                requests.append(fixture)
+                if requests.values.count == 1 {
+                    fixture.respond(headers: ["Content-Length": "3", "ETag": "\"old\"", "Cache-Control": policy], body: Data("old".utf8))
+                } else {
+                    fixture.respond(status: 304, headers: [:], body: Data())
+                }
+            }
+            defer { FixtureURLProtocol.uninstall(url) }
+            let directory = temporaryDirectory()
+            let cache = try await makeCache(directory)
+            let image = request(url, tags: [avatars])
+            let original = try await cache.file(for: image)
+            let denied = try await cache.cachedFile(for: image, allowingStale: true)
+            XCTAssertNil(denied, policy)
+            XCTAssertNil(cache.cachedContentIdentifier(for: image, allowingStale: true), policy)
+            await original.release()
+            try await cache.shutdown(removingFiles: false)
+            let reopened = try await makeCache(directory)
+            let afterRecovery = try await reopened.cachedFile(for: image, allowingStale: true)
+            XCTAssertNil(afterRecovery, policy)
+            if policy != "no-store" {
+                let validated = try await reopened.file(for: image)
+                XCTAssertEqual(validated.url, original.url)
+                await validated.release()
+                try await reopened.shutdown(removingFiles: false)
+                let again = try await makeCache(directory)
+                let after304 = try await again.cachedFile(for: image, allowingStale: true)
+                XCTAssertNil(after304, policy)
+                XCTAssertNil(again.cachedContentIdentifier(for: image, allowingStale: true), policy)
+                XCTAssertEqual(requests.values.count, 2)
+            } else {
+                XCTAssertEqual(requests.values.count, 1)
+            }
+        }
+    }
+
+    func testLegacyMetadataRequiresKnownPolicyBeforeStaleReads() async throws {
+        let requests = FixtureRequests()
+        let clock = FixtureClock()
+        let url = FixtureURLProtocol.install { fixture in
+            requests.append(fixture)
+            if requests.values.count == 1 {
+                fixture.respond(headers: Self.headers(length: 3, maxAge: 10), body: Data("old".utf8))
+            } else if requests.values.count == 2 {
+                fixture.respond(status: 304, headers: [:], body: Data())
+            } else {
+                fixture.respond(headers: ["Content-Length": "3"], body: Data("new".utf8))
+            }
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let directory = temporaryDirectory()
+        let cache = try await makeCache(directory, clock: clock)
+        let image = request(url, tags: [avatars])
+        let original = try await cache.file(for: image)
+        await original.release()
+        try await cache.shutdown(removingFiles: false)
+        let metadata = original.url.deletingLastPathComponent().appendingPathComponent("metadata.json")
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metadata)) as? [String: Any])
+        json.removeValue(forKey: "requiresRevalidation")
+        try JSONSerialization.data(withJSONObject: json).write(to: metadata)
+        let reopened = try await makeCache(directory, clock: clock)
+        let fresh = try await reopened.cachedFile(for: image)
+        XCTAssertEqual(fresh?.url, original.url)
+        await fresh?.release()
+        clock.advance(11)
+        let expired = try await reopened.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(expired)
+        let headerless304 = try await reopened.file(for: image)
+        await headerless304.release()
+        let stillUnknown = try await reopened.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(stillUnknown)
+        let replacement = try await reopened.file(for: image)
+        await replacement.release()
+        let known = try await reopened.cachedFile(for: image, allowingStale: true)
+        XCTAssertEqual(known?.url, replacement.url)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(known).url), Data("new".utf8))
+        XCTAssertEqual(requests.values.count, 3)
+        await known?.release()
+    }
+
+    func testCacheOnlyCorruptionAndExplicitRemovalRevokeWithoutHTTP() async throws {
+        let requests = FixtureRequests()
+        let url = FixtureURLProtocol.install { fixture in
+            requests.append(fixture)
+            fixture.respond(headers: Self.headers(length: 3, maxAge: 0), body: Data("old".utf8))
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let cache = try await makeCache(temporaryDirectory())
+        let image = request(url, tags: [avatars])
+        let original = try await cache.file(for: image)
+        let cached = try await cache.cachedFile(for: image, allowingStale: true)
+        let stale = try XCTUnwrap(cached)
+        try FileManager.default.removeItem(at: original.url)
+        let corrupt = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(corrupt)
+        XCTAssertNil(cache.cachedContentIdentifier(for: image, allowingStale: true))
+        await assertError(.invalidated) { try await stale.checkValidity() }
+        XCTAssertEqual(requests.values.count, 1)
+        await original.release()
+        await stale.release()
+        let replacement = try await cache.file(for: image)
+        let nextCached = try await cache.cachedFile(for: image, allowingStale: true)
+        let next = try XCTUnwrap(nextCached)
+        _ = try await cache.remove(tag: avatars)
+        await assertError(.invalidated) { try await next.checkValidity() }
+        let removed = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(removed)
+        XCTAssertEqual(requests.values.count, 2)
+        await next.release()
+        await replacement.release()
+    }
+
+    func testInvalidationsReachEverySubscriberWithoutRevokingOrdinaryReplacementOrNoStoreRelease() async throws {
+        let requests = FixtureRequests()
+        let url = FixtureURLProtocol.install { fixture in
+            requests.append(fixture)
+            fixture.respond(headers: ["Content-Length": "3", "Cache-Control": requests.values.count == 3 ? "no-store" : "max-age=0"],
+                            body: Data("png".utf8))
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let cache = try await makeCache(temporaryDirectory())
+        let firstStream = await cache.invalidations()
+        let secondStream = await cache.invalidations()
+        let firstEvents = Task { var result: [CacheInvalidation] = []; for await event in firstStream { result.append(event) }; return result }
+        let secondEvents = Task { var result: [CacheInvalidation] = []; for await event in secondStream { result.append(event) }; return result }
+        let image = request(url, tags: [avatars])
+        let old = try await cache.file(for: image)
+        await old.release()
+        let new = try await cache.file(for: image)
+        await new.release()
+        let transient = try await cache.file(for: image)
+        await transient.release()
+        _ = try await cache.remove(tag: avatars)
+        try await cache.shutdown(removingFiles: true)
+        for events in [await firstEvents.value, await secondEvents.value] {
+            XCTAssertEqual(events.count, 3)
+            guard events.count == 3 else { continue }
+            guard case .contentIdentifier(let restrictedID) = events[0] else { XCTFail("Missing HTTP policy revocation"); continue }
+            XCTAssertEqual(restrictedID, new.url.absoluteString)
+            guard case .tags(let tags) = events[1] else { XCTFail("Missing category revocation"); continue }
+            XCTAssertEqual(tags, [avatars])
+            guard case .all = events[2] else { XCTFail("Missing shutdown revocation"); continue }
+        }
+    }
+
+    func testFailedNoStoreReplacementCannotRestorePermissiveStalePolicy() async throws {
+        let policy = "no-store"
+        let requests = FixtureRequests()
+        let url = FixtureURLProtocol.install { fixture in
+            requests.append(fixture)
+            if requests.values.count == 1 {
+                fixture.respond(headers: Self.headers(length: 3, maxAge: 0), body: Data("old".utf8))
+            }
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let directory = temporaryDirectory()
+        let cache = try await makeCache(directory)
+        let image = request(url, tags: [avatars])
+        let original = try await cache.file(for: image)
+        await original.release()
+        XCTAssertEqual(cache.cachedContentIdentifier(for: image, allowingStale: true), original.url.absoluteString)
+        let refresh = Task { try await cache.file(for: image) }
+        try await eventually { requests.values.count == 2 }
+        // URLSession buffers tiny fixture responses; deliver a real partial chunk.
+        requests.values[1].respond(
+            status: 200, headers: ["Cache-Control": policy, "Content-Type": "image/png", "Content-Length": "8192"], body: Data(repeating: 0x6e, count: 4096),
+            finish: false)
+        try await eventually { cache.cachedContentIdentifier(for: image, allowingStale: true) == nil }
+        let during = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(during, policy)
+        requests.values[1].fail(URLError(.timedOut))
+        do { _ = try await refresh.value; XCTFail("Failed refresh returned a file") } catch { XCTAssertEqual((error as? URLError)?.code, .timedOut) }
+        let afterFailure = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(afterFailure, policy)
+        try await cache.shutdown(removingFiles: false)
+        let reopened = try await makeCache(directory)
+        let recovered = try await reopened.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(recovered, policy)
+        XCTAssertEqual(requests.values.count, 2)
+    }
+
+    func testRemovingJoinedStaleTagCancelsRefreshAndCannotRestorePrevious() async throws {
+        let requests = FixtureRequests()
+        let url = FixtureURLProtocol.install { fixture in
+            requests.append(fixture)
+            if requests.values.count == 1 {
+                fixture.respond(headers: Self.headers(length: 3, maxAge: 0), body: Data("old".utf8))
+            }
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let directory = temporaryDirectory()
+        let cache = try await makeCache(directory)
+        let image = request(url, tags: [avatars])
+        let original = try await cache.file(for: image)
+        await original.release()
+        let refresh = Task { try await cache.file(for: image) }
+        try await eventually { requests.values.count == 2 }
+        let joined = try await cache.cachedFile(for: request(url, tags: [chat]), allowingStale: true)
+        let stale = try XCTUnwrap(joined)
+        _ = try await cache.remove(tag: chat)
+        await assertInvalidated(refresh)
+        await assertError(.invalidated) { try await stale.checkValidity() }
+        XCTAssertNil(cache.cachedContentIdentifier(for: image, allowingStale: true))
+        let removed = try await cache.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(removed)
+        await stale.release()
+        try await cache.shutdown(removingFiles: false)
+        let reopened = try await makeCache(directory)
+        let recovered = try await reopened.cachedFile(for: image, allowingStale: true)
+        XCTAssertNil(recovered)
+        XCTAssertEqual(requests.values.count, 2)
+    }
+
+    func testCorruptionAndEvictionPublishGenerationInvalidations() async throws {
+        let url = FixtureURLProtocol.install { fixture in
+            fixture.respond(headers: Self.headers(length: 3), body: Data("png".utf8))
+        }
+        defer { FixtureURLProtocol.uninstall(url) }
+        let cache = try await makeCache(temporaryDirectory())
+        let stream = await cache.invalidations()
+        let collected = Task { var events: [CacheInvalidation] = []; for await event in stream { events.append(event) }; return events }
+        let image = request(url, tags: [avatars])
+        let corrupt = try await cache.file(for: image)
+        await corrupt.release()
+        try FileManager.default.removeItem(at: corrupt.url)
+        let repaired = try await cache.cachedFile(for: image)
+        XCTAssertNil(repaired)
+        let replacement = try await cache.file(for: image)
+        await replacement.release()
+        _ = try await cache.trim(toDiskBytes: 0)
+        try await cache.shutdown(removingFiles: true)
+        let events = await collected.value
+        XCTAssertEqual(events.count, 3)
+        guard events.count == 3 else { return }
+        guard case .contentIdentifier(let corruptedID) = events[0],
+              case .contentIdentifier(let evictedID) = events[1],
+              case .all = events[2] else {
+            XCTFail("Missing generation or shutdown invalidation")
+            return
+        }
+        XCTAssertEqual(corruptedID, corrupt.url.absoluteString)
+        XCTAssertEqual(evictedID, replacement.url.absoluteString)
+    }
+
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory.appendingPathComponent("ChahuaImageCacheTests-\(UUID().uuidString)")
     }
