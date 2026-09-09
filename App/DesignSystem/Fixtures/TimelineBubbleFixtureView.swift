@@ -175,6 +175,48 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
                 ]
                 objects.append(item)
             }
+            let reactions: [[String: Any]] = [
+                ["emoji": "👍", "count": 8, "reactedByMe": true, "reactors": (1 ... 5).map { ["uid": $0, "name": "Reactor \($0)"] }],
+                ["emoji": "❤️", "count": 3, "reactedByMe": false],
+                ["emoji": "🎉", "count": 2], ["emoji": "👀", "count": 1],
+                ["emoji": "😂", "count": 1], ["emoji": "🔥", "count": 1]
+            ]
+            for outgoing in [false, true] {
+                var item = object(index: objects.count, text: "Reactions wrap below the bubble")
+                item["sender"] = sender(outgoing ? 1 : 2)
+                item["reactions"] = reactions
+                objects.append(item)
+                var sticker = object(index: objects.count, text: "")
+                sticker["sender"] = sender(outgoing ? 1 : 2)
+                sticker["messageType"] = "sticker"
+                sticker["sticker"] = [
+                    "id": "fixture-sticker", "emoji": "🎉", "createdAt": "2026-09-01T12:00:00Z",
+                    "media": ["id": "sticker-media", "url": gif.absoluteString, "contentType": "image/gif", "size": 1, "width": 240, "height": 180]
+                ]
+                sticker["reactions"] = reactions
+                sticker["replyToMessage"] = [
+                    "id": "quoted-target", "clientGeneratedId": "quoted-client",
+                    "createdAt": "2026-09-01T12:00:00Z", "sender": sender(2),
+                    "messageType": "text", "attachments": [], "mentions": [],
+                    "isDeleted": false, "message": "A sticker reply uses the same preview."
+                ]
+                sticker["threadInfo"] = ["replyCount": 3]
+                objects.append(sticker)
+                var unsupported = object(index: objects.count, text: "")
+                unsupported["sender"] = sender(outgoing ? 1 : 2)
+                unsupported["messageType"] = "file"
+                unsupported["reactions"] = [["emoji": "👍", "count": 2]]
+                objects.append(unsupported)
+            }
+            let video = attachment(url: directory.appendingPathComponent("placeholder.mp4"), id: "video-placeholder", width: 320, height: 180, kind: "video/mp4")
+            objects.append(object(index: objects.count, text: "Video stays a placeholder", attachments: [video]))
+            for name in ["Ada", "", "System"] {
+                var item = object(index: objects.count, text: "joined the chat\nSystem messages have no avatar or bubble background")
+                item["messageType"] = "system"
+                item["sender"] = ["uid": 2, "name": name, "gender": 0]
+                item["isDeleted"] = name == "System"
+                objects.append(item)
+            }
             if let count = ProcessInfo.processInfo.environment["CHAHUA_PERFORMANCE_ROWS"].flatMap(Int.init) {
                 for _ in objects.count ..< max(objects.count, count) {
                     objects.append(object(index: objects.count, text: String(repeating: "Scroll and resize wrapped text with selectable content. ", count: 4)))

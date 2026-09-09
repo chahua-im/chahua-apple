@@ -20,7 +20,7 @@ enum BubbleMetrics {
     }
 }
 
-struct TextMessageBubble: View {
+struct ChatMessageBubble: View {
     let row: TimelineMessageRow
     let context: TimelineRowContext
     let actions: TimelineBubbleActions
@@ -31,6 +31,8 @@ struct TextMessageBubble: View {
     @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = BubbleMetrics.avatarSize
 
     private var message: MessageResponse? { row.entry.remoteMessage }
+    private var isSticker: Bool { row.entry.messageType == .sticker }
+    private var showsSender: Bool { row.showsSenderName && !isSticker }
     private var attachments: [AttachmentResponse] { message?.attachments ?? [] }
     private var bodyText: String { row.entry.text ?? "" }
     private var hasBody: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -40,8 +42,8 @@ struct TextMessageBubble: View {
         return preview
     }
     private var threadCount: Int64? { context.isThreadTimeline ? nil : message?.threadInfo?.replyCount }
-    private var hasBackground: Bool { !mediaOnly || row.showsSenderName || replyPreview != nil || threadCount != nil }
-    private var hasTail: Bool { !mediaOnly && (row.groupPosition == .single || row.groupPosition == .last) }
+    private var hasBackground: Bool { !isSticker && (!mediaOnly || showsSender || replyPreview != nil || threadCount != nil) }
+    private var hasTail: Bool { !isSticker && !mediaOnly && (row.groupPosition == .single || row.groupPosition == .last) }
     private var foreground: Color { row.isOutgoing && hasBackground ? ChahuaTheme.ChatBubble.outgoingForeground : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme) }
     private var background: Color { row.isOutgoing ? ChahuaTheme.ChatBubble.outgoingBackground : ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme) }
 
@@ -58,17 +60,14 @@ struct TextMessageBubble: View {
 
     var body: some View {
         let mediaSize = mediaSize
-        BubbleRowLayout(isOutgoing: row.isOutgoing, avatarSize: avatarSize) {
+        MessageBubbleShell(row: row, context: context, styled: false) {
             bubble(mediaSize: mediaSize)
-            avatar
         }
-        .padding(.horizontal, BubbleMetrics.rowHorizontalInset)
-        .padding(.vertical, BubbleMetrics.rowVerticalInset)
     }
 
     private func bubble(mediaSize: CGSize?) -> some View {
         BubbleColumnLayout {
-            if row.showsSenderName {
+            if showsSender {
                 sender
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
@@ -76,11 +75,22 @@ struct TextMessageBubble: View {
             }
             if let preview = replyPreview {
                 reply(preview)
-                    .padding(.horizontal, 12)
-                    .padding(.top, row.showsSenderName ? 0 : 8)
+                    .padding(.horizontal, isSticker ? 0 : 12)
+                    .padding(.top, showsSender || isSticker ? 0 : 8)
                     .padding(.bottom, 6)
             }
-            if let mediaSize, mediaSize.width > 0, mediaSize.height > 0 {
+            if isSticker {
+                BubbleSticker(sticker: message?.sticker, viewport: context.viewportSize, availableWidth: availableMediaWidth, isMeasuring: context.isMeasuring)
+                    .overlay(alignment: .bottomTrailing) {
+                        textContent(text: "", overlay: true)
+                            .fixedSize()
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+                            .padding(4)
+                    }
+            }
+            if !isSticker, let mediaSize, mediaSize.width > 0, mediaSize.height > 0 {
                 BubbleMedia(
                     messageID: message?.id ?? "", attachments: attachments,
                     viewport: context.viewportSize, availableWidth: availableMediaWidth,
@@ -99,7 +109,7 @@ struct TextMessageBubble: View {
                 }
                 .padding(.top, row.showsSenderName || replyPreview != nil ? 4 : 0)
             }
-            if !mediaOnly {
+            if !isSticker && !mediaOnly {
                 textContent(text: hasBody ? bodyText : "", overlay: false)
                     .padding(.horizontal, BubbleMetrics.textHorizontalInset)
                     .padding(.top, !attachments.isEmpty ? 4 : (row.showsSenderName || replyPreview != nil ? 0 : BubbleMetrics.textVerticalInset))
@@ -112,10 +122,10 @@ struct TextMessageBubble: View {
                     .padding(.bottom, 8)
             }
         }
-        .frame(width: mediaSize?.width)
+        .frame(width: isSticker ? min(200, max(1, availableMediaWidth)) : mediaSize?.width)
         .foregroundStyle(foreground)
         // Clip the content, never the background droplet extending outside it.
-        .clipShape(BubbleShape(isOutgoing: row.isOutgoing, hasTail: hasTail, drawsTail: false))
+        .clipShape(BubbleShape(isOutgoing: row.isOutgoing, hasTail: hasTail, drawsTail: false, cornerRadius: isSticker ? 0 : 18))
         .background {
             if hasBackground {
                 BubbleShape(isOutgoing: row.isOutgoing, hasTail: hasTail)
@@ -142,16 +152,6 @@ struct TextMessageBubble: View {
         )
     }
 
-    @ViewBuilder private var avatar: some View {
-        if !context.isMeasuring && (row.groupPosition == .single || row.groupPosition == .last) {
-            AvatarView(
-                url: message?.sender.avatarUrl.flatMap(URL.init(string:)),
-                displayName: senderName, diameter: BubbleMetrics.avatarSize
-            )
-        } else {
-            Color.clear.frame(width: avatarSize, height: avatarSize)
-        }
-    }
 
     private var sender: some View {
         HStack(spacing: 8) {
@@ -186,7 +186,7 @@ struct TextMessageBubble: View {
 
     @ViewBuilder private func reply(_ preview: MessagePreview) -> some View {
         let name = preview.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(preview.sender.uid)"
-        let color = row.isOutgoing && !mediaOnly ? Color.white : bubbleColorForUser(name: name, dark: colorScheme == .dark)
+        let color = row.isOutgoing && hasBackground ? Color.white : bubbleColorForUser(name: name, dark: colorScheme == .dark)
         let content = VStack(alignment: .leading, spacing: 2) {
             Text(name).font(.system(size: senderSize * 11 / 12, weight: .semibold)).opacity(0.85).lineLimit(1)
             Text(messagePreview(preview)).font(.system(size: senderSize)).opacity(0.7).lineLimit(1).truncationMode(.tail)
@@ -196,7 +196,7 @@ struct TextMessageBubble: View {
         .padding(.vertical, 4)
         .padding(.leading, 11)
         .padding(.trailing, 8)
-        .background(row.isOutgoing ? Color.black.opacity(0.1) : color.opacity(0.1))
+        .background(row.isOutgoing && hasBackground ? Color.black.opacity(0.1) : color.opacity(0.1))
         .overlay(alignment: .leading) { Rectangle().fill(color.opacity(row.isOutgoing ? 0.5 : 1)).frame(width: 3) }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         if let action = actions.openReply {
@@ -214,9 +214,9 @@ struct TextMessageBubble: View {
         .font(.system(size: senderSize, weight: .semibold))
         .lineLimit(1)
         .frame(maxWidth: .infinity, alignment: row.isOutgoing ? .trailing : .leading)
-        .padding(.top, mediaOnly ? 0 : 5)
+        .padding(.top, mediaOnly || isSticker ? 0 : 5)
         .overlay(alignment: .top) {
-            if !mediaOnly {
+            if !mediaOnly && !isSticker {
                 Rectangle().fill(row.isOutgoing ? Color.white.opacity(0.2) : Color.black.opacity(0.08)).frame(height: 1)
             }
         }
@@ -233,7 +233,7 @@ struct TextMessageBubble: View {
     }
 }
 
-private struct BubbleRowLayout: Layout {
+struct BubbleRowLayout: Layout {
     let isOutgoing: Bool
     let avatarSize: CGFloat
 
@@ -272,7 +272,8 @@ private struct BubbleRowLayout: Layout {
 
 /// Measure natural widths before proposing a bounded common column. Expanding
 /// alignment frames in a reply/thread must never choose the row's maximum width.
-private struct BubbleColumnLayout: Layout {
+struct BubbleColumnLayout: Layout {
+    var alignment: HorizontalAlignment = .leading
     // SwiftUI refreshes this cache when subviews change. Re-probing natural widths
     // for each bounded proposal would repeatedly switch TextKit away from its wrapped layout.
     func makeCache(subviews: Subviews) -> CGFloat {
@@ -293,7 +294,8 @@ private struct BubbleColumnLayout: Layout {
         var y = bounds.minY
         for subview in subviews {
             let size = subview.sizeThatFits(.init(width: bounds.width, height: nil))
-            subview.place(at: CGPoint(x: bounds.minX, y: y), anchor: .topLeading, proposal: .init(width: bounds.width, height: size.height))
+            let x = alignment == .trailing ? bounds.maxX - size.width : bounds.minX
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .init(width: size.width, height: size.height))
             y += size.height
         }
     }
@@ -303,12 +305,13 @@ struct BubbleShape: Shape {
     let isOutgoing: Bool
     let hasTail: Bool
     var drawsTail = true
+    var cornerRadius: CGFloat = 18
 
     func path(in rect: CGRect) -> Path {
         let smallCorner: CGFloat = hasTail ? 0 : 4
         var path = Path(roundedRect: rect, cornerRadii: .init(
-            topLeading: 18, bottomLeading: isOutgoing ? 18 : smallCorner,
-            bottomTrailing: isOutgoing ? smallCorner : 18, topTrailing: 18
+            topLeading: cornerRadius, bottomLeading: isOutgoing ? cornerRadius : min(smallCorner, cornerRadius),
+            bottomTrailing: isOutgoing ? min(smallCorner, cornerRadius) : cornerRadius, topTrailing: cornerRadius
         ), style: .circular)
         guard hasTail && drawsTail else { return path }
         // Exact received SCSS droplet; the sent path is its x=4 reflection.

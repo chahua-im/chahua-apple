@@ -49,14 +49,14 @@ struct TimelineBubbleView: View {
 
     @ViewBuilder
     private func messageBody(_ row: TimelineMessageRow) -> some View {
-        if row.entry.remoteMessage?.isDeleted == true {
-            DeletedMessageBubble(row: row)
-        } else if row.entry.messageType == .system {
+        if row.entry.messageType == .system {
             SystemMessageBubble(row: row)
-        } else if row.entry.messageType == .text {
-            TextMessageBubble(row: row, context: context, actions: actions)
+        } else if row.entry.remoteMessage?.isDeleted == true {
+            DeletedMessageBubble(row: row, context: context)
+        } else if row.entry.messageType == .text || row.entry.messageType == .sticker {
+            ChatMessageBubble(row: row, context: context, actions: actions)
         } else {
-            UnsupportedMessageBubble(row: row)
+            UnsupportedMessageBubble(row: row, context: context)
         }
     }
 }

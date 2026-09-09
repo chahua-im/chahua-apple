@@ -630,7 +630,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private func rowContext(for row: TimelineRow) -> TimelineRowContext {
         let dependsOnViewportHeight: Bool
         if case .message(let message) = row {
-            dependsOnViewportHeight = !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
+            dependsOnViewportHeight = message.entry.messageType == .sticker || !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
         } else {
             dependsOnViewportHeight = false
         }
