@@ -27,6 +27,12 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
 
     private let model: ConversationTimelineModel
     private var rows: [TimelineRow] = []
+    var actions: TimelineBubbleActions {
+        didSet {
+            guard isViewLoaded else { return }
+            collectionView.reconfigureItems(at: collectionView.indexPathsForVisibleItems)
+        }
+    }
     var mediaContext: AppMediaContext? {
         didSet {
             guard mediaContext !== oldValue, isViewLoaded else { return }
@@ -67,8 +73,9 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         return UICollectionView(frame: .zero, collectionViewLayout: layout)
     }()
 
-    init(model: ConversationTimelineModel) {
+    init(model: ConversationTimelineModel, actions: TimelineBubbleActions) {
         self.model = model
+        self.actions = actions
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -151,7 +158,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "timeline", for: indexPath)
         let row = rows[indexPath.item]
         cell.contentConfiguration = UIHostingConfiguration {
-            TimelineBubbleView(row: row, context: .init(isHighlighted: row.id == highlightedRowID), mediaContext: mediaContext)
+            TimelineBubbleView(row: row, context: .init(isHighlighted: row.id == highlightedRowID), actions: actions, mediaContext: mediaContext)
         }.margins(.all, 0)
         return cell
     }

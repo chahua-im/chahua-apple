@@ -61,3 +61,29 @@ For a targeted launch, set `CHAHUA_FIXTURE_MESSAGE` to a fixture ID (for example
 `TimelineTableViewControllerTests` renders real native cells at 320, 600, and 900 points and retains PNG attachments in the XCTest result bundle. Its regressions check compact single/multiline bubbles, rendered glyph containment, caption/reply/thread reflow, dark timestamp visibility, scroll anchors, and complete row-height settlement after live resize. `MacBubbleTextLayoutTests` checks final-line metadata and drawing-appearance changes; `MacBubbleMediaLayoutTests` checks image bounds, missing dimensions, justified rows, and sixth-tile overflow.
 
 Do not treat finding an `NSTextView`, a successful build, or a passing measurement-only test as visual proof. Inspect the native window or rendered XCTest attachments. Keep animated-image windows unoccluded while checking animation: AppKit can suspend animations in covered windows.
+
+## macOS scrolling and divider regression checks
+
+The split diagnostic uses the production `ChatSplitLayout` and native timeline. Add `-fixture-split` and set `CHAHUA_PERFORMANCE_ROWS=300` to exercise a loaded history of wrapped messages alongside the media fixtures:
+
+```sh
+CHAHUA_PERFORMANCE_ROWS=300 /tmp/chahua-bubbles/Build/Products/Debug/chahua-apple.app/Contents/MacOS/chahua-apple -bubble-timeline -fixture-split &
+fixture_pid=$!
+swift scripts/macos-split-smoke.swift "$fixture_pid"
+```
+
+Build `/tmp/chahua-bubbles` with the command above first. The smoke script requires Accessibility/input-posting permission for the invoking terminal and a diagnostic window at least 900 points wide. It sends real mouse input and reads the rendered divider's accessibility geometry after each move. Do not switch windows or use the pointer during the check; losing fixture focus aborts further drag input. The script releases the mouse and restores the original pointer position when it finishes.
+
+The smoke checks successive pointer tracking, reversal, both sidebar clamps, release stability, and a fresh gesture after clamping. It uses a one-point tolerance for screen-coordinate rounding. This is intentionally separate from hosted unit tests: synthetic `NSEvent` delivery inside XCTest does not reliably reach SwiftUI's drag recognizer on all macOS versions.
+
+The hosted `TimelineTableViewControllerTests` cover the other half of the interaction: the split environment reaches the native host, offscreen heights remain deferred during dragging, newly visible rows have exact heights, overlapping window/split resize lifecycles remain independent, and every row converges to exact final-width geometry afterward. They also check history-anchor/bottom attachment throughout cooperative settlement, including a reentrant message edit and another resize. Native text tests check selection preservation and replacement/removal of link actions.
+
+For frame pacing, record the fixture with Instruments' **Animation Hitches** template while scrolling and dragging/releasing the divider:
+
+```sh
+xcrun xctrace record --template 'Animation Hitches' --attach "$fixture_pid" --time-limit 20s --output /tmp/chahua-scroll.trace
+```
+
+Use an unoccluded window and a fresh trace output path. Inspect rendered-update cadence and main-thread stalls, including mouse-up—not just average CPU use. A 60 fps frame budget is 16.7 ms; passing correctness checks or observing no stalls above the template's 33 ms reporting threshold does not establish that every frame meets that budget.
+
+The macOS host measures visible/overscan rows during resizing. After release, offscreen corrections run in cooperative batches (at most 32 rows, with a 4 ms measurement budget), preserving the current reader anchor between batches. A new resize cancels the previous settlement pass; data or geometry changes restart it against the current revision. The budget bounds measurement work between yields, not the cost of a single complex row or AppKit layout.

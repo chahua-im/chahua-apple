@@ -45,12 +45,16 @@ final class RealtimeCoordinator: ObservableObject {
         self.uid = uid
         failures = 0
         store.reset()
+        store.outgoingQueue.requestSession(uid: uid)
         startIfNeeded()
     }
 
     func setSceneActive(id: UUID, active: Bool) {
         let wasActive = !activeScenes.isEmpty
         if active { activeScenes.insert(id) } else { activeScenes.remove(id) }
+        if wasActive != !activeScenes.isEmpty {
+            store.setForegroundActive(!activeScenes.isEmpty)
+        }
         if activeScenes.isEmpty { stop() }
         else if !wasActive { failures = 0; startIfNeeded() }
     }
@@ -98,7 +102,8 @@ final class RealtimeCoordinator: ObservableObject {
                             }
                         }
                     } else {
-                        store.applyRealtimeEvent(event, currentUserID: uid)
+                        await store.applyRealtimeEvent(event, currentUserID: uid)
+                        guard generation == currentGeneration, attempt == currentAttempt, !Task.isCancelled else { return }
                     }
                 }
             } catch {

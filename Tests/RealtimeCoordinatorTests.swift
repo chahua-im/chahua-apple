@@ -30,7 +30,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
         let clock = RealtimeTestClock()
         let socket = RealtimeTestSocket()
         let provider = RealtimeTestProvider(sockets: [socket])
-        let store = ChatStore(apiClient: RealtimeTestHTTP(), onInvalidToken: {})
+        let store = ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {})
         let coordinator = RealtimeCoordinator(provider: provider, store: store, onInvalidToken: {}, sleep: { try await clock.sleep($0) }, jitter: { 0 })
         let first = UUID(), second = UUID()
         coordinator.setSession(uid: 1)
@@ -55,7 +55,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
         let first = RealtimeTestSocket(), second = RealtimeTestSocket()
         let provider = RealtimeTestProvider(sockets: [first, second])
         let coordinator = RealtimeCoordinator(
-            provider: provider, store: ChatStore(apiClient: RealtimeTestHTTP(), onInvalidToken: {}),
+            provider: provider, store: ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
             onInvalidToken: {}, sleep: { try await clock.sleep($0) }, jitter: { 0 }
         )
         let scene = UUID()
@@ -76,7 +76,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
         let provider = RealtimeTestProvider(sockets: [socket], holdOpen: true)
         var expired = false
         let coordinator = RealtimeCoordinator(
-            provider: provider, store: ChatStore(apiClient: RealtimeTestHTTP(), onInvalidToken: {}),
+            provider: provider, store: ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
             onInvalidToken: { expired = true }
         )
         coordinator.setSession(uid: 1)
@@ -90,7 +90,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
 
     func testRecoveryDoesNotBlockLaterEventDelivery() async throws {
         let api = RealtimeTestHTTP(holdChats: true)
-        let store = ChatStore(apiClient: api, onInvalidToken: {})
+        let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
         let socket = RealtimeTestSocket()
         let coordinator = RealtimeCoordinator(provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {})
         var received = false

@@ -11,8 +11,11 @@ let package = Package(
     products: [
         .library(name: "ChahuaAPI", targets: ["ChahuaAPI"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1"),
+    ],
     targets: [
-        .target(name: "ChahuaAPI"),
+        .target(name: "ChahuaAPI", dependencies: [.product(name: "GRDB", package: "GRDB.swift")]),
         .testTarget(name: "ChahuaAPITests", dependencies: ["ChahuaAPI"]),
     ],
     swiftLanguageModes: [.v6],

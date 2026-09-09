@@ -73,6 +73,34 @@ final class ConversationMessageStoreTests: XCTestCase {
         XCTAssertEqual(projections.first?.entries.first?.displayState, .delivered)
     }
 
+    func testCommittedBatchAcknowledgementPublishesSuccessorStateAndJournalsOneAtomicIngress() throws {
+        let store = ConversationMessageStore()
+        store.replacePending(chatID: "chat", with: [
+            pending(id: "send-1", state: .sending),
+            pending(id: "send-2", state: .queued),
+        ])
+        let token = store.beginSnapshot(chatID: "chat")
+        defer { store.endSnapshot(token) }
+        let acknowledgement = try TimelineTestFixtures.message(id: "server", at: 2, clientGeneratedID: "send-1")
+        var projections: [ConversationProjection] = []
+        let observation = store.changes.sink { change in
+            let remote: [MessageResponse]
+            if case .realtime(.message(let message)) = change { remote = [message] } else { remote = [] }
+            projections.append(store.projection(for: "chat", remoteMessages: remote, includePendingOutgoing: true))
+        }
+        defer { observation.cancel() }
+
+        store.replacePending(chatID: "chat", with: [pending(id: "send-2", state: .failed)], acknowledging: acknowledgement)
+
+        XCTAssertEqual(projections.count, 1)
+        let entries = try XCTUnwrap(projections.first).entries
+        XCTAssertEqual(Set(entries.map(\.stableKey)), [.clientGenerated("send-1"), .clientGenerated("send-2")])
+        XCTAssertEqual(entries.first { $0.stableKey == .clientGenerated("send-1") }?.displayState, .delivered)
+        XCTAssertEqual(entries.first { $0.stableKey == .clientGenerated("send-2") }?.displayState, .failed)
+        XCTAssertEqual(eventNames(store.eventsDuringSnapshot(token)), ["create"])
+        XCTAssertEqual(store.projection(for: "chat", remoteMessages: [], includePendingOutgoing: true).entries.map(\.stableKey), [.clientGenerated("send-2")])
+    }
+
     private func eventNames(_ events: [RealtimeServerEvent]) -> [String] {
         events.map {
             switch $0 {

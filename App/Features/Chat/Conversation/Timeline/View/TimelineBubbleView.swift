@@ -15,6 +15,7 @@ struct TimelineBubbleActions {
     var openThread: ((String) -> Void)?
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?
+    var openFailedMessage: ((String) -> Void)?
 }
 
 /// Closed rendering surface. Per-kind components live under `View/Bubble/`; adding a new row
@@ -56,7 +57,7 @@ struct TimelineBubbleView: View {
             #if os(macOS)
             MacTextMessageBubble(row: row, context: context, actions: actions)
             #else
-            TextMessageBubble(row: row)
+            TextMessageBubble(row: row, actions: actions)
             #endif
         } else {
             UnsupportedMessageBubble(row: row)

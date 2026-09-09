@@ -34,21 +34,12 @@ struct ConversationTimelineView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch model.state.content {
-        case .idle, .loadingInitial:
-            ProgressView("Loading messages")
-        case .initialLoadFailed:
-            VStack(spacing: ChahuaTheme.Spacing.small) {
-                Image(systemName: "exclamationmark.triangle").font(.largeTitle)
-                Text("Couldn’t load messages").font(.headline)
-                Text("Check your connection and try again.").foregroundStyle(ChahuaTheme.secondaryText)
-                Button("Try again") { Task { await model.retryInitial() } }
-            }
-        case .ready, .repositioning:
+        if !model.rows.isEmpty || model.state.content == .ready || isRepositioning {
             timelineHost
+                .safeAreaInset(edge: .top, spacing: 0) { initialHistoryBanner }
                 .overlay(alignment: .top) { olderEdgeOverlay }
                 .overlay(alignment: .bottom) { newerEdgeOverlay }
-                .overlay { if case .repositioning = model.state.content { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.medium)) } }
+                .overlay { if isRepositioning { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.medium)) } }
                 .overlay(alignment: .top) { if let failure = model.state.repositionFailure { failureBanner(failure) } }
                 .overlay(alignment: .top) {
                     if model.state.reconciliationFailed {
@@ -61,15 +52,49 @@ struct ConversationTimelineView: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)).padding()
                     }
                 }
-
+        } else if model.state.content == .initialLoadFailed {
+            VStack(spacing: ChahuaTheme.Spacing.small) {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+                Text("Couldn’t load messages").font(.headline)
+                Text("Check your connection and try again.").foregroundStyle(ChahuaTheme.secondaryText)
+                Button("Try again") { Task { await model.retryInitial() } }
+            }
+        } else {
+            ProgressView("Loading messages")
         }
     }
+
+    private var isRepositioning: Bool {
+        if case .repositioning = model.state.content { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private var initialHistoryBanner: some View {
+        if model.state.content == .idle || model.state.content == .loadingInitial {
+            ProgressView("Loading messages")
+                .controlSize(.small)
+                .frame(maxWidth: .infinity)
+                .padding(ChahuaTheme.Spacing.small)
+                .background(.regularMaterial)
+        } else if model.state.content == .initialLoadFailed {
+            HStack {
+                Text("Couldn’t load messages.")
+                Spacer()
+                Button("Try again") { Task { await model.retryInitial() } }
+            }
+            .font(.caption)
+            .padding(ChahuaTheme.Spacing.small)
+            .background(.regularMaterial)
+        }
+    }
+
     @ViewBuilder
     private var timelineHost: some View {
         #if os(macOS)
         TimelineHostView(model: model, actions: actions, mediaContext: mediaContext)
         #else
-        TimelineHostView(model: model, mediaContext: mediaContext)
+        TimelineHostView(model: model, actions: actions, mediaContext: mediaContext)
         #endif
     }
 
@@ -105,10 +130,11 @@ import UIKit
 struct TimelineHostView: UIViewControllerRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     let model: ConversationTimelineModel
+    var actions = TimelineBubbleActions()
     var mediaContext: AppMediaContext?
 
     func makeUIViewController(context: Context) -> TimelineCollectionViewController {
-        let controller = TimelineCollectionViewController(model: model)
+        let controller = TimelineCollectionViewController(model: model, actions: actions)
         controller.mediaContext = mediaContext
         controller.colorScheme = colorScheme
         return controller
@@ -116,6 +142,7 @@ struct TimelineHostView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: TimelineCollectionViewController, context: Context) {
         controller.mediaContext = mediaContext
+        controller.actions = actions
         controller.colorScheme = colorScheme
     }
 }
@@ -123,21 +150,28 @@ struct TimelineHostView: UIViewControllerRepresentable {
 import AppKit
 struct TimelineHostView: NSViewControllerRepresentable {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isChatSplitResizing) private var isSplitResizing
     let model: ConversationTimelineModel
     var actions = TimelineBubbleActions()
     var mediaContext: AppMediaContext?
 
     func makeNSViewController(context: Context) -> TimelineTableViewController {
         let controller = TimelineTableViewController(model: model, actions: actions)
+        controller.isSplitResizing = isSplitResizing
         controller.mediaContext = mediaContext
         controller.colorScheme = colorScheme
         return controller
     }
 
     func updateNSViewController(_ controller: TimelineTableViewController, context: Context) {
+        controller.isSplitResizing = isSplitResizing
         controller.mediaContext = mediaContext
         controller.actions = actions
         controller.colorScheme = colorScheme
+    }
+
+    static func dismantleNSViewController(_ controller: TimelineTableViewController, coordinator: ()) {
+        controller.isSplitResizing = false
     }
 }
 #endif

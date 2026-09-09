@@ -41,7 +41,6 @@ final class MediaImageLoader {
     func image(for request: MediaRequest, thumbnailPixelSize: CGSize? = nil) async throws -> ImageResponse {
         try Task.checkCancellation()
         guard !isClosed else { throw MediaCacheError.closed }
-        let started = ContinuousClock.now
         let loadID = UUID()
 
         // Even decoded-memory hits must register tags and acquire the current generation.

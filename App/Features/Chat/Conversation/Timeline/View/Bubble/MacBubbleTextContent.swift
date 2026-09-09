@@ -11,6 +11,7 @@ struct MacBubbleTextContent: NSViewRepresentable {
     let action: ((URL) -> Void)?
     var mentionAction: ((Int32) -> Void)? = nil
     var metadata: MacBubbleMetadata? = nil
+    var failureAction: (() -> Void)? = nil
     @ScaledMetric(relativeTo: .body) private var fontSize = NSFont.preferredFont(forTextStyle: .body).pointSize
 
     func makeNSView(context: Context) -> MacBubbleTextView {
@@ -22,14 +23,29 @@ struct MacBubbleTextContent: NSViewRepresentable {
     func updateNSView(_ view: MacBubbleTextView, context: Context) {
         context.coordinator.openLink = action
         context.coordinator.openMention = mentionAction
-        let attributed = Self.attributedText(
+        let input = TextInput(
             text: text, mentions: mentions, currentUserID: currentUserID,
-            isOutgoing: isOutgoing, font: .systemFont(ofSize: fontSize),
+            isOutgoing: isOutgoing, fontSize: fontSize,
             linksEnabled: action != nil, mentionsEnabled: mentionAction != nil
         )
-        view.contentLayout.update(attributedText: attributed, metadata: metadata)
+        let attributed: NSAttributedString?
+        if context.coordinator.textInput != input {
+            attributed = Self.attributedText(
+                text: text, mentions: mentions, currentUserID: currentUserID,
+                isOutgoing: isOutgoing, font: .systemFont(ofSize: fontSize),
+                linksEnabled: input.linksEnabled, mentionsEnabled: input.mentionsEnabled
+            )
+            context.coordinator.textInput = input
+        } else {
+            attributed = nil
+        }
+        let geometryChanged = view.contentLayout.update(attributedText: attributed, metadata: metadata)
+        view.failureAction = failureAction
+        if geometryChanged {
+            view.needsLayout = true
+            view.invalidateIntrinsicContentSize()
+        }
         view.needsDisplay = true
-        view.invalidateIntrinsicContentSize()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MacBubbleTextView, context: Context) -> CGSize? {
@@ -39,9 +55,22 @@ struct MacBubbleTextContent: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    // Width proposals and replacement callbacks do not change the selectable runs.
+    // Keep this local to the native view's lifetime rather than caching message text globally.
+    struct TextInput: Equatable {
+        let text: String
+        let mentions: [MentionInfo]
+        let currentUserID: Int32?
+        let isOutgoing: Bool
+        let fontSize: CGFloat
+        let linksEnabled: Bool
+        let mentionsEnabled: Bool
+    }
+
     final class Coordinator: NSObject, NSTextViewDelegate {
         var openLink: ((URL) -> Void)?
         var openMention: ((Int32) -> Void)?
+        var textInput: TextInput?
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             guard let storage = textView.textStorage, charIndex < storage.length else { return true }
@@ -147,7 +176,7 @@ struct MacBubbleMetadata {
     private let attributedTime: NSAttributedString
     private let textSize: CGSize
     private let symbolSize: CGFloat
-    private let symbol: NSImage?
+    let symbol: NSImage?
     private let textOpacity: CGFloat
 
     init(time: String, state: ConversationMessageDisplayState?, isOutgoing: Bool, isOverlay: Bool = false, fontSize: CGFloat = 12) {
@@ -166,11 +195,12 @@ struct MacBubbleMetadata {
         if let state {
             let name: String
             switch state {
-            case .queued, .sending: name = "checkmark.circle"
+            case .queued: name = "clock"
+            case .sending: name = "ellipsis"
             case .delivered: name = "checkmark.circle.fill"
-            case .failed: name = "exclamationmark.triangle.fill"
+            case .failed: name = "exclamationmark.circle.fill"
             }
-            let color = state == .failed ? NSColor.systemYellow : foreground.withAlphaComponent(isOverlay ? 1 : 0.7)
+            let color = state == .failed ? NSColor.systemRed : foreground.withAlphaComponent(isOverlay ? 1 : 0.7)
             let configuration = NSImage.SymbolConfiguration(pointSize: fontSize, weight: .regular)
                 .applying(.init(paletteColors: [color]))
             symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
@@ -198,18 +228,30 @@ struct MacBubbleMetadata {
         return "\(time), \(label)"
     }
 
-    func draw(in frame: CGRect) {
+    func symbolFrame(in frame: CGRect) -> CGRect {
+        guard symbol != nil, frame.width > 0, size.width > 0 else { return .zero }
+        let scale = min(1, frame.width / size.width)
+        return CGRect(
+            x: frame.minX + (size.width - symbolSize) * scale,
+            y: frame.minY + (size.height - symbolSize) / 2 * scale,
+            width: symbolSize * scale,
+            height: symbolSize * scale
+        )
+    }
+
+    func draw(in frame: CGRect, drawsSymbol: Bool = true) {
         guard frame.width > 0, size.width > 0 else { return }
         NSGraphicsContext.saveGraphicsState()
-        defer { NSGraphicsContext.restoreGraphicsState() }
         let transform = NSAffineTransform()
         transform.translateX(by: frame.minX, yBy: frame.minY)
         transform.scale(by: min(1, frame.width / size.width))
         transform.concat()
         NSGraphicsContext.current?.cgContext.setAlpha(textOpacity)
         attributedTime.draw(at: CGPoint(x: 0, y: (size.height - textSize.height) / 2))
-        NSGraphicsContext.current?.cgContext.setAlpha(1)
-        symbol?.draw(in: CGRect(x: size.width - symbolSize, y: (size.height - symbolSize) / 2, width: symbolSize, height: symbolSize), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        NSGraphicsContext.restoreGraphicsState()
+        if drawsSymbol {
+            symbol?.draw(in: symbolFrame(in: frame), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
     }
 }
 
@@ -240,14 +282,20 @@ final class MacBubbleTextLayout {
         update(attributedText: attributedText, metadata: metadata)
     }
 
-    func update(attributedText: NSAttributedString, metadata: MacBubbleMetadata?) {
-        let textChanged = !storage.isEqual(to: attributedText)
-        if textChanged { storage.setAttributedString(attributedText) }
-        if textChanged || self.metadata?.size != metadata?.size {
+    @discardableResult
+    func update(attributedText: NSAttributedString? = nil, metadata: MacBubbleMetadata?) -> Bool {
+        var textChanged = false
+        if let attributedText, !storage.isEqual(to: attributedText) {
+            storage.setAttributedString(attributedText)
+            textChanged = true
+        }
+        let geometryChanged = textChanged || self.metadata?.size != metadata?.size
+        if geometryChanged {
             cachedGeometry = nil
             cachedIdealSize = nil
         }
         self.metadata = metadata
+        return geometryChanged
     }
 
     private var metadataGap: CGFloat {
@@ -313,6 +361,10 @@ final class MacBubbleTextLayout {
 
 final class MacBubbleTextView: NSTextView {
     let contentLayout: MacBubbleTextLayout
+    var failureAction: (() -> Void)? {
+        didSet { updateFailureButton() }
+    }
+    private var failureButton: NSButton?
 
     init() {
         let layout = MacBubbleTextLayout()
@@ -334,23 +386,66 @@ final class MacBubbleTextView: NSTextView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: NSSize { contentLayout.idealSize }
+    private func updateFailureButton() {
+        guard failureAction != nil, let metadata = contentLayout.metadata, metadata.state == .failed else {
+            failureButton?.removeFromSuperview()
+            failureButton = nil
+            return
+        }
+        let button: NSButton
+        if let failureButton {
+            button = failureButton
+        } else {
+            button = NSButton(frame: .zero)
+            button.title = ""
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+            button.imageScaling = .scaleProportionallyUpOrDown
+            button.setButtonType(.momentaryPushIn)
+            button.target = self
+            button.action = #selector(openFailureOptions)
+            button.setAccessibilityLabel(String(localized: "Failed to send. Retry options"))
+            button.setAccessibilityElement(true)
+            addSubview(button)
+            failureButton = button
+        }
+        button.image = metadata.symbol
+        needsLayout = true
+    }
+
+    @objc private func openFailureOptions() {
+        guard contentLayout.metadata?.state == .failed else { return }
+        failureAction?()
+    }
+
 
     override func layout() {
         super.layout()
-        _ = contentLayout.geometry(for: bounds.width)
+        let geometry = contentLayout.geometry(for: bounds.width)
+        if let metadata = contentLayout.metadata {
+            failureButton?.frame = metadata.symbolFrame(in: geometry.metadataFrame)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
         let geometry = contentLayout.geometry(for: bounds.width)
         super.draw(dirtyRect)
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            contentLayout.metadata?.draw(in: geometry.metadataFrame)
+            contentLayout.metadata?.draw(in: geometry.metadataFrame, drawsSymbol: failureButton == nil)
         }
     }
 
     override func accessibilityValue() -> String? {
         guard let metadata = contentLayout.metadata else { return super.accessibilityValue() }
         return "\(string) \(metadata.accessibilityLabel)"
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        var children = super.accessibilityChildren() ?? []
+        if let failureButton, !children.contains(where: { ($0 as? NSView) === failureButton }) {
+            children.append(failureButton)
+        }
+        return children
     }
 }
 

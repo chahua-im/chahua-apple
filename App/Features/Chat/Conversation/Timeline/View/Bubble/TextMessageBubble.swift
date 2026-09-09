@@ -3,6 +3,8 @@ import SwiftUI
 
 struct TextMessageBubble: View {
     let row: TimelineMessageRow
+    let actions: TimelineBubbleActions
+    @ScaledMetric(relativeTo: .caption) private var statusSize: CGFloat = 14
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -17,17 +19,17 @@ struct TextMessageBubble: View {
                             .truncationMode(.tail)
                     }
                     if (row.entry.text ?? "").isEmpty {
-                        timestamp
+                        metadata
                     } else {
                         ViewThatFits(in: .horizontal) {
                             HStack(alignment: .bottom, spacing: 8) {
                                 messageText
-                                timestamp
+                                metadata
                             }
                             .fixedSize(horizontal: true, vertical: false)
                             VStack(alignment: .leading, spacing: 0) {
                                 messageText
-                                timestamp.frame(maxWidth: .infinity, alignment: .trailing)
+                                metadata.frame(maxWidth: .infinity, alignment: .trailing)
                             }
                         }
                     }
@@ -48,11 +50,56 @@ struct TextMessageBubble: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var timestamp: some View {
-        TimestampView(date: row.entry.createdAt, style: .time)
-            .font(.caption)
-            .opacity(0.7)
-            .fixedSize(horizontal: false, vertical: true)
+    private var metadata: some View {
+        HStack(spacing: 4) {
+            TimestampView(date: row.entry.createdAt, style: .time)
+                .font(.caption)
+                .opacity(0.7)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            if row.isOutgoing {
+                status
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if case .pending(let pending) = row.entry, pending.state == .failed {
+            Button { actions.openFailedMessage?(pending.clientGeneratedID) } label: {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: statusSize))
+                    .foregroundStyle(.red)
+                    .frame(width: max(24, statusSize), height: max(24, statusSize))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Failed to send. Retry options")
+        } else {
+            Image(systemName: statusSymbol)
+                .font(.system(size: statusSize))
+                .opacity(0.7)
+                .frame(width: max(24, statusSize), height: max(24, statusSize))
+                .accessibilityLabel(statusLabel)
+        }
+    }
+
+    private var statusSymbol: String {
+        switch row.entry.displayState {
+        case .queued: "clock"
+        case .sending: "ellipsis"
+        case .delivered: "checkmark.circle.fill"
+        case .failed: "exclamationmark.circle.fill"
+        }
+    }
+
+    private var statusLabel: String {
+        switch row.entry.displayState {
+        case .queued: String(localized: "Queued")
+        case .sending: String(localized: "Sending")
+        case .delivered: String(localized: "Sent")
+        case .failed: String(localized: "Failed to send")
+        }
     }
 
     private var senderName: Text {
@@ -87,7 +134,7 @@ private struct TextBubbleRowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let size = dimensions(proposal: proposal, subviews: subviews).child
+        let size = dimensions(proposal: ProposedViewSize(width: bounds.width, height: nil), subviews: subviews).child
         subviews.first?.place(at: CGPoint(x: isOutgoing ? bounds.maxX - size.width : bounds.minX, y: bounds.minY),
                               anchor: .topLeading, proposal: ProposedViewSize(width: size.width, height: nil))
     }

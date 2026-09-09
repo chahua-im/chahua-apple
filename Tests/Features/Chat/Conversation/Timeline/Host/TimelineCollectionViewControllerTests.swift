@@ -28,7 +28,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         window.rootViewController = parent
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
-        let controller = TimelineCollectionViewController(model: model)
+        let controller = TimelineCollectionViewController(model: model, actions: .init())
         parent.addChild(controller)
         parent.view.addSubview(controller.view)
         controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 600)
@@ -103,7 +103,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
 
-        let controller = TimelineCollectionViewController(model: model)
+        let controller = TimelineCollectionViewController(model: model, actions: .init())
         parent.addChild(controller)
         parent.view.addSubview(controller.view)
         controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
@@ -149,6 +149,86 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         let after = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.height
         XCTAssertGreaterThan(after, before)
         XCTAssertEqual(after, referenceMeasurer.height(for: model.rows[index], width: collection.bounds.width), accuracy: 1)
+    }
+
+    func testFailedMetadataMatchesMeasuredRowsAcrossResizeAndAcknowledgement() async throws {
+        let text = "Unsent text\n你好，世界 " + String(repeating: "Wrapping message. ", count: 3)
+        let pending = PendingOutgoingMessage(
+            chatID: "chat", clientGeneratedID: "failed-text",
+            body: .init(messageType: .text, clientGeneratedId: "failed-text", message: text),
+            enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1, state: .failed
+        )
+        let store = ConversationMessageStore()
+        store.replacePending(chatID: "chat", with: [pending])
+        let source = BubbleSource(page: try TimelineTestFixtures.page([]))
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source, messageStore: store
+        )
+        let parent = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = parent
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let controller = TimelineCollectionViewController(
+            model: model, actions: .init(openFailedMessage: { _ in XCTFail("Rendering must not activate retry.") })
+        )
+        parent.addChild(controller)
+        parent.view.addSubview(controller.view)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 900)
+        controller.didMove(toParent: parent)
+        setCategory(.accessibilityExtraLarge, on: controller, parent: parent)
+        await model.loadInitial()
+        try await Task.sleep(for: .milliseconds(200))
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.contentInsetAdjustmentBehavior = .never
+        let measurer = TimelineRowMeasurer(parent: controller)
+        for width: CGFloat in [320, 600, 900] {
+            controller.view.frame.size.width = width
+            controller.overrideUserInterfaceStyle = width == 600 ? .dark : .light
+            parent.view.layoutIfNeeded()
+            controller.viewDidLayoutSubviews()
+            try await Task.sleep(for: .milliseconds(100))
+            collection.layoutIfNeeded()
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.stableMessageKey == .clientGenerated("failed-text") })
+            let path = IndexPath(item: index, section: 0)
+            collection.scrollToItem(at: path, at: .bottom, animated: false)
+            collection.layoutIfNeeded()
+            let cell = try XCTUnwrap(collection.cellForItem(at: path))
+            cell.layoutIfNeeded()
+            let renderedSize = cell.contentView.systemLayoutSizeFitting(
+                CGSize(width: width, height: 0), withHorizontalFittingPriority: .required,
+                verticalFittingPriority: .fittingSizeLevel
+            )
+            XCTAssertEqual(cell.bounds.height, renderedSize.height, accuracy: 1)
+            XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: width), accuracy: 1,
+                           "The hidden measurer without actions must reserve the visible failure control.")
+            let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
+                cell.layer.render(in: context.cgContext)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "ios-failed-message-\(Int(width))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        let acknowledgement = try TimelineTestFixtures.message(
+            id: "delivered-text", at: 0, clientGeneratedID: "failed-text", fields: ["message": text]
+        )
+        store.replacePending(chatID: "chat", with: [], acknowledging: acknowledgement)
+        controller.viewDidLayoutSubviews()
+        try await Task.sleep(for: .milliseconds(100))
+        collection.layoutIfNeeded()
+        let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "delivered-text" })
+        let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)))
+        XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: collection.bounds.width), accuracy: 1)
+        let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
+            cell.layer.render(in: context.cgContext)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "ios-acknowledged-message"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func setCategory(_ category: UIContentSizeCategory, on controller: UIViewController, parent: UIViewController) {

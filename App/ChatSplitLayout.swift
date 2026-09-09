@@ -11,6 +11,19 @@ enum ChatSplitMetrics {
     static let accessibilityStep: CGFloat = 20
 }
 
+#if os(macOS)
+private struct ChatSplitResizingKey: EnvironmentKey {
+    nonisolated static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var isChatSplitResizing: Bool {
+        get { self[ChatSplitResizingKey.self] }
+        set { self[ChatSplitResizingKey.self] = newValue }
+    }
+}
+#endif
+
 struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     let hasSelection: Bool
     private let sidebar: (Bool) -> Sidebar
@@ -18,6 +31,9 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
 
     @State private var preferredSidebarWidth = ChatSplitMetrics.initialSidebarWidth
     @State private var dragStartWidth: CGFloat?
+    #if os(macOS)
+    @GestureState private var isResizing = false
+    #endif
 
     init(
         hasSelection: Bool,
@@ -54,6 +70,13 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                     isVisible: isSplit || hasSelection
                 )
             }
+            #if os(macOS)
+            .environment(\.isChatSplitResizing, isSplit && isResizing)
+            .onChange(of: isResizing) { resizing in
+                // Gesture state also resets when SwiftUI cancels the drag.
+                if !resizing { dragStartWidth = nil }
+            }
+            #endif
             .onChange(of: isSplit) { split in
                 if !split { dragStartWidth = nil }
             }
@@ -98,7 +121,12 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     }
 
     private func resizeGesture(availableWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        // The divider moves with the sidebar. Its local coordinates feed that
+        // movement back into translation, so measure the pointer in a fixed space.
+        DragGesture(minimumDistance: 0, coordinateSpace: .global)
+            #if os(macOS)
+            .updating($isResizing) { _, resizing, _ in resizing = true }
+            #endif
             .onChanged { value in
                 let startWidth = dragStartWidth ?? effectiveSidebarWidth(for: availableWidth)
                 if dragStartWidth == nil { dragStartWidth = startWidth }

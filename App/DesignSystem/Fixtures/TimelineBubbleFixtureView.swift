@@ -15,6 +15,19 @@ struct TimelineBubbleFixtureView: View {
     @State private var threadScope = false
 
     var body: some View {
+        if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
+            ChatSplitLayout(hasSelection: true) { _ in
+                Text("Performance smoke: drag divider")
+            } detail: { _ in
+                timelineContent
+            }
+            .frame(minWidth: 900, minHeight: 600)
+        } else {
+            timelineContent
+        }
+    }
+
+    private var timelineContent: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading) {
                 HStack {
@@ -119,6 +132,11 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
                 item["isEdited"] = true
                 objects.append(item)
             }
+            if let count = ProcessInfo.processInfo.environment["CHAHUA_PERFORMANCE_ROWS"].flatMap(Int.init) {
+                for _ in objects.count ..< max(objects.count, count) {
+                    objects.append(object(index: objects.count, text: String(repeating: "Scroll and resize wrapped text with selectable content. ", count: 4)))
+                }
+            }
             messages = try objects.map { try decoder.decode(MessageResponse.self, from: JSONSerialization.data(withJSONObject: $0)) }
             timeline = ConversationTimelineModel(chatID: "bubble-fixtures", currentUserID: 1, isGroupChat: true, source: self, messageStore: store)
         } catch { self.error = "Fixture generation failed: \(error)" }
@@ -127,7 +145,8 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
     func queue() async {
         guard let timeline, !hasQueued else { return }
         hasQueued = true
-        await timeline.enqueue(.init(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending", body: .init(messageType: .text, clientGeneratedId: "diagnostic-pending", message: "Pending acknowledgement retains row identity"), enqueuedAt: Date(), senderID: 1, state: .queued))
+        store.enqueue(.init(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending", body: .init(messageType: .text, clientGeneratedId: "diagnostic-pending", message: "Pending acknowledgement retains row identity"), enqueuedAt: Date(), senderID: 1, state: .queued))
+        await timeline.revealLatestAfterSend()
     }
 
     func acknowledge() {

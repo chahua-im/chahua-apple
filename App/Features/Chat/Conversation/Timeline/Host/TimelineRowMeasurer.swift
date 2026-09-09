@@ -11,8 +11,8 @@ import SwiftUI
 import UIKit
 
 
-// UIKit host: attach the measuring controller to the visible parent so traits and Dynamic Type
-// match the configured cells; placing it hidden and offscreen prevents it from affecting layout.
+// Use the same UIHostingConfiguration content view as visible cells. Its fitting
+// behavior differs from UIHostingController for wrapped accessibility metadata.
 @MainActor
 final class TimelineRowMeasurer {
     private struct CachedMeasurement {
@@ -24,7 +24,7 @@ final class TimelineRowMeasurer {
     }
 
     private unowned let parent: UIViewController
-    private var host: UIHostingController<TimelineBubbleView>?
+    private var measuringView: (UIView & UIContentView)?
     private var cache: [TimelineRowID: CachedMeasurement] = [:]
 
     init(parent: UIViewController) {
@@ -35,9 +35,25 @@ final class TimelineRowMeasurer {
         let typographySignature = parent.traitCollection.preferredContentSizeCategory.rawValue
         let scale = parent.view.traitCollection.displayScale
         if let cached = cache[row.id], cached.row == row, cached.width == width, cached.typographySignature == typographySignature, cached.scale == scale { return cached.height }
-        let host = hostingController(for: row)
-        host.rootView = TimelineBubbleView(row: row, context: .init())
-        let measured = host.sizeThatFits(in: CGSize(width: width, height: 10_000)).height
+        let configuration = UIHostingConfiguration {
+            TimelineBubbleView(row: row, context: .init(isMeasuring: true))
+        }.margins(.all, 0)
+        let view: UIView & UIContentView
+        if let measuringView {
+            view = measuringView
+            view.configuration = configuration
+        } else {
+            view = configuration.makeContentView()
+            view.isHidden = true
+            parent.view.addSubview(view)
+            measuringView = view
+        }
+        view.frame = CGRect(x: 0, y: -10_000, width: width, height: 0)
+        let measured = view.systemLayoutSizeFitting(
+            CGSize(width: width, height: 0),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        ).height
         let height = ceil(measured * scale) / scale
         cache[row.id] = .init(row: row, width: width, typographySignature: typographySignature, scale: scale, height: height)
         return height
@@ -48,18 +64,6 @@ final class TimelineRowMeasurer {
         for id in ids { cache.removeValue(forKey: id) }
     }
 
-    private func hostingController(for row: TimelineRow) -> UIHostingController<TimelineBubbleView> {
-        if let host { return host }
-        let host = UIHostingController(rootView: TimelineBubbleView(row: row, context: .init()))
-        host.safeAreaRegions = []
-        host.view.isHidden = true
-        host.view.frame = CGRect(x: 0, y: -10_000, width: 1, height: 1)
-        parent.addChild(host)
-        parent.view.addSubview(host.view)
-        host.didMove(toParent: parent)
-        self.host = host
-        return host
-    }
 }
 #elseif os(macOS)
 import AppKit

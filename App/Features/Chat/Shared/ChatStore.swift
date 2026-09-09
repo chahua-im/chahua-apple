@@ -18,6 +18,16 @@ struct ChatState: Equatable {
 final class ChatStore: ObservableObject {
     @Published private(set) var state = ChatState()
     let conversationMessages = ConversationMessageStore()
+    let outgoingQueue: OutgoingMessageQueue
+    @Published private(set) var drafts: [String: String] = [:]
+    @Published private(set) var committingDrafts = Set<String>()
+    @Published private(set) var draftSaveFailed = false
+    private var draftRevisions: [String: Int64] = [:]
+    private var unsavedDrafts = Set<String>()
+    private var pendingDraftSaves: [String: Task<Void, Never>] = [:]
+    private var outgoingObservation: AnyCancellable?
+    private var storageObservation: AnyCancellable?
+    private var outgoingRevisions: [String: Int64] = [:]
 
     private let apiClient: any ChahuaAPIClient
     private let onInvalidToken: @MainActor @Sendable () async -> Void
@@ -35,9 +45,130 @@ final class ChatStore: ObservableObject {
         weak var value: ConversationTimelineModel?
     }
 
-    init(apiClient: any ChahuaAPIClient, onInvalidToken: @escaping @MainActor @Sendable () async -> Void) {
+    init(apiClient: any ChahuaAPIClient, outgoingQueue: OutgoingMessageQueue, onInvalidToken: @escaping @MainActor @Sendable () async -> Void) {
         self.apiClient = apiClient
         self.onInvalidToken = onInvalidToken
+        self.outgoingQueue = outgoingQueue
+        outgoingObservation = outgoingQueue.events.sink { [weak self] event in
+            self?.applyOutgoingEvent(event)
+        }
+        storageObservation = outgoingQueue.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
+    }
+
+    private func applyOutgoingEvent(_ event: OutgoingQueueEvent) {
+        switch event {
+        case .snapshot(let snapshot):
+            guard installDraft(snapshot) else { return }
+            conversationMessages.replacePending(chatID: snapshot.chatID, with: pendingProjection(chatID: snapshot.chatID))
+        case .acknowledged(let snapshot, let message):
+            if let snapshot { _ = installDraft(snapshot) }
+            conversationMessages.replacePending(chatID: message.chatId, with: pendingProjection(chatID: message.chatId), acknowledging: message)
+            invalidateChatList()
+        }
+    }
+
+    @discardableResult
+    private func installDraft(_ snapshot: LocalConversationSnapshot) -> Bool {
+        guard snapshot.revision >= outgoingRevisions[snapshot.chatID, default: -1] else { return false }
+        outgoingRevisions[snapshot.chatID] = snapshot.revision
+        if unsavedDrafts.contains(snapshot.chatID), !committingDrafts.contains(snapshot.chatID),
+           drafts[snapshot.chatID] != snapshot.draft.text {
+            draftRevisions[snapshot.chatID] = max(draftRevisions[snapshot.chatID, default: 0], snapshot.draft.editRevision + 1)
+        } else if snapshot.draft.editRevision >= draftRevisions[snapshot.chatID, default: 0] {
+            drafts[snapshot.chatID] = snapshot.draft.text
+            draftRevisions[snapshot.chatID] = snapshot.draft.editRevision
+            unsavedDrafts.remove(snapshot.chatID)
+        }
+        return true
+    }
+
+    private func pendingProjection(chatID: String) -> [PendingOutgoingMessage] {
+        outgoingQueue.pendingMessages(chatID: chatID).sorted { $0.enqueueSequence < $1.enqueueSequence }.map { message in
+            let state: PendingOutgoingMessage.State = switch message.state {
+            case .queued: .queued
+            case .sending: .sending
+            case .failed: .failed
+            }
+            return PendingOutgoingMessage(
+                chatID: message.chatID, clientGeneratedID: message.clientGeneratedID,
+                body: .init(messageType: .text, clientGeneratedId: message.clientGeneratedID, message: message.text),
+                enqueuedAt: message.enqueuedAt, senderID: message.senderID,
+                state: state
+            )
+        }
+    }
+
+    func draftText(chatID: String) -> String { drafts[chatID, default: ""] }
+
+    func setDraftText(_ text: String, chatID: String) {
+        guard !committingDrafts.contains(chatID), drafts[chatID] != text else { return }
+        drafts[chatID] = text
+        unsavedDrafts.insert(chatID)
+        draftRevisions[chatID, default: 0] += 1
+        pendingDraftSaves[chatID]?.cancel()
+        pendingDraftSaves[chatID] = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+            self?.pendingDraftSaves[chatID] = nil
+            await self?.flushDraft(chatID: chatID)
+        }
+    }
+
+    func flushDraft(chatID: String) async {
+        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
+        guard let text = drafts[chatID], unsavedDrafts.contains(chatID), !committingDrafts.contains(chatID) else { return }
+        let revision = draftRevisions[chatID, default: 0]
+        let requestGeneration = generation
+        do {
+            try await outgoingQueue.saveDraft(chatID: chatID, text: text, editRevision: revision, updatedAt: Date())
+            guard generation == requestGeneration else { return }
+            draftSaveFailed = false
+        } catch {
+            guard generation == requestGeneration else { return }
+            draftSaveFailed = true
+        }
+    }
+
+    func submitDraft(chatID: String) async -> Bool {
+        let text = draftText(chatID: chatID).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !committingDrafts.contains(chatID), outgoingQueue.storageState == .ready else { return false }
+        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
+        committingDrafts.insert(chatID)
+        let requestGeneration = generation
+        let revision = draftRevisions[chatID, default: 0] + 1
+        defer { if generation == requestGeneration { committingDrafts.remove(chatID) } }
+        do {
+            try await outgoingQueue.enqueueText(chatID: chatID, text: text, clearedDraftRevision: revision)
+            guard generation == requestGeneration else { return false }
+            draftRevisions[chatID] = revision
+            drafts[chatID] = ""
+            unsavedDrafts.remove(chatID)
+            draftSaveFailed = false
+            return true
+        } catch {
+            guard generation == requestGeneration else { return false }
+            draftSaveFailed = true
+            return false
+        }
+    }
+
+    func retryLocalStorage() async {
+        await outgoingQueue.retryStorage()
+        for chatID in Array(drafts.keys) { await flushDraft(chatID: chatID) }
+    }
+
+    func setForegroundActive(_ active: Bool) {
+        outgoingQueue.requestForegroundActive(active)
+        if !active {
+            for chatID in drafts.keys {
+                pendingDraftSaves[chatID]?.cancel()
+                pendingDraftSaves[chatID] = Task { [weak self] in
+                    self?.pendingDraftSaves[chatID] = nil
+                    await self?.flushDraft(chatID: chatID)
+                }
+            }
+        }
     }
 
     func loadActiveChats() async {
@@ -118,10 +249,14 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func applyRealtimeEvent(_ event: RealtimeServerEvent, currentUserID: Int32) {
+    func applyRealtimeEvent(_ event: RealtimeServerEvent, currentUserID: Int32) async {
         switch event {
         case .message(let message):
-            conversationMessages.apply(.message(message.normalizedForRealtime(currentUserID: currentUserID)))
+            let requestGeneration = generation
+            let normalized = message.normalizedForRealtime(currentUserID: currentUserID)
+            let handled = await outgoingQueue.acceptAcknowledgement(normalized)
+            guard generation == requestGeneration else { return }
+            if !handled { conversationMessages.apply(.message(normalized)) }
             invalidateChatList()
         case .messageUpdated(let message):
             conversationMessages.apply(.messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
@@ -200,6 +335,10 @@ final class ChatStore: ObservableObject {
         do {
             let response = try await apiClient.listMessages(chatID: chatID, query: query)
             guard generation == requestGeneration else { throw CancellationError() }
+            for message in response.messages {
+                _ = await outgoingQueue.acceptAcknowledgement(message)
+                guard generation == requestGeneration else { throw CancellationError() }
+            }
             return response
         } catch {
             guard generation == requestGeneration else { throw CancellationError() }
@@ -225,6 +364,14 @@ final class ChatStore: ObservableObject {
 
     func reset() {
         generation += 1
+        for task in pendingDraftSaves.values { task.cancel() }
+        pendingDraftSaves.removeAll()
+        drafts.removeAll()
+        draftRevisions.removeAll()
+        unsavedDrafts.removeAll()
+        outgoingRevisions.removeAll()
+        committingDrafts.removeAll()
+        draftSaveFailed = false
         cancelRealtimeRecovery()
         conversationMessages.reset()
         state = ChatState()

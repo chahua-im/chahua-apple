@@ -7,6 +7,27 @@ import ChahuaAPI
 final class ConversationTimelineModelTests: XCTestCase {
     private var cancellables: Set<AnyCancellable> = []
 
+    func testContinuedUserScrollingDoesNotRepublishUnchangedState() async throws {
+        let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 2))])
+        await model.loadInitial()
+        var stateChanges = 0
+        let observation = model.objectWillChange.sink { stateChanges += 1 }
+        defer { observation.cancel() }
+
+        model.userScrollBegan()
+        XCTAssertFalse(model.state.live.followsLatest)
+        XCTAssertNil(model.updates.value.pendingScroll)
+        XCTAssertEqual(stateChanges, 1)
+
+        for _ in 0 ..< 120 { model.userScrollBegan() }
+        XCTAssertEqual(stateChanges, 1, "Continued wheel events must not invalidate the SwiftUI timeline.")
+
+        source.store.apply(.message(try TimelineTestFixtures.message(id: "3", senderID: 2, at: 3)))
+        XCTAssertFalse(model.state.live.followsLatest)
+        XCTAssertEqual(model.state.live.unseenCount, 1)
+        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2", "3"])
+    }
+
     func testInitialLoadPublishesBottomResetWithRemoteRows() async throws {
         let (model, _, updates) = try makeModel(pages: [.success(try livePage(ids: 1 ... 2))])
 
@@ -27,6 +48,98 @@ final class ConversationTimelineModelTests: XCTestCase {
         await model.retryInitial()
         XCTAssertEqual(model.state.content, .ready)
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["1"])
+    }
+
+    func testRestoredFailedRowsRemainVisibleWhileInitialHistoryLoadsAndFails() async throws {
+        let source = ScriptedTimelineSource(pages: [.failure(StubError())])
+        var failed = pending(id: "restored")
+        failed.state = .failed
+        source.store.replacePending(chatID: "chat", with: [failed])
+        let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: true, source: source, messageStore: source.store)
+        XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [.clientGenerated("restored")])
+        source.holdNextRequest()
+        let loading = Task { await model.open() }
+        await source.waitUntilHeld()
+        XCTAssertEqual(model.state.content, .loadingInitial)
+        XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [.clientGenerated("restored")])
+
+        source.release()
+        await loading.value
+
+        XCTAssertEqual(model.state.content, .initialLoadFailed)
+        let entries = model.rows.compactMap { row -> ConversationTimelineEntry? in
+            guard case .message(let message) = row else { return nil }
+            return message.entry
+        }
+        XCTAssertEqual(entries.map(\.stableKey), [.clientGenerated("restored")])
+        XCTAssertEqual(entries.map(\.displayState), [.failed])
+        source.store.replacePending(chatID: "chat", with: [failed, pending(id: "new")])
+        XCTAssertEqual(Set(model.rows.compactMap(\.stableMessageKey)), [.clientGenerated("restored"), .clientGenerated("new")])
+    }
+
+    func testAtomicAcknowledgementDuringInitialLoadingSurvivesFailureAndRetry() async throws {
+        let acknowledged = try TimelineTestFixtures.message(id: "server", at: 1, clientGeneratedID: "send")
+        let (model, source, _) = try makeModel(pages: [
+            .failure(StubError()), .success(try TimelineTestFixtures.page([acknowledged])),
+        ])
+        source.store.replacePending(chatID: "chat", with: [pending(id: "send")])
+        source.holdNextRequest()
+        let loading = Task { await model.open() }
+        await source.waitUntilHeld()
+        var visibleKeys: [[ConversationMessageStableKey]] = []
+        let observation = model.updates.sink { visibleKeys.append($0.rows.compactMap(\.stableMessageKey)) }
+        defer { observation.cancel() }
+
+        source.store.replacePending(chatID: "chat", with: [], acknowledging: acknowledged)
+        XCTAssertEqual(model.state.content, .loadingInitial)
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        source.store.apply(.message(try TimelineTestFixtures.message(id: "unrelated", senderID: 2, at: 2)))
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"], "Only matched acknowledgements are exposed before history succeeds")
+        source.release()
+        await loading.value
+        XCTAssertEqual(model.state.content, .initialLoadFailed)
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+
+        source.holdNextRequest()
+        let retrying = Task { await model.retryInitial() }
+        await source.waitUntilHeld()
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        source.release()
+        await retrying.value
+        XCTAssertEqual(model.rows.filter { $0.stableMessageKey == .clientGenerated("send") }.count, 1)
+        XCTAssertTrue(visibleKeys.allSatisfy { $0.filter { $0 == .clientGenerated("send") }.count == 1 })
+        XCTAssertEqual(model.state.live.unseenCount, 0)
+    }
+
+    func testAcknowledgementAfterInitialFailureRemainsDeliveredUntilSnapshot() async throws {
+        let acknowledged = try TimelineTestFixtures.message(id: "server", at: 1, clientGeneratedID: "send")
+        let (model, source, _) = try makeModel(pages: [
+            .failure(StubError()), .success(try TimelineTestFixtures.page([acknowledged])),
+        ])
+        source.store.replacePending(chatID: "chat", with: [pending(id: "send")])
+        await model.open()
+        source.store.replacePending(chatID: "chat", with: [], acknowledging: acknowledged)
+        source.store.replacePending(chatID: "chat", with: [])
+        XCTAssertEqual(model.state.content, .initialLoadFailed)
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        await model.retryInitial()
+        XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [.clientGenerated("send")])
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+    }
+
+    func testRevealAfterDurableEnqueueReusesNearbyLiveWindowWithoutWritingAgain() async throws {
+        let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 2))])
+        await model.open()
+        model.userScrollBegan()
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1, distanceToTop: 5_000, distanceToBottom: 100, height: 400), reason: .user, revision: model.updates.value.revision)
+        source.store.replacePending(chatID: "chat", with: [pending(id: "send")])
+
+        await model.revealLatestAfterSend()
+
+        XCTAssertEqual(source.queries.count, 1)
+        XCTAssertEqual(model.rows.filter { $0.stableMessageKey == .clientGenerated("send") }.count, 1)
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: true))
+        XCTAssertTrue(model.state.live.followsLatest)
     }
 
     func testLiveMessageOffLiveEdgeIsDeferredAndCounted() async throws {

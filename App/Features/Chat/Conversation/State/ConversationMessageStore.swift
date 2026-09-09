@@ -30,6 +30,16 @@ final class ConversationMessageStore: ObservableObject {
     private var snapshots: [UUID: Snapshot] = [:]
     private var journals: [String: [JournalEntry]] = [:]
 
+    func replacePending(chatID: String, with pending: [PendingOutgoingMessage], acknowledging message: MessageResponse? = nil) {
+        pendingOutgoingByChatID[chatID] = pending
+        if let message {
+            precondition(message.chatId == chatID, "Acknowledgement and pending batch must belong to the same chat.")
+            apply(.message(message))
+        } else {
+            changes.send(.pendingChanged(chatID: chatID))
+        }
+    }
+
     func enqueue(_ pending: PendingOutgoingMessage) {
         precondition(!pending.clientGeneratedID.isEmpty, "Queued messages require a client-generated ID.")
         precondition(pending.body.clientGeneratedId == pending.clientGeneratedID, "Queue and request IDs must match.")

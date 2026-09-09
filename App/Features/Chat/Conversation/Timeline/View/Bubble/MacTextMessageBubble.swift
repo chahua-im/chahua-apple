@@ -123,6 +123,12 @@ struct MacTextMessageBubble: View {
         }
     }
 
+    private var failureAction: (() -> Void)? {
+        guard row.isOutgoing, case .pending(let pending) = row.entry, pending.state == .failed,
+              let openFailedMessage = actions.openFailedMessage else { return nil }
+        return { openFailedMessage(pending.clientGeneratedID) }
+    }
+
     private func textContent(text: String, overlay: Bool) -> some View {
         MacBubbleTextContent(
             text: text, mentions: message?.mentions ?? [], currentUserID: context.currentUserID,
@@ -130,7 +136,8 @@ struct MacTextMessageBubble: View {
             metadata: MacBubbleMetadata(
                 row: row, isOverlay: overlay,
                 fontSize: overlay ? overlayMetadataSize : metadataSize
-            )
+            ),
+            failureAction: failureAction
         )
     }
 
@@ -228,23 +235,27 @@ struct MacTextMessageBubble: View {
 private struct MacBubbleRowLayout: Layout {
     let isOutgoing: Bool
 
-    private func dimensions(width: CGFloat?, subviews: Subviews) -> (row: CGSize, bubble: CGSize) {
+    func makeCache(subviews: Subviews) -> CGFloat {
+        guard subviews.count == 2 else { return 0 }
+        return subviews[0].sizeThatFits(.unspecified).width
+    }
+
+    private func dimensions(width: CGFloat?, idealWidth: CGFloat, subviews: Subviews) -> (row: CGSize, bubble: CGSize) {
         guard subviews.count == 2 else { return (.zero, .zero) }
-        let ideal = subviews[0].sizeThatFits(.unspecified)
         let avatarLane = MacBubbleMetrics.avatarSize + MacBubbleMetrics.avatarGap
-        let available = max(0, width ?? (ideal.width / MacBubbleMetrics.widthFraction + avatarLane))
+        let available = max(0, width ?? (idealWidth / MacBubbleMetrics.widthFraction + avatarLane))
         let cap = MacBubbleMetrics.maximumBubbleWidth(rowWidth: available + 2 * MacBubbleMetrics.rowHorizontalInset)
-        let bubble = subviews[0].sizeThatFits(.init(width: min(ideal.width, cap), height: nil))
+        let bubble = subviews[0].sizeThatFits(.init(width: min(idealWidth, cap), height: nil))
         return (CGSize(width: available, height: max(MacBubbleMetrics.avatarSize, bubble.height)), bubble)
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        dimensions(width: proposal.width, subviews: subviews).row
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat) -> CGSize {
+        dimensions(width: proposal.width, idealWidth: cache, subviews: subviews).row
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat) {
         guard subviews.count == 2 else { return }
-        let bubble = dimensions(width: bounds.width, subviews: subviews).bubble
+        let bubble = dimensions(width: bounds.width, idealWidth: cache, subviews: subviews).bubble
         let avatarSize = MacBubbleMetrics.avatarSize
         let avatarLane = avatarSize + MacBubbleMetrics.avatarGap
         subviews[0].place(
@@ -261,18 +272,23 @@ private struct MacBubbleRowLayout: Layout {
 /// Measure natural widths before proposing a bounded common column. Expanding
 /// alignment frames in a reply/thread must never choose the row's maximum width.
 private struct MacBubbleColumnLayout: Layout {
-    private func dimensions(proposal: ProposedViewSize, subviews: Subviews) -> CGSize {
-        let idealWidth = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+    // SwiftUI refreshes this cache when subviews change. Re-probing natural widths
+    // for each bounded proposal would repeatedly switch TextKit away from its wrapped layout.
+    func makeCache(subviews: Subviews) -> CGFloat {
+        subviews.reduce(CGFloat.zero) { max($0, $1.sizeThatFits(.unspecified).width) }
+    }
+
+    private func dimensions(proposal: ProposedViewSize, idealWidth: CGFloat, subviews: Subviews) -> CGSize {
         let width = min(idealWidth, max(0, proposal.width ?? idealWidth))
         let height = subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.init(width: width, height: nil)).height }
         return CGSize(width: width, height: height)
     }
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        dimensions(proposal: proposal, subviews: subviews)
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat) -> CGSize {
+        dimensions(proposal: proposal, idealWidth: cache, subviews: subviews)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat) {
         var y = bounds.minY
         for subview in subviews {
             let size = subview.sizeThatFits(.init(width: bounds.width, height: nil))

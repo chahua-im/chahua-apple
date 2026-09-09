@@ -28,6 +28,7 @@ final class ConversationTimelineModel: ObservableObject {
     private var window = TimelineWindow()
     private var observation: AnyCancellable?
     private var deferredCreates: [ConversationMessageStableKey: MessageResponse] = [:]
+    private var preHistoryAcknowledgementKeys: Set<ConversationMessageStableKey> = []
     private var unseenKeys: Set<ConversationMessageStableKey> = []
     private var deletedIDs: Set<String> = []
     private var snapshotTokens: Set<UUID> = []
@@ -45,7 +46,8 @@ final class ConversationTimelineModel: ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     private var olderTask: Task<Void, Never>?
     private var newerTask: Task<Void, Never>?
-    private var isWritingStore = false
+    // A committed pending publication invalidates the host's viewport revision before reveal runs.
+    private var canReuseLatestWindowAfterPendingChange = false
 
     init(chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource, messageStore: ConversationMessageStore, threadID: String? = nil, calendar: Calendar = .autoupdatingCurrent) {
         self.chatID = chatID
@@ -55,6 +57,7 @@ final class ConversationTimelineModel: ObservableObject {
         self.messageStore = messageStore
         builder = TimelineRowsBuilder(currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar)
         observeChanges()
+        publish()
     }
 
     /// Unlike fixture-oriented loadInitial, every appearance requests a fresh latest window.
@@ -75,6 +78,7 @@ final class ConversationTimelineModel: ObservableObject {
         observeChanges()
         lastInitialPosition = position
         state.content = .loadingInitial
+        publish()
         let requestGeneration = generation
         let task = Task { [weak self] in
             guard let self else { return }
@@ -93,9 +97,9 @@ final class ConversationTimelineModel: ObservableObject {
                     }
                 }
             } catch is CancellationError {
-                if generation == requestGeneration { state.content = .idle }
+                if generation == requestGeneration { state.content = .idle; publish() }
             } catch {
-                if generation == requestGeneration { state.content = .initialLoadFailed }
+                if generation == requestGeneration { state.content = .initialLoadFailed; publish() }
             }
         }
         initialTask = task
@@ -153,7 +157,8 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func userScrollBegan() {
-        state.live.followsLatest = false
+        canReuseLatestWindowAfterPendingChange = false
+        if state.live.followsLatest { state.live.followsLatest = false }
         let cancelledRequest = pendingScroll != nil
         pendingScroll = nil
         if recoveryTask != nil { invalidateRequests() }
@@ -165,6 +170,7 @@ final class ConversationTimelineModel: ObservableObject {
 
     func viewportDidChange(_ viewport: TimelineViewport, reason: TimelineViewportChangeReason, revision: Int) {
         guard revision == snapshotRevision, viewport.isValid(forRowCount: rows.count) else { return }
+        canReuseLatestWindowAfterPendingChange = false
         lastViewport = viewport
         viewportRevision = revision
         visibleAnchorID = nil
@@ -221,11 +227,9 @@ final class ConversationTimelineModel: ObservableObject {
 
     func dismissRepositionFailure() { state.repositionFailure = nil }
 
-    func enqueue(_ pending: PendingOutgoingMessage) async {
-        let canReuse = canReuseLatestWindow
-        isWritingStore = true
-        messageStore.enqueue(pending)
-        isWritingStore = false
+    func revealLatestAfterSend() async {
+        let canReuse = canReuseLatestWindow || canReuseLatestWindowAfterPendingChange
+        canReuseLatestWindowAfterPendingChange = false
         if state.content == .ready, canReuse {
             state.live.followsLatest = true
             publish(animateFollowing: true, position: .bottom(animated: true))
@@ -297,6 +301,7 @@ final class ConversationTimelineModel: ObservableObject {
         case .page(.older): window.prependOlder(page, accepting: accepts)
         case .page(.newer): window.appendNewer(page, accepting: accepts)
         }
+        preHistoryAcknowledgementKeys.removeAll()
         for event in events { reduce(event, replay: true) }
         absorbDeferredCreates()
         commit()
@@ -319,13 +324,25 @@ final class ConversationTimelineModel: ObservableObject {
             invalidateRequests()
             clearWindow()
         case .pendingChanged(let changedChatID):
-            guard changedChatID == chatID, !isWritingStore, state.content == .ready || state.content == .repositioning(.liveEdge) else { return }
+            guard changedChatID == chatID else { return }
+            canReuseLatestWindowAfterPendingChange = canReuseLatestWindowAfterPendingChange || canReuseLatestWindow
             publish()
         case .realtime(let event):
-            guard event.conversationChatID == chatID, state.content != .idle, state.content != .initialLoadFailed else { return }
+            guard event.conversationChatID == chatID else { return }
+            if isBeforeInitialHistory, case .message(let message) = event, accepts(message),
+               lastProjection?.entries.contains(where: {
+                   guard case .pending(let pending) = $0 else { return false }
+                   return pending.clientGeneratedID == message.clientGeneratedId && pending.senderID == message.sender.uid
+               }) == true {
+                preHistoryAcknowledgementKeys.insert(message.timelineStableKey)
+            }
             let appended = reduce(event, replay: false)
-            if state.content != .loadingInitial { publish(animateFollowing: appended && state.live.followsLatest) }
+            publish(animateFollowing: !isBeforeInitialHistory && appended && state.live.followsLatest)
         }
+    }
+
+    private var isBeforeInitialHistory: Bool {
+        state.content == .idle || state.content == .loadingInitial || state.content == .initialLoadFailed
     }
 
     /// Returns whether a genuinely new row was appended. Replay repairs data only.
@@ -339,10 +356,10 @@ final class ConversationTimelineModel: ObservableObject {
             let content = deletedIDs.contains(message.id) ? message.redactedForDeletion() : message
             let message = content.redactingReplyPreview(messageIDs: deletedIDs)
             let outcome: TimelineWindow.LiveInsertOutcome
-            if state.content == .loadingInitial && !replay { outcome = .deferred }
+            if isBeforeInitialHistory && !replay { outcome = .deferred }
             else { outcome = window.insertLive(message) }
             if outcome == .deferred { deferredCreates[message.timelineStableKey] = message }
-            if !replay, state.content != .loadingInitial, outcome != .duplicate,
+            if !replay, !isBeforeInitialHistory, outcome != .duplicate,
                outcome == .deferred || !state.live.followsLatest {
                 unseenKeys.insert(message.timelineStableKey)
                 state.live.unseenCount = unseenKeys.count
@@ -425,6 +442,8 @@ final class ConversationTimelineModel: ObservableObject {
         window = TimelineWindow()
         windowRevision &+= 1
         deferredCreates.removeAll()
+        preHistoryAcknowledgementKeys.removeAll()
+        canReuseLatestWindowAfterPendingChange = false
         unseenKeys.removeAll()
         deletedIDs.removeAll()
         state = ConversationTimelineState()
@@ -432,13 +451,11 @@ final class ConversationTimelineModel: ObservableObject {
         lastViewport = .empty
         visibleAnchorID = nil
         viewportRevision = nil
-        rows = []
-        lastProjection = nil
-        snapshotRevision &+= 1
-        updates.send(.init(revision: snapshotRevision, windowRevision: windowRevision, rows: [], animateFollowing: false, pendingScroll: nil))
+        publish(reset: true)
     }
 
     private func invalidateRequests() {
+        canReuseLatestWindowAfterPendingChange = false
         generation &+= 1
         initialTask?.cancel(); initialTask = nil
         recoveryTask?.cancel(); recoveryTask = nil
@@ -455,7 +472,13 @@ final class ConversationTimelineModel: ObservableObject {
     private func rowID(forServerID id: String) -> TimelineRowID? { window.index(ofServerID: id).map { .message(window.messages[$0].timelineStableKey) } }
 
     private func publish(animateFollowing: Bool = false, position: TimelineScrollIntent? = nil, reset: Bool = false) {
-        let projection = messageStore.projection(for: chatID, remoteMessages: window.messages, includePendingOutgoing: threadID == nil)
+        var remoteMessages = window.messages
+        if isBeforeInitialHistory {
+            for (key, message) in deferredCreates where preHistoryAcknowledgementKeys.contains(key) {
+                remoteMessages.append(message)
+            }
+        }
+        let projection = messageStore.projection(for: chatID, remoteMessages: remoteMessages, includePendingOutgoing: threadID == nil)
         let changed = projection != lastProjection || reset
         if changed {
             let newRows = builder.build(projection.entries)

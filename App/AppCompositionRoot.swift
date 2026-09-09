@@ -19,7 +19,14 @@ final class AppCompositionRoot {
             tokenStorage: KeychainTokenStorage(),
             mediaDirectory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("app.chahua.chat/MediaCache", isDirectory: true),
-            mediaNamespace: apiConfiguration.baseURL.absoluteString
+            mediaNamespace: apiConfiguration.baseURL.absoluteString,
+            localStoreFactory: { uid in
+                try await Task.detached {
+                    let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                    let directory = LocalStorageScope(apiBaseURL: apiConfiguration.baseURL, userID: uid).directory(under: root)
+                    return try ChahuaLocalStore(directory: directory)
+                }.value
+            }
         )
     }
 
@@ -29,7 +36,8 @@ final class AppCompositionRoot {
         credentialLoginClient: any CredentialLoginProviding,
         tokenStorage: any SessionTokenStorage,
         mediaDirectory: URL? = nil,
-        mediaNamespace: String = "injected"
+        mediaNamespace: String = "injected",
+        localStoreFactory: @escaping @Sendable (Int32) async throws -> ChahuaLocalStore
     ) {
         let sessionModel = AuthSessionModel(
             apiClient: apiClient,
@@ -40,7 +48,8 @@ final class AppCompositionRoot {
         let invalidToken: @MainActor @Sendable () async -> Void = { [weak sessionModel] in
             await sessionModel?.sessionDidExpire()
         }
-        chatStore = ChatStore(apiClient: apiClient, onInvalidToken: invalidToken)
+        let outgoingQueue = OutgoingMessageQueue(apiClient: apiClient, localStoreFactory: localStoreFactory, onInvalidToken: invalidToken)
+        chatStore = ChatStore(apiClient: apiClient, outgoingQueue: outgoingQueue, onInvalidToken: invalidToken)
         mediaContext = AppMediaContext(rootDirectory: mediaDirectory, namespace: mediaNamespace)
         realtimeCoordinator = RealtimeCoordinator(provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
         sessionObservation = sessionModel.$state.sink { [weak self] state in

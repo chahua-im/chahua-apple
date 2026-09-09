@@ -118,6 +118,131 @@ final class TimelineTableViewControllerTests: XCTestCase {
         }
     }
 
+    func testFailedButtonsRemainClickableAcrossResizeAndAcknowledgement() async throws {
+        let text = "Unsent text remains selectable.\n你好，世界 " + String(repeating: "Wrapped message text. ", count: 3)
+        let pending = ["failed-a", "failed-b"].enumerated().map { index, id in
+            PendingOutgoingMessage(
+                chatID: "chat", clientGeneratedID: id,
+                body: .init(messageType: .text, clientGeneratedId: id, message: text),
+                enqueuedAt: TimelineTestFixtures.date(second: index), senderID: 1, state: .failed
+            )
+        }
+        let page = try TimelineTestFixtures.page([])
+        let store = ConversationMessageStore()
+        store.replacePending(chatID: "chat", with: pending)
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: store
+        )
+        var selected: [String] = []
+        let controller = TimelineTableViewController(
+            model: model, actions: .init(openFailedMessage: { selected.append($0) })
+        )
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 900),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.orderFront(nil)
+        defer { window.close() }
+        await model.loadInitial()
+        let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        let measurer = TimelineRowMeasurer(parent: controller)
+
+        func renderedMessage(_ id: String) throws -> (NSView, MacBubbleTextView) {
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.stableMessageKey == .clientGenerated(id) })
+            table.scrollRowToVisible(index)
+            let cell = try XCTUnwrap(table.view(atColumn: 0, row: index, makeIfNecessary: true))
+            cell.layoutSubtreeIfNeeded()
+            let native = try XCTUnwrap(textViews(in: cell).compactMap { $0 as? MacBubbleTextView }.first)
+            XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
+            return (cell, native)
+        }
+
+        for width: CGFloat in [320, 600, 900] {
+            window.appearance = NSAppearance(named: width == 600 ? .darkAqua : .aqua)
+            window.setContentSize(NSSize(width: width, height: 900))
+            controller.view.layoutSubtreeIfNeeded()
+            controller.viewDidLayout()
+            controller.view.layoutSubtreeIfNeeded()
+            for item in pending {
+                let (cell, native) = try renderedMessage(item.clientGeneratedID)
+                let button = try XCTUnwrap(native.subviews.compactMap { $0 as? NSButton }.first)
+                XCTAssertEqual(button.accessibilityLabel(), "Failed to send. Retry options")
+                XCTAssertTrue(native.accessibilityChildren()?.contains { ($0 as? NSButton) === button } == true)
+                let geometry = native.contentLayout.geometry(for: native.bounds.width)
+                let metadata = try XCTUnwrap(native.contentLayout.metadata)
+                XCTAssertEqual(button.frame, metadata.symbolFrame(in: geometry.metadataFrame))
+                XCTAssertTrue(native.bounds.contains(button.frame))
+                XCTAssertTrue(cell.bounds.insetBy(dx: -1, dy: -1).contains(cell.convert(button.bounds, from: button)))
+                XCTAssertTrue(native.isSelectable)
+                native.setSelectedRange(NSRange(location: 0, length: 6))
+                XCTAssertEqual((native.string as NSString).substring(with: native.selectedRange()), "Unsent")
+                assertGlyphsVisible(native, in: cell)
+                button.performClick(nil)
+                XCTAssertEqual(selected.last, item.clientGeneratedID)
+                let bitmap = try XCTUnwrap(cell.bitmapImageRepForCachingDisplay(in: cell.bounds))
+                cell.cacheDisplay(in: cell.bounds, to: bitmap)
+                assertRedFailureSymbol(in: bitmap, frame: cell.convert(button.bounds, from: button), cell: cell)
+                let attachment = XCTAttachment(data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                                               uniformTypeIdentifier: "public.png")
+                attachment.name = "failed-message-\(item.clientGeneratedID)-\(Int(width))"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        XCTAssertEqual(selected, ["failed-a", "failed-b", "failed-a", "failed-b", "failed-a", "failed-b"])
+
+        controller.actions = .init(openFailedMessage: { selected.append("updated:\($0)") })
+        controller.view.layoutSubtreeIfNeeded()
+        let (_, refreshed) = try renderedMessage("failed-b")
+        try XCTUnwrap(refreshed.subviews.compactMap { $0 as? NSButton }.first).performClick(nil)
+        XCTAssertEqual(selected.last, "updated:failed-b")
+
+        controller.actions = .init()
+        controller.view.layoutSubtreeIfNeeded()
+        let (_, withoutAction) = try renderedMessage("failed-b")
+        XCTAssertTrue(withoutAction.subviews.compactMap { $0 as? NSButton }.isEmpty)
+        controller.actions = .init(openFailedMessage: { selected.append("updated:\($0)") })
+        controller.view.layoutSubtreeIfNeeded()
+        let (_, restoredAction) = try renderedMessage("failed-b")
+        try XCTUnwrap(restoredAction.subviews.compactMap { $0 as? NSButton }.first).performClick(nil)
+        XCTAssertEqual(selected.last, "updated:failed-b")
+
+        let acknowledgement = try TimelineTestFixtures.message(
+            id: "delivered-a", at: 0, clientGeneratedID: "failed-a", fields: ["message": text]
+        )
+        store.replacePending(chatID: "chat", with: [pending[1]], acknowledging: acknowledgement)
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        let (_, delivered) = try renderedMessage("failed-a")
+        XCTAssertTrue(delivered.subviews.compactMap { $0 as? NSButton }.isEmpty)
+        let (_, remaining) = try renderedMessage("failed-b")
+        try XCTUnwrap(remaining.subviews.compactMap { $0 as? NSButton }.first).performClick(nil)
+        XCTAssertEqual(selected.last, "updated:failed-b")
+    }
+
+    private func assertRedFailureSymbol(in bitmap: NSBitmapImageRep, frame: CGRect, cell: NSView,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        let frame = frame.intersection(cell.bounds)
+        guard !frame.isNull, !frame.isEmpty else {
+            return XCTFail("The failure button must lie inside the rendered cell.", file: file, line: line)
+        }
+        let scaleX = CGFloat(bitmap.pixelsWide) / cell.bounds.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / cell.bounds.height
+        let top = cell.isFlipped ? frame.minY : cell.bounds.height - frame.maxY
+        var hasRedInk = false
+        for y in max(0, Int(top * scaleY)) ..< min(bitmap.pixelsHigh, Int(ceil((top + frame.height) * scaleY))) {
+            for x in max(0, Int(frame.minX * scaleX)) ..< min(bitmap.pixelsWide, Int(ceil(frame.maxX * scaleX))) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.redComponent > color.greenComponent + 0.2 && color.redComponent > color.blueComponent + 0.2 {
+                    hasRedInk = true
+                }
+            }
+        }
+        XCTAssertTrue(hasRedInk, "The failure button must render red ink inside its hit frame.", file: file, line: line)
+    }
+
     private func inspectRenderedMessage(
         text: String, senderID: Int32, widths: [CGFloat],
         appearance: NSAppearance.Name = .aqua,
@@ -258,11 +383,247 @@ final class TimelineTableViewControllerTests: XCTestCase {
         await referenceModel.loadInitial()
         let referenceScroll = try XCTUnwrap(reference.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let referenceTable = try XCTUnwrap(referenceScroll.documentView as? NSTableView)
+        try await waitForRowHeights(table, expected: model.rows.indices.map { referenceTable.rect(ofRow: $0).height }) {
+            XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1)
+        }
         for index in model.rows.indices {
             XCTAssertEqual(table.rect(ofRow: index).height, referenceTable.rect(ofRow: index).height, accuracy: 1,
                            "Offscreen rows must settle to the same geometry as a fresh timeline at the final width.")
         }
     }
+
+    func testSplitResizeEnvironmentDefersOffscreenRowsAndPreservesHistoryAnchor() async throws {
+        let page = try TimelineTestFixtures.page((0 ..< 80).map {
+            try TimelineTestFixtures.message(id: "\($0)", senderID: 2, at: $0,
+                text: String(repeating: "Wrapping text during divider dragging. ", count: 6))
+        })
+        let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore())
+        // Production mounts the native host inside an expanding conversation view,
+        // not as a zero-intrinsic-size representable at the window's root.
+        await model.loadInitial()
+        let root = { (isResizing: Bool) in
+            ConversationTimelineView(model: model, loadsInitialAutomatically: false)
+                .environment(\.isChatSplitResizing, isResizing)
+        }
+        let host = NSHostingController(rootView: root(false))
+        // The surrounding split layout owns the proposed size in production.
+        // Do not let the hosting controller resize this fixture's window to its
+        // content's preferred size while SwiftUI mounts the native controller.
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.setContentSize(NSSize(width: 800, height: 500))
+        host.view.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        window.orderFront(nil)
+        defer { window.close() }
+        host.view.needsLayout = true
+        host.view.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(timelineScrollView(in: host.view))
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        let controller = try XCTUnwrap(table.delegate as? TimelineTableViewController)
+        controller.viewDidLayout()
+        XCTAssertEqual(controller.view.bounds.width, 800, accuracy: 1)
+        XCTAssertEqual(scroll.contentView.bounds.height, 500, accuracy: 1)
+        guard table.numberOfRows == model.rows.count, scroll.documentVisibleRect.height > 0 else {
+            XCTFail("The production conversation container must install rows in a nonzero viewport before resizing.")
+            return
+        }
+        let measurer = TimelineRowMeasurer(parent: controller)
+        let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
+        let originalHeight = table.rect(ofRow: offscreen).height
+        XCTAssertGreaterThan(originalHeight, 0)
+        XCTAssertEqual(originalHeight,
+                       measurer.height(for: model.rows[offscreen], width: table.bounds.width, context: .init(currentUserID: 1)),
+                       accuracy: 1)
+        let anchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "20" })
+        model.userScrollBegan()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: anchor).minY + 12))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        let offset = table.rect(ofRow: anchor).minY - scroll.documentVisibleRect.minY
+        XCTAssertEqual(offset, -12, accuracy: 1)
+        XCTAssertFalse(NSLocationInRange(offscreen, table.rows(in: scroll.documentVisibleRect)))
+
+        // Exercise the same environment/representable path as the divider, without
+        // NSWindow live-resize notifications (a split drag never sends them).
+        host.rootView = root(true)
+        host.view.needsLayout = true
+        host.view.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.isSplitResizing, "SwiftUI must deliver the divider environment before its first width change.")
+        for width: CGFloat in [620, 420] {
+            window.setContentSize(NSSize(width: width, height: 500))
+            host.view.needsLayout = true
+            host.view.layoutSubtreeIfNeeded()
+            controller.viewDidLayout()
+            XCTAssertEqual(controller.view.bounds.width, width, accuracy: 1)
+            XCTAssertEqual(table.rect(ofRow: offscreen).height, originalHeight, accuracy: 1,
+                           "Divider updates must not remeasure the offscreen history.")
+            XCTAssertEqual(table.rect(ofRow: anchor).minY - scroll.documentVisibleRect.minY, offset, accuracy: 1)
+            let visible = table.rows(in: scroll.documentVisibleRect)
+            XCTAssertGreaterThan(visible.length, 0)
+            for index in visible.location ..< min(NSMaxRange(visible), model.rows.count) {
+                XCTAssertEqual(table.rect(ofRow: index).height,
+                               measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)),
+                               accuracy: 1)
+            }
+        }
+
+        // Moving to previously offscreen rows at an unchanged width must still
+        // replace their temporary heights before presenting the new viewport.
+        let newAnchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "50" })
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: newAnchor).minY + 12))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+        let newOffset = table.rect(ofRow: newAnchor).minY - scroll.documentVisibleRect.minY
+        XCTAssertEqual(newOffset, -12, accuracy: 1)
+        let visible = table.rows(in: scroll.documentVisibleRect)
+        XCTAssertGreaterThan(visible.length, 0)
+        for index in visible.location ..< min(NSMaxRange(visible), model.rows.count) {
+            XCTAssertEqual(table.rect(ofRow: index).height,
+                           measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)),
+                           accuracy: 1)
+        }
+        XCTAssertEqual(table.rect(ofRow: offscreen).height, originalHeight, accuracy: 1)
+
+        // GestureState resets this value for both mouse-up and cancellation.
+        host.rootView = root(false)
+        host.view.needsLayout = true
+        host.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        XCTAssertFalse(controller.isSplitResizing, "Ending the gesture must reach the same native controller.")
+        XCTAssertEqual(table.rect(ofRow: offscreen).height, originalHeight, accuracy: 1,
+                       "Mouse-up must yield before remeasuring the offscreen history.")
+        let expected = model.rows.map { measurer.height(for: $0, width: table.bounds.width, context: .init(currentUserID: 1)) }
+        try await waitForRowHeights(table, expected: expected) {
+            XCTAssertEqual(table.rect(ofRow: newAnchor).minY - scroll.documentVisibleRect.minY, newOffset, accuracy: 1)
+        }
+        XCTAssertGreaterThan(table.rect(ofRow: offscreen).height, originalHeight)
+        XCTAssertEqual(table.rect(ofRow: newAnchor).minY - scroll.documentVisibleRect.minY, newOffset, accuracy: 1)
+        XCTAssertFalse(model.state.live.followsLatest)
+    }
+
+    func testSplitAndWindowResizeStayIndependentUntilBothEnd() async throws {
+        let page = try TimelineTestFixtures.page((0 ..< 40).map {
+            try TimelineTestFixtures.message(id: "\($0)", senderID: 2, at: $0,
+                text: String(repeating: "Wrapping text during overlapping resize interactions. ", count: 5))
+        })
+        let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore())
+        let controller = TimelineTableViewController(model: model)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.orderFront(nil)
+        defer { window.close() }
+        await model.loadInitial()
+        let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
+        let measurer = TimelineRowMeasurer(parent: controller)
+
+        for splitEndsFirst in [true, false] {
+            window.setContentSize(NSSize(width: 800, height: 500))
+            controller.view.layoutSubtreeIfNeeded()
+            controller.viewDidLayout()
+            let originalHeight = table.rect(ofRow: offscreen).height
+            controller.isSplitResizing = true
+            NotificationCenter.default.post(name: NSWindow.willStartLiveResizeNotification, object: window)
+            window.setContentSize(NSSize(width: 420, height: 500))
+            controller.view.layoutSubtreeIfNeeded()
+            controller.viewDidLayout()
+            if splitEndsFirst {
+                controller.isSplitResizing = false
+            } else {
+                NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: window)
+            }
+            XCTAssertEqual(table.rect(ofRow: offscreen).height, originalHeight, accuracy: 1,
+                           "Ending one interaction must not settle while the other is active.")
+            if splitEndsFirst {
+                NotificationCenter.default.post(name: NSWindow.didEndLiveResizeNotification, object: window)
+            } else {
+                controller.isSplitResizing = false
+            }
+            let expected = model.rows.map { measurer.height(for: $0, width: table.bounds.width, context: .init(currentUserID: 1)) }
+            try await waitForRowHeights(table, expected: expected) {
+                XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1)
+            }
+            XCTAssertGreaterThan(table.rect(ofRow: offscreen).height, originalHeight)
+            XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1)
+        }
+    }
+    func testHeightSettlementSurvivesReentrantEditAndAnotherResize() async throws {
+        let page = try TimelineTestFixtures.page((0 ..< 120).map {
+            try TimelineTestFixtures.message(id: "\($0)", senderID: 2, at: $0,
+                text: String(repeating: "Text that reflows across multiple settlement batches. ", count: 6))
+        })
+        let store = ConversationMessageStore()
+        let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: store)
+        let controller = TimelineTableViewController(model: model)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        await model.loadInitial()
+        let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        let first = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
+        let anchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "50" })
+        let originalHeight = table.rect(ofRow: first).height
+        model.userScrollBegan()
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: anchor).minY + 12))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        controller.isSplitResizing = true
+        controller.view.setFrameSize(NSSize(width: 420, height: 500))
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        controller.isSplitResizing = false
+        let edited = try TimelineTestFixtures.message(id: "90", senderID: 2, at: 90,
+            text: String(repeating: "Edited while native height correction restores the reader. ", count: 20))
+        var delivered = false
+        let observation = NotificationCenter.default.publisher(for: NSView.boundsDidChangeNotification, object: scroll.contentView).sink { _ in
+            guard !delivered, table.rect(ofRow: first).height != originalHeight else { return }
+            delivered = true
+            store.apply(.messageUpdated(edited))
+        }
+        defer { observation.cancel() }
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while !delivered, ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertTrue(delivered, "Exercise a real reentrant edit while the settlement batch restores its anchor.")
+        controller.isSplitResizing = true
+        controller.view.setFrameSize(NSSize(width: 660, height: 500))
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        controller.isSplitResizing = false
+        let measurer = TimelineRowMeasurer(parent: controller)
+        let expected = model.rows.map { measurer.height(for: $0, width: table.bounds.width, context: .init(currentUserID: 1)) }
+        try await waitForRowHeights(table, expected: expected) {
+            XCTAssertEqual(table.rect(ofRow: anchor).minY - scroll.documentVisibleRect.minY, -12, accuracy: 1)
+        }
+        XCTAssertFalse(model.state.live.followsLatest)
+    }
+
+    private func waitForRowHeights(
+        _ table: NSTableView, expected: [CGFloat], checkViewport: () -> Void
+    ) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while expected.indices.contains(where: { abs(table.rect(ofRow: $0).height - expected[$0]) > 1 }) {
+            checkViewport()
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                XCTFail("Offscreen heights did not converge to exact final-width geometry.")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        checkViewport()
+    }
+
 
     func testResizingPreservesBottomAttachmentAndHistoryAnchor() async throws {
         let page = try TimelineTestFixtures.page((0 ..< 40).map {
@@ -499,6 +860,11 @@ final class TimelineTableViewControllerTests: XCTestCase {
 
 private func textViews(in view: NSView) -> [NSTextView] {
     (view as? NSTextView).map { [$0] } ?? [] + view.subviews.flatMap(textViews)
+}
+
+private func timelineScrollView(in view: NSView) -> NSScrollView? {
+    if let scroll = view as? NSScrollView, scroll.documentView is NSTableView { return scroll }
+    return view.subviews.lazy.compactMap(timelineScrollView).first
 }
 
 @MainActor

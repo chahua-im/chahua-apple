@@ -1,10 +1,48 @@
 #if os(macOS)
 import AppKit
+import SwiftUI
 import XCTest
 @testable import chahua_apple
 
 @MainActor
 final class MacBubbleTextLayoutTests: XCTestCase {
+    func testNativeTextPreservesSelectionAndUsesCurrentLinkActions() throws {
+        var opened: [String] = []
+        func content(_ prefix: String?) -> MacBubbleTextContent {
+            MacBubbleTextContent(
+                text: "Hello https://example.com", mentions: [], currentUserID: 1,
+                isOutgoing: false,
+                action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } }
+            )
+        }
+        let host = NSHostingView(rootView: content("first:"))
+        host.sizingOptions = []
+        host.frame = NSRect(x: 0, y: 0, width: 340, height: 100)
+        host.layoutSubtreeIfNeeded()
+        func textView(in view: NSView) -> MacBubbleTextView? {
+            if let text = view as? MacBubbleTextView { return text }
+            return view.subviews.lazy.compactMap { textView(in: $0) }.first
+        }
+        let text = try XCTUnwrap(textView(in: host))
+        let link = try XCTUnwrap(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
+        text.setSelectedRange(NSRange(location: 0, length: 5))
+        _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
+        XCTAssertEqual(opened, ["first:https://example.com"])
+
+        host.rootView = content("replacement:")
+        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 5))
+        _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
+        XCTAssertEqual(opened, ["first:https://example.com", "replacement:https://example.com"])
+
+        host.rootView = content(nil)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertNil(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
+        _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
+        XCTAssertEqual(opened, ["first:https://example.com", "replacement:https://example.com"])
+        XCTAssertEqual(text.string, "Hello https://example.com")
+    }
+
     func testShortTextHasCompactIdealWidthWithInlineMetadata() {
         let layout = makeLayout("Hello")
         let size = layout.idealSize
