@@ -179,7 +179,7 @@ struct ChatFloatingHeader: View {
                 .buttonStyle(.plain)
             }
             if showsAvatar {
-                AvatarView(url: avatarURL, displayName: title, diameter: 36)
+                AvatarView(url: avatarURL, displayName: title, diameter: 32)
                     .accessibilityHidden(true)
             }
             Text(title)
@@ -188,21 +188,21 @@ struct ChatFloatingHeader: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityAddTraits(.isHeader)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .frame(minHeight: 60)
+        .padding(.horizontal, 8)
+        .frame(minHeight: 42)
         .modifier(ChatGlassSurface(cornerRadius: 24))
     }
 }
 
-private struct ChatGlassSurface: ViewModifier {
+struct ChatGlassSurface: ViewModifier {
     let cornerRadius: CGFloat
+    var isInteractive = false
 
     @ViewBuilder
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
         if #available(macOS 26, iOS 26, *) {
-            content.glassEffect(.regular, in: shape)
+            content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
         } else {
             content
                 .background(.regularMaterial, in: shape)
@@ -229,7 +229,6 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .clipped()
             .environment(\.chatHeaderInset, headerHeight + 12)
             .overlay(alignment: .top) {
                 header()

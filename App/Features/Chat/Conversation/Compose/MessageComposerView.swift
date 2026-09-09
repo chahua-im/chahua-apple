@@ -8,56 +8,93 @@ struct MessageComposerView: View {
     let onSubmit: () -> Void
 
     private var canSubmit: Bool { isEnabled && canSend }
+    private var hasText: Bool { !text.isEmpty }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: ChahuaTheme.Spacing.xSmall) {
-            NativeComposerTextView(
-                text: $text,
-                maxHeight: maxHeight,
-                isEnabled: isEnabled,
-                onSubmit: submit
-            )
-            .background(surface)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(ChahuaTheme.separator, lineWidth: 1)
+        HStack(alignment: .bottom, spacing: 8) {
+            Button {} label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 20))
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
             }
-            .padding(.vertical, 4)
+            .disabled(true)
+            .accessibilityLabel("Attachments (unavailable)")
+            .modifier(ChatGlassSurface(cornerRadius: 22))
+
+            HStack(alignment: .bottom, spacing: 0) {
+                NativeComposerTextView(
+                    text: $text,
+                    maxHeight: max(36, maxHeight - 8),
+                    isEnabled: isEnabled,
+                    onSubmit: submit
+                )
+                .padding(.vertical, 4)
+
+                Button {} label: {
+                    Image(systemName: "face.smiling")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                }
+                .disabled(true)
+                .accessibilityLabel("Emoji (unavailable)")
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .modifier(ChatGlassSurface(cornerRadius: 22))
 
             Button(action: submit) {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(ChahuaTheme.accent, in: Circle())
+                Image(systemName: hasText ? "paperplane.fill" : "mic")
+                    .font(.system(size: 20))
+                    .foregroundStyle(hasText && canSubmit ? ChahuaTheme.accent : .secondary)
                     .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                    .contentShape(Circle())
             }
-            .buttonStyle(.plain)
-            .disabled(!canSubmit)
-            .opacity(canSubmit ? 1 : 0.5)
-            .accessibilityLabel("Send message")
+            .disabled(!hasText || !canSubmit)
+            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: hasText && canSubmit))
+            .accessibilityLabel(hasText ? Text("Send message") : Text("Voice message (unavailable)"))
             #if os(macOS)
             .focusable(false)
             #endif
-            .frame(width: 48)
         }
-        .padding(.vertical, ChahuaTheme.Spacing.small)
-        .padding(.horizontal, ChahuaTheme.Spacing.medium)
-        .background(surface)
-    }
-
-    private var surface: Color {
-        #if os(iOS)
-        Color(uiColor: .systemBackground)
-        #else
-        Color(nsColor: .windowBackgroundColor)
-        #endif
+        .buttonStyle(.plain)
+        .padding(12)
     }
 
     private func submit() {
         guard canSubmit else { return }
         onSubmit()
+    }
+}
+
+private struct ChatComposerInsetKey: EnvironmentKey {
+    nonisolated static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var chatComposerInset: CGFloat {
+        get { self[ChatComposerInsetKey.self] }
+        set { self[ChatComposerInsetKey.self] = newValue }
+    }
+}
+
+/// Keep the scroll viewport behind the composer, with clearance for its current height.
+struct ChatComposerOverlay<Composer: View>: ViewModifier {
+    @ViewBuilder let composer: () -> Composer
+    @State private var composerHeight: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.chatComposerInset, composerHeight)
+            .overlay(alignment: .bottom) {
+                composer()
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear
+                                .onAppear { composerHeight = geometry.size.height }
+                                .onChange(of: geometry.size.height) { composerHeight = $0 }
+                        }
+                    }
+            }
     }
 }

@@ -5,6 +5,7 @@ struct ConversationTimelineView: View {
     @Environment(\.mediaContext) private var mediaContext
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.chatHeaderInset) private var chatHeaderInset
+    @Environment(\.chatComposerInset) private var chatComposerInset
     var initialPosition: TimelineInitialPosition = .liveEdge
     var loadsInitialAutomatically = true
     var actions = TimelineBubbleActions()
@@ -12,6 +13,7 @@ struct ConversationTimelineView: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             content
+                .clipped()
             if canJumpToLiveEdge {
                 Button { Task { await model.jumpToLiveEdge() } } label: {
                     jumpToLatestSymbol
@@ -24,6 +26,7 @@ struct ConversationTimelineView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Jump to latest messages")
                 .padding(ChahuaTheme.Spacing.large)
+                .padding(.bottom, chatComposerInset)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -55,7 +58,9 @@ struct ConversationTimelineView: View {
                     }
                     .padding(.top, chatHeaderInset)
                 }
-                .overlay(alignment: .bottom) { newerEdgeOverlay }
+                .overlay(alignment: .bottom) {
+                    newerEdgeOverlay.padding(.bottom, chatComposerInset)
+                }
                 .overlay { if isRepositioning { ProgressView().padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.medium)) } }
                 .overlay(alignment: .top) {
                     if let failure = model.state.repositionFailure {
@@ -152,6 +157,7 @@ import UIKit
 struct TimelineHostView: UIViewControllerRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.chatHeaderInset) private var chatHeaderInset
+    @Environment(\.chatComposerInset) private var chatComposerInset
     let model: ConversationTimelineModel
     var actions = TimelineBubbleActions()
     var mediaContext: AppMediaContext?
@@ -161,6 +167,7 @@ struct TimelineHostView: UIViewControllerRepresentable {
         controller.mediaContext = mediaContext
         controller.colorScheme = colorScheme
         controller.headerInset = chatHeaderInset
+        controller.composerInset = chatComposerInset
         return controller
     }
 
@@ -169,6 +176,7 @@ struct TimelineHostView: UIViewControllerRepresentable {
         controller.actions = actions
         controller.colorScheme = colorScheme
         controller.headerInset = chatHeaderInset
+        controller.composerInset = chatComposerInset
     }
 }
 #elseif os(macOS)
@@ -177,6 +185,7 @@ struct TimelineHostView: NSViewControllerRepresentable {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isChatSplitResizing) private var isSplitResizing
     @Environment(\.chatHeaderInset) private var chatHeaderInset
+    @Environment(\.chatComposerInset) private var chatComposerInset
     let model: ConversationTimelineModel
     var actions = TimelineBubbleActions()
     var mediaContext: AppMediaContext?
@@ -187,6 +196,7 @@ struct TimelineHostView: NSViewControllerRepresentable {
         controller.mediaContext = mediaContext
         controller.colorScheme = colorScheme
         controller.headerInset = chatHeaderInset
+        controller.composerInset = chatComposerInset
         return controller
     }
 
@@ -196,6 +206,7 @@ struct TimelineHostView: NSViewControllerRepresentable {
         controller.actions = actions
         controller.colorScheme = colorScheme
         controller.headerInset = chatHeaderInset
+        controller.composerInset = chatComposerInset
     }
 
     static func dismantleNSViewController(_ controller: TimelineTableViewController, coordinator: ()) {

@@ -21,6 +21,10 @@ final class TimelineTableViewControllerTests: XCTestCase {
             Text("Chats")
         } detail: { _ in
             ConversationTimelineView(model: model, loadsInitialAutomatically: false)
+                .modifier(ChatComposerOverlay {
+                    MessageComposerView(text: .constant(""), maxHeight: 160,
+                                        isEnabled: true, canSend: false, onSubmit: {})
+                })
                 .modifier(ChatHeaderOverlay {
                     ChatFloatingHeader(title: "Conversation")
                         .padding(.top, ChatSplitMetrics.outerInset)
@@ -38,14 +42,14 @@ final class TimelineTableViewControllerTests: XCTestCase {
         defer { window.close() }
         host.view.layoutSubtreeIfNeeded()
         await model.loadInitial()
-        // Allow SwiftUI to mount the native host and deliver the measured header inset.
+        // Allow SwiftUI to mount the host and deliver both measured chrome insets.
         try await Task.sleep(for: .milliseconds(200))
         host.view.layoutSubtreeIfNeeded()
         let scroll = try XCTUnwrap(timelineScrollView(in: host.view))
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         XCTAssertEqual(table.numberOfRows, model.rows.count)
         XCTAssertGreaterThan(scroll.documentVisibleRect.height, 0)
-        XCTAssertEqual(table.bounds.maxY, scroll.documentVisibleRect.maxY, accuracy: 1,
+        XCTAssertEqual(table.bounds.maxY, scroll.documentVisibleRect.maxY - scroll.contentInsets.bottom, accuracy: 1,
                        "Opening must reveal the latest message: clip=\(scroll.contentView.bounds), visible=\(scroll.documentVisibleRect), insets=\(scroll.contentInsets)")
         XCTAssertTrue(model.state.live.followsLatest)
         XCTAssertTrue(model.state.live.isPinnedToBottom)

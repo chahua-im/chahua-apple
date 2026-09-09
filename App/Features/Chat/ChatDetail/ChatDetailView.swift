@@ -23,7 +23,7 @@ struct ChatDetailView: View {
     var body: some View {
         GeometryReader { geometry in
             ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: bubbleActions)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
+                .modifier(ChatComposerOverlay {
                     VStack(spacing: 0) {
                         if store.outgoingQueue.storageState == .failed || store.draftSaveFailed {
                             HStack {
@@ -32,10 +32,14 @@ struct ChatDetailView: View {
                                 Spacer(minLength: 8)
                                 Button("Retry") { Task { await store.retryLocalStorage() } }
                             }
+                            .padding(12)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                             .padding(.horizontal, 12)
-                            .padding(.top, 8)
                         } else if store.outgoingQueue.storageState == .loading {
-                            ProgressView("Loading saved messages…").controlSize(.small).padding(.top, 8)
+                            ProgressView("Loading saved messages…")
+                                .controlSize(.small)
+                                .padding(12)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                         }
                         MessageComposerView(
                             text: Binding(get: { store.draftText(chatID: chat.id) }, set: { store.setDraftText($0, chatID: chat.id) }),
@@ -50,8 +54,7 @@ struct ChatDetailView: View {
                             }
                         )
                     }
-                    .background(composerBackground)
-                }
+                })
         }
             .navigationTitle(chat.chatDisplayName)
             .onAppear { store.registerTimeline(model) }
@@ -91,13 +94,5 @@ struct ChatDetailView: View {
             // The queue surfaces local-storage errors and treats a late acknowledgement as a no-op.
             try? await store.outgoingQueue.retry(chatID: chat.id, clientGeneratedID: id, scope: scope)
         }
-    }
-
-    private var composerBackground: Color {
-        #if os(iOS)
-        Color(uiColor: .systemBackground)
-        #else
-        Color(nsColor: .windowBackgroundColor)
-        #endif
     }
 }

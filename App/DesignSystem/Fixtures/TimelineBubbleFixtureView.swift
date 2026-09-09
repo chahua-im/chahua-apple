@@ -13,6 +13,7 @@ struct TimelineBubbleFixtureView: View {
     @State private var handlersEnabled = true
     @State private var event = "No action"
     @State private var threadScope = false
+    @State private var draft = ""
 
     var body: some View {
         if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
@@ -54,6 +55,18 @@ struct TimelineBubbleFixtureView: View {
                     actions: actions
                 )
                     .id(ObjectIdentifier(model))
+                    .modifier(ChatComposerOverlay {
+                        MessageComposerView(
+                            text: $draft,
+                            maxHeight: 160,
+                            isEnabled: true,
+                            canSend: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            onSubmit: {
+                                event = "Submitted: \(draft)"
+                                draft = ""
+                            }
+                        )
+                    })
             } else if let error = fixture.error {
                 Text(error).textSelection(.enabled).padding()
             } else {

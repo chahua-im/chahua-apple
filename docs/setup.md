@@ -113,6 +113,8 @@ The expanded Apple chat shell uses a permanently visible, rounded material sideb
 
 On macOS/iOS 26, floating surfaces use native Liquid Glass; older systems use regular material. The conversation viewport extends behind the header and its top margin. A measured header height feeds native scroll-content and indicator insets, keeping the oldest message clear of the header without shrinking the viewport. Content is clipped before the floating header is overlaid, and sidebar content is rounded before glass is applied. Do not clip the enclosing panes: that cuts glass shadows into rectangular corners. Inactive compact panes are explicitly hidden and excluded from hit testing/accessibility.
 
+`ConversationTimelineView` owns clipping of the timeline content only. Neither `ChatHeaderOverlay` nor `ChatComposerOverlay` may clip its input: these modifiers nest, so clipping in either one can cut off another floating control's glass shadow at the rectangular detail boundary.
+
 Keep the floating sidebar above the detail pane in stacking order. The native timeline has an opaque background; drawing it over the sidebar shadow creates a hard color seam at the pane boundary even without clipping.
 
 On macOS, geometry-changing clip-view bounds notifications occur inside AppKit's layout transaction. Defer timeline placement to the controller's completed layout pass; scrolling within that notification can be overwritten by AppKit's top-inset adjustment. The opening regression test mounts the production SwiftUI split/header hierarchy and verifies that the latest message is bottom-aligned without user input.
@@ -120,6 +122,10 @@ On macOS, geometry-changing clip-view bounds notifications occur inside AppKit's
 For visual checks, inspect light and dark appearances, scroll messages behind the header, and scroll to the oldest edge to check its clearance. The split fixture keeps diagnostic controls in the sidebar so they do not interrupt the production underlap geometry.
 
 The jump-to-latest control uses a plain button with a circular interactive glass surface on macOS/iOS 26 and circular material on older systems. Keep the unread badge outside the glass effect; a default macOS button bezel adds an unwanted rectangular backdrop.
+
+The composer floats over the conversation with separate glass attachment/action circles and a rounded, growing text field containing the smiley. Its measured height becomes native bottom content/scroller clearance; the jump-to-latest control sits above it. Empty input shows the disabled microphone; any nonempty draft shows the paper-plane Send control, with whitespace-only drafts still unsendable. Text submission, Return/Shift-Return, and native input-method handling retain their existing behavior. Attachment, emoji, and voice features are intentionally disabled in this design-only pass.
+
+The local timeline fixture includes the production composer: submission records the draft in the diagnostic status and clears it without contacting the server. Check empty/nonempty transitions, multiline growth, light/dark appearance, and latest-message clearance when changing its height.
 
 The split diagnostic uses the production `ChatSplitLayout` and native timeline. Add `-fixture-split` and set `CHAHUA_PERFORMANCE_ROWS=300` to exercise a loaded history of wrapped messages alongside the media fixtures:
 

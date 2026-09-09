@@ -55,6 +55,14 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
             view.setNeedsLayout()
         }
     }
+    var composerInset: CGFloat = 0 {
+        didSet {
+            guard composerInset != oldValue, isViewLoaded else { return }
+            collectionView.contentInset.bottom = composerInset
+            collectionView.verticalScrollIndicatorInsets.bottom = composerInset
+            view.setNeedsLayout()
+        }
+    }
     private var measurer: TimelineRowMeasurer!
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
@@ -108,6 +116,8 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         collectionView.keyboardDismissMode = .interactive
         collectionView.contentInset.top = headerInset
         collectionView.verticalScrollIndicatorInsets.top = headerInset
+        collectionView.contentInset.bottom = composerInset
+        collectionView.verticalScrollIndicatorInsets.bottom = composerInset
         collectionView.register(TimelineCollectionViewCell.self, forCellWithReuseIdentifier: "timeline")
         measurer = TimelineRowMeasurer(parent: self)
         cancellable = model.updates.sink { [weak self] in self?.receive($0) }

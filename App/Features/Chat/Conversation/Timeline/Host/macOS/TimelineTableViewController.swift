@@ -103,6 +103,14 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             view.needsLayout = true
         }
     }
+    var composerInset: CGFloat = 0 {
+        didSet {
+            guard composerInset != oldValue, isViewLoaded else { return }
+            scrollView.contentInsets.bottom = composerInset
+            scrollView.scrollerInsets.bottom = composerInset
+            view.needsLayout = true
+        }
+    }
     private var measurer: TimelineRowMeasurer!
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
@@ -156,6 +164,8 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets.top = headerInset
         scrollView.scrollerInsets.top = headerInset
+        scrollView.contentInsets.bottom = composerInset
+        scrollView.scrollerInsets.bottom = composerInset
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.wheelWillScroll = { [weak self] in
             guard let self else { return }
