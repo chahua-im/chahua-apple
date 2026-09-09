@@ -34,26 +34,39 @@ struct AuthenticatedShell: View {
 
     private var adaptiveLayout: some View {
         ChatSplitLayout(hasSelection: selectedChatID != nil) { isSplit in
-            NavigationStack {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Chats")
+                        .font(.title2.bold())
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    Button {
+                        Task { await chatStore.refreshActiveChats() }
+                    } label: {
+                        Label("Refresh chats", systemImage: "arrow.clockwise")
+                            .labelStyle(.iconOnly)
+                    }
+                    .disabled(chatStore.state.isRefreshingChats)
+                    accountMenu
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .padding(16)
                 chatList(showsDisclosureIndicator: !isSplit)
-                    .navigationTitle("Chats")
-                    .toolbar { accountToolbar }
             }
         } detail: { isSplit in
-            NavigationStack {
-                detailContent
-                    .toolbar {
-                        if !isSplit {
-                            ToolbarItem(placement: .navigation) {
-                                Button {
-                                    selectedChatID = nil
-                                } label: {
-                                    Label("Chats", systemImage: "chevron.backward")
-                                }
-                            }
-                        }
+            detailContent
+                .modifier(ChatHeaderOverlay {
+                    if let chat = selectedChat {
+                        ChatFloatingHeader(
+                            title: chat.chatDisplayName,
+                            avatarURL: chat.chatAvatarURL,
+                            onBack: isSplit ? nil : { selectedChatID = nil }
+                        )
+                        .padding(isSplit ? 0 : 12)
+                        .padding(.top, isSplit ? ChatSplitMetrics.outerInset : 0)
                     }
-            }
+                })
         }
     }
 
@@ -106,11 +119,17 @@ struct AuthenticatedShell: View {
 
     @ToolbarContentBuilder private var accountToolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Menu("Account") {
-                Text(me.username)
-                Button("Sign out", role: .destructive, action: onSignOut)
-                    .disabled(isSigningOut)
-            }
+            accountMenu
+        }
+    }
+
+    private var accountMenu: some View {
+        Menu {
+            Text(me.username)
+            Button("Sign out", role: .destructive, action: onSignOut)
+                .disabled(isSigningOut)
+        } label: {
+            Label("Account", systemImage: "person.crop.circle")
         }
     }
 

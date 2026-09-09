@@ -1,4 +1,5 @@
 #if os(iOS)
+import ChahuaAPI
 import Combine
 import SwiftUI
 import UIKit
@@ -44,6 +45,14 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         didSet {
             guard isViewLoaded else { return }
             applyConversationBackground()
+        }
+    }
+    var headerInset: CGFloat = 0 {
+        didSet {
+            guard headerInset != oldValue, isViewLoaded else { return }
+            collectionView.contentInset.top = headerInset
+            collectionView.verticalScrollIndicatorInsets.top = headerInset
+            view.setNeedsLayout()
         }
     }
     private var measurer: TimelineRowMeasurer!
@@ -97,7 +106,9 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
-        collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "timeline")
+        collectionView.contentInset.top = headerInset
+        collectionView.verticalScrollIndicatorInsets.top = headerInset
+        collectionView.register(TimelineCollectionViewCell.self, forCellWithReuseIdentifier: "timeline")
         measurer = TimelineRowMeasurer(parent: self)
         cancellable = model.updates.sink { [weak self] in self?.receive($0) }
     }
@@ -145,9 +156,17 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     }
 
     private func updateMeasurementsForGeometry() {
-        guard geometry?.rowWidth != availableRowWidth else { return }
-        measurer.invalidateAll()
-        collectionView.reconfigureItems(at: collectionView.indexPathsForVisibleItems)
+        guard geometry != currentGeometry else { return }
+        let widthChanged = geometry?.rowWidth != availableRowWidth
+        if widthChanged { measurer.invalidateAll() }
+        // Height-only changes affect media bounds, not text. Offscreen measurements
+        // validate their viewport context when requested; retain text height caches.
+        let paths = collectionView.indexPathsForVisibleItems.filter { path in
+            guard !widthChanged else { return true }
+            guard rows.indices.contains(path.item), case .message(let message) = rows[path.item] else { return false }
+            return !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
+        }
+        if !paths.isEmpty { collectionView.reconfigureItems(at: paths) }
     }
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -155,18 +174,40 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "timeline", for: indexPath)
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "timeline", for: indexPath) as! TimelineCollectionViewCell
         let row = rows[indexPath.item]
-        cell.contentConfiguration = UIHostingConfiguration {
-            TimelineBubbleView(row: row, context: .init(isHighlighted: row.id == highlightedRowID), actions: actions, mediaContext: mediaContext)
-        }.margins(.all, 0)
+        cell.attach(to: self)
+        cell.hosting.rootView = TimelineBubbleView(row: row, context: rowContext(for: row), actions: actions, mediaContext: mediaContext)
         return cell
+    }
+
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        (cell as? TimelineCollectionViewCell)?.attach(to: self)
+    }
+
+    func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        (cell as? TimelineCollectionViewCell)?.detach()
     }
 
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
         // Flow layout can request metrics before the parent's viewDidLayoutSubviews runs.
         let width = availableRowWidth
-        return .init(width: width, height: measurer.height(for: rows[indexPath.item], width: width))
+        return .init(width: width, height: measurer.height(for: rows[indexPath.item], width: width, context: rowContext(for: rows[indexPath.item])))
+    }
+
+    private func rowContext(for row: TimelineRow) -> TimelineRowContext {
+        let hasMedia: Bool
+        if case .message(let message) = row {
+            hasMedia = !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
+        } else {
+            hasMedia = false
+        }
+        return .init(
+            isHighlighted: row.id == highlightedRowID,
+            viewportSize: hasMedia ? CGSize(width: currentGeometry.rowWidth, height: currentGeometry.size.height) : .zero,
+            currentUserID: model.currentUserID,
+            isThreadTimeline: model.threadID != nil
+        )
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

@@ -7,7 +7,8 @@ enum ChatSplitMetrics {
     static let minimumSidebarWidth: CGFloat = 280
     static let maximumSidebarWidth: CGFloat = 400
     static let minimumDetailWidth: CGFloat = 440
-    static let dividerWidth: CGFloat = 1
+    static let dividerWidth: CGFloat = 12
+    static let outerInset: CGFloat = 12
     static let accessibilityStep: CGFloat = 20
 }
 
@@ -29,6 +30,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     private let sidebar: (Bool) -> Sidebar
     private let detail: (Bool) -> Detail
 
+    @Environment(\.colorScheme) private var colorScheme
     @State private var preferredSidebarWidth = ChatSplitMetrics.initialSidebarWidth
     @State private var dragStartWidth: CGFloat?
     #if os(macOS)
@@ -48,17 +50,25 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     var body: some View {
         GeometryReader { proxy in
             let isSplit = proxy.size.width >= ChatSplitMetrics.splitThreshold
-            let sidebarWidth = effectiveSidebarWidth(for: proxy.size.width)
-            let detailWidth = max(0, proxy.size.width - sidebarWidth - ChatSplitMetrics.dividerWidth)
+            let inset = isSplit ? ChatSplitMetrics.outerInset : 0
+            let availableWidth = proxy.size.width - inset * 2
+            let sidebarWidth = effectiveSidebarWidth(for: availableWidth)
+            let detailWidth = max(0, availableWidth - sidebarWidth - ChatSplitMetrics.dividerWidth)
 
             HStack(spacing: 0) {
                 pane(
-                    sidebar(isSplit),
+                    sidebar(isSplit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: isSplit ? 24 : 0, style: .continuous))
+                        .modifier(ChatGlassSurface(cornerRadius: isSplit ? 24 : 0))
+                        .padding(.vertical, inset),
                     width: isSplit ? sidebarWidth : (hasSelection ? 0 : proxy.size.width),
                     isVisible: isSplit || !hasSelection
                 )
+                // Floating chrome must draw above the neighboring opaque timeline.
+                .zIndex(1)
 
-                splitDivider(isSplit: isSplit, availableWidth: proxy.size.width)
+                splitDivider(isSplit: isSplit, availableWidth: availableWidth)
                     .frame(width: isSplit ? ChatSplitMetrics.dividerWidth : 0)
                     .opacity(isSplit ? 1 : 0)
                     .allowsHitTesting(isSplit)
@@ -70,6 +80,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                     isVisible: isSplit || hasSelection
                 )
             }
+            .padding(.horizontal, inset)
             #if os(macOS)
             .environment(\.isChatSplitResizing, isSplit && isResizing)
             .onChange(of: isResizing) { resizing in
@@ -81,19 +92,20 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                 if !split { dragStartWidth = nil }
             }
         }
+        .background(ChahuaTheme.conversationBackground(for: colorScheme))
     }
 
     private func pane<Content: View>(_ content: Content, width: CGFloat, isVisible: Bool) -> some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .frame(width: max(0, width), alignment: .leading)
-            .clipped()
+            .opacity(isVisible ? 1 : 0)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
     }
 
     private func splitDivider(isSplit: Bool, availableWidth: CGFloat) -> some View {
-        Divider()
+        Color.clear
             .overlay {
                 Color.clear
                     .frame(width: 24)
@@ -147,5 +159,87 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
             availableWidth - ChatSplitMetrics.minimumDetailWidth - ChatSplitMetrics.dividerWidth
         )
         return min(max(width, ChatSplitMetrics.minimumSidebarWidth), maximumAllowed)
+    }
+}
+
+/// In-content chrome shared by the adaptive conversation and its diagnostic surface.
+struct ChatFloatingHeader: View {
+    let title: String
+    var avatarURL: URL?
+    var showsAvatar = true
+    var onBack: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let onBack {
+                Button(action: onBack) {
+                    Label("Chats", systemImage: "chevron.backward")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.plain)
+            }
+            if showsAvatar {
+                AvatarView(url: avatarURL, displayName: title, diameter: 36)
+                    .accessibilityHidden(true)
+            }
+            Text(title)
+                .font(.headline)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(minHeight: 60)
+        .modifier(ChatGlassSurface(cornerRadius: 24))
+    }
+}
+
+private struct ChatGlassSurface: ViewModifier {
+    let cornerRadius: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(macOS 26, iOS 26, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content
+                .background(.regularMaterial, in: shape)
+                .overlay { shape.strokeBorder(.primary.opacity(0.08)) }
+        }
+    }
+}
+
+private struct ChatHeaderInsetKey: EnvironmentKey {
+    nonisolated static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var chatHeaderInset: CGFloat {
+        get { self[ChatHeaderInsetKey.self] }
+        set { self[ChatHeaderInsetKey.self] = newValue }
+    }
+}
+
+/// Reserve scrollable breathing room, not layout space: rows travel behind the glass.
+struct ChatHeaderOverlay<Header: View>: ViewModifier {
+    @ViewBuilder let header: () -> Header
+    @State private var headerHeight: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .clipped()
+            .environment(\.chatHeaderInset, headerHeight + 12)
+            .overlay(alignment: .top) {
+                header()
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear
+                                .onAppear { headerHeight = geometry.size.height }
+                                .onChange(of: geometry.size.height) { headerHeight = $0 }
+                        }
+                    }
+            }
     }
 }

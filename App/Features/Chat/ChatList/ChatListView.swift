@@ -11,16 +11,6 @@ struct ChatListView: View {
     var body: some View {
         content
             .task { await store.loadActiveChats() }
-            #if os(macOS)
-            .toolbar {
-                Button {
-                    Task { await store.refreshActiveChats() }
-                } label: {
-                    Label("Refresh chats", systemImage: "arrow.clockwise")
-                }
-                .disabled(store.state.isRefreshingChats)
-            }
-            #endif
     }
 
     @ViewBuilder private var content: some View {
@@ -68,6 +58,7 @@ struct ChatListView: View {
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .refreshable { await store.refreshActiveChats() }
         }
     }

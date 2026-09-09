@@ -130,7 +130,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
             var previousBottom: CGFloat = 0
             for index in model.rows.indices {
                 let frame = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))).frame
-                let expectedHeight = referenceMeasurer.height(for: model.rows[index], width: width)
+                let expectedHeight = referenceMeasurer.height(for: model.rows[index], width: width, context: .init(currentUserID: 1))
                 XCTAssertEqual(frame.height, expectedHeight, accuracy: 1, "Row \(index) at width \(width)")
                 XCTAssertGreaterThanOrEqual(frame.minY, previousBottom - 0.5)
                 previousBottom = frame.maxY
@@ -148,7 +148,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         collection.layoutIfNeeded()
         let after = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.height
         XCTAssertGreaterThan(after, before)
-        XCTAssertEqual(after, referenceMeasurer.height(for: model.rows[index], width: collection.bounds.width), accuracy: 1)
+        XCTAssertEqual(after, referenceMeasurer.height(for: model.rows[index], width: collection.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
     }
 
     func testFailedMetadataMatchesMeasuredRowsAcrossResizeAndAcknowledgement() async throws {
@@ -201,7 +201,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
                 verticalFittingPriority: .fittingSizeLevel
             )
             XCTAssertEqual(cell.bounds.height, renderedSize.height, accuracy: 1)
-            XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: width), accuracy: 1,
+            XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: width, context: .init(currentUserID: 1)), accuracy: 1,
                            "The hidden measurer without actions must reserve the visible failure control.")
             let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
                 cell.layer.render(in: context.cgContext)
@@ -221,7 +221,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         collection.layoutIfNeeded()
         let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "delivered-text" })
         let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)))
-        XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: collection.bounds.width), accuracy: 1)
+        XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: collection.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
         let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
             cell.layer.render(in: context.cgContext)
         }
@@ -229,6 +229,66 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         attachment.name = "ios-acknowledged-message"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    func testReplyMediaRowsRemeasureWhenOnlyViewportHeightChanges() async throws {
+        let message = try TimelineTestFixtures.message(id: "reply-media", senderID: 2, at: 0, fields: [
+            "message": "Caption below the quoted message.",
+            "hasAttachments": true,
+            "attachments": [[
+                "id": "portrait", "url": "file:///missing-fixture.png", "kind": "image/png",
+                "size": 1, "fileName": "portrait.png", "width": 400, "height": 1600
+            ]],
+            "replyToMessage": [
+                "id": "quoted", "clientGeneratedId": "quoted-client",
+                "createdAt": "2026-09-01T00:00:00Z", "sender": ["uid": 3, "gender": 0, "name": "Quoted sender"],
+                "messageType": "text", "attachments": [], "mentions": [],
+                "isDeleted": false, "message": "Quoted text"
+            ],
+            "threadInfo": ["replyCount": 2]
+        ])
+        let source = BubbleSource(page: try TimelineTestFixtures.page([message]))
+        let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: true, source: source, messageStore: ConversationMessageStore())
+        let parent = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = parent
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let controller = TimelineCollectionViewController(model: model, actions: .init())
+        parent.addChild(controller)
+        parent.view.addSubview(controller.view)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        controller.didMove(toParent: parent)
+        await model.loadInitial()
+        try await Task.sleep(for: .milliseconds(200))
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.contentInsetAdjustmentBehavior = .never
+        let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "reply-media" })
+        let path = IndexPath(item: index, section: 0)
+        var heights: [CGFloat] = []
+        for height: CGFloat in [800, 400, 800] {
+            controller.view.frame.size.height = height
+            parent.view.layoutIfNeeded()
+            controller.viewDidLayoutSubviews()
+            try await Task.sleep(for: .milliseconds(100))
+            collection.scrollToItem(at: path, at: .top, animated: false)
+            collection.layoutIfNeeded()
+            let cell = try XCTUnwrap(collection.cellForItem(at: path))
+            let rendered = cell.contentView.systemLayoutSizeFitting(
+                CGSize(width: 400, height: 0), withHorizontalFittingPriority: .required,
+                verticalFittingPriority: .fittingSizeLevel
+            )
+            XCTAssertEqual(cell.bounds.height, rendered.height, accuracy: 1)
+            heights.append(cell.bounds.height)
+            let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { cell.layer.render(in: $0.cgContext) }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "ios-reply-media-viewport-\(Int(height))"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertGreaterThan(heights[0], heights[1] + 100, "Portrait media must shrink when the viewport height shrinks.")
+        XCTAssertEqual(heights[0], heights[2], accuracy: 1, "Returning to the original viewport must restore row geometry.")
     }
 
     private func setCategory(_ category: UIContentSizeCategory, on controller: UIViewController, parent: UIViewController) {

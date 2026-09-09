@@ -100,7 +100,7 @@ final class MediaHostingTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
         let measurer = TimelineRowMeasurer(parent: parent)
-        _ = measurer.height(for: row, width: 400)
+        _ = measurer.height(for: row, width: 400, context: .init())
         parent.view.layoutIfNeeded()
         #endif
 

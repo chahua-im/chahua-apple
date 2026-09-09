@@ -45,7 +45,7 @@ struct ChahuaApp: App {
 
     @ViewBuilder
     private var appRoot: some View {
-        #if DEBUG && os(macOS)
+        #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
             TimelineBubbleFixtureView()
         } else {

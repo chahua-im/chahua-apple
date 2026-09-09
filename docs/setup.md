@@ -76,26 +76,50 @@ xcodebuild test -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -conf
 xcodebuild test -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
 
-## Native macOS bubble checks
+## Shared native bubble checks
 
-The DEBUG-only native bubble timeline uses the production table host with local messages and generated PNG, GIF, and HEIC files. It does not initialize authentication or production networking:
+Both platforms use `TextMessageBubble` for sender, reply, media, body, and thread composition. `BubbleTextContent` shares mention/link formatting, TextKit geometry, metadata placement, and caches; only native text-view interaction and drawing use AppKit/UIKit adapters. macOS retains its direct text-only measurement fast path.
+
+iOS visible cells and measurement roots use the same `TimelineBubbleHostingController` with `safeAreaRegions = []`: the collection view owns screen insets, and scrolling a row under a safe-area boundary must not change its height. Both hosts supply viewport, current-user, and thread context. Viewport-height changes reflow media without discarding unrelated text-height caches.
+
+The DEBUG-only bubble timeline uses the production native host with local messages and generated PNG, GIF, and HEIC files. It does not initialize authentication or production networking:
 
 ```sh
 xcodebuild build -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=macOS,arch=arm64' -derivedDataPath /tmp/chahua-bubbles
 open -n /tmp/chahua-bubbles/Build/Products/Debug/chahua-apple.app --args -bubble-timeline
 ```
 
-The component gallery also links to this timeline. Toggle dark appearance, action hooks, and thread scope; use Queue, Sending, Fail, and Acknowledge to inspect pending-message transitions. Queue is intentionally single-use per fixture session. Video playback is deferred.
+On a booted iOS simulator:
 
-For a targeted launch, set `CHAHUA_FIXTURE_MESSAGE` to a fixture ID (for example, `fixture-0` for text, `fixture-10` for GIF/HEIC, or `fixture-19` for overflow galleries). The `-fixture-dark` argument starts in dark appearance.
+```sh
+xcodebuild build -project chahua-apple.xcodeproj -scheme 'Debug - Prod API' -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath /tmp/chahua-bubbles-ios
+xcrun simctl install booted /tmp/chahua-bubbles-ios/Build/Products/Debug-iphonesimulator/chahua-apple.app
+xcrun simctl launch --terminate-running-process booted app.chahua.chat -bubble-timeline
+```
+
+The component gallery links to this timeline on both platforms. Toggle dark appearance, action hooks, and thread scope; use Queue, Sending, Fail, and Acknowledge to inspect pending-message transitions. Queue is intentionally single-use per fixture session. Video playback is deferred; the existing iOS image loader remains static for animated images.
+
+For a targeted launch, set `CHAHUA_FIXTURE_MESSAGE` to a fixture ID (for example, `fixture-0` for text, `fixture-10` for GIF/HEIC, `fixture-19` for overflow galleries, or `fixture-24` for a text reply followed by a deleted quote). For `simctl launch`, prefix the environment variable with `SIMCTL_CHILD_`. The `-fixture-dark` argument starts in dark appearance.
 
 Use `fixture-6` to inspect image-only sender headers in both appearances: incoming headers use the normal incoming bubble background, and outgoing headers use blue with white text. Images retain their overlaid timestamps and tail-free shape; bare media without a sender, reply, or thread section remains background-free.
 
-`TimelineTableViewControllerTests` renders real native cells at 320, 600, and 900 points and retains PNG attachments in the XCTest result bundle. Its regressions check compact single/multiline bubbles, rendered glyph containment, caption/reply/thread reflow, dark timestamp visibility, scroll anchors, and complete row-height settlement after live resize. `MacBubbleTextLayoutTests` checks final-line metadata and drawing-appearance changes; `MacBubbleMediaLayoutTests` checks image bounds, missing dimensions, justified rows, and sixth-tile overflow.
+`TimelineTableViewControllerTests` renders real native cells at 320, 600, and 900 points and retains PNG attachments in the XCTest result bundle. Its regressions check compact single/multiline bubbles, rendered glyph containment, caption/reply/thread reflow, dark timestamp visibility, scroll anchors, and complete row-height settlement after live resize. `TimelineCollectionViewControllerTests` checks Dynamic Type, width changes, failed-message rendering/acknowledgement, and reply/media row measurements across viewport-height-only changes. `BubbleTextLayoutTests` runs shared final-line geometry checks on both platforms and native selection/action checks in each adapter; `BubbleMediaLayoutTests` checks image bounds, missing dimensions, justified rows, and sixth-tile overflow on both.
 
 Do not treat finding an `NSTextView`, a successful build, or a passing measurement-only test as visual proof. Inspect the native window or rendered XCTest attachments. Keep animated-image windows unoccluded while checking animation: AppKit can suspend animations in covered windows.
 
 ## macOS scrolling and divider regression checks
+
+The expanded Apple chat shell uses a permanently visible, rounded material sidebar and an in-content floating conversation header. Both are inset 12 points from the content edges; drag the 12-point gap to resize the sidebar (280–400 points, constrained to preserve a 440-point conversation). The gap also supports accessibility width adjustment. Refresh and Account are inside the sidebar. Compact iPad windows retain a Chats back button, and iPhone retains stack navigation. The split diagnostic renders the same sidebar surface and conversation header; its controls and messages are local fixtures rather than a signed-in session.
+
+On macOS/iOS 26, floating surfaces use native Liquid Glass; older systems use regular material. The conversation viewport extends behind the header and its top margin. A measured header height feeds native scroll-content and indicator insets, keeping the oldest message clear of the header without shrinking the viewport. Content is clipped before the floating header is overlaid, and sidebar content is rounded before glass is applied. Do not clip the enclosing panes: that cuts glass shadows into rectangular corners. Inactive compact panes are explicitly hidden and excluded from hit testing/accessibility.
+
+Keep the floating sidebar above the detail pane in stacking order. The native timeline has an opaque background; drawing it over the sidebar shadow creates a hard color seam at the pane boundary even without clipping.
+
+On macOS, geometry-changing clip-view bounds notifications occur inside AppKit's layout transaction. Defer timeline placement to the controller's completed layout pass; scrolling within that notification can be overwritten by AppKit's top-inset adjustment. The opening regression test mounts the production SwiftUI split/header hierarchy and verifies that the latest message is bottom-aligned without user input.
+
+For visual checks, inspect light and dark appearances, scroll messages behind the header, and scroll to the oldest edge to check its clearance. The split fixture keeps diagnostic controls in the sidebar so they do not interrupt the production underlap geometry.
+
+The jump-to-latest control uses a plain button with a circular interactive glass surface on macOS/iOS 26 and circular material on older systems. Keep the unread badge outside the glass effect; a default macOS button bezel adds an unwanted rectangular backdrop.
 
 The split diagnostic uses the production `ChatSplitLayout` and native timeline. Add `-fixture-split` and set `CHAHUA_PERFORMANCE_ROWS=300` to exercise a loaded history of wrapped messages alongside the media fixtures:
 

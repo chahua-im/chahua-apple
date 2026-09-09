@@ -1,8 +1,7 @@
 import ChahuaAPI
 import CoreGraphics
 
-#if os(macOS)
-enum MacBubbleMediaLayout {
+enum BubbleMediaLayout {
     struct Cell: Hashable {
         let attachment: AttachmentResponse
         let frame: CGRect
@@ -150,5 +149,3 @@ enum MacBubbleMediaLayout {
         return result + rows.reduce(0) { $0 + abs($1 - average) }
     }
 }
-
-#endif

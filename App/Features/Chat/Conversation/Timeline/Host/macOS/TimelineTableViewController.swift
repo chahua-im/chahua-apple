@@ -95,6 +95,14 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             finishResizeIfPossible()
         }
     }
+    var headerInset: CGFloat = 0 {
+        didSet {
+            guard headerInset != oldValue, isViewLoaded else { return }
+            scrollView.contentInsets.top = headerInset
+            scrollView.scrollerInsets.top = headerInset
+            view.needsLayout = true
+        }
+    }
     private var measurer: TimelineRowMeasurer!
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
@@ -145,6 +153,9 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         scrollView.hasVerticalScroller = true
         scrollView.horizontalScrollElasticity = .none
         scrollView.drawsBackground = false
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets.top = headerInset
+        scrollView.scrollerInsets.top = headerInset
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.wheelWillScroll = { [weak self] in
             guard let self else { return }
@@ -634,6 +645,13 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
 
     @objc private func boundsChanged() {
         guard !applying, !settingScrollOrigin, !handlingWheel else { return }
+        // Bounds notifications arrive inside AppKit's inset/resize transaction.
+        // Place messages after layout, otherwise that transaction can overwrite
+        // the initial bottom position with its own top-inset adjustment.
+        guard installedGeometry == currentGeometry else {
+            view.needsLayout = true
+            return
+        }
         installIfPossible()
         if !liveScrolling { reportViewport(reason: .layout) }
     }

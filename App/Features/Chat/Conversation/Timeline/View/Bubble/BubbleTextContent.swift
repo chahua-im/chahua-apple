@@ -1,56 +1,55 @@
-#if os(macOS)
-import AppKit
 import ChahuaAPI
 import SwiftUI
 
-struct MacBubbleTextContent: NSViewRepresentable {
+#if os(macOS)
+import AppKit
+typealias BubbleNativeFont = NSFont
+typealias BubbleNativeColor = NSColor
+typealias BubbleNativeImage = NSImage
+#else
+import UIKit
+typealias BubbleNativeFont = UIFont
+typealias BubbleNativeColor = UIColor
+typealias BubbleNativeImage = UIImage
+#endif
+
+struct BubbleTextContent {
     let text: String
     let mentions: [MentionInfo]
     let currentUserID: Int32?
     let isOutgoing: Bool
     let action: ((URL) -> Void)?
     var mentionAction: ((Int32) -> Void)? = nil
-    var metadata: MacBubbleMetadata? = nil
+    var metadata: BubbleMetadata? = nil
     var failureAction: (() -> Void)? = nil
+    #if os(macOS)
     @ScaledMetric(relativeTo: .body) private var fontSize = NSFont.preferredFont(forTextStyle: .body).pointSize
+    #else
+    @ScaledMetric(relativeTo: .body) private var fontSize = UIFont.preferredFont(
+        forTextStyle: .body, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
+    ).pointSize
+    #endif
 
-    func makeNSView(context: Context) -> MacBubbleTextView {
-        let view = MacBubbleTextView()
-        view.delegate = context.coordinator
-        return view
-    }
-
-    func updateNSView(_ view: MacBubbleTextView, context: Context) {
-        context.coordinator.openLink = action
-        context.coordinator.openMention = mentionAction
+    func update(_ layout: BubbleTextLayout, coordinator: Coordinator) -> Bool {
+        coordinator.openLink = action
+        coordinator.openMention = mentionAction
         let input = TextInput(
             text: text, mentions: mentions, currentUserID: currentUserID,
             isOutgoing: isOutgoing, fontSize: fontSize,
             linksEnabled: action != nil, mentionsEnabled: mentionAction != nil
         )
         let attributed: NSAttributedString?
-        if context.coordinator.textInput != input {
+        if coordinator.textInput != input {
             attributed = Self.attributedText(
                 text: text, mentions: mentions, currentUserID: currentUserID,
                 isOutgoing: isOutgoing, font: .systemFont(ofSize: fontSize),
                 linksEnabled: input.linksEnabled, mentionsEnabled: input.mentionsEnabled
             )
-            context.coordinator.textInput = input
+            coordinator.textInput = input
         } else {
             attributed = nil
         }
-        let geometryChanged = view.contentLayout.update(attributedText: attributed, metadata: metadata)
-        view.failureAction = failureAction
-        if geometryChanged {
-            view.needsLayout = true
-            view.invalidateIntrinsicContentSize()
-        }
-        view.needsDisplay = true
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MacBubbleTextView, context: Context) -> CGSize? {
-        let ideal = nsView.contentLayout.idealSize
-        return nsView.contentLayout.geometry(for: min(ideal.width, proposal.width ?? ideal.width)).size
+        return layout.update(attributedText: attributed, metadata: metadata)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -67,20 +66,19 @@ struct MacBubbleTextContent: NSViewRepresentable {
         let mentionsEnabled: Bool
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject {
         var openLink: ((URL) -> Void)?
         var openMention: ((Int32) -> Void)?
         var textInput: TextInput?
 
-        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            guard let storage = textView.textStorage, charIndex < storage.length else { return true }
-            if let uid = storage.attribute(.macMentionID, at: charIndex, effectiveRange: nil) as? NSNumber {
+        func activateLink(in storage: NSAttributedString, at charIndex: Int) {
+            guard charIndex >= 0, charIndex < storage.length,
+                  storage.attribute(.link, at: charIndex, effectiveRange: nil) != nil else { return }
+            if let uid = storage.attribute(.bubbleMentionID, at: charIndex, effectiveRange: nil) as? NSNumber {
                 openMention?(uid.int32Value)
-            } else if let url = storage.attribute(.macURL, at: charIndex, effectiveRange: nil) as? URL {
+            } else if let url = storage.attribute(.bubbleURL, at: charIndex, effectiveRange: nil) as? URL {
                 openLink?(url)
             }
-            // Never let AppKit open a URL itself, including when a handler was removed.
-            return true
         }
     }
 
@@ -104,15 +102,15 @@ struct MacBubbleTextContent: NSViewRepresentable {
 
     static func attributedText(
         text: String, mentions: [MentionInfo], currentUserID: Int32?, isOutgoing: Bool,
-        font: NSFont = .preferredFont(forTextStyle: .body),
+        font: BubbleNativeFont = .preferredFont(forTextStyle: .body),
         linksEnabled: Bool = false, mentionsEnabled: Bool = false
     ) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.minimumLineHeight = ceil(font.pointSize * 1.4)
         paragraph.maximumLineHeight = paragraph.minimumLineHeight
         paragraph.lineBreakMode = .byWordWrapping
-        let foreground: NSColor = isOutgoing ? .white : .labelColor
-        let base: [NSAttributedString.Key: Any] = [.font: font, .macBodyFont: font, .foregroundColor: foreground, .paragraphStyle: paragraph]
+        let foreground: BubbleNativeColor = isOutgoing ? .white : bubbleLabelColor
+        let base: [NSAttributedString.Key: Any] = [.font: font, .bubbleBodyFont: font, .foregroundColor: foreground, .paragraphStyle: paragraph]
         let output = NSMutableAttributedString(string: "")
         let source = text as NSString
         var names: [Int32: String] = [:]
@@ -129,7 +127,7 @@ struct MacBubbleTextContent: NSViewRepresentable {
                     range.length -= 1
                 }
                 guard range.length > 0, let url = URL(string: string.substring(with: range)) else { continue }
-                run.addAttributes([.macURL: url, .underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
+                run.addAttributes([.bubbleURL: url, .underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
                 if linksEnabled { run.addAttribute(.link, value: url, range: range) }
             }
             output.append(run)
@@ -144,19 +142,19 @@ struct MacBubbleTextContent: NSViewRepresentable {
                 offset = NSMaxRange(match.range)
                 continue
             }
-            let mentionFont = NSFont.systemFont(ofSize: font.pointSize * 0.9, weight: .semibold)
+            let mentionFont = BubbleNativeFont.systemFont(ofSize: font.pointSize * 0.9, weight: .semibold)
             let isSelf = uid == currentUserID
-            let tint: NSColor = isOutgoing ? .white : .systemBlue
+            let tint: BubbleNativeColor = isOutgoing ? .white : .systemBlue
             // En spaces with an 8pt font reserve exactly four points at either edge.
             // They remain part of the selectable run rather than separate wrapping views.
             let run = NSMutableAttributedString(string: "\u{2002}@\(names[uid] ?? "User \(uid)")\u{2002}", attributes: base)
             let range = NSRange(location: 0, length: run.length)
             run.addAttributes([
-                .font: mentionFont, .foregroundColor: isOutgoing ? NSColor.white : tint,
-                .macMentionID: NSNumber(value: uid), .macMentionTint: tint.withAlphaComponent(isSelf ? 0.28 : 0.14)
+                .font: mentionFont, .foregroundColor: tint,
+                .bubbleMentionID: NSNumber(value: uid), .bubbleMentionTint: tint.withAlphaComponent(isSelf ? 0.28 : 0.14)
             ], range: range)
             for location in [0, run.length - 1] {
-                run.addAttribute(.font, value: NSFont.systemFont(ofSize: 8), range: NSRange(location: location, length: 1))
+                run.addAttribute(.font, value: BubbleNativeFont.systemFont(ofSize: 8), range: NSRange(location: location, length: 1))
             }
             if mentionsEnabled, let target = URL(string: "chahua-mention://\(uid)") {
                 run.addAttribute(.link, value: target, range: range)
@@ -169,14 +167,14 @@ struct MacBubbleTextContent: NSViewRepresentable {
     }
 }
 
-struct MacBubbleMetadata {
+struct BubbleMetadata {
     let time: String
     let state: ConversationMessageDisplayState?
     let size: CGSize
     private let attributedTime: NSAttributedString
     private let textSize: CGSize
     private let symbolSize: CGFloat
-    let symbol: NSImage?
+    let symbol: BubbleNativeImage?
     private let textOpacity: CGFloat
 
     init(time: String, state: ConversationMessageDisplayState?, isOutgoing: Bool, isOverlay: Bool = false, fontSize: CGFloat = 12) {
@@ -184,9 +182,9 @@ struct MacBubbleMetadata {
         self.state = state
         textOpacity = isOverlay ? 1 : 0.7
         symbolSize = fontSize
-        let foreground: NSColor = isOutgoing || isOverlay ? .white : .labelColor
+        let foreground: BubbleNativeColor = isOutgoing || isOverlay ? .white : bubbleLabelColor
         let text = NSAttributedString(string: time, attributes: [
-            .font: NSFont.systemFont(ofSize: fontSize),
+            .font: BubbleNativeFont.systemFont(ofSize: fontSize),
             .foregroundColor: foreground
         ])
         attributedTime = text
@@ -200,10 +198,16 @@ struct MacBubbleMetadata {
             case .delivered: name = "checkmark.circle.fill"
             case .failed: name = "exclamationmark.circle.fill"
             }
-            let color = state == .failed ? NSColor.systemRed : foreground.withAlphaComponent(isOverlay ? 1 : 0.7)
+            let color = state == .failed ? BubbleNativeColor.systemRed : foreground.withAlphaComponent(isOverlay ? 1 : 0.7)
+            #if os(macOS)
             let configuration = NSImage.SymbolConfiguration(pointSize: fontSize, weight: .regular)
                 .applying(.init(paletteColors: [color]))
             symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+            #else
+            let configuration = UIImage.SymbolConfiguration(pointSize: fontSize, weight: .regular)
+                .applying(UIImage.SymbolConfiguration(paletteColors: [color]))
+            symbol = UIImage(systemName: name, withConfiguration: configuration)
+            #endif
         } else {
             symbol = nil
         }
@@ -241,21 +245,30 @@ struct MacBubbleMetadata {
 
     func draw(in frame: CGRect, drawsSymbol: Bool = true) {
         guard frame.width > 0, size.width > 0 else { return }
-        NSGraphicsContext.saveGraphicsState()
-        let transform = NSAffineTransform()
-        transform.translateX(by: frame.minX, yBy: frame.minY)
-        transform.scale(by: min(1, frame.width / size.width))
-        transform.concat()
-        NSGraphicsContext.current?.cgContext.setAlpha(textOpacity)
+        #if os(macOS)
+        let context = NSGraphicsContext.current?.cgContext
+        #else
+        let context = UIGraphicsGetCurrentContext()
+        #endif
+        guard let context else { return }
+        context.saveGState()
+        context.translateBy(x: frame.minX, y: frame.minY)
+        let scale = min(1, frame.width / size.width)
+        context.scaleBy(x: scale, y: scale)
+        context.setAlpha(textOpacity)
         attributedTime.draw(at: CGPoint(x: 0, y: (size.height - textSize.height) / 2))
-        NSGraphicsContext.restoreGraphicsState()
+        context.restoreGState()
         if drawsSymbol {
+            #if os(macOS)
             symbol?.draw(in: symbolFrame(in: frame), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            #else
+            symbol?.draw(in: symbolFrame(in: frame))
+            #endif
         }
     }
 }
 
-struct MacBubbleTextGeometry {
+struct BubbleTextGeometry {
     let size: CGSize
     let bodyBounds: CGRect
     let lastLineBounds: CGRect
@@ -265,15 +278,15 @@ struct MacBubbleTextGeometry {
 
 /// TextKit is the single source of line breaks and height for both the table measurer
 /// and the selectable on-screen text view. Metadata is drawn outside the text storage.
-final class MacBubbleTextLayout {
+final class BubbleTextLayout {
     let storage = NSTextStorage()
-    let layoutManager = MacMentionLayoutManager()
+    let layoutManager = BubbleMentionLayoutManager()
     let textContainer = NSTextContainer(size: .zero)
-    private(set) var metadata: MacBubbleMetadata?
-    private var cachedGeometry: MacBubbleTextGeometry?
+    private(set) var metadata: BubbleMetadata?
+    private var cachedGeometry: BubbleTextGeometry?
     private var cachedIdealSize: CGSize?
 
-    init(attributedText: NSAttributedString = NSAttributedString(string: ""), metadata: MacBubbleMetadata? = nil) {
+    init(attributedText: NSAttributedString = NSAttributedString(string: ""), metadata: BubbleMetadata? = nil) {
         textContainer.lineFragmentPadding = 0
         textContainer.widthTracksTextView = false
         textContainer.heightTracksTextView = false
@@ -283,7 +296,7 @@ final class MacBubbleTextLayout {
     }
 
     @discardableResult
-    func update(attributedText: NSAttributedString? = nil, metadata: MacBubbleMetadata?) -> Bool {
+    func update(attributedText: NSAttributedString? = nil, metadata: BubbleMetadata?) -> Bool {
         var textChanged = false
         if let attributedText, !storage.isEqual(to: attributedText) {
             storage.setAttributedString(attributedText)
@@ -299,8 +312,8 @@ final class MacBubbleTextLayout {
     }
 
     private var metadataGap: CGFloat {
-        let font = storage.length > 0 ? storage.attribute(.macBodyFont, at: 0, effectiveRange: nil) as? NSFont ?? storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont : nil
-        return ("0" as NSString).size(withAttributes: [.font: font ?? NSFont.preferredFont(forTextStyle: .body)]).width * 1.5
+        let font = storage.length > 0 ? storage.attribute(.bubbleBodyFont, at: 0, effectiveRange: nil) as? BubbleNativeFont ?? storage.attribute(.font, at: 0, effectiveRange: nil) as? BubbleNativeFont : nil
+        return ("0" as NSString).size(withAttributes: [.font: font ?? BubbleNativeFont.preferredFont(forTextStyle: .body)]).width * 1.5
     }
 
     var idealSize: CGSize {
@@ -312,16 +325,21 @@ final class MacBubbleTextLayout {
         return size
     }
 
-    func geometry(for proposedWidth: CGFloat) -> MacBubbleTextGeometry {
+    func fittingSize(width: CGFloat?) -> CGSize {
+        let ideal = idealSize
+        return geometry(for: min(ideal.width, width ?? ideal.width)).size
+    }
+
+    func geometry(for proposedWidth: CGFloat) -> BubbleTextGeometry {
         let width = proposedWidth.isFinite ? max(1, proposedWidth) : 1_000_000
         if let cachedGeometry, cachedGeometry.size.width == width { return cachedGeometry }
-        textContainer.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
+        textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         var bodyBounds = storage.length == 0 ? CGRect.zero : layoutManager.usedRect(for: textContainer)
         var lastLine = CGRect.zero
         let glyphs = layoutManager.glyphRange(for: textContainer)
-        // NSTextView may extend used line fragments to the container edge for
-        // selection. Those rectangles are not the intrinsic width of the glyphs.
+        // Native text views may extend used line fragments to the container edge
+        // for selection. Those rectangles are not the intrinsic glyph width.
         let text = storage.string as NSString
         var maximumGlyphX: CGFloat = 0
         layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, range, _ in
@@ -349,7 +367,7 @@ final class MacBubbleTextLayout {
         let inline = metadata != nil && storage.length > 0 && lastLine.maxX + metadataGap + metadataSize.width <= width
         let metadataY = inline ? max(lastLine.minY, lastLine.maxY - metadataSize.height) : ceil(bodyBounds.maxY)
         let metadataFrame = metadata == nil ? CGRect.zero : CGRect(x: width - metadataSize.width, y: metadataY, width: metadataSize.width, height: metadataSize.height)
-        let result = MacBubbleTextGeometry(
+        let result = BubbleTextGeometry(
             size: CGSize(width: width, height: ceil(max(bodyBounds.maxY, metadataFrame.maxY))),
             bodyBounds: bodyBounds, lastLineBounds: lastLine,
             metadataFrame: metadataFrame, metadataIsInline: inline
@@ -359,120 +377,44 @@ final class MacBubbleTextLayout {
     }
 }
 
-final class MacBubbleTextView: NSTextView {
-    let contentLayout: MacBubbleTextLayout
-    var failureAction: (() -> Void)? {
-        didSet { updateFailureButton() }
-    }
-    private var failureButton: NSButton?
 
-    init() {
-        let layout = MacBubbleTextLayout()
-        contentLayout = layout
-        super.init(frame: .zero, textContainer: layout.textContainer)
-        isEditable = false
-        isSelectable = true
-        isRichText = true
-        drawsBackground = false
-        textContainerInset = .zero
-        isHorizontallyResizable = false
-        isVerticallyResizable = false
-        layout.textContainer.widthTracksTextView = false
-        layout.textContainer.heightTracksTextView = false
-        linkTextAttributes = [:]
-        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override var intrinsicContentSize: NSSize { contentLayout.idealSize }
-    private func updateFailureButton() {
-        guard failureAction != nil, let metadata = contentLayout.metadata, metadata.state == .failed else {
-            failureButton?.removeFromSuperview()
-            failureButton = nil
-            return
-        }
-        let button: NSButton
-        if let failureButton {
-            button = failureButton
-        } else {
-            button = NSButton(frame: .zero)
-            button.title = ""
-            button.isBordered = false
-            button.imagePosition = .imageOnly
-            button.imageScaling = .scaleProportionallyUpOrDown
-            button.setButtonType(.momentaryPushIn)
-            button.target = self
-            button.action = #selector(openFailureOptions)
-            button.setAccessibilityLabel(String(localized: "Failed to send. Retry options"))
-            button.setAccessibilityElement(true)
-            addSubview(button)
-            failureButton = button
-        }
-        button.image = metadata.symbol
-        needsLayout = true
-    }
-
-    @objc private func openFailureOptions() {
-        guard contentLayout.metadata?.state == .failed else { return }
-        failureAction?()
-    }
-
-
-    override func layout() {
-        super.layout()
-        let geometry = contentLayout.geometry(for: bounds.width)
-        if let metadata = contentLayout.metadata {
-            failureButton?.frame = metadata.symbolFrame(in: geometry.metadataFrame)
-        }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let geometry = contentLayout.geometry(for: bounds.width)
-        super.draw(dirtyRect)
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            contentLayout.metadata?.draw(in: geometry.metadataFrame, drawsSymbol: failureButton == nil)
-        }
-    }
-
-    override func accessibilityValue() -> String? {
-        guard let metadata = contentLayout.metadata else { return super.accessibilityValue() }
-        return "\(string) \(metadata.accessibilityLabel)"
-    }
-
-    override func accessibilityChildren() -> [Any]? {
-        var children = super.accessibilityChildren() ?? []
-        if let failureButton, !children.contains(where: { ($0 as? NSView) === failureButton }) {
-            children.append(failureButton)
-        }
-        return children
-    }
-}
-
-final class MacMentionLayoutManager: NSLayoutManager {
-    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+final class BubbleMentionLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let textStorage, let container = textContainers.first else { return }
         let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
-        textStorage.enumerateAttribute(.macMentionTint, in: characters) { value, range, _ in
-            guard let color = value as? NSColor else { return }
+        textStorage.enumerateAttribute(.bubbleMentionTint, in: characters) { value, range, _ in
+            guard let color = value as? BubbleNativeColor else { return }
             let glyphs = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             self.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rect, _ in
                 color.setFill()
-                NSBezierPath(roundedRect: rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0, dy: 1), xRadius: 4, yRadius: 4).fill()
+                let background = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0, dy: 1)
+                #if os(macOS)
+                NSBezierPath(roundedRect: background, xRadius: 4, yRadius: 4).fill()
+                #else
+                UIBezierPath(roundedRect: background, cornerRadius: 4).fill()
+                #endif
             }
         }
     }
 }
 
 private extension NSAttributedString.Key {
-    static let macURL = NSAttributedString.Key("ChahuaURL")
-    static let macBodyFont = NSAttributedString.Key("ChahuaBodyFont")
-    static let macMentionID = NSAttributedString.Key("ChahuaMentionID")
-    static let macMentionTint = NSAttributedString.Key("ChahuaMentionTint")
+    static let bubbleURL = NSAttributedString.Key("ChahuaURL")
+    static let bubbleBodyFont = NSAttributedString.Key("ChahuaBodyFont")
+    static let bubbleMentionID = NSAttributedString.Key("ChahuaMentionID")
+    static let bubbleMentionTint = NSAttributedString.Key("ChahuaMentionTint")
 }
 
-func macMessagePreview(_ preview: MessagePreview) -> String {
+private var bubbleLabelColor: BubbleNativeColor {
+    #if os(macOS)
+    .labelColor
+    #else
+    .label
+    #endif
+}
+
+func messagePreview(_ preview: MessagePreview) -> String {
     switch preview.messageType {
     case .invite: return String(localized: "[Invite]")
     case .sticker:
@@ -489,8 +431,7 @@ func macMessagePreview(_ preview: MessagePreview) -> String {
         }.joined()
         let original = preview.message ?? ""
         guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return prefix }
-        let rendered = MacBubbleTextContent.expandingMentions(in: original, mentions: preview.mentions)
+        let rendered = BubbleTextContent.expandingMentions(in: original, mentions: preview.mentions)
         return prefix.isEmpty ? rendered : "\(prefix) \(rendered)"
     }
 }
-#endif

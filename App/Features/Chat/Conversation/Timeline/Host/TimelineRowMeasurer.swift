@@ -1,61 +1,57 @@
 import SwiftUI
 
-/// Both native hosts need exact, pre-computed row heights so their offset/anchor calculations
-/// agree with SwiftUI bubble layout. The public `TimelineRowMeasurer` contract is identical on
-/// each platform, but controller containment, typography environment, and pixel scale are not:
-/// UIKit requires a child `UIHostingController` with safe-area suppression; AppKit requires an
-/// `NSHostingController` and uses the window backing scale. Keep the branches explicit rather
-/// than hiding those lifecycle differences behind a typealias abstraction.
+/// Both native hosts measure the same bubble with the same layout context.
+/// Hosting remains native so measurement inherits the visible cells' typography
+/// and fitting behavior. Highlighting never participates in the height cache.
 
 #if os(iOS)
 import UIKit
 
 
-// Use the same UIHostingConfiguration content view as visible cells. Its fitting
-// behavior differs from UIHostingController for wrapped accessibility metadata.
+// Match the visible cells' safe-area-free hosting and inherited typography.
 @MainActor
 final class TimelineRowMeasurer {
     private struct CachedMeasurement {
         let row: TimelineRow
         let width: CGFloat
+        let context: TimelineRowContext
         let typographySignature: String
         let scale: CGFloat
         let height: CGFloat
     }
 
     private unowned let parent: UIViewController
-    private var measuringView: (UIView & UIContentView)?
+    private var host: TimelineBubbleHostingController?
     private var cache: [TimelineRowID: CachedMeasurement] = [:]
 
     init(parent: UIViewController) {
         self.parent = parent
     }
 
-    func height(for row: TimelineRow, width: CGFloat) -> CGFloat {
+    func height(for row: TimelineRow, width: CGFloat, context: TimelineRowContext) -> CGFloat {
         let typographySignature = parent.traitCollection.preferredContentSizeCategory.rawValue
         let scale = parent.view.traitCollection.displayScale
-        if let cached = cache[row.id], cached.row == row, cached.width == width, cached.typographySignature == typographySignature, cached.scale == scale { return cached.height }
-        let configuration = UIHostingConfiguration {
-            TimelineBubbleView(row: row, context: .init(isMeasuring: true))
-        }.margins(.all, 0)
-        let view: UIView & UIContentView
-        if let measuringView {
-            view = measuringView
-            view.configuration = configuration
+        var measurementContext = context
+        measurementContext.isHighlighted = false
+        measurementContext.isMeasuring = true
+        if let cached = cache[row.id], cached.row == row, cached.width == width, cached.context == measurementContext, cached.typographySignature == typographySignature, cached.scale == scale { return cached.height }
+        let root = TimelineBubbleView(row: row, context: measurementContext)
+        let measuringHost: TimelineBubbleHostingController
+        if let host {
+            measuringHost = host
+            host.rootView = root
         } else {
-            view = configuration.makeContentView()
-            view.isHidden = true
-            parent.view.addSubview(view)
-            measuringView = view
+            measuringHost = TimelineBubbleHostingController(rootView: root)
+            measuringHost.view.isHidden = true
+            parent.addChild(measuringHost)
+            parent.view.addSubview(measuringHost.view)
+            measuringHost.didMove(toParent: parent)
+            host = measuringHost
         }
-        view.frame = CGRect(x: 0, y: -10_000, width: width, height: 0)
-        let measured = view.systemLayoutSizeFitting(
-            CGSize(width: width, height: 0),
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        ).height
+        measuringHost.view.frame = CGRect(x: 0, y: -10_000, width: width, height: 0)
+        let measured = measuringHost.sizeThatFits(in: CGSize(width: width, height: 10_000)).height
         let height = ceil(measured * scale) / scale
-        cache[row.id] = .init(row: row, width: width, typographySignature: typographySignature, scale: scale, height: height)
+        cache[row.id] = .init(row: row, width: width, context: measurementContext, typographySignature: typographySignature, scale: scale, height: height)
         return height
     }
 
@@ -81,7 +77,7 @@ final class TimelineRowMeasurer {
         let typographySignature: CGFloat
         let scale: CGFloat
         let height: CGFloat
-        let textLayout: MacBubbleTextLayout?
+        let textLayout: BubbleTextLayout?
     }
 
     private unowned let parent: NSViewController
@@ -105,23 +101,23 @@ final class TimelineRowMeasurer {
         if let cached = cache[row.id], cached.row == row, cached.width == width, cached.context == measurementContext, cached.typographySignature == typographySignature, cached.scale == scale { return cached.height }
         let previous = cache[row.id]
         let measured: CGFloat
-        let textLayout: MacBubbleTextLayout?
+        let textLayout: BubbleTextLayout?
         if let previous, previous.row == row, previous.context == measurementContext,
            previous.typographySignature == typographySignature, let layout = previous.textLayout {
-            measured = MacBubbleMetrics.textOnlyHeight(layout: layout, rowWidth: width)
+            measured = BubbleMetrics.textOnlyHeight(layout: layout, rowWidth: width)
             textLayout = layout
         } else if isTextOnly(row), case .message(let message) = row {
             let text = message.entry.text ?? ""
-            let layout = MacBubbleTextLayout(
-                attributedText: MacBubbleTextContent.attributedText(
+            let layout = BubbleTextLayout(
+                attributedText: BubbleTextContent.attributedText(
                     text: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : text,
                     mentions: message.entry.remoteMessage?.mentions ?? [],
                     currentUserID: context.currentUserID, isOutgoing: message.isOutgoing,
                     font: .systemFont(ofSize: typographySignature)
                 ),
-                metadata: MacBubbleMetadata(row: message)
+                metadata: BubbleMetadata(row: message)
             )
-            measured = MacBubbleMetrics.textOnlyHeight(layout: layout, rowWidth: width)
+            measured = BubbleMetrics.textOnlyHeight(layout: layout, rowWidth: width)
             textLayout = layout
         } else {
             let host = hostingController(for: row)

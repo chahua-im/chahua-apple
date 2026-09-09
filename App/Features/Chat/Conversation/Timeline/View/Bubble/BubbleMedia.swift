@@ -1,9 +1,8 @@
-#if os(macOS)
 import ChahuaAPI
 import ChahuaMediaCache
 import SwiftUI
 
-struct MacBubbleMedia: View {
+struct BubbleMedia: View {
     let messageID: String
     let attachments: [AttachmentResponse]
     let viewport: CGSize
@@ -13,9 +12,9 @@ struct MacBubbleMedia: View {
 
     var body: some View {
         if attachments.count == 1, let attachment = attachments.first,
-           let size = MacBubbleMediaLayout.singleSize(for: attachment, viewport: viewport, availableWidth: availableWidth) {
+           let size = BubbleMediaLayout.singleSize(for: attachment, viewport: viewport, availableWidth: availableWidth) {
             tile(attachment, size: size, gallery: false)
-        } else if let gallery = MacBubbleMediaLayout.gallery(for: attachments, viewport: viewport, availableWidth: availableWidth) {
+        } else if let gallery = BubbleMediaLayout.gallery(for: attachments, viewport: viewport, availableWidth: availableWidth) {
             ZStack(alignment: .topLeading) {
                 ForEach(gallery.cells, id: \.attachment.id) { cell in
                     tile(cell.attachment, size: cell.frame.size, gallery: true, overflowCount: cell.overflowCount)
@@ -72,5 +71,3 @@ struct MacBubbleMedia: View {
         } else { content }
     }
 }
-
-#endif

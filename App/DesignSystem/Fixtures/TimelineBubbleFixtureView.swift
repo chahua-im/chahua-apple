@@ -1,5 +1,5 @@
-#if DEBUG && os(macOS)
-import AppKit
+#if DEBUG
+import CoreText
 import ChahuaAPI
 import Combine
 import ImageIO
@@ -17,11 +17,26 @@ struct TimelineBubbleFixtureView: View {
     var body: some View {
         if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
             ChatSplitLayout(hasSelection: true) { _ in
-                Text("Performance smoke: drag divider")
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Chats").font(.title2.bold())
+                    Label("Native bubble timeline", systemImage: "bubble.left.and.bubble.right")
+                    Text("Drag the gap to resize the sidebar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    diagnosticControls
+                    Spacer()
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             } detail: { _ in
                 timelineContent
+                    .modifier(ChatHeaderOverlay {
+                        ChatFloatingHeader(title: "Native bubble timeline")
+                            .padding(.top, ChatSplitMetrics.outerInset)
+                    })
             }
             .frame(minWidth: 900, minHeight: 600)
+            .preferredColorScheme(dark ? .dark : .light)
         } else {
             timelineContent
         }
@@ -29,22 +44,9 @@ struct TimelineBubbleFixtureView: View {
 
     private var timelineContent: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading) {
-                HStack {
-                    Toggle("Dark", isOn: $dark)
-                    Toggle("Action hooks", isOn: $handlersEnabled)
-                    Toggle("Thread scope", isOn: $threadScope)
-                        .onChange(of: threadScope) { value in fixture.setThreadScope(value) }
-                }
-                HStack {
-                    Button("Queue") { Task { await fixture.queue() } }
-                        .disabled(fixture.hasQueued)
-                    Button("Sending") { fixture.store.markSending(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending") }
-                    Button("Fail") { fixture.store.markFailed(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending") }
-                    Button("Acknowledge") { fixture.acknowledge() }
-                }
-            }.padding(8)
-            Text(event).font(.caption).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading).padding(8)
+            if !ProcessInfo.processInfo.arguments.contains("-fixture-split") {
+                diagnosticControls
+            }
             if let model = fixture.timeline {
                 ConversationTimelineView(
                     model: model,
@@ -62,6 +64,24 @@ struct TimelineBubbleFixtureView: View {
         .navigationTitle("Native bubble timeline")
         .frame(minWidth: 300, minHeight: 400)
         .task { fixture.prepare() }
+    }
+
+    private var diagnosticControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Dark", isOn: $dark)
+            Toggle("Action hooks", isOn: $handlersEnabled)
+            Toggle("Thread scope", isOn: $threadScope)
+                .onChange(of: threadScope) { value in fixture.setThreadScope(value) }
+            HStack {
+                Button("Queue") { Task { await fixture.queue() } }
+                    .disabled(fixture.hasQueued)
+                Button("Sending") { fixture.store.markSending(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending") }
+                Button("Fail") { fixture.store.markFailed(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending") }
+                Button("Acknowledge") { fixture.acknowledge() }
+            }
+            Text(event).font(.caption).lineLimit(2)
+        }
+        .padding(8)
     }
 
     private var actions: TimelineBubbleActions {
@@ -132,6 +152,16 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
                 item["isEdited"] = true
                 objects.append(item)
             }
+            for deleted in [false, true] {
+                var item = object(index: objects.count, text: "A text reply with @[uid:2] and https://example.com")
+                item["replyToMessage"] = [
+                    "id": "quoted-target", "clientGeneratedId": "quoted-client",
+                    "createdAt": "2026-09-01T12:00:00Z", "sender": sender(2),
+                    "messageType": "text", "attachments": [], "mentions": [],
+                    "isDeleted": deleted, "message": "Quoted text should appear above the reply."
+                ]
+                objects.append(item)
+            }
             if let count = ProcessInfo.processInfo.environment["CHAHUA_PERFORMANCE_ROWS"].flatMap(Int.init) {
                 for _ in objects.count ..< max(objects.count, count) {
                     objects.append(object(index: objects.count, text: String(repeating: "Scroll and resize wrapped text with selectable content. ", count: 4)))
@@ -190,14 +220,21 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, type as CFString, frames, nil) else { throw CocoaError(.fileWriteUnknown) }
         if frames > 1 { CGImageDestinationSetProperties(destination, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary) }
         for frame in 0 ..< frames {
-            let image = NSImage(size: NSSize(width: width, height: height))
-            image.lockFocus()
-            NSColor(calibratedHue: CGFloat(number + frame) / 10, saturation: 0.6, brightness: 0.85, alpha: 1).setFill()
-            NSRect(x: 0, y: 0, width: width, height: height).fill()
-            let label = "Fixture \(number) / frame \(frame)"
-            label.draw(at: NSPoint(x: 8, y: 8), withAttributes: [.font: NSFont.systemFont(ofSize: CGFloat(min(width, height)) / 8), .foregroundColor: NSColor.black])
-            image.unlockFocus()
-            guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { throw CocoaError(.fileWriteUnknown) }
+            guard let context = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { throw CocoaError(.fileWriteUnknown) }
+            let shade = CGFloat((number + frame) % 10) / 10
+            context.setFillColor(CGColor(red: 0.3 + shade * 0.5, green: 0.75 - shade * 0.4, blue: 0.65, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            let label = NSAttributedString(string: "Fixture \(number) / frame \(frame)", attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica" as CFString, CGFloat(min(width, height)) / 8, nil),
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0, alpha: 1)
+            ])
+            context.textPosition = CGPoint(x: 8, y: 8)
+            CTLineDraw(CTLineCreateWithAttributedString(label), context)
+            guard let cgImage = context.makeImage() else { throw CocoaError(.fileWriteUnknown) }
             let properties: [CFString: Any] = frames > 1 ? [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.3]] : [:]
             CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
         }

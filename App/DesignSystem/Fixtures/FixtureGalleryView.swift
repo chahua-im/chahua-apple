@@ -7,13 +7,11 @@ struct FixtureGalleryView: View {
         NavigationStack {
             List {
                 #if DEBUG
-                #if os(macOS)
                 Section("Native timeline verification") {
                     NavigationLink("Images, replies, threads and delivery states") {
                         TimelineBubbleFixtureView()
                     }
                 }
-                #endif
                 Section("Text bubbles") {
                     VStack(spacing: 0) {
                         ForEach(DesignSystemFixtures.textBubbleRows) { row in

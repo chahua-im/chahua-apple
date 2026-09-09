@@ -54,11 +54,7 @@ struct TimelineBubbleView: View {
         } else if row.entry.messageType == .system {
             SystemMessageBubble(row: row)
         } else if row.entry.messageType == .text {
-            #if os(macOS)
-            MacTextMessageBubble(row: row, context: context, actions: actions)
-            #else
-            TextMessageBubble(row: row, actions: actions)
-            #endif
+            TextMessageBubble(row: row, context: context, actions: actions)
         } else {
             UnsupportedMessageBubble(row: row)
         }

@@ -8,6 +8,49 @@ import ChahuaAPI
 
 @MainActor
 final class TimelineTableViewControllerTests: XCTestCase {
+    func testOpeningWithFloatingHeaderLandsAtLatestMessage() async throws {
+        let page = try TimelineTestFixtures.page((0 ..< 80).map {
+            try TimelineTestFixtures.message(id: "\($0)", at: $0,
+                text: String(repeating: "A message beneath the floating header. ", count: 4))
+        })
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore()
+        )
+        let root = ChatSplitLayout(hasSelection: true) { _ in
+            Text("Chats")
+        } detail: { _ in
+            ConversationTimelineView(model: model, loadsInitialAutomatically: false)
+                .modifier(ChatHeaderOverlay {
+                    ChatFloatingHeader(title: "Conversation")
+                        .padding(.top, ChatSplitMetrics.outerInset)
+                })
+        }
+        let host = NSHostingController(rootView: root)
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = host
+        window.setContentSize(NSSize(width: 900, height: 500))
+        host.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        window.orderFront(nil)
+        defer { window.close() }
+        host.view.layoutSubtreeIfNeeded()
+        await model.loadInitial()
+        // Allow SwiftUI to mount the native host and deliver the measured header inset.
+        try await Task.sleep(for: .milliseconds(200))
+        host.view.layoutSubtreeIfNeeded()
+        let scroll = try XCTUnwrap(timelineScrollView(in: host.view))
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        XCTAssertEqual(table.numberOfRows, model.rows.count)
+        XCTAssertGreaterThan(scroll.documentVisibleRect.height, 0)
+        XCTAssertEqual(table.bounds.maxY, scroll.documentVisibleRect.maxY, accuracy: 1,
+                       "Opening must reveal the latest message: clip=\(scroll.contentView.bounds), visible=\(scroll.documentVisibleRect), insets=\(scroll.contentInsets)")
+        XCTAssertTrue(model.state.live.followsLatest)
+        XCTAssertTrue(model.state.live.isPinnedToBottom)
+    }
+
     func testUserScrollLoadsHistoryButLayoutDoesNot() async throws {
         try await checkHistoryScroll(legacyMouse: false)
     }
@@ -102,7 +145,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
 
     func testIncomingMetadataRemainsReadableInDarkAppearance() async throws {
         try await inspectRenderedMessage(text: "Hello", senderID: 2, widths: [320], appearance: .darkAqua) { cell, textView, bitmap in
-            guard let native = textView as? MacBubbleTextView else { return XCTFail("Missing native text view") }
+            guard let native = textView as? AppKitBubbleTextView else { return XCTFail("Missing native text view") }
             let frame = cell.convert(native.contentLayout.geometry(for: native.bounds.width).metadataFrame, from: native)
             let scaleX = CGFloat(bitmap.pixelsWide) / cell.bounds.width
             let scaleY = CGFloat(bitmap.pixelsHigh) / cell.bounds.height
@@ -149,12 +192,12 @@ final class TimelineTableViewControllerTests: XCTestCase {
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let measurer = TimelineRowMeasurer(parent: controller)
 
-        func renderedMessage(_ id: String) throws -> (NSView, MacBubbleTextView) {
+        func renderedMessage(_ id: String) throws -> (NSView, AppKitBubbleTextView) {
             let index = try XCTUnwrap(model.rows.firstIndex { $0.stableMessageKey == .clientGenerated(id) })
             table.scrollRowToVisible(index)
             let cell = try XCTUnwrap(table.view(atColumn: 0, row: index, makeIfNecessary: true))
             cell.layoutSubtreeIfNeeded()
-            let native = try XCTUnwrap(textViews(in: cell).compactMap { $0 as? MacBubbleTextView }.first)
+            let native = try XCTUnwrap(textViews(in: cell).compactMap { $0 as? AppKitBubbleTextView }.first)
             XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
             return (cell, native)
         }
