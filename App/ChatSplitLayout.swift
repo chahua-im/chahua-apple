@@ -57,7 +57,13 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
 
             HStack(spacing: 0) {
                 pane(
-                    sidebar(isSplit)
+                    VStack(spacing: 0) {
+                        #if os(macOS)
+                        SidebarWindowControls()
+                            .frame(height: 52)
+                        #endif
+                        sidebar(isSplit)
+                    }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipShape(RoundedRectangle(cornerRadius: isSplit ? 24 : 0, style: .continuous))
                         .modifier(ChatGlassSurface(cornerRadius: isSplit ? 24 : 0))
@@ -92,6 +98,9 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                 if !split { dragStartWidth = nil }
             }
         }
+        #if os(macOS)
+        .ignoresSafeArea(.container, edges: .top)
+        #endif
         .background(ChahuaTheme.conversationBackground(for: colorScheme))
     }
 

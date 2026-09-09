@@ -39,6 +39,7 @@ struct ChahuaApp: App {
             #endif
         }
         #if os(macOS)
+        .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         #endif
     }
