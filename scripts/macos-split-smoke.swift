@@ -89,7 +89,7 @@ func waitForDivider(x: CGFloat, label: String) throws {
 }
 func drag(_ moves: [(offset: CGFloat, delta: CGFloat)], label: String) throws {
     let initial = try dividerPosition()
-    // The 24-point accessible hit area is centered on the floating pane gap.
+    // The 24-point accessible hit area is centered on the sidebar divider.
     let start = CGPoint(x: initial.x + 11, y: initial.y + 200)
     try mouse(.leftMouseDown, at: start)
     Thread.sleep(forTimeInterval: 0.05)

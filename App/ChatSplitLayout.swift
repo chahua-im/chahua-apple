@@ -7,7 +7,7 @@ enum ChatSplitMetrics {
     static let minimumSidebarWidth: CGFloat = 280
     static let maximumSidebarWidth: CGFloat = 400
     static let minimumDetailWidth: CGFloat = 440
-    static let dividerWidth: CGFloat = 12
+    static let dividerWidth: CGFloat = 1
     static let outerInset: CGFloat = 12
     static let accessibilityStep: CGFloat = 20
 }
@@ -50,8 +50,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     var body: some View {
         GeometryReader { proxy in
             let isSplit = proxy.size.width >= ChatSplitMetrics.splitThreshold
-            let inset = isSplit ? ChatSplitMetrics.outerInset : 0
-            let availableWidth = proxy.size.width - inset * 2
+            let availableWidth = proxy.size.width
             let sidebarWidth = effectiveSidebarWidth(for: availableWidth)
             let detailWidth = max(0, availableWidth - sidebarWidth - ChatSplitMetrics.dividerWidth)
 
@@ -65,20 +64,17 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                         sidebar(isSplit)
                     }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipShape(RoundedRectangle(cornerRadius: isSplit ? 24 : 0, style: .continuous))
-                        .modifier(ChatGlassSurface(cornerRadius: isSplit ? 24 : 0))
-                        .padding(.vertical, inset),
+                        .background(.regularMaterial),
                     width: isSplit ? sidebarWidth : (hasSelection ? 0 : proxy.size.width),
                     isVisible: isSplit || !hasSelection
                 )
-                // Floating chrome must draw above the neighboring opaque timeline.
-                .zIndex(1)
 
                 splitDivider(isSplit: isSplit, availableWidth: availableWidth)
                     .frame(width: isSplit ? ChatSplitMetrics.dividerWidth : 0)
                     .opacity(isSplit ? 1 : 0)
                     .allowsHitTesting(isSplit)
                     .accessibilityHidden(!isSplit)
+                    .zIndex(1)
 
                 pane(
                     detail(isSplit),
@@ -86,7 +82,6 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                     isVisible: isSplit || hasSelection
                 )
             }
-            .padding(.horizontal, inset)
             #if os(macOS)
             .environment(\.isChatSplitResizing, isSplit && isResizing)
             .onChange(of: isResizing) { resizing in
@@ -114,7 +109,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     }
 
     private func splitDivider(isSplit: Bool, availableWidth: CGFloat) -> some View {
-        Color.clear
+        Color.primary.opacity(0.12)
             .overlay {
                 Color.clear
                     .frame(width: 24)

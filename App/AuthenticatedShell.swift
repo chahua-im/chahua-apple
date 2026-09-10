@@ -35,23 +35,7 @@ struct AuthenticatedShell: View {
     private var adaptiveLayout: some View {
         ChatSplitLayout(hasSelection: selectedChatID != nil) { isSplit in
             VStack(spacing: 0) {
-                HStack {
-                    Text("Chats")
-                        .font(.title2.bold())
-                        .accessibilityAddTraits(.isHeader)
-                    Spacer()
-                    Button {
-                        Task { await chatStore.refreshActiveChats() }
-                    } label: {
-                        Label("Refresh chats", systemImage: "arrow.clockwise")
-                            .labelStyle(.iconOnly)
-                    }
-                    .disabled(chatStore.state.isRefreshingChats)
-                    accountMenu
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.borderless)
-                .padding(16)
+                ConversationListHeader { accountMenu }
                 chatList(showsDisclosureIndicator: !isSplit)
             }
         } detail: { isSplit in
@@ -63,7 +47,8 @@ struct AuthenticatedShell: View {
                             avatarURL: chat.chatAvatarURL,
                             onBack: isSplit ? nil : { selectedChatID = nil }
                         )
-                        .padding(isSplit ? 0 : 12)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, isSplit ? 0 : 12)
                         .padding(.top, isSplit ? ChatSplitMetrics.outerInset : 0)
                     }
                 })
@@ -73,6 +58,11 @@ struct AuthenticatedShell: View {
     private var phoneNavigation: some View {
         NavigationStack(path: phonePath) {
             chatList(showsDisclosureIndicator: true)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    ConversationScopePicker()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                }
                 .navigationTitle("Chats")
                 .toolbar { accountToolbar }
                 .navigationDestination(for: String.self) { chatID in
@@ -126,10 +116,21 @@ struct AuthenticatedShell: View {
     private var accountMenu: some View {
         Menu {
             Text(me.username)
+            Button {
+                Task { await chatStore.refreshActiveChats() }
+            } label: {
+                Label("Refresh chats", systemImage: "arrow.clockwise")
+            }
+            .disabled(chatStore.state.isRefreshingChats)
             Button("Sign out", role: .destructive, action: onSignOut)
                 .disabled(isSigningOut)
         } label: {
-            Label("Account", systemImage: "person.crop.circle")
+            if usesAdaptiveSplitLayout {
+                AvatarView(url: me.avatarUrl.flatMap(URL.init(string:)), displayName: me.username, diameter: 26)
+                    .accessibilityLabel("Account")
+            } else {
+                Label("Account", systemImage: "person.crop.circle")
+            }
         }
     }
 

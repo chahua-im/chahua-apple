@@ -18,22 +18,35 @@
         var body: some View {
             if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
                 ChatSplitLayout(hasSelection: true) { _ in
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Chats").font(.title2.bold())
-                        Label("Native bubble timeline", systemImage: "bubble.left.and.bubble.right")
-                        Text("Drag the gap to resize the sidebar.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        diagnosticControls
-                        Spacer()
+                    VStack(alignment: .leading, spacing: 0) {
+                        ConversationListHeader {
+                            Menu {
+                                Text("Alex")
+                            } label: {
+                                AvatarView(
+                                    url: ProcessInfo.processInfo.environment["CHAHUA_FIXTURE_AVATAR"].map { URL(fileURLWithPath: $0) },
+                                    displayName: "Alex", diameter: 26)
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 16) {
+                            Label(
+                                "Native bubble timeline",
+                                systemImage: "bubble.left.and.bubble.right")
+                            Text("Drag the divider to resize the sidebar.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            diagnosticControls
+                            Spacer()
+                        }
+                        .padding(16)
                     }
-                    .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 } detail: { _ in
                     timelineContent
                         .modifier(
                             ChatHeaderOverlay {
                                 ChatFloatingHeader(title: "Native bubble timeline")
+                                    .padding(.horizontal, 12)
                                     .padding(.top, ChatSplitMetrics.outerInset)
                             })
                 }
