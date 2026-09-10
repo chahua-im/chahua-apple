@@ -41,3 +41,5 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - Bundle ID: `app.chahua.chat`
 - Swift concurrency: approachable concurrency / default actor isolation as set in the Xcode project
 - Do not introduce CocoaPods or Carthage; use SPM (remote or local under `Packages/`)
+- Prefer shared SwiftUI views and controls across iOS and macOS. Use UIKit/AppKit wrappers or separate platform implementations only when a concrete requirement cannot reasonably be met with shared SwiftUI.
+- Document each new or retained platform-specific UI exception near its implementation: the requirement, the SwiftUI limitation that necessitates the exception, and why the native approach is needed. Do not add custom native UI solely to reproduce behavior SwiftUI already provides.

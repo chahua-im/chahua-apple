@@ -109,7 +109,7 @@ final class ChatStore: ObservableObject {
         draftRevisions[chatID, default: 0] += 1
         pendingDraftSaves[chatID]?.cancel()
         pendingDraftSaves[chatID] = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+            do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
             self?.pendingDraftSaves[chatID] = nil
             await self?.flushDraft(chatID: chatID)
         }

@@ -1,11 +1,17 @@
 import SwiftUI
 
+#if os(macOS)
+import AppKit
+#endif
+
 struct MessageComposerView: View {
     @Binding var text: String
     let maxHeight: CGFloat
     let isEnabled: Bool
     let canSend: Bool
     let onSubmit: () -> Void
+    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
+    @FocusState private var isInputFocused: Bool
 
     private var canSubmit: Bool { isEnabled && canSend }
     private var hasText: Bool { !text.isEmpty }
@@ -23,13 +29,21 @@ struct MessageComposerView: View {
             .modifier(ChatGlassSurface(cornerRadius: 22))
 
             HStack(alignment: .bottom, spacing: 0) {
-                NativeComposerTextView(
-                    text: $text,
-                    maxHeight: max(36, maxHeight - 8),
-                    isEnabled: isEnabled,
-                    onSubmit: submit
-                )
-                .padding(.vertical, 4)
+                TextField("Message", text: $text, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: fontSize))
+                    .lineLimit(1...6)
+                    .frame(maxHeight: max(20, maxHeight - 24))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 12)
+                    .padding(.vertical, 12)
+                    .disabled(!isEnabled)
+                    .focused($isInputFocused)
+                    .onSubmit(submit)
+                    #if os(macOS)
+                    .background(ComposerShiftReturn(isFocused: isInputFocused, isEnabled: isEnabled))
+                    #endif
+                    .accessibilityLabel("Message")
 
                 Button {} label: {
                     Image(systemName: "face.smiling")
@@ -66,6 +80,54 @@ struct MessageComposerView: View {
         onSubmit()
     }
 }
+
+#if os(macOS)
+// SwiftUI's multiline TextField submits on Shift-Return on macOS. Its onSubmit
+// callback is too late to intercept the key, and macOS 13 lacks onKeyPress.
+// This command-only bridge leaves text, selection, undo, and IME ownership with
+// SwiftUI's field editor; it never synchronizes or replaces the draft itself.
+private struct ComposerShiftReturn: NSViewRepresentable {
+    let isFocused: Bool
+    let isEnabled: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+            [weak view, weak coordinator = context.coordinator] event in
+            guard let view, let coordinator,
+                  coordinator.isFocused, coordinator.isEnabled,
+                  let window = view.window, event.window === window,
+                  event.keyCode == 36 || event.keyCode == 76,
+                  event.modifierFlags.intersection([.shift, .control, .option, .command]) == .shift,
+                  let editor = window.firstResponder as? NSTextView,
+                  !editor.hasMarkedText() else { return event }
+            editor.insertNewlineIgnoringFieldEditor(nil)
+            return nil
+        }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.isFocused = isFocused
+        context.coordinator.isEnabled = isEnabled
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        if let monitor = coordinator.monitor {
+            NSEvent.removeMonitor(monitor)
+            coordinator.monitor = nil
+        }
+    }
+
+    final class Coordinator {
+        var isFocused = false
+        var isEnabled = false
+        var monitor: Any?
+    }
+}
+#endif
 
 private struct ChatComposerInsetKey: EnvironmentKey {
     nonisolated static let defaultValue: CGFloat = 0
