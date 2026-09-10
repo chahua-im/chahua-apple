@@ -1,3 +1,4 @@
+import ChahuaAPI
 import SwiftUI
 
 struct MessageComposerView: View {
@@ -7,6 +8,10 @@ struct MessageComposerView: View {
     let canSend: Bool
     let onSubmit: () -> Void
     var onCompositionChanged: ((Bool) -> Void)? = nil
+    var replyToMessage: MessagePreview? = nil
+    var replyFocusRequest = 0
+    var onCancelReply: (() -> Void)? = nil
+    var onOpenReply: ((String) -> Void)? = nil
     @StateObject private var input = ComposerInputState()
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
     @FocusState private var isInputFocused: Bool
@@ -35,36 +40,51 @@ struct MessageComposerView: View {
             .accessibilityLabel("Attachments (unavailable)")
             .modifier(ChatGlassSurface(cornerRadius: 22))
 
-            HStack(alignment: .bottom, spacing: 0) {
-                TextField("Message", text: editorText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: fontSize))
-                    .lineLimit(1...6)
-                    .frame(maxHeight: max(20, maxHeight - 24))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 12)
-                    .padding(.vertical, 12)
-                    .disabled(!isEnabled)
-                    .focused($isInputFocused)
-                    .onSubmit(submit)
-                    .background(
-                        ComposerInputBridge(
-                            input: input, draft: $text, isFocused: isInputFocused,
-                            isEnabled: isEnabled, onCompositionChanged: onCompositionChanged
-                        )
-                        .accessibilityHidden(true)
-                    )
-                    .accessibilityLabel("Message")
-
-                Button {
-                } label: {
-                    Image(systemName: "face.smiling")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
+            VStack(spacing: 0) {
+                if let reply = replyToMessage {
+                    replyMarker(reply)
                 }
-                .disabled(true)
-                .accessibilityLabel("Emoji (unavailable)")
+
+                HStack(alignment: .bottom, spacing: 0) {
+                    TextField("Message", text: editorText, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: fontSize))
+                        .lineLimit(1...6)
+                        .frame(maxHeight: max(20, maxHeight - 24))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 12)
+                        .padding(.vertical, 12)
+                        .disabled(!isEnabled)
+                        .focused($isInputFocused)
+                        .onSubmit(submit)
+                        .onKeyPress(.escape) {
+                            guard !input.isComposing else { return .ignored }
+                            if replyToMessage != nil {
+                                onCancelReply?()
+                            } else {
+                                isInputFocused = false
+                            }
+                            return .handled
+                        }
+                        .background(
+                            ComposerInputBridge(
+                                input: input, draft: $text, isFocused: isInputFocused,
+                                isEnabled: isEnabled, onCompositionChanged: onCompositionChanged
+                            )
+                            .accessibilityHidden(true)
+                        )
+                        .accessibilityLabel("Message")
+
+                    Button {
+                    } label: {
+                        Image(systemName: "face.smiling")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                    }
+                    .disabled(true)
+                    .accessibilityLabel("Emoji (unavailable)")
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .modifier(ChatGlassSurface(cornerRadius: 22))
@@ -85,11 +105,57 @@ struct MessageComposerView: View {
         .padding(12)
         .onAppear { input.receiveExternalText(text) }
         .onChange(of: text) { _, text in input.receiveExternalText(text) }
+        .onChange(of: replyFocusRequest) { _, _ in
+            if isEnabled { isInputFocused = true }
+        }
         .onChange(of: isEnabled) { _, enabled in
             guard enabled, restoresFocusAfterSend else { return }
             restoresFocusAfterSend = false
             isInputFocused = true
         }
+    }
+
+    private func replyMarker(_ reply: MessagePreview) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Button {
+                onOpenReply?(reply.id)
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(
+                        "Reply to \(reply.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(reply.sender.uid)")"
+                    )
+                    .font(.system(size: fontSize, weight: .semibold))
+                    .foregroundStyle(ChahuaTheme.accent)
+                    Text(reply.isDeleted ? String(localized: "Message deleted") : messagePreview(reply))
+                        .font(.system(size: fontSize))
+                        .foregroundStyle(.primary)
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(ChahuaTheme.accent)
+                        .frame(width: 3)
+                }
+                .contentShape(Rectangle())
+            }
+            .disabled(reply.isDeleted)
+            Button {
+                onCancelReply?()
+                isInputFocused = true
+            } label: {
+                Image(systemName: "xmark")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36, alignment: .topTrailing)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Cancel reply")
+            .disabled(!isEnabled)
+            .modifier(ComposerSendFocus())
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
     }
 
     private func submit() {

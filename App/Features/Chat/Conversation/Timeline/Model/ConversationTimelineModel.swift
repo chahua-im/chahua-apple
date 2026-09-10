@@ -225,6 +225,42 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
+    func jumpToMessage(_ id: String) async {
+        switch state.content {
+        case .ready, .repositioning: break
+        default: return
+        }
+        invalidateRequests()
+        state.repositionFailure = nil
+        state.content = .ready
+        if let rowID = rowID(forServerID: id) {
+            state.live.followsLatest = false
+            requestScroll(.reveal(rowID, animated: true, highlight: true))
+            return
+        }
+        state.content = .repositioning(.message(id))
+        let requestGeneration = generation
+        do {
+            try await fetchSnapshot(query: aroundQuery(for: .message(id)), mode: .replace(latest: false), generation: requestGeneration, requiredMessageID: id) {
+                state.content = .ready
+                state.live.followsLatest = false
+                if let rowID = rowID(forServerID: id) {
+                    publish(position: .reveal(rowID, animated: false, highlight: true), reset: true)
+                } else {
+                    state.repositionFailure = .message(id)
+                    publish(position: .bottom(animated: false), reset: true)
+                }
+            }
+        } catch is CancellationError {
+            if generation == requestGeneration { state.content = .ready }
+        } catch {
+            if generation == requestGeneration {
+                state.content = .ready
+                state.repositionFailure = .message(id)
+            }
+        }
+    }
+
     func dismissRepositionFailure() { state.repositionFailure = nil }
 
     func revealLatestAfterSend() async {
@@ -278,8 +314,10 @@ final class ConversationTimelineModel: ObservableObject {
 
     private enum SnapshotMode { case replace(latest: Bool), page(EdgeSide) }
 
+    private struct MessageNotFound: Error {}
+
     /// The baseline, ordered replay and caller's publication execute without a suspension.
-    private func fetchSnapshot(query: ListMessagesQuery, mode: SnapshotMode, generation requestGeneration: Int, commit: () -> Void) async throws {
+    private func fetchSnapshot(query: ListMessagesQuery, mode: SnapshotMode, generation requestGeneration: Int, requiredMessageID: String? = nil, commit: () -> Void) async throws {
         try Task.checkCancellation()
         guard generation == requestGeneration else { throw CancellationError() }
         let token = messageStore.beginSnapshot(chatID: chatID)
@@ -288,6 +326,9 @@ final class ConversationTimelineModel: ObservableObject {
         let page = try await source.fetchMessages(chatID: chatID, query: query)
         try Task.checkCancellation()
         guard generation == requestGeneration else { throw CancellationError() }
+        if let requiredMessageID, !page.messages.contains(where: { $0.id == requiredMessageID && accepts($0) }) {
+            throw MessageNotFound()
+        }
         let events = messageStore.eventsDuringSnapshot(token)
         switch mode {
         case .replace(let latest):

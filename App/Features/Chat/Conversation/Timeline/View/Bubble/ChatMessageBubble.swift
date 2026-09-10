@@ -38,7 +38,7 @@ struct ChatMessageBubble: View {
     private var hasBody: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var mediaOnly: Bool { !attachments.isEmpty && !hasBody }
     private var replyPreview: MessagePreview? {
-        guard let preview = message?.replyToMessage, !preview.isDeleted else { return nil }
+        guard let preview = row.entry.replyToMessage, !preview.isDeleted else { return nil }
         return preview
     }
     private var threadCount: Int64? { context.isThreadTimeline ? nil : message?.threadInfo?.replyCount }
@@ -200,7 +200,7 @@ struct ChatMessageBubble: View {
         .overlay(alignment: .leading) { Rectangle().fill(color.opacity(row.isOutgoing ? 0.5 : 1)).frame(width: 3) }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         if let action = actions.openReply {
-            Button { action(preview.id) } label: { content }.buttonStyle(.plain)
+            MessageRowActionButton { action(preview.id) } label: { content }
         } else {
             content
         }
@@ -222,7 +222,7 @@ struct ChatMessageBubble: View {
         }
         .opacity(0.8)
         if let action = actions.openThread, let id = message?.id {
-            Button { action(id) } label: { content }.buttonStyle(.plain)
+            MessageRowActionButton { action(id) } label: { content }
         } else {
             content
         }

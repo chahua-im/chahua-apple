@@ -46,6 +46,13 @@ enum ConversationTimelineEntry: Hashable {
         }
     }
 
+    var replyToMessage: MessagePreview? {
+        switch self {
+        case .remote(let message): message.replyToMessage
+        case .pending(let pending): pending.replyToMessage
+        }
+    }
+
     var displayState: ConversationMessageDisplayState {
         switch self {
         case .remote: .delivered

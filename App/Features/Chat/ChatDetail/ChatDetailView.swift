@@ -11,6 +11,7 @@ struct ChatDetailView: View {
     @State private var hasLoadedInteractionPermissions = false
     @State private var failedMessageID: String?
     @State private var showsRetryOptions = false
+    @State private var replyFocusRequest = 0
 
     init(chat: ChatListItem, currentUserID: Int32, store: ChatStore) {
         self.chat = chat
@@ -57,7 +58,7 @@ struct ChatDetailView: View {
                                         get: { drafts.draftText(chatID: chat.id) },
                                         set: { drafts.setDraftText($0, chatID: chat.id) }),
                                     maxHeight: max(36, geometry.size.height / 3),
-                                    isEnabled: !drafts.committingDrafts.contains(chat.id),
+                                    isEnabled: interactionContext.canWrite && !drafts.committingDrafts.contains(chat.id),
                                     canSend: store.outgoingQueue.storageState == .ready
                                         && !drafts.committingDrafts.contains(chat.id)
                                         && !drafts.draftText(chatID: chat.id).trimmingCharacters(
@@ -70,7 +71,11 @@ struct ChatDetailView: View {
                                             }
                                         }
                                     },
-                                    onCompositionChanged: { drafts.setDraftComposing($0, chatID: chat.id) }
+                                    onCompositionChanged: { drafts.setDraftComposing($0, chatID: chat.id) },
+                                    replyToMessage: drafts.draftReply(chatID: chat.id),
+                                    replyFocusRequest: replyFocusRequest,
+                                    onCancelReply: { drafts.setDraftReply(nil, chatID: chat.id) },
+                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } }
                                 )
                             }
                         })
@@ -126,11 +131,17 @@ struct ChatDetailView: View {
         var actions = TimelineBubbleActions()
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
         if interactionContext.canWrite {
+            actions.replyToMessage = { message in
+                guard !drafts.committingDrafts.contains(chat.id) else { return }
+                drafts.setDraftReply(message.replyPreview, chatID: chat.id)
+                replyFocusRequest &+= 1
+            }
             actions.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage, !message.isDeleted else { return }
                 Task { await reactions.toggle(message: message, emoji: emoji, currentUserID: model.currentUserID) }
             }
         }
+        actions.openReply = { id in Task { await model.jumpToMessage(id) } }
         actions.openFailedMessage = { id in
             failedMessageID = id
             showsRetryOptions = true

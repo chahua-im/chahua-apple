@@ -1,6 +1,20 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Cancel reply" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel reply" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消回复" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "取消回覆" } }
+      }
+    },
+    "Reply to %@" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Reply to %@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "回复 %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "回覆 %@" } }
+      }
+    },
     "" : {
 
     },

@@ -6,6 +6,8 @@ import UIKit
 /// public hosting control for both visible and measuring roots so scrolling
 /// under a status bar cannot change a bubble's measured height.
 final class TimelineBubbleHostingController: UIHostingController<TimelineBubbleView> {
+    lazy var rowGestures = MessageRowGestureCoordinator(view: view)
+
     override init(rootView: TimelineBubbleView) {
         super.init(rootView: rootView)
         safeAreaRegions = []
@@ -35,6 +37,11 @@ final class TimelineCollectionViewCell: UICollectionViewCell {
 
     required init?(coder: NSCoder) { nil }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        hosting.rowGestures.cancel()
+    }
+
     func attach(to parent: UIViewController) {
         guard hosting.parent !== parent else { return }
         detach()
@@ -43,6 +50,7 @@ final class TimelineCollectionViewCell: UICollectionViewCell {
     }
 
     func detach() {
+        hosting.rowGestures.cancel()
         guard hosting.parent != nil else { return }
         hosting.willMove(toParent: nil)
         hosting.removeFromParent()

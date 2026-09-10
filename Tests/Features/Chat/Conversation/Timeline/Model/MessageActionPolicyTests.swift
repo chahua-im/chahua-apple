@@ -11,11 +11,11 @@ final class MessageActionPolicyTests: XCTestCase {
     func testCopyIsEnabledWhileRelevantUnimplementedActionsStayDisabled() {
         let policy = MessageActionPolicy(messageType: .text, text: "Hello", context: writable)
         XCTAssertEqual(policy.availability(of: .copy), .enabled)
-        XCTAssertEqual(policy.availability(of: .reply), .unimplemented)
+        XCTAssertEqual(policy.availability(of: .reply), .enabled)
         XCTAssertEqual(policy.availability(of: .thread), .unimplemented)
         XCTAssertEqual(policy.availability(of: .delete), .hidden)
         XCTAssertEqual(policy.availability(of: .edit), .hidden)
-        XCTAssertEqual(policy.actions.filter { policy.availability(of: $0) == .enabled }, [.copy])
+        XCTAssertEqual(policy.actions.filter { policy.availability(of: $0) == .enabled }, [.reply, .copy])
     }
 
     func testWhitespaceAndNonTextMediaCannotBeCopied() {
@@ -92,7 +92,7 @@ final class MessageActionPolicyTests: XCTestCase {
             messageType: .text, text: "Stale sensitive text", isDeleted: true,
             isOwn: true, hasReactions: true, context: writable)
         XCTAssertEqual(deleted.actions, [.reply, .copyLink, .reactionDetails])
-        XCTAssertTrue(deleted.actions.allSatisfy { deleted.availability(of: $0) == .unimplemented })
+        XCTAssertEqual(deleted.availability(of: .reply), .enabled)
         XCTAssertEqual(deleted.availability(of: .copy), .hidden)
         XCTAssertFalse(deleted.canReact)
     }

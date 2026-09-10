@@ -21,6 +21,7 @@ public struct LocalStorageScope: Sendable {
 
 public struct LocalDraft: Sendable, Equatable {
     public let text: String
+    public let replyToMessage: MessagePreview?
     public let editRevision: Int64
     public let updatedAt: Date
 }
@@ -31,6 +32,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public let chatID: String
     public let senderID: Int32
     public let text: String
+    public let replyToMessage: MessagePreview?
     public let enqueuedAt: Date
     public let enqueueSequence: Int64
     public let dispatchOrder: Int64

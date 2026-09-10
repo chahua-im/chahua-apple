@@ -15,8 +15,7 @@ struct BubbleReactions: View {
                 $0.count == $1.count ? $0.emoji < $1.emoji : $0.count > $1.count
             }, id: \.emoji) { reaction in
                 if let toggle, !isMeasuring {
-                    Button { toggle(reaction.emoji) } label: { pill(reaction) }
-                        .buttonStyle(.plain)
+                    MessageRowActionButton { toggle(reaction.emoji) } label: { pill(reaction) }
                         .disabled(isPending)
                 } else {
                     pill(reaction)

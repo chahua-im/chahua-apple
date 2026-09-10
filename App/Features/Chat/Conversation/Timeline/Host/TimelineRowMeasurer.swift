@@ -146,7 +146,7 @@ final class TimelineRowMeasurer {
               !message.showsSenderName, message.entry.remoteMessage?.isDeleted != true else { return false }
         let remote = message.entry.remoteMessage
         return (remote?.attachments.isEmpty ?? true) && (remote?.reactions.isEmpty ?? true)
-            && remote?.replyToMessage == nil && remote?.threadInfo == nil
+            && message.entry.replyToMessage == nil && remote?.threadInfo == nil
     }
 
 

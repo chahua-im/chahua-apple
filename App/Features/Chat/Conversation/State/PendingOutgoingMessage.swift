@@ -14,6 +14,7 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     let enqueuedAt: Date
     let senderID: Int32
     var state: State
+    var replyToMessage: MessagePreview? = nil
 
     var id: String { clientGeneratedID }
 }

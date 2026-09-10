@@ -18,6 +18,7 @@ final class ConversationMessageStore: ObservableObject {
     let changes = PassthroughSubject<ConversationChange, Never>()
 
     private var pendingOutgoingByChatID: [String: [PendingOutgoingMessage]] = [:]
+    private var deletedReplyIDs: [String: Set<String>] = [:]
     private var receiveRevision: UInt64 = 0
     private struct Snapshot {
         let chatID: String
@@ -31,7 +32,7 @@ final class ConversationMessageStore: ObservableObject {
     private var journals: [String: [JournalEntry]] = [:]
 
     func replacePending(chatID: String, with pending: [PendingOutgoingMessage], acknowledging message: MessageResponse? = nil) {
-        pendingOutgoingByChatID[chatID] = pending
+        pendingOutgoingByChatID[chatID] = deletedReplyIDs[chatID]?.isEmpty == false ? pending.map(normalizingReply) : pending
         if let message {
             precondition(message.chatId == chatID, "Acknowledgement and pending batch must belong to the same chat.")
             apply(.message(message))
@@ -47,7 +48,7 @@ final class ConversationMessageStore: ObservableObject {
             !(pendingOutgoingByChatID[pending.chatID, default: []].contains { $0.clientGeneratedID == pending.clientGeneratedID }),
             "A client-generated ID may be queued only once per chat."
         )
-        pendingOutgoingByChatID[pending.chatID, default: []].append(pending)
+        pendingOutgoingByChatID[pending.chatID, default: []].append(normalizingReply(pending))
         changes.send(.pendingChanged(chatID: pending.chatID))
     }
 
@@ -70,6 +71,14 @@ final class ConversationMessageStore: ObservableObject {
         // Acknowledgement and remote insertion are one observable transition.
         if case .message(let message) = event {
             removePending(chatID: message.chatId, clientGeneratedID: message.clientGeneratedId)
+        }
+        switch event {
+        case .messageDeleted(let message):
+            redactPendingReplies([message.id], chatID: message.chatId)
+        case .messagesBulkDeleted(let payload):
+            redactPendingReplies(Set(payload.messageIds), chatID: payload.chatId)
+        default:
+            break
         }
         receiveRevision &+= 1
         if let chatID = event.conversationChatID, snapshots.values.contains(where: { $0.chatID == chatID }) {
@@ -100,6 +109,7 @@ final class ConversationMessageStore: ObservableObject {
 
     func reset() {
         pendingOutgoingByChatID.removeAll()
+        deletedReplyIDs.removeAll()
         snapshots.removeAll()
         journals.removeAll()
         receiveRevision = 0
@@ -122,6 +132,20 @@ final class ConversationMessageStore: ObservableObject {
             if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
             return $0.stableKey.sortValue < $1.stableKey.sortValue
         })
+    }
+
+    private func normalizingReply(_ pending: PendingOutgoingMessage) -> PendingOutgoingMessage {
+        guard let reply = pending.replyToMessage, !reply.isDeleted,
+              deletedReplyIDs[pending.chatID]?.contains(reply.id) == true else { return pending }
+        var pending = pending
+        pending.replyToMessage = reply.redactedForDeletion()
+        return pending
+    }
+
+    private func redactPendingReplies(_ messageIDs: Set<String>, chatID: String) {
+        deletedReplyIDs[chatID, default: []].formUnion(messageIDs)
+        guard let pending = pendingOutgoingByChatID[chatID] else { return }
+        pendingOutgoingByChatID[chatID] = pending.map(normalizingReply)
     }
 
     private func mutatePending(

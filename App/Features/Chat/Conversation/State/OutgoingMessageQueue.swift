@@ -146,12 +146,12 @@ final class OutgoingMessageQueue: ObservableObject {
         return outgoing.filter { acknowledgements[$0.clientGeneratedID] == nil }
     }
 
-    func saveDraft(chatID: String, text: String, editRevision: Int64, updatedAt: Date) async throws {
+    func saveDraft(chatID: String, text: String, editRevision: Int64, updatedAt: Date, replyToMessage: MessagePreview? = nil) async throws {
         guard let store, requestedUID != nil else { throw QueueError.storageUnavailable }
         let current = generation
         do {
             try await checkpoint(.saveDraft, generation: current)
-            let snapshot = try await store.saveDraft(chatID: chatID, text: text, editRevision: editRevision, updatedAt: updatedAt)
+            let snapshot = try await store.saveDraft(chatID: chatID, text: text, editRevision: editRevision, updatedAt: updatedAt, replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
         } catch {
@@ -160,7 +160,7 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func enqueueText(chatID: String, text: String, clearedDraftRevision: Int64) async throws {
+    func enqueueText(chatID: String, text: String, clearedDraftRevision: Int64, replyToMessage: MessagePreview? = nil) async throws {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LocalStorageError.blankMessage }
         guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed else {
             throw QueueError.storageUnavailable
@@ -170,7 +170,7 @@ final class OutgoingMessageQueue: ObservableObject {
         let date = Date()
         do {
             try await checkpoint(.enqueue, generation: current)
-            let snapshot = try await store.enqueueText(chatID: chatID, senderID: uid, clientGeneratedID: id, text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision)
+            let snapshot = try await store.enqueueText(chatID: chatID, senderID: uid, clientGeneratedID: id, text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision, replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
             wakeWorker(chatID: chatID)
@@ -293,7 +293,7 @@ final class OutgoingMessageQueue: ObservableObject {
                 return
             }
             do {
-                let response = try await apiClient.sendMessage(chatID: chatID, body: CreateMessageBody(messageType: .text, clientGeneratedId: pending.clientGeneratedID, message: pending.text))
+                let response = try await apiClient.sendMessage(chatID: chatID, body: CreateMessageBody(messageType: .text, clientGeneratedId: pending.clientGeneratedID, message: pending.text, replyToId: pending.replyToMessage?.id))
                 guard generation == current else { return }
                 guard matches(response, pending: pending) else { throw QueueError.invalidAcknowledgement }
                 // Even a socket-first success must emit this validated HTTP acknowledgement.

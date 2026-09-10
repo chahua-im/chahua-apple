@@ -10,6 +10,19 @@ struct MessageBubbleShell<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.messageBubbleActions) private var actions
     @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = BubbleMetrics.avatarSize
+    @State private var isRowHovered = false
+    @State private var isReplyHovered = false
+
+    private var canReply: Bool {
+        !context.isMeasuring && !context.isInteractionPreview
+            && actions.replyToMessage != nil
+            && MessageActionPolicy(row: row, context: actions.interactionContext).availability(of: .reply) == .enabled
+    }
+
+    private func reply() {
+        guard canReply, let message = row.entry.remoteMessage else { return }
+        actions.replyToMessage?(message)
+    }
 
     var body: some View {
         if context.isInteractionPreview {
@@ -29,6 +42,23 @@ struct MessageBubbleShell<Content: View>: View {
                             : actions.openContextMenu.map { action in
                                 { rect in action(row, rect) }
                             }))
+                .overlay(alignment: row.isOutgoing ? .bottomLeading : .bottomTrailing) {
+                    if canReply && isRowHovered {
+                        MessageRowActionButton(action: reply) {
+                            Image(systemName: "arrowshape.turn.up.left")
+                                .font(.system(size: 16))
+                                .foregroundStyle(isReplyHovered ? ChahuaTheme.accent : .secondary)
+                                .frame(width: 28, height: 28)
+                                .background(.primary.opacity(isReplyHovered ? 0.12 : 0.06), in: Circle())
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Reply")
+                        .help("Reply")
+                        .onHover { isReplyHovered = $0 }
+                        .offset(x: row.isOutgoing ? -36 : 36)
+                    }
+                }
             avatar
             if row.entry.remoteMessage?.isDeleted != true,
                 let reactions = row.entry.remoteMessage?.reactions, !reactions.isEmpty
@@ -45,6 +75,17 @@ struct MessageBubbleShell<Content: View>: View {
         }
         .padding(.horizontal, BubbleMetrics.rowHorizontalInset)
         .padding(.vertical, BubbleMetrics.rowVerticalInset)
+        .contentShape(Rectangle())
+        .onHover { isRowHovered = $0 }
+        .modifier(MessageReplySwipe(isEnabled: canReply, isMeasuring: context.isMeasuring, onReply: reply))
+        .id(row.entry.stableKey)
+        .onChange(of: row.entry.stableKey) { _, _ in
+            isRowHovered = false
+            isReplyHovered = false
+        }
+        .onChange(of: canReply) { _, enabled in
+            if !enabled { isReplyHovered = false }
+        }
     }
 
     @ViewBuilder private var surface: some View {

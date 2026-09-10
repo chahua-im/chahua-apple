@@ -41,3 +41,10 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - Do not introduce CocoaPods or Carthage; use SPM (remote or local under `Packages/`)
 - Prefer shared SwiftUI views and controls across iOS and macOS. Use UIKit/AppKit wrappers or separate platform implementations only when a concrete requirement cannot reasonably be met with shared SwiftUI.
 - Document each new or retained platform-specific UI exception near its implementation: the requirement, the SwiftUI limitation that necessitates the exception, and why the native approach is needed. Do not add custom native UI solely to reproduce behavior SwiftUI already provides.
+
+## Verification
+
+- Do not introduce new test fixtures unless explicitly requested by the user. Reuse existing fixtures when appropriate.
+- For most new feature verification, especially look and feel and interaction behavior, request manual verification and feedback from the user rather than creating new fixtures or elaborate UI automation.
+- Give the user concise verification steps and the expected behavior. Distinguish checks performed from behavior awaiting manual verification.
+- Treat user-reported verification as authoritative; do not repeat checks they have already completed.

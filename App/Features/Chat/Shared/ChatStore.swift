@@ -86,9 +86,9 @@ final class ChatStore: ObservableObject {
             }
             return PendingOutgoingMessage(
                 chatID: message.chatID, clientGeneratedID: message.clientGeneratedID,
-                body: .init(messageType: .text, clientGeneratedId: message.clientGeneratedID, message: message.text),
+                body: .init(messageType: .text, clientGeneratedId: message.clientGeneratedID, message: message.text, replyToId: message.replyToMessage?.id),
                 enqueuedAt: message.enqueuedAt, senderID: message.senderID,
-                state: state
+                state: state, replyToMessage: message.replyToMessage
             )
         }
     }
@@ -198,6 +198,7 @@ final class ChatStore: ObservableObject {
             conversationMessages.apply(.messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
             invalidateChatList()
         case .messageDeleted(let message):
+            drafts.redactReplyTargets([message.id], chatID: message.chatId)
             conversationMessages.apply(.messageDeleted(message.normalizedForRealtime(currentUserID: currentUserID).redactedForDeletion()))
             invalidateChatList()
         case .reactionUpdated(let payload):
@@ -206,6 +207,7 @@ final class ChatStore: ObservableObject {
                 reactions: payload.reactions.map { $0.normalizedForRealtime(currentUserID: currentUserID) }
             )))
         case .messagesBulkDeleted(let payload):
+            drafts.redactReplyTargets(Set(payload.messageIds), chatID: payload.chatId)
             conversationMessages.apply(event)
             invalidateChatList()
             scheduleRecovery(chatID: payload.chatId)

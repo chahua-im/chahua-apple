@@ -266,17 +266,21 @@ final class ChatStoreTests: XCTestCase {
 
     func testFailedLocalEnqueueKeepsDraftAndRetryEnqueuesExactlyOnce() async throws {
         let h = try await openDraftHarness()
+        let reply = try TimelineTestFixtures.message(id: "target", at: 0).replyPreview
+        h.store.drafts.setDraftReply(reply, chatID: "chat")
         h.store.drafts.setDraftText("keep this", chatID: "chat")
         await h.store.drafts.flushDraft(chatID: "chat")
         h.probe.failEnqueue = true
         let failed = await h.store.drafts.submitDraft(chatID: "chat")
         XCTAssertFalse(failed)
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "keep this")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), reply)
         XCTAssertTrue(h.store.drafts.draftSaveFailed)
         XCTAssertFalse(h.store.drafts.committingDrafts.contains("chat"))
         XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
         let afterFailure = try await h.localStore.restore()
         XCTAssertEqual(afterFailure.first?.draft.text, "keep this")
+        XCTAssertEqual(afterFailure.first?.draft.replyToMessage, reply)
         XCTAssertTrue(afterFailure.flatMap(\.outgoing).isEmpty)
 
         h.probe.failEnqueue = false
@@ -284,9 +288,68 @@ final class ChatStoreTests: XCTestCase {
         let retried = await h.store.drafts.submitDraft(chatID: "chat")
         XCTAssertTrue(retried)
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "")
+        XCTAssertNil(h.store.drafts.draftReply(chatID: "chat"))
         XCTAssertFalse(h.store.drafts.draftSaveFailed)
         let afterRetry = try await h.localStore.restore()
         XCTAssertEqual(afterRetry.flatMap(\.outgoing).map(\.text), ["keep this"])
+        XCTAssertNil(afterRetry.first?.draft.replyToMessage)
+        XCTAssertEqual(afterRetry.flatMap(\.outgoing).first?.replyToMessage, reply)
+    }
+
+    func testReplyOnlyDraftRestoresAndLocalReplyChangesSurviveStaleSnapshots() async throws {
+        let h = try await openDraftHarness()
+        let original = try TimelineTestFixtures.message(id: "original", at: 0).replyPreview
+        let replacement = try TimelineTestFixtures.message(id: "replacement", at: 1).replyPreview
+        h.store.drafts.setDraftReply(original, chatID: "chat")
+        await h.store.drafts.flushAll()
+        await h.queue.deactivate()
+        h.store.reset()
+        await h.queue.activate(uid: 1)
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), original)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "")
+
+        h.store.drafts.setDraftReply(replacement, chatID: "chat")
+        let stale = try XCTUnwrap(h.queue.snapshots["chat"])
+        h.store.drafts.install(stale)
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), replacement)
+        await h.store.drafts.flushDraft(chatID: "chat")
+        let replaced = try await h.localStore.restore()
+        XCTAssertEqual(replaced.first?.draft.replyToMessage, replacement)
+
+        h.store.drafts.setDraftText("keep text", chatID: "chat")
+        h.store.drafts.setDraftReply(nil, chatID: "chat")
+        h.store.drafts.install(try XCTUnwrap(h.queue.snapshots["chat"]))
+        XCTAssertNil(h.store.drafts.draftReply(chatID: "chat"))
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "keep text")
+        await h.store.drafts.flushDraft(chatID: "chat")
+        let canceled = try await h.localStore.restore()
+        XCTAssertNil(canceled.first?.draft.replyToMessage)
+        XCTAssertEqual(canceled.first?.draft.text, "keep text")
+    }
+
+    func testDeletedReplyTargetsStayRedactedAfterOutboxRefresh() async throws {
+        let h = try await openDraftHarness()
+        let target = try TimelineTestFixtures.message(id: "target", at: 0, text: "private content")
+        h.store.drafts.setDraftReply(target.replyPreview, chatID: "chat")
+        h.store.drafts.setDraftText("queued answer", chatID: "chat")
+        let submitted = await h.store.drafts.submitDraft(chatID: "chat")
+        XCTAssertTrue(submitted)
+        h.store.drafts.setDraftReply(target.replyPreview, chatID: "chat")
+        h.store.drafts.setDraftText("next answer", chatID: "chat")
+
+        await h.store.applyRealtimeEvent(.messageDeleted(target), currentUserID: 1)
+        let redacted = target.replyPreview.redactedForDeletion()
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), redacted)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "next answer")
+        await h.store.drafts.flushDraft(chatID: "chat")
+        let refreshed = h.store.conversationMessages.projection(for: "chat", remoteMessages: [], includePendingOutgoing: true)
+        guard case .pending(let pending) = try XCTUnwrap(refreshed.entries.first) else {
+            return XCTFail("Expected the queued reply")
+        }
+        XCTAssertEqual(pending.replyToMessage, redacted)
+        XCTAssertEqual(pending.body.replyToId, target.id)
+        h.store.drafts.setDraftReply(target.replyPreview, chatID: "chat")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), redacted)
     }
 
     private func openDraftHarness() async throws -> DraftHarness {

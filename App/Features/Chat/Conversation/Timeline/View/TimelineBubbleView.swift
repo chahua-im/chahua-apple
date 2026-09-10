@@ -13,6 +13,7 @@ struct TimelineRowContext: Equatable {
 struct TimelineBubbleActions {
     var openMedia: ((String, [AttachmentResponse], String) -> Void)?
     var openReply: ((String) -> Void)?
+    var replyToMessage: ((MessageResponse) -> Void)?
     var openThread: ((String) -> Void)?
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?

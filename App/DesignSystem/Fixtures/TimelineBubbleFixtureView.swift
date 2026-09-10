@@ -14,6 +14,8 @@
         @State private var event = "No action"
         @State private var threadScope = false
         @State private var draft = ""
+        @State private var replyToMessage: MessagePreview?
+        @State private var replyFocusRequest = 0
 
         var body: some View {
             if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
@@ -83,9 +85,14 @@
                                     isEnabled: true,
                                     canSend: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                                     onSubmit: {
-                                        event = "Submitted: \(draft)"
+                                        event = "Submitted: \(draft)" + (replyToMessage.map { " → \($0.id)" } ?? "")
                                         draft = ""
-                                    }
+                                        replyToMessage = nil
+                                    },
+                                    replyToMessage: replyToMessage,
+                                    replyFocusRequest: replyFocusRequest,
+                                    onCancelReply: { replyToMessage = nil },
+                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } }
                                 )
                             })
                     }
@@ -146,7 +153,11 @@
             result.openMedia = { source, attachments, selected in
                 event = "Media: \(source) / \(selected), \(attachments.count) attachments"
             }
-            result.openReply = { event = "Reply: \($0)" }
+            result.replyToMessage = {
+                replyToMessage = $0.replyPreview
+                replyFocusRequest &+= 1
+            }
+            result.openReply = { id in Task { await fixture.timeline?.jumpToMessage(id) } }
             result.openThread = { event = "Thread: \($0)" }
             result.openLink = { event = "Link: \($0.absoluteString)" }
             result.openMention = { event = "Mention: \($0)" }
@@ -221,10 +232,10 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
             for deleted in [false, true] {
                 var item = object(index: objects.count, text: "A text reply with @[uid:2] and https://example.com")
                 item["replyToMessage"] = [
-                    "id": "quoted-target", "clientGeneratedId": "quoted-client",
+                    "id": "fixture-0", "clientGeneratedId": "fixture-client-0",
                     "createdAt": "2026-09-01T12:00:00Z", "sender": sender(2),
                     "messageType": "text", "attachments": [], "mentions": [],
-                    "isDeleted": deleted, "message": "Quoted text should appear above the reply."
+                    "isDeleted": deleted, "message": "Hello"
                 ]
                 objects.append(item)
             }

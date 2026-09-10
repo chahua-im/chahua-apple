@@ -40,6 +40,7 @@ struct MessageInteractionHost<Content: View>: View {
                 target = Target(key: row.entry.stableKey, source: rect)
             } : nil
         if !context.canWrite { result.toggleReaction = nil }
+        if target != nil || !context.canWrite { result.replyToMessage = nil }
         return result
     }
 
@@ -58,6 +59,15 @@ struct MessageInteractionHost<Content: View>: View {
                             actions.toggleReaction?(liveRow, emoji)
                         },
                         onAction: { action in
+                            if action == .reply, let liveRow = selectedRow,
+                                MessageActionPolicy(row: liveRow, context: context).availability(of: action) == .enabled,
+                                let message = liveRow.entry.remoteMessage,
+                                let reply = actions.replyToMessage
+                            {
+                                self.target = nil
+                                reply(message)
+                                return
+                            }
                             if action == .copy, let liveRow = selectedRow,
                                 MessageActionPolicy(row: liveRow, context: context).availability(of: action)
                                     == .enabled,

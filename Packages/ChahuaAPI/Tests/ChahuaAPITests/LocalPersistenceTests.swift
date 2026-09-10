@@ -8,24 +8,32 @@ final class LocalPersistenceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let scope = LocalStorageScope(apiBaseURL: URL(string: "https://example.com/api")!, userID: 1)
         let directory = scope.directory(under: root)
+        let reply = preview(id: "original")
+        let nextReply = preview(id: "next")
         var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
-        _ = try await store!.saveDraft(chatID: "chat", text: "hello\n世界", editRevision: 1, updatedAt: Date())
+        _ = try await store!.saveDraft(chatID: "chat", text: "hello\n世界", editRevision: 1, updatedAt: Date(), replyToMessage: reply)
         store = nil
         store = try ChahuaLocalStore(directory: directory)
         let restored = try await store!.restore()
         XCTAssertEqual(restored.first?.draft.text, "hello\n世界")
-        let sent = try await store!.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "  hello\n世界  ", enqueuedAt: Date(), clearedDraftRevision: 2)
+        XCTAssertEqual(restored.first?.draft.replyToMessage, reply)
+        let sent = try await store!.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "  hello\n世界  ", enqueuedAt: Date(), clearedDraftRevision: 2, replyToMessage: reply)
         XCTAssertEqual(sent.draft.text, "")
+        XCTAssertNil(sent.draft.replyToMessage)
+        XCTAssertEqual(sent.outgoing.first?.replyToMessage, reply)
         XCTAssertEqual(sent.outgoing.map(\.text), ["hello\n世界"])
-        let late = try await store!.saveDraft(chatID: "chat", text: "stale", editRevision: 1, updatedAt: Date())
+        let late = try await store!.saveDraft(chatID: "chat", text: "stale", editRevision: 1, updatedAt: Date(), replyToMessage: reply)
         XCTAssertEqual(late.draft.text, "")
-        _ = try await store!.saveDraft(chatID: "chat", text: "keep me", editRevision: 3, updatedAt: Date())
+        XCTAssertNil(late.draft.replyToMessage)
+        _ = try await store!.saveDraft(chatID: "chat", text: "keep me", editRevision: 3, updatedAt: Date(), replyToMessage: nextReply)
         do {
-            _ = try await store!.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "duplicate", enqueuedAt: Date(), clearedDraftRevision: 4)
+            _ = try await store!.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "duplicate", enqueuedAt: Date(), clearedDraftRevision: 4, replyToMessage: nextReply)
             XCTFail("Duplicate identity must roll back the entire handoff")
         } catch { }
         let rolledBack = try await store!.restore()
         XCTAssertEqual(rolledBack.first?.draft.text, "keep me")
+        XCTAssertEqual(rolledBack.first?.draft.replyToMessage, nextReply)
+        XCTAssertEqual(rolledBack.first?.outgoing.first?.replyToMessage, reply)
         XCTAssertEqual(rolledBack.first?.outgoing.map(\.clientGeneratedID), ["A"])
         let otherChat = try await store!.saveDraft(chatID: "other", text: "", editRevision: 1, updatedAt: Date())
         XCTAssertTrue(otherChat.outgoing.isEmpty)
@@ -70,5 +78,14 @@ final class LocalPersistenceTests: XCTestCase {
         let single = try await store!.retry(chatID: "chat", clientGeneratedID: "D", scope: .message)
         XCTAssertEqual(single.outgoing.map(\.clientGeneratedID), ["D", "C", "A"])
         XCTAssertEqual(single.outgoing.map(\.state), [.queued, .failed, .failed])
+    }
+
+    private func preview(id: String) -> MessagePreview {
+        MessagePreview(
+            id: id, clientGeneratedId: "client-\(id)", createdAt: Date(timeIntervalSince1970: 1),
+            sender: User(uid: 2, gender: 0, name: "Ada", avatarUrl: nil, userGroup: nil),
+            messageType: .text, attachments: [], mentions: [], isDeleted: false,
+            message: "Reply to \(id)", sticker: nil
+        )
     }
 }

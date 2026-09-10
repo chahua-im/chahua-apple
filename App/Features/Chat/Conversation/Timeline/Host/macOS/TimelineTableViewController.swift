@@ -65,6 +65,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             // that read the latest actions; only availability changes affect their UI.
             guard (actions.openMedia == nil) != (oldValue.openMedia == nil)
                 || (actions.openReply == nil) != (oldValue.openReply == nil)
+                || (actions.replyToMessage == nil) != (oldValue.replyToMessage == nil)
                 || (actions.openThread == nil) != (oldValue.openThread == nil)
                 || (actions.openLink == nil) != (oldValue.openLink == nil)
                 || (actions.openMention == nil) != (oldValue.openMention == nil)
@@ -622,6 +623,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         .init(
             openMedia: actions.openMedia == nil ? nil : { [weak self] in self?.actions.openMedia?($0, $1, $2) },
             openReply: actions.openReply == nil ? nil : { [weak self] in self?.actions.openReply?($0) },
+            replyToMessage: actions.replyToMessage == nil ? nil : { [weak self] in self?.actions.replyToMessage?($0) },
             openThread: actions.openThread == nil ? nil : { [weak self] in self?.actions.openThread?($0) },
             openLink: actions.openLink == nil ? nil : { [weak self] in self?.actions.openLink?($0) },
             openMention: actions.openMention == nil ? nil : { [weak self] in self?.actions.openMention?($0) },

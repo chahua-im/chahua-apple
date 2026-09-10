@@ -65,8 +65,7 @@ struct BubbleMedia: View {
         .contentShape(Rectangle())
 
         if let action, !isMeasuring, !isVideo {
-            Button { action(messageID, attachments, attachment.id) } label: { content }
-                .buttonStyle(.plain)
+            MessageRowActionButton { action(messageID, attachments, attachment.id) } label: { content }
                 .accessibilityLabel("Open image")
         } else { content }
     }

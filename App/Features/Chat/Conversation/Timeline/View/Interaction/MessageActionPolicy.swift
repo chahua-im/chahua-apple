@@ -90,7 +90,7 @@ struct MessageActionPolicy {
         if isDeleted {
             // Preserve the PWA's history affordances, never a stale redacted body.
             switch action {
-            case .reply: return context.canWrite ? .unimplemented : .hidden
+            case .reply: return context.canWrite && !isPending ? .enabled : .hidden
             case .copyLink: return context.isDM ? .hidden : .unimplemented
             case .reactionDetails: return hasReactions ? .unimplemented : .hidden
             default: return .hidden
@@ -106,7 +106,7 @@ struct MessageActionPolicy {
         case .copyLink:
             applicable = !context.isDM
         case .reply:
-            applicable = context.canWrite
+            return context.canWrite ? .enabled : .hidden
         case .thread:
             applicable = context.canWrite && messageType == .text && !context.isThreadView && !hasThreadInfo
         case .pin:

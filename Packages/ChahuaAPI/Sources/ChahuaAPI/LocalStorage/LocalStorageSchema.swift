@@ -29,6 +29,12 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
             CREATE INDEX outgoing_dispatch ON outgoing_message(chat_id, dispatch_order);
             """)
     }
+    migrator.registerMigration("v2_reply_context") { db in
+        try db.execute(sql: """
+            ALTER TABLE draft ADD COLUMN reply_to_message BLOB;
+            ALTER TABLE outgoing_message ADD COLUMN reply_to_message BLOB;
+            """)
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }

@@ -26,24 +26,30 @@ public final class ChahuaLocalStore: Sendable {
         }
     }
 
-    public func saveDraft(chatID: String, text: String, editRevision: Int64, updatedAt: Date) async throws -> LocalConversationSnapshot {
-        try await database.write { db in
+    public func saveDraft(chatID: String, text: String, editRevision: Int64, updatedAt: Date, replyToMessage: MessagePreview? = nil) async throws -> LocalConversationSnapshot {
+        let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
+        return try await database.write { db in
             try Self.ensure(db, chatID)
-            if try Self.writeDraft(db, chatID, text, editRevision, updatedAt) { try Self.bump(db, chatID) }
+            if try Self.writeDraft(db, chatID, text, editRevision, updatedAt, replyData) { try Self.bump(db, chatID) }
             return try Self.snapshot(db, chatID)
         }
     }
 
-    public func enqueueText(chatID: String, senderID: Int32, clientGeneratedID: String, text: String, enqueuedAt: Date, clearedDraftRevision: Int64) async throws -> LocalConversationSnapshot {
+    public func enqueueText(chatID: String, senderID: Int32, clientGeneratedID: String, text: String, enqueuedAt: Date, clearedDraftRevision: Int64, replyToMessage: MessagePreview? = nil) async throws -> LocalConversationSnapshot {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw LocalStorageError.blankMessage }
+        let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
         return try await database.write { db in
             try Self.ensure(db, chatID)
-            guard try Self.writeDraft(db, chatID, "", clearedDraftRevision, enqueuedAt) else { throw LocalStorageError.staleDraft }
+            guard try Self.writeDraft(db, chatID, "", clearedDraftRevision, enqueuedAt, nil) else { throw LocalStorageError.staleDraft }
             let sequence = try Int64.fetchOne(db, sql: "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ?", arguments: [chatID])!
             let order = try Int64.fetchOne(db, sql: "SELECT COALESCE(MAX(dispatch_order), -1) + 1 FROM outgoing_message WHERE chat_id = ?", arguments: [chatID])!
             let failed = try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM outgoing_message WHERE chat_id = ? AND state = 'failed')", arguments: [chatID])!
-            try db.execute(sql: "INSERT INTO outgoing_message VALUES (?, ?, ?, ?, ?, ?, ?, ?)", arguments: [clientGeneratedID, chatID, senderID, trimmed, enqueuedAt.timeIntervalSince1970, sequence, order, failed ? "failed" : "queued"])
+            try db.execute(sql: """
+                INSERT INTO outgoing_message
+                    (client_generated_id, chat_id, sender_id, text, enqueued_at, enqueue_sequence, dispatch_order, state, reply_to_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [clientGeneratedID, chatID, senderID, trimmed, enqueuedAt.timeIntervalSince1970, sequence, order, failed ? "failed" : "queued", replyData])
             try db.execute(sql: "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ?", arguments: [chatID])
             try Self.bump(db, chatID)
             return try Self.snapshot(db, chatID)
@@ -109,24 +115,28 @@ public final class ChahuaLocalStore: Sendable {
         try db.execute(sql: "UPDATE local_conversation SET revision = revision + 1 WHERE chat_id = ?", arguments: [chat])
     }
 
-    private static func writeDraft(_ db: Database, _ chat: String, _ text: String, _ revision: Int64, _ date: Date) throws -> Bool {
+    private static func writeDraft(_ db: Database, _ chat: String, _ text: String, _ revision: Int64, _ date: Date, _ replyData: Data?) throws -> Bool {
         try db.execute(sql: """
-            INSERT INTO draft VALUES (?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET text = excluded.text, edit_revision = excluded.edit_revision, updated_at = excluded.updated_at
+            INSERT INTO draft (chat_id, text, edit_revision, updated_at, reply_to_message) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET text = excluded.text, edit_revision = excluded.edit_revision, updated_at = excluded.updated_at, reply_to_message = excluded.reply_to_message
             WHERE excluded.edit_revision > draft.edit_revision
-            """, arguments: [chat, text, revision, date.timeIntervalSince1970])
+            """, arguments: [chat, text, revision, date.timeIntervalSince1970, replyData])
         return db.changesCount > 0
     }
 
     private static func snapshot(_ db: Database, _ chat: String) throws -> LocalConversationSnapshot {
         let revision = try Int64.fetchOne(db, sql: "SELECT revision FROM local_conversation WHERE chat_id = ?", arguments: [chat]) ?? 0
         let draftRow = try Row.fetchOne(db, sql: "SELECT * FROM draft WHERE chat_id = ?", arguments: [chat])
-        let draft = draftRow.map { LocalDraft(text: $0["text"], editRevision: $0["edit_revision"], updatedAt: Date(timeIntervalSince1970: $0["updated_at"])) }
-            ?? LocalDraft(text: "", editRevision: 0, updatedAt: .distantPast)
+        let draft = try draftRow.map { LocalDraft(text: $0["text"], replyToMessage: try decodeReply($0["reply_to_message"]), editRevision: $0["edit_revision"], updatedAt: Date(timeIntervalSince1970: $0["updated_at"])) }
+            ?? LocalDraft(text: "", replyToMessage: nil, editRevision: 0, updatedAt: .distantPast)
         let outgoing = try Row.fetchAll(db, sql: "SELECT * FROM outgoing_message WHERE chat_id = ? ORDER BY dispatch_order", arguments: [chat]).map { row in
             guard let state = LocalOutgoingMessage.State(rawValue: row["state"]), let sender = Int32(exactly: row["sender_id"] as Int64) else { throw LocalStorageError.corruptRecord }
-            return LocalOutgoingMessage(clientGeneratedID: row["client_generated_id"], chatID: chat, senderID: sender, text: row["text"], enqueuedAt: Date(timeIntervalSince1970: row["enqueued_at"]), enqueueSequence: row["enqueue_sequence"], dispatchOrder: row["dispatch_order"], state: state)
+            return LocalOutgoingMessage(clientGeneratedID: row["client_generated_id"], chatID: chat, senderID: sender, text: row["text"], replyToMessage: try decodeReply(row["reply_to_message"]), enqueuedAt: Date(timeIntervalSince1970: row["enqueued_at"]), enqueueSequence: row["enqueue_sequence"], dispatchOrder: row["dispatch_order"], state: state)
         }
         return LocalConversationSnapshot(chatID: chat, revision: revision, draft: draft, outgoing: outgoing)
+    }
+
+    private static func decodeReply(_ data: Data?) throws -> MessagePreview? {
+        try data.map { try JSONDecoder().decode(MessagePreview.self, from: $0) }
     }
 }

@@ -7,6 +7,56 @@ import ChahuaAPI
 final class ConversationTimelineModelTests: XCTestCase {
     private var cancellables: Set<AnyCancellable> = []
 
+
+    func testReplyJumpReusesLoadedTargetAndLoadsMissingHistory() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .success(try livePage(ids: 10 ... 12)),
+            .success(try historyPage(ids: 1 ... 3, newerCursor: "3")),
+        ])
+        await model.open()
+        await model.jumpToMessage("11")
+        XCTAssertEqual(source.queries.count, 1)
+        XCTAssertFalse(model.state.live.followsLatest)
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent,
+                       .reveal(.message(.clientGenerated("client-11")), animated: true, highlight: true))
+        await model.jumpToMessage("2")
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "2", "3"])
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent,
+                       .reveal(.message(.clientGenerated("client-2")), animated: false, highlight: true))
+    }
+
+    func testFailedReplyJumpKeepsHistoryAndCanBeRetried() async throws {
+        let (model, _, _) = try makeModel(pages: [
+            .success(try livePage(ids: 10 ... 12)), .failure(StubError()),
+            .success(try historyPage(ids: 1 ... 3, newerCursor: "3")),
+        ])
+        await model.open()
+        await model.jumpToMessage("2")
+        XCTAssertEqual(model.state.content, .ready)
+        XCTAssertEqual(model.state.repositionFailure, .message("2"))
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["10", "11", "12"])
+        await model.jumpToMessage("2")
+        XCTAssertNil(model.state.repositionFailure)
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "2", "3"])
+    }
+
+    func testLoadedReplyJumpSupersedesAnInFlightHistoryJump() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .success(try livePage(ids: 10 ... 12)),
+            .success(try historyPage(ids: 1 ... 3, newerCursor: "3")),
+        ])
+        await model.open()
+        source.holdNextRequest()
+        let oldJump = Task { await model.jumpToMessage("2") }
+        await source.waitUntilHeld()
+        await model.jumpToMessage("11")
+        source.release()
+        await oldJump.value
+        XCTAssertEqual(model.state.content, .ready)
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["10", "11", "12"])
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent,
+                       .reveal(.message(.clientGenerated("client-11")), animated: true, highlight: true))
+    }
     func testContinuedUserScrollingDoesNotRepublishUnchangedState() async throws {
         let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 2))])
         await model.loadInitial()

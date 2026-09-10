@@ -254,6 +254,28 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await second.close()
     }
 
+    func testFailedReplyKeepsTargetAcrossRestartAndRetry() async throws {
+        let h = try await openHarness()
+        let reply = try TimelineTestFixtures.message(id: "target", at: 0).replyPreview
+        try await h.queue.enqueueText(chatID: "chat", text: "answer", clearedDraftRevision: 1, replyToMessage: reply)
+        try await eventually { await h.api.requests().count == 1 }
+        let original = try await firstRequest(h.api)
+        XCTAssertEqual(original.body.replyToId, reply.id)
+        await h.api.finish(0, with: .failure(QueueTestError.network))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").first?.state == .failed }
+        await h.close()
+
+        let restored = try await openHarness(root: h.root)
+        XCTAssertEqual(restored.queue.pendingMessages(chatID: "chat").first?.replyToMessage, reply)
+        try await restored.queue.retry(chatID: "chat", clientGeneratedID: original.body.clientGeneratedId, scope: .message)
+        try await eventually { await restored.api.requests().count == 1 }
+        let retried = try await firstRequest(restored.api)
+        XCTAssertEqual(retried.body, original.body)
+        await restored.api.finish(0, with: .success(try response(retried)))
+        try await eventually { restored.queue.pendingMessages(chatID: "chat").isEmpty }
+        await restored.close()
+    }
+
     func testEnqueueAndClaimStorageFailuresNeverSendUncommittedWork() async throws {
         let h = try await openHarness()
         try await h.queue.saveDraft(chatID: "chat", text: "hello\n世界", editRevision: 1, updatedAt: Date())

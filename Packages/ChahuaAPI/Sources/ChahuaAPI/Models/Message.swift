@@ -49,6 +49,17 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         threadInfo = try container.decodeIfPresent(ThreadInfo.self, forKey: .threadInfo)
     }
 
+    public var replyPreview: MessagePreview {
+        MessagePreview(
+            id: id, clientGeneratedId: clientGeneratedId, createdAt: createdAt,
+            sender: sender, messageType: messageType,
+            attachments: isDeleted ? [] : attachments.map { MessagePreviewAttachment(kind: $0.kind) },
+            mentions: isDeleted ? [] : mentions, isDeleted: isDeleted,
+            message: isDeleted ? nil : message,
+            sticker: isDeleted ? nil : sticker.map { MessagePreviewSticker(emoji: $0.emoji) }
+        )
+    }
+
     public func replacingReactions(_ reactions: [ReactionSummary]) -> Self {
         guard !isDeleted else { return self }
         var copy = self
