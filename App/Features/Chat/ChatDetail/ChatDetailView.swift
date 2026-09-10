@@ -6,6 +6,7 @@ struct ChatDetailView: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ConversationTimelineModel
     @ObservedObject private var reactions: MessageReactionController
+    @ObservedObject private var drafts: ChatDraftStore
     @State private var interactionContext: MessageInteractionContext
     @State private var hasLoadedInteractionPermissions = false
     @State private var failedMessageID: String?
@@ -15,6 +16,7 @@ struct ChatDetailView: View {
         self.chat = chat
         self.store = store
         self.reactions = store.reactions
+        self.drafts = store.drafts
         _interactionContext = State(initialValue: .init(isDM: chat.kind == .dm))
         _model = StateObject(
             wrappedValue: ConversationTimelineModel(
@@ -34,7 +36,7 @@ struct ChatDetailView: View {
                     .modifier(
                         ChatComposerOverlay {
                             VStack(spacing: 0) {
-                                if store.outgoingQueue.storageState == .failed || store.draftSaveFailed {
+                                if store.outgoingQueue.storageState == .failed || drafts.draftSaveFailed {
                                     HStack {
                                         Text("Couldn’t save messages on this device.")
                                             .font(.caption)
@@ -52,23 +54,23 @@ struct ChatDetailView: View {
                                 }
                                 MessageComposerView(
                                     text: Binding(
-                                        get: { store.draftText(chatID: chat.id) },
-                                        set: { store.setDraftText($0, chatID: chat.id) }),
+                                        get: { drafts.draftText(chatID: chat.id) },
+                                        set: { drafts.setDraftText($0, chatID: chat.id) }),
                                     maxHeight: max(36, geometry.size.height / 3),
-                                    isEnabled: !store.committingDrafts.contains(chat.id),
+                                    isEnabled: !drafts.committingDrafts.contains(chat.id),
                                     canSend: store.outgoingQueue.storageState == .ready
-                                        && !store.committingDrafts.contains(chat.id)
-                                        && !store.draftText(chatID: chat.id).trimmingCharacters(
+                                        && !drafts.committingDrafts.contains(chat.id)
+                                        && !drafts.draftText(chatID: chat.id).trimmingCharacters(
                                             in: .whitespacesAndNewlines
                                         ).isEmpty,
                                     onSubmit: {
                                         Task {
-                                            if await store.submitDraft(chatID: chat.id) {
+                                            if await drafts.submitDraft(chatID: chat.id) {
                                                 await model.revealLatestAfterSend()
                                             }
                                         }
                                     },
-                                    onCompositionChanged: { store.setDraftComposing($0, chatID: chat.id) }
+                                    onCompositionChanged: { drafts.setDraftComposing($0, chatID: chat.id) }
                                 )
                             }
                         })
@@ -109,7 +111,7 @@ struct ChatDetailView: View {
         .onDisappear {
             store.unregisterTimeline(model)
             model.close()
-            Task { await store.flushDraft(chatID: chat.id) }
+            Task { await drafts.flushDraft(chatID: chat.id) }
         }
     }
 

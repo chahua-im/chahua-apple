@@ -43,6 +43,7 @@ The diagram separates connection lifecycle, event routing, message reconciliatio
 | `URLSessionRealtimeConnection` | Connection attempt | Socket operations and typed frame decoding | App lifecycle or UI |
 | `RealtimeCoordinator` | App | One desired connection, receive loop, heartbeat, backoff, scene aggregation, connection generation | Message merge or scroll policy |
 | `ChatStore` | App/session | Active-chat projection, event routing, coalesced list refresh, weak visible-timeline registry | A second full-message cache |
+| `ChatDraftStore` | App/session, owned by `ChatStore` | Committed draft text, edit revisions, debounced persistence, composition deferral, durable submission and session fencing | Network delivery or chat/message projections |
 | `ConversationMessageStore` | App/session | Pending sends, synchronous change broadcast, request-scoped event journal | A complete canonical message database or a globally consumable live buffer |
 | `ConversationTimelineModel` | Conversation presentation | Loaded window, local deferred arrivals, unseen identities, request generations, reconciliation and scroll policy | Authentication or socket ownership |
 | Native timeline host | Presentation | Rendering, measurement, viewport reporting and scroll effects | Network or reconciliation decisions |
@@ -163,7 +164,7 @@ The realtime layer handles existing chat/timeline state only. It does not introd
 
 ## Composer and durable enqueue boundary
 
-The iOS and macOS composer use one growing SwiftUI `TextField`, one `ComposerInputState`, and the same `ChatStore`/`OutgoingMessageQueue` pipeline. `MessageComposerView` owns layout, submission, and focus; the editing session owns only transient input and composition boundaries. The external draft binding remains the committed authority—there is no second cached committed string or retained send callback.
+The iOS and macOS composer use one growing SwiftUI `TextField`, one `ComposerInputState`, and the same `ChatDraftStore`/`OutgoingMessageQueue` pipeline. `ChatDetailView` observes `ChatDraftStore` directly. `ChatStore` routes revision-filtered outgoing snapshots to it and coordinates reset, background flush, and storage retry. `MessageComposerView` owns layout, submission, and focus; the editing session owns only transient input and composition boundaries. The external draft binding remains the committed authority—there is no second cached committed string or retained send callback.
 
 `ComposerNativeInput.swift` isolates the native facts SwiftUI does not expose: marked text, editor ownership, editing-end snapshots, and undo/redo notifications. It observes SwiftUI's editor without installing a delegate or replacing editing, selection, or undo. A temporary run-loop observer settles edits after native input transactions and detects unchanged-string unmark. Native teardown captures the final owned snapshot before deferring observable publication outside SwiftUI's update.
 
@@ -182,6 +183,7 @@ Apple implementation:
 - [ChahuaClient](../../Packages/ChahuaAPI/Sources/ChahuaAPI/Core/ChahuaClient.swift) and [RealtimeConnection](../../Packages/ChahuaAPI/Sources/ChahuaAPI/Core/RealtimeConnection.swift): shared credentials and socket transport.
 - [RealtimeServerEvent](../../Packages/ChahuaAPI/Sources/ChahuaAPI/Models/Realtime.swift): complete wire protocol.
 - [ChatStore](../../App/Features/Chat/Shared/ChatStore.swift): event ingress, list refresh and weak timeline registration.
+- [ChatDraftStore](../../App/Features/Chat/Shared/ChatDraftStore.swift): committed drafts, composition-aware persistence, durable submission and session fencing.
 - [ConversationMessageStore](../../App/Features/Chat/Conversation/State/ConversationMessageStore.swift): pending identity, synchronous broadcast and request journal.
 - [MessageReactionController](../../App/Features/Chat/Conversation/State/MessageReactionController.swift): authoritative reaction toggles, permission loading, pending/error state, and session fencing.
 - [ConversationTimelineModel](../../App/Features/Chat/Conversation/Timeline/Model/ConversationTimelineModel.swift) and [TimelineWindow](../../App/Features/Chat/Conversation/Timeline/Model/TimelineWindow.swift): per-window reconciliation, identities, pagination and viewport policy.

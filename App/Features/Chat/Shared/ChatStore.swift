@@ -20,14 +20,7 @@ final class ChatStore: ObservableObject {
     let conversationMessages = ConversationMessageStore()
     let outgoingQueue: OutgoingMessageQueue
     let reactions: MessageReactionController
-    @Published private(set) var drafts: [String: String] = [:]
-    @Published private(set) var committingDrafts = Set<String>()
-    @Published private(set) var draftSaveFailed = false
-    private var draftRevisions: [String: Int64] = [:]
-    private var unsavedDrafts = Set<String>()
-    private var composingDrafts = Set<String>()
-    private var deferredDraftFlushes = Set<String>()
-    private var pendingDraftSaves: [String: Task<Void, Never>] = [:]
+    let drafts: ChatDraftStore
     private var outgoingObservation: AnyCancellable?
     private var storageObservation: AnyCancellable?
     private var outgoingRevisions: [String: Int64] = [:]
@@ -52,6 +45,7 @@ final class ChatStore: ObservableObject {
         self.apiClient = apiClient
         self.onInvalidToken = onInvalidToken
         self.outgoingQueue = outgoingQueue
+        drafts = ChatDraftStore(outgoingQueue: outgoingQueue)
         reactions = MessageReactionController(
             apiClient: apiClient, messageStore: conversationMessages, onInvalidToken: onInvalidToken
         )
@@ -66,27 +60,20 @@ final class ChatStore: ObservableObject {
     private func applyOutgoingEvent(_ event: OutgoingQueueEvent) {
         switch event {
         case .snapshot(let snapshot):
-            guard installDraft(snapshot) else { return }
+            guard installOutgoingSnapshot(snapshot) else { return }
             conversationMessages.replacePending(chatID: snapshot.chatID, with: pendingProjection(chatID: snapshot.chatID))
         case .acknowledged(let snapshot, let message):
-            if let snapshot { _ = installDraft(snapshot) }
+            if let snapshot { _ = installOutgoingSnapshot(snapshot) }
             conversationMessages.replacePending(chatID: message.chatId, with: pendingProjection(chatID: message.chatId), acknowledging: message)
             invalidateChatList()
         }
     }
 
     @discardableResult
-    private func installDraft(_ snapshot: LocalConversationSnapshot) -> Bool {
+    private func installOutgoingSnapshot(_ snapshot: LocalConversationSnapshot) -> Bool {
         guard snapshot.revision >= outgoingRevisions[snapshot.chatID, default: -1] else { return false }
         outgoingRevisions[snapshot.chatID] = snapshot.revision
-        if unsavedDrafts.contains(snapshot.chatID), !committingDrafts.contains(snapshot.chatID),
-           drafts[snapshot.chatID] != snapshot.draft.text {
-            draftRevisions[snapshot.chatID] = max(draftRevisions[snapshot.chatID, default: 0], snapshot.draft.editRevision + 1)
-        } else if snapshot.draft.editRevision >= draftRevisions[snapshot.chatID, default: 0] {
-            drafts[snapshot.chatID] = snapshot.draft.text
-            draftRevisions[snapshot.chatID] = snapshot.draft.editRevision
-            unsavedDrafts.remove(snapshot.chatID)
-        }
+        drafts.install(snapshot)
         return true
     }
 
@@ -106,106 +93,17 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func draftText(chatID: String) -> String { drafts[chatID, default: ""] }
-
-    func setDraftText(_ text: String, chatID: String) {
-        guard !committingDrafts.contains(chatID), drafts[chatID] != text else { return }
-        drafts[chatID] = text
-        unsavedDrafts.insert(chatID)
-        draftRevisions[chatID, default: 0] += 1
-        scheduleDraftSave(chatID: chatID)
-    }
-
-    func setDraftComposing(_ isComposing: Bool, chatID: String) {
-        if isComposing {
-            composingDrafts.insert(chatID)
-            pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        } else if composingDrafts.remove(chatID) != nil {
-            scheduleDraftSave(chatID: chatID)
-        }
-    }
-
-    private func scheduleDraftSave(chatID: String, immediately: Bool = false) {
-        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        if immediately { deferredDraftFlushes.insert(chatID) }
-        guard !composingDrafts.contains(chatID) else { return }
-        guard unsavedDrafts.contains(chatID) else {
-            deferredDraftFlushes.remove(chatID)
-            return
-        }
-        let shouldFlushImmediately = deferredDraftFlushes.contains(chatID)
-        let requestGeneration = generation
-        pendingDraftSaves[chatID] = Task { [weak self] in
-            if !shouldFlushImmediately {
-                do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
-            }
-            guard let self, self.generation == requestGeneration, !Task.isCancelled else { return }
-            self.pendingDraftSaves[chatID] = nil
-            await self.flushDraft(chatID: chatID)
-        }
-    }
-
-    func flushDraft(chatID: String) async {
-        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        guard !composingDrafts.contains(chatID) else {
-            deferredDraftFlushes.insert(chatID)
-            return
-        }
-        deferredDraftFlushes.remove(chatID)
-        guard let text = drafts[chatID], unsavedDrafts.contains(chatID), !committingDrafts.contains(chatID) else { return }
-        let revision = draftRevisions[chatID, default: 0]
-        let requestGeneration = generation
-        do {
-            try await outgoingQueue.saveDraft(chatID: chatID, text: text, editRevision: revision, updatedAt: Date())
-            guard generation == requestGeneration else { return }
-            draftSaveFailed = false
-        } catch {
-            guard generation == requestGeneration else { return }
-            draftSaveFailed = true
-        }
-    }
-
-    func submitDraft(chatID: String) async -> Bool {
-        let text = draftText(chatID: chatID).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !composingDrafts.contains(chatID),
-              !committingDrafts.contains(chatID), outgoingQueue.storageState == .ready else { return false }
-        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        committingDrafts.insert(chatID)
-        let requestGeneration = generation
-        let revision = draftRevisions[chatID, default: 0] + 1
-        defer { if generation == requestGeneration { committingDrafts.remove(chatID) } }
-        do {
-            try await outgoingQueue.enqueueText(chatID: chatID, text: text, clearedDraftRevision: revision)
-            guard generation == requestGeneration else { return false }
-            draftRevisions[chatID] = revision
-            drafts[chatID] = ""
-            unsavedDrafts.remove(chatID)
-            deferredDraftFlushes.remove(chatID)
-            draftSaveFailed = false
-            return true
-        } catch {
-            guard generation == requestGeneration else { return false }
-            draftSaveFailed = true
-            return false
-        }
-    }
-
     func retryLocalStorage() async {
         let requestGeneration = generation
         await outgoingQueue.retryStorage()
         guard generation == requestGeneration else { return }
-        for chatID in Array(drafts.keys) {
-            await flushDraft(chatID: chatID)
-            guard generation == requestGeneration else { return }
-        }
+        await drafts.flushAll()
     }
 
     func setForegroundActive(_ active: Bool) {
         outgoingQueue.requestForegroundActive(active)
         if !active {
-            for chatID in drafts.keys {
-                scheduleDraftSave(chatID: chatID, immediately: true)
-            }
+            drafts.scheduleBackgroundFlush()
         }
     }
 
@@ -402,16 +300,8 @@ final class ChatStore: ObservableObject {
 
     func reset() {
         generation += 1
-        for task in pendingDraftSaves.values { task.cancel() }
-        pendingDraftSaves.removeAll()
-        drafts.removeAll()
-        draftRevisions.removeAll()
-        unsavedDrafts.removeAll()
-        composingDrafts.removeAll()
-        deferredDraftFlushes.removeAll()
+        drafts.reset()
         outgoingRevisions.removeAll()
-        committingDrafts.removeAll()
-        draftSaveFailed = false
         cancelRealtimeRecovery()
         reactions.reset()
         conversationMessages.reset()
