@@ -107,3 +107,30 @@ public struct ListChatsResponse: Codable, Hashable, Sendable {
         self.nextCursor = nextCursor
     }
 }
+
+public enum GroupRole: String, Codable, Hashable, Sendable {
+    case member
+    case admin
+}
+
+/// Membership and peer fields from `GET /group/{chatID}`.
+public struct GroupInfoResponse: Codable, Hashable, Sendable {
+    public let id: String
+    public let myRole: GroupRole?
+    public let kind: ChatKind
+    public let peer: MemberSummary?
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        myRole = try container.decodeIfPresent(GroupRole.self, forKey: .myRole)
+        kind = try container.decodeIfPresent(ChatKind.self, forKey: .kind) ?? .group
+        peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)
+    }
+}
+
+/// The server-authoritative DM write decision from `GET /friends/{peerUID}`.
+public struct FriendRelationshipResponse: Codable, Hashable, Sendable {
+    public let peerUid: Int32
+    public let canDm: Bool
+}

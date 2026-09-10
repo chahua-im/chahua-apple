@@ -515,6 +515,11 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { throw APIError.unavailable }
+    func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
+    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
+    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
+    func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
+    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
 
     // Intentionally ignores cancellation until explicitly completed, exercising late responses.
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse {

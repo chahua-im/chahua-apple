@@ -51,7 +51,7 @@ public extension ChahuaClient {
         try await send(
             HTTPRequestSpec(
                 method: .get,
-                path: "/chats/\(chatID)/messages",
+                path: ["chats", chatID, "messages"],
                 query: query.queryItems
             ),
             decoding: ListMessagesResponse.self
@@ -64,8 +64,26 @@ public extension ChahuaClient {
         body: CreateMessageBody
     ) async throws -> MessageResponse {
         try await send(
-            HTTPRequestSpec.json(.post, "/chats/\(chatID)/messages", body: body),
+            HTTPRequestSpec.json(.post, ["chats", chatID, "messages"], body: body),
             decoding: MessageResponse.self
         )
+    }
+
+    /// Fetches a recipient-personalized, authoritative message snapshot.
+    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["chats", chatID, "messages", messageID]),
+            decoding: MessageResponse.self
+        )
+    }
+
+    /// Adds the current user's reaction. The server returns an empty 204 response.
+    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+        try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "messages", messageID, "reactions", emoji]))
+    }
+
+    /// Removes the current user's reaction. Emoji remains one encoded path segment.
+    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+        try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "messages", messageID, "reactions", emoji]))
     }
 }

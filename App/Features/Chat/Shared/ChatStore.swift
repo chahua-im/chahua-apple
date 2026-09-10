@@ -19,6 +19,7 @@ final class ChatStore: ObservableObject {
     @Published private(set) var state = ChatState()
     let conversationMessages = ConversationMessageStore()
     let outgoingQueue: OutgoingMessageQueue
+    let reactions: MessageReactionController
     @Published private(set) var drafts: [String: String] = [:]
     @Published private(set) var committingDrafts = Set<String>()
     @Published private(set) var draftSaveFailed = false
@@ -49,6 +50,9 @@ final class ChatStore: ObservableObject {
         self.apiClient = apiClient
         self.onInvalidToken = onInvalidToken
         self.outgoingQueue = outgoingQueue
+        reactions = MessageReactionController(
+            apiClient: apiClient, messageStore: conversationMessages, onInvalidToken: onInvalidToken
+        )
         outgoingObservation = outgoingQueue.events.sink { [weak self] event in
             self?.applyOutgoingEvent(event)
         }
@@ -373,6 +377,7 @@ final class ChatStore: ObservableObject {
         committingDrafts.removeAll()
         draftSaveFailed = false
         cancelRealtimeRecovery()
+        reactions.reset()
         conversationMessages.reset()
         state = ChatState()
     }

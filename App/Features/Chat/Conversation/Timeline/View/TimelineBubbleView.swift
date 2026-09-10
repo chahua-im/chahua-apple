@@ -7,6 +7,7 @@ struct TimelineRowContext: Equatable {
     var currentUserID: Int32?
     var isThreadTimeline = false
     var isMeasuring = false
+    var isInteractionPreview = false
 }
 
 struct TimelineBubbleActions {
@@ -16,6 +17,21 @@ struct TimelineBubbleActions {
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?
     var openFailedMessage: ((String) -> Void)?
+    var openContextMenu: ((TimelineMessageRow, CGRect) -> Void)?
+    var toggleReaction: ((TimelineMessageRow, String) -> Void)?
+    var pendingReactionMessageIDs: Set<String> = []
+    var interactionContext = MessageInteractionContext()
+}
+
+private struct MessageBubbleActionsKey: EnvironmentKey {
+    static var defaultValue: TimelineBubbleActions { .init() }
+}
+
+extension EnvironmentValues {
+    var messageBubbleActions: TimelineBubbleActions {
+        get { self[MessageBubbleActionsKey.self] }
+        set { self[MessageBubbleActionsKey.self] = newValue }
+    }
 }
 
 /// Closed rendering surface. Per-kind components live under `View/Bubble/`; adding a new row
@@ -45,6 +61,7 @@ struct TimelineBubbleView: View {
         .background(context.isHighlighted ? ChahuaTheme.accent.opacity(0.15) : .clear)
         .animation(.easeOut(duration: 0.3), value: context.isHighlighted)
         .environment(\.mediaContext, mediaContext)
+        .environment(\.messageBubbleActions, actions)
     }
 
     @ViewBuilder

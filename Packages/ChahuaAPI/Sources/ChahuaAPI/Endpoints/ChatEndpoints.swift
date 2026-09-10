@@ -35,8 +35,22 @@ public extension ChahuaClient {
     /// corresponding `ListChatsQuery` fields are non-`nil`.
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         try await send(
-            HTTPRequestSpec(method: .get, path: "/chats", query: query.queryItems),
+            HTTPRequestSpec(method: .get, path: ["chats"], query: query.queryItems),
             decoding: ListChatsResponse.self
+        )
+    }
+
+    func groupInfo(chatID: String) async throws -> GroupInfoResponse {
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["group", chatID]),
+            decoding: GroupInfoResponse.self
+        )
+    }
+
+    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["friends", String(peerUID)]),
+            decoding: FriendRelationshipResponse.self
         )
     }
 }

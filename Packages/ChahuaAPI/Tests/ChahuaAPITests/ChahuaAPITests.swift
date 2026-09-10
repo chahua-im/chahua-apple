@@ -117,6 +117,37 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
     }
 
+    func testReactionPathsPreserveEmojiAndReservedCharactersAsSingleSegments() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (204, "")
+        }
+        let client = ChahuaClient(
+            configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example/base%20path/")!),
+            token: "candidate",
+            session: testSession()
+        )
+        let emojis = ["👩🏽‍💻", "#️⃣", "/", "%2F"]
+        for emoji in emojis {
+            try await client.putReaction(chatID: "chat/one", messageID: "message#two", emoji: emoji)
+            try await client.deleteReaction(chatID: "chat/one", messageID: "message#two", emoji: emoji)
+        }
+
+        XCTAssertEqual(requests.values.count, emojis.count * 2)
+        for (index, request) in requests.values.enumerated() {
+            let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+            let segments = components.percentEncodedPath.split(separator: "/").map(String.init)
+            XCTAssertEqual(segments.count, 7)
+            XCTAssertEqual(Array(segments.prefix(6)), ["base%20path", "chats", "chat%2Fone", "messages", "message%23two", "reactions"])
+            XCTAssertEqual(segments.last?.removingPercentEncoding, emojis[index / 2])
+            XCTAssertNil(components.query)
+            XCTAssertNil(components.fragment)
+            XCTAssertEqual(request.httpMethod, index.isMultiple(of: 2) ? "PUT" : "DELETE")
+            XCTAssertNil(request.httpBody)
+        }
+    }
+
     private func testSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

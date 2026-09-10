@@ -26,11 +26,24 @@ public protocol ChahuaAPIClient: Sendable {
     /// reorder pages.
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse
 
+    /// Fetches current membership and DM peer identity with `GET /group/{chatID}`.
+    func groupInfo(chatID: String) async throws -> GroupInfoResponse
+
+    /// Fetches the server's DM authorization decision with `GET /friends/{peerUID}`.
+    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse
+
     /// Fetches a message page from `GET /chats/{chatID}/messages`.
     ///
     /// Use the `olderCursor` and `newerCursor` response fields for paging.
     /// `nextCursor` and `prevCursor` are compatibility fields only.
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
+
+    /// Fetches authoritative, current-recipient state with `GET /chats/{chatID}/messages/{messageID}`.
+    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse
+
+    /// Idempotent reaction mutation at `/chats/{chatID}/messages/{messageID}/reactions/{emoji}`.
+    func putReaction(chatID: String, messageID: String, emoji: String) async throws
+    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws
 
     /// Sends a message with `POST /chats/{chatID}/messages`.
     ///

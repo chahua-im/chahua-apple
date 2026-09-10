@@ -85,6 +85,16 @@ Main-chat models accept top-level messages only. Thread models accept their root
 
 Reaction WS payloads contain up to five reactors and omit `reactedByMe`. Presence of the current UID establishes true; absence is unknown, not false. Full message events can carry actor-relative preference values. Do not treat event sticker favorites as receiving-user authority. HTTP hydration supplies user-relative state.
 
+### Message interaction mutations
+
+`MessageActionPolicy` determines applicable and enabled actions. `MessageActionMenu` renders the quick reaction bar and shared action controls; its full-picker entry is disabled. `MessageContextSource` adapts AppKit right-click/Control-click and UIKit long-press/secondary-click. `MessageInteractionHost` owns anchoring, dismissal, and a stable message target resolved against current timeline rows. Previews reuse the production bubble renderer without recursive interaction hooks.
+
+`MessageReactionController` owns permissions, mutation serialization, errors, and session cancellation. Group membership/role and DM friendship permission come from HTTP, not a permissive UI default. Only Copy and reactions are enabled; unfinished actions remain disabled.
+
+A toggle first reads `GET /chats/{chatID}/messages/{messageID}` to establish the current user's reaction ownership. Unknown ownership, deleted content, and intervening reaction events abort rather than guessing an add/remove operation. The controller enforces five reactions per user and fifty distinct reactions per message, then sends `PUT` or `DELETE` to the message's `/reactions/{emoji}` endpoint. Every URL path segment is encoded independently.
+
+No optimistic count is installed. After mutation success, a new request-scoped journal protects the authoritative readback: reaction/deletion events received during that GET win over the response. Events received during the preceding PUT/DELETE do not suppress the subsequent personalized GET. Pending state prevents duplicate taps, failures remain visible, and account/session reset cancels work and rejects stale completion.
+
 ## HTTP and WebSocket reconciliation
 
 ### Request-scoped journal
@@ -149,7 +159,7 @@ The app router handles current messaging events and explicitly groups the remain
 
 Malformed payloads for known events fail the connection rather than being silently discarded, allowing HTTP recovery on reconnect. Complete protocol modeling does not add screens, feature stores, or HTTP requests for domains the app does not yet handle. Verification decodes each known wire type and proves an unhandled/future event does not interrupt subsequent message delivery.
 
-This scope handles existing chat/timeline state only. It does not introduce typing/read-receipt protocols, APNs, a composer/send worker, reaction controls, or friend/pin/sticker/thread-list screens. Pending-send identity is preserved for existing machinery without claiming that a production send worker already exists.
+The realtime layer handles existing chat/timeline state only. It does not introduce typing/read-receipt protocols, APNs, a composer/send worker, or friend/pin/sticker/thread-list screens. Reaction controls use the separate mutation controller described above. Pending-send identity is preserved for existing machinery without claiming that a production send worker already exists.
 
 ## Source map and verification invariants
 
@@ -163,6 +173,7 @@ Apple implementation:
 - [RealtimeServerEvent](../../Packages/ChahuaAPI/Sources/ChahuaAPI/Models/Realtime.swift): complete wire protocol.
 - [ChatStore](../../App/Features/Chat/Shared/ChatStore.swift): event ingress, list refresh and weak timeline registration.
 - [ConversationMessageStore](../../App/Features/Chat/Conversation/State/ConversationMessageStore.swift): pending identity, synchronous broadcast and request journal.
+- [MessageReactionController](../../App/Features/Chat/Conversation/State/MessageReactionController.swift): authoritative reaction toggles, permission loading, pending/error state, and session fencing.
 - [ConversationTimelineModel](../../App/Features/Chat/Conversation/Timeline/Model/ConversationTimelineModel.swift) and [TimelineWindow](../../App/Features/Chat/Conversation/Timeline/Model/TimelineWindow.swift): per-window reconciliation, identities, pagination and viewport policy.
 
 Behavioral regressions cover HTTP rollback of intervening edits/deletes, duplicate create/ack identity and unseen counts, multi-window delivery, historical gaps, same-model reopen, account replacement, refresh failures, and foreground connection lifecycle. Real URLSession loopback scenarios exercise HTTP/event races and recovery through both native hosts; their rendered attachments show the redacted/edited rows, historical unseen affordance, fresh reopened window, and list error/empty states. These checks establish client-side behavior, not lossless server delivery or a global mutation order.

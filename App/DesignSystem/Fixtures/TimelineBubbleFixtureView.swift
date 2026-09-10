@@ -1,126 +1,166 @@
 #if DEBUG
-import CoreText
-import ChahuaAPI
-import Combine
-import ImageIO
-import SwiftUI
-import UniformTypeIdentifiers
+    import CoreText
+    import ChahuaAPI
+    import Combine
+    import ImageIO
+    import SwiftUI
+    import UniformTypeIdentifiers
 
-/// Local-only diagnostic surface. Uses the production timeline and decoder, never production auth.
-struct TimelineBubbleFixtureView: View {
-    @StateObject private var fixture = TimelineBubbleFixtureModel()
-    @State private var dark = ProcessInfo.processInfo.arguments.contains("-fixture-dark")
-    @State private var handlersEnabled = true
-    @State private var event = "No action"
-    @State private var threadScope = false
-    @State private var draft = ""
+    /// Local-only diagnostic surface. Uses the production timeline and decoder, never production auth.
+    struct TimelineBubbleFixtureView: View {
+        @StateObject private var fixture = TimelineBubbleFixtureModel()
+        @State private var dark = ProcessInfo.processInfo.arguments.contains("-fixture-dark")
+        @State private var handlersEnabled = true
+        @State private var event = "No action"
+        @State private var threadScope = false
+        @State private var draft = ""
 
-    var body: some View {
-        if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
-            ChatSplitLayout(hasSelection: true) { _ in
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Chats").font(.title2.bold())
-                    Label("Native bubble timeline", systemImage: "bubble.left.and.bubble.right")
-                    Text("Drag the gap to resize the sidebar.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    diagnosticControls
-                    Spacer()
+        var body: some View {
+            if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
+                ChatSplitLayout(hasSelection: true) { _ in
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("Chats").font(.title2.bold())
+                        Label("Native bubble timeline", systemImage: "bubble.left.and.bubble.right")
+                        Text("Drag the gap to resize the sidebar.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        diagnosticControls
+                        Spacer()
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } detail: { _ in
+                    timelineContent
+                        .modifier(
+                            ChatHeaderOverlay {
+                                ChatFloatingHeader(title: "Native bubble timeline")
+                                    .padding(.top, ChatSplitMetrics.outerInset)
+                            })
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } detail: { _ in
-                timelineContent
-                    .modifier(ChatHeaderOverlay {
-                        ChatFloatingHeader(title: "Native bubble timeline")
-                            .padding(.top, ChatSplitMetrics.outerInset)
-                    })
-            }
-            .frame(minWidth: 900, minHeight: 600)
-            .preferredColorScheme(dark ? .dark : .light)
-        } else {
-            timelineContent
-        }
-    }
-
-    private var timelineContent: some View {
-        VStack(spacing: 0) {
-            if !ProcessInfo.processInfo.arguments.contains("-fixture-split") {
-                diagnosticControls
-            }
-            if let model = fixture.timeline {
-                ConversationTimelineView(
-                    model: model,
-                    initialPosition: ProcessInfo.processInfo.environment["CHAHUA_FIXTURE_MESSAGE"].map(TimelineInitialPosition.message) ?? .liveEdge,
-                    actions: actions
-                )
-                    .id(ObjectIdentifier(model))
-                    .modifier(ChatComposerOverlay {
-                        MessageComposerView(
-                            text: $draft,
-                            maxHeight: 160,
-                            isEnabled: true,
-                            canSend: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                            onSubmit: {
-                                event = "Submitted: \(draft)"
-                                draft = ""
-                            }
-                        )
-                    })
-            } else if let error = fixture.error {
-                Text(error).textSelection(.enabled).padding()
+                .frame(minWidth: 900, minHeight: 600)
+                .preferredColorScheme(dark ? .dark : .light)
             } else {
-                ProgressView("Generating local fixtures")
+                timelineContent
             }
         }
-        .preferredColorScheme(dark ? .dark : .light)
-        .navigationTitle("Native bubble timeline")
-        .frame(minWidth: 300, minHeight: 400)
-        .task { fixture.prepare() }
-    }
 
-    private var diagnosticControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Toggle("Dark", isOn: $dark)
-            Toggle("Action hooks", isOn: $handlersEnabled)
-            Toggle("Thread scope", isOn: $threadScope)
-                .onChange(of: threadScope) { value in fixture.setThreadScope(value) }
-            HStack {
-                Button("Queue") { Task { await fixture.queue() } }
-                    .disabled(fixture.hasQueued)
-                Button("Sending") { fixture.store.markSending(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending") }
-                Button("Fail") { fixture.store.markFailed(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending") }
-                Button("Acknowledge") { fixture.acknowledge() }
+        private var timelineContent: some View {
+            VStack(spacing: 0) {
+                if !ProcessInfo.processInfo.arguments.contains("-fixture-split") {
+                    diagnosticControls
+                }
+                if let model = fixture.timeline {
+                    MessageInteractionHost(
+                        model: model,
+                        context: .init(canWrite: handlersEnabled, isAdmin: true, isThreadView: threadScope),
+                        actions: actions
+                    ) { interactiveActions in
+                        ConversationTimelineView(
+                            model: model,
+                            initialPosition: ProcessInfo.processInfo.environment["CHAHUA_FIXTURE_MESSAGE"].map(
+                                TimelineInitialPosition.message) ?? .liveEdge,
+                            actions: interactiveActions
+                        )
+                        .id(ObjectIdentifier(model))
+                        .modifier(
+                            ChatComposerOverlay {
+                                MessageComposerView(
+                                    text: $draft,
+                                    maxHeight: 160,
+                                    isEnabled: true,
+                                    canSend: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                    onSubmit: {
+                                        event = "Submitted: \(draft)"
+                                        draft = ""
+                                    }
+                                )
+                            })
+                    }
+                } else if let error = fixture.error {
+                    Text(error).textSelection(.enabled).padding()
+                } else {
+                    ProgressView("Generating local fixtures")
+                }
             }
-            Text(event).font(.caption).lineLimit(2)
+            .preferredColorScheme(dark ? .dark : .light)
+            .navigationTitle("Native bubble timeline")
+            .frame(minWidth: 300, minHeight: 400)
+            .task { fixture.prepare() }
+            .alert(
+                "Couldn’t update reaction",
+                isPresented: Binding(
+                    get: { fixture.reactions.error != nil },
+                    set: { if !$0 { fixture.reactions.error = nil } }
+                )
+            ) {
+                Button("OK") { fixture.reactions.error = nil }
+            } message: {
+                Text(fixture.reactions.error ?? "")
+            }
         }
-        .padding(8)
+
+        private var diagnosticControls: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Dark", isOn: $dark)
+                Toggle("Action hooks", isOn: $handlersEnabled)
+                Toggle("Thread scope", isOn: $threadScope)
+                    .onChange(of: threadScope) { value in fixture.setThreadScope(value) }
+                HStack {
+                    Button("Queue") { Task { await fixture.queue() } }
+                        .disabled(fixture.hasQueued)
+                    Button("Sending") {
+                        fixture.store.markSending(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending")
+                    }
+                    Button("Fail") {
+                        fixture.store.markFailed(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending")
+                    }
+                    Button("Acknowledge") { fixture.acknowledge() }
+                }
+                Button("Fail next reaction") { fixture.reactionClient.failNextMutation = true }
+                Text(event).font(.caption).lineLimit(2)
+            }
+            .padding(8)
+        }
+
+        private var actions: TimelineBubbleActions {
+            guard handlersEnabled else { return .init() }
+            var result = TimelineBubbleActions()
+            result.pendingReactionMessageIDs = fixture.reactions.pendingMessageIDs
+            result.toggleReaction = { row, emoji in
+                guard let message = row.entry.remoteMessage else { return }
+                Task { await fixture.reactions.toggle(message: message, emoji: emoji, currentUserID: 1) }
+            }
+            result.openMedia = { source, attachments, selected in
+                event = "Media: \(source) / \(selected), \(attachments.count) attachments"
+            }
+            result.openReply = { event = "Reply: \($0)" }
+            result.openThread = { event = "Thread: \($0)" }
+            result.openLink = { event = "Link: \($0.absoluteString)" }
+            result.openMention = { event = "Mention: \($0)" }
+            return result
+        }
     }
 
-    private var actions: TimelineBubbleActions {
-        guard handlersEnabled else { return .init() }
-        var result = TimelineBubbleActions()
-        result.openMedia = { source, attachments, selected in event = "Media: \(source) / \(selected), \(attachments.count) attachments" }
-        result.openReply = { event = "Reply: \($0)" }
-        result.openThread = { event = "Thread: \($0)" }
-        result.openLink = { event = "Link: \($0.absoluteString)" }
-        result.openMention = { event = "Mention: \($0)" }
-        return result
-    }
-}
-
-@MainActor
+    @MainActor
 private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessageSource {
     @Published var timeline: ConversationTimelineModel?
     @Published var error: String?
     @Published var hasQueued = false
     let store = ConversationMessageStore()
+    let reactionClient = FixtureReactionClient()
+    let reactions: MessageReactionController
+    private var reactionObservation: AnyCancellable?
     private var messages: [MessageResponse] = []
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()
+
+    init() {
+        reactions = MessageReactionController(apiClient: reactionClient, messageStore: store, onInvalidToken: {})
+        reactionObservation = reactions.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+    }
 
     func prepare() {
         guard timeline == nil, error == nil else { return }
@@ -223,6 +263,7 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
                 }
             }
             messages = try objects.map { try decoder.decode(MessageResponse.self, from: JSONSerialization.data(withJSONObject: $0)) }
+            reactionClient.install(messages)
             timeline = ConversationTimelineModel(chatID: "bubble-fixtures", currentUserID: 1, isGroupChat: true, source: self, messageStore: store)
         } catch { self.error = "Fixture generation failed: \(error)" }
     }

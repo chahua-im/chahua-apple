@@ -50,7 +50,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         }
         let spec = try HTTPRequestSpec.json(
             .post,
-            "/auth/dev-session",
+            ["auth", "dev-session"],
             body: DevSessionRequest(uid: uid),
             requiresAuth: false,
             allowsTokenRefresh: false,
@@ -125,7 +125,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     }
 
     public func me() async throws -> MeResponse {
-        try await send(HTTPRequestSpec(method: .get, path: "/users/me"), decoding: MeResponse.self)
+        try await send(HTTPRequestSpec(method: .get, path: ["users", "me"]), decoding: MeResponse.self)
     }
 
     func send<Response: Decodable>(_ spec: HTTPRequestSpec, decoding: Response.Type) async throws -> Response {
@@ -195,9 +195,10 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         guard var components = URLComponents(url: configuration.baseURL, resolvingAgainstBaseURL: false) else {
             throw APIError.invalidBaseURL(configuration.baseURL)
         }
-        components.path = components.path.hasSuffix("/")
-            ? String(components.path.dropLast()) + spec.path
-            : components.path + spec.path
+        let path = try spec.encodedPath()
+        components.percentEncodedPath = components.percentEncodedPath.hasSuffix("/")
+            ? String(components.percentEncodedPath.dropLast()) + path
+            : components.percentEncodedPath + path
         components.queryItems = spec.query.isEmpty ? nil : spec.query
         guard let url = components.url else { throw APIError.invalidBaseURL(configuration.baseURL) }
 
@@ -215,7 +216,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
 
     private func fetchMe(token: String) async throws -> MeResponse {
         let generation = sessionGeneration
-        let spec = HTTPRequestSpec(method: .get, path: "/users/me", requiresAuth: false, allowsTokenRefresh: false)
+        let spec = HTTPRequestSpec(method: .get, path: ["users", "me"], requiresAuth: false, allowsTokenRefresh: false)
         let (data, status) = try await execute(spec, token: token)
         try checkSession(generation)
         if status == 401 { throw APIError.invalidToken }
@@ -262,7 +263,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     private func performRefresh(generation: UUID) async throws -> String {
         try checkSession(generation)
         guard let token else { throw APIError.invalidToken }
-        let spec = HTTPRequestSpec(method: .post, path: "/auth/refresh", requiresAuth: false, allowsTokenRefresh: false)
+        let spec = HTTPRequestSpec(method: .post, path: ["auth", "refresh"], requiresAuth: false, allowsTokenRefresh: false)
         let response = try await execute(spec, token: token)
         try checkSession(generation)
         if response.status == 401 {

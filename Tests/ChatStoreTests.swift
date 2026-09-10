@@ -227,6 +227,11 @@ private actor FakeChatAPI: ChahuaAPIClient {
     func authenticate(candidateJWT: String) async throws -> MeResponse { throw APIError.unavailable }
     func createDevSession(uid: Int32, clientID: String) async throws -> String { throw APIError.unavailable }
     func me() async throws -> MeResponse { throw APIError.unavailable }
+    func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
+    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
+    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
+    func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
+    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
 
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         chatQueries.append(query)

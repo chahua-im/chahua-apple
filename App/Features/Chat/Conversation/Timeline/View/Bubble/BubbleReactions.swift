@@ -5,6 +5,8 @@ struct BubbleReactions: View {
     let reactions: [ReactionSummary]
     let isOutgoing: Bool
     let isMeasuring: Bool
+    var isPending = false
+    var toggle: ((String) -> Void)?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -12,9 +14,16 @@ struct BubbleReactions: View {
             ForEach(reactions.sorted {
                 $0.count == $1.count ? $0.emoji < $1.emoji : $0.count > $1.count
             }, id: \.emoji) { reaction in
-                pill(reaction)
+                if let toggle, !isMeasuring {
+                    Button { toggle(reaction.emoji) } label: { pill(reaction) }
+                        .buttonStyle(.plain)
+                        .disabled(isPending)
+                } else {
+                    pill(reaction)
+                }
             }
         }
+        .opacity(isPending ? 0.6 : 1)
     }
 
     private func pill(_ reaction: ReactionSummary) -> some View {

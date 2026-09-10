@@ -68,7 +68,11 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                 || (actions.openThread == nil) != (oldValue.openThread == nil)
                 || (actions.openLink == nil) != (oldValue.openLink == nil)
                 || (actions.openMention == nil) != (oldValue.openMention == nil)
-                || (actions.openFailedMessage == nil) != (oldValue.openFailedMessage == nil) else { return }
+                || (actions.openFailedMessage == nil) != (oldValue.openFailedMessage == nil)
+                || (actions.openContextMenu == nil) != (oldValue.openContextMenu == nil)
+                || (actions.toggleReaction == nil) != (oldValue.toggleReaction == nil)
+                || actions.pendingReactionMessageIDs != oldValue.pendingReactionMessageIDs
+                || actions.interactionContext != oldValue.interactionContext else { return }
             rowActions = makeRowActions()
             guard isViewLoaded else { return }
             refreshVisibleRoots()
@@ -623,7 +627,11 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             openThread: actions.openThread == nil ? nil : { [weak self] in self?.actions.openThread?($0) },
             openLink: actions.openLink == nil ? nil : { [weak self] in self?.actions.openLink?($0) },
             openMention: actions.openMention == nil ? nil : { [weak self] in self?.actions.openMention?($0) },
-            openFailedMessage: actions.openFailedMessage == nil ? nil : { [weak self] in self?.actions.openFailedMessage?($0) }
+            openFailedMessage: actions.openFailedMessage == nil ? nil : { [weak self] in self?.actions.openFailedMessage?($0) },
+            openContextMenu: actions.openContextMenu == nil ? nil : { [weak self] in self?.actions.openContextMenu?($0, $1) },
+            toggleReaction: actions.toggleReaction == nil ? nil : { [weak self] in self?.actions.toggleReaction?($0, $1) },
+            pendingReactionMessageIDs: actions.pendingReactionMessageIDs,
+            interactionContext: actions.interactionContext
         )
     }
 

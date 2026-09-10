@@ -238,17 +238,21 @@ struct BubbleRowLayout: Layout {
     let avatarSize: CGFloat
 
     func makeCache(subviews: Subviews) -> CGFloat {
-        guard subviews.count == 2 else { return 0 }
-        return subviews[0].sizeThatFits(.unspecified).width
+        guard subviews.count >= 2 else { return 0 }
+        let bubbleWidth = subviews[0].sizeThatFits(.unspecified).width
+        let reactionsWidth = subviews.count > 2 ? subviews[2].sizeThatFits(.unspecified).width : 0
+        return max(bubbleWidth, reactionsWidth)
     }
 
-    private func dimensions(width: CGFloat?, idealWidth: CGFloat, subviews: Subviews) -> (row: CGSize, bubble: CGSize) {
-        guard subviews.count == 2 else { return (.zero, .zero) }
+    private func dimensions(width: CGFloat?, idealWidth: CGFloat, subviews: Subviews) -> (row: CGSize, bubble: CGSize, reactions: CGSize) {
+        guard subviews.count >= 2 else { return (.zero, .zero, .zero) }
         let avatarLane = avatarSize + BubbleMetrics.avatarGap
         let available = max(0, width ?? (idealWidth / BubbleMetrics.widthFraction + avatarLane))
         let cap = BubbleMetrics.maximumBubbleWidth(rowWidth: available + 2 * BubbleMetrics.rowHorizontalInset, avatarSize: avatarSize)
-        let bubble = subviews[0].sizeThatFits(.init(width: min(idealWidth, cap), height: nil))
-        return (CGSize(width: available, height: max(avatarSize, bubble.height)), bubble)
+        let columnProposal = ProposedViewSize(width: min(idealWidth, cap), height: nil)
+        let bubble = subviews[0].sizeThatFits(columnProposal)
+        let reactions = subviews.count > 2 ? subviews[2].sizeThatFits(columnProposal) : .zero
+        return (CGSize(width: available, height: max(avatarSize, bubble.height) + reactions.height), bubble, reactions)
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat) -> CGSize {
@@ -256,17 +260,24 @@ struct BubbleRowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CGFloat) {
-        guard subviews.count == 2 else { return }
-        let bubble = dimensions(width: bounds.width, idealWidth: cache, subviews: subviews).bubble
+        guard subviews.count >= 2 else { return }
+        let sizes = dimensions(width: bounds.width, idealWidth: cache, subviews: subviews)
         let avatarLane = avatarSize + BubbleMetrics.avatarGap
+        let bubbleBottom = bounds.minY + max(avatarSize, sizes.bubble.height)
         subviews[0].place(
-            at: CGPoint(x: isOutgoing ? bounds.maxX - avatarLane - bubble.width : bounds.minX + avatarLane, y: bounds.maxY - bubble.height),
-            anchor: .topLeading, proposal: .init(width: bubble.width, height: bubble.height)
+            at: CGPoint(x: isOutgoing ? bounds.maxX - avatarLane - sizes.bubble.width : bounds.minX + avatarLane, y: bubbleBottom - sizes.bubble.height),
+            anchor: .topLeading, proposal: .init(width: sizes.bubble.width, height: sizes.bubble.height)
         )
         subviews[1].place(
-            at: CGPoint(x: isOutgoing ? bounds.maxX - avatarSize : bounds.minX, y: bounds.maxY - avatarSize),
+            at: CGPoint(x: isOutgoing ? bounds.maxX - avatarSize : bounds.minX, y: bubbleBottom - avatarSize),
             anchor: .topLeading, proposal: .init(width: avatarSize, height: avatarSize)
         )
+        if subviews.count > 2 {
+            subviews[2].place(
+                at: CGPoint(x: isOutgoing ? bounds.maxX - avatarLane - sizes.reactions.width : bounds.minX + avatarLane, y: bubbleBottom),
+                anchor: .topLeading, proposal: .init(width: sizes.reactions.width, height: sizes.reactions.height)
+            )
+        }
     }
 }
 
