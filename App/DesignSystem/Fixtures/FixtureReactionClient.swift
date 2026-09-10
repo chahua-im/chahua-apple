@@ -79,6 +79,10 @@
         func createDevSession(uid: Int32, clientID: String) async throws -> String { throw Failure.unexpectedOperation }
         func me() async throws -> MeResponse { throw Failure.unexpectedOperation }
         func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw Failure.unexpectedOperation }
+        func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
+        func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
+        func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw Failure.unexpectedOperation }
+        func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw Failure.unexpectedOperation }
         func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw Failure.unexpectedOperation }
         func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
             throw Failure.unexpectedOperation

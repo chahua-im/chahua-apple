@@ -10,10 +10,11 @@ struct ChahuaApp: App {
     private let compositionRoot: AppCompositionRoot?
 
     init() {
-        // Hosted unit tests need a platform application/window, not production startup.
-        // Do not construct authentication or network dependencies in the XCTest process.
+        // Hosted tests and SwiftUI previews must not start production services or
+        // contend with the running app for its exclusive media-cache lock.
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-fixture-gallery")
+        if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+            || ProcessInfo.processInfo.arguments.contains("-fixture-gallery")
             || ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
             compositionRoot = nil
             return

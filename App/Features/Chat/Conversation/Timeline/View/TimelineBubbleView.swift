@@ -55,6 +55,14 @@ struct TimelineBubbleView: View {
             switch row {
             case .dateSeparator(let separator):
                 DateSeparatorBubble(row: separator)
+            case .unreadSeparator:
+                Text("Below are unread messages")
+                    .font(.caption)
+                    .foregroundStyle(ChahuaTheme.ChatBubble.outgoingBackground)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, ChahuaTheme.Spacing.medium)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, ChahuaTheme.Spacing.medium)
             case .message(let message):
                 messageBody(message)
             }

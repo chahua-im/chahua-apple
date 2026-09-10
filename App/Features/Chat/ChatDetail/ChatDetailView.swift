@@ -3,6 +3,10 @@ import SwiftUI
 
 struct ChatDetailView: View {
     let chat: ChatListItem
+    let threadID: String?
+    let initialPosition: TimelineInitialPosition
+
+    private var conversationKey: ConversationKey { .init(chatID: chat.id, threadID: threadID) }
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ConversationTimelineModel
     @ObservedObject private var reactions: MessageReactionController
@@ -11,21 +15,28 @@ struct ChatDetailView: View {
     @State private var hasLoadedInteractionPermissions = false
     @State private var failedMessageID: String?
     @State private var showsRetryOptions = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var replyFocusRequest = 0
 
-    init(chat: ChatListItem, currentUserID: Int32, store: ChatStore) {
+    init(chat: ChatListItem, currentUserID: Int32, store: ChatStore, threadID: String? = nil, initialPosition: TimelineInitialPosition? = nil) {
         self.chat = chat
+        self.threadID = threadID
+        self.initialPosition = initialPosition ?? (chat.unreadCount > 0 ? .unread(after: chat.lastReadMessageId) : .liveEdge)
         self.store = store
         self.reactions = store.reactions
         self.drafts = store.drafts
-        _interactionContext = State(initialValue: .init(isDM: chat.kind == .dm))
+        _interactionContext = State(initialValue: .init(isDM: chat.kind == .dm, isThreadView: threadID != nil))
         _model = StateObject(
             wrappedValue: ConversationTimelineModel(
                 chatID: chat.id,
                 currentUserID: currentUserID,
                 isGroupChat: chat.kind == .group,
                 source: store,
-                messageStore: store.conversationMessages
+                messageStore: store.conversationMessages,
+                threadID: threadID,
+                markRead: { messageID in
+                    try await store.markRead(chatID: chat.id, threadID: threadID, messageID: messageID)
+                }
             ))
     }
 
@@ -55,26 +66,26 @@ struct ChatDetailView: View {
                                 }
                                 MessageComposerView(
                                     text: Binding(
-                                        get: { drafts.draftText(chatID: chat.id) },
-                                        set: { drafts.setDraftText($0, chatID: chat.id) }),
+                                        get: { drafts.draftText(chatID: chat.id, threadID: threadID) },
+                                        set: { drafts.setDraftText($0, chatID: chat.id, threadID: threadID) }),
                                     maxHeight: max(36, geometry.size.height / 3),
-                                    isEnabled: interactionContext.canWrite && !drafts.committingDrafts.contains(chat.id),
-                                    canSend: store.outgoingQueue.storageState == .ready
-                                        && !drafts.committingDrafts.contains(chat.id)
-                                        && !drafts.draftText(chatID: chat.id).trimmingCharacters(
+                                    isEnabled: interactionContext.canWrite && !drafts.committingDrafts.contains(conversationKey),
+                                    canSend: interactionContext.canWrite && store.outgoingQueue.storageState == .ready
+                                        && !drafts.committingDrafts.contains(conversationKey)
+                                        && !drafts.draftText(chatID: chat.id, threadID: threadID).trimmingCharacters(
                                             in: .whitespacesAndNewlines
                                         ).isEmpty,
                                     onSubmit: {
                                         Task {
-                                            if await drafts.submitDraft(chatID: chat.id) {
+                                            if await drafts.submitDraft(chatID: chat.id, threadID: threadID) {
                                                 await model.revealLatestAfterSend()
                                             }
                                         }
                                     },
-                                    onCompositionChanged: { drafts.setDraftComposing($0, chatID: chat.id) },
-                                    replyToMessage: drafts.draftReply(chatID: chat.id),
+                                    onCompositionChanged: { drafts.setDraftComposing($0, chatID: chat.id, threadID: threadID) },
+                                    replyToMessage: drafts.draftReply(chatID: chat.id, threadID: threadID),
                                     replyFocusRequest: replyFocusRequest,
-                                    onCancelReply: { drafts.setDraftReply(nil, chatID: chat.id) },
+                                    onCancelReply: { drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID) },
                                     onOpenReply: { id in Task { await model.jumpToMessage(id) } }
                                 )
                             }
@@ -82,9 +93,15 @@ struct ChatDetailView: View {
             }
         }
         .navigationTitle(chat.chatDisplayName)
-        .onAppear { store.registerTimeline(model) }
-        .task { await model.open() }
+        .onAppear {
+            store.registerTimeline(model)
+            model.setReadTrackingActive(scenePhase == .active)
+        }
+        .task { await model.open(position: initialPosition) }
         .task { await loadInteractionPermissions() }
+        .onChange(of: scenePhase) { _, phase in
+            model.setReadTrackingActive(phase == .active)
+        }
         .alert(
             "Message actions",
             isPresented: Binding(
@@ -106,7 +123,7 @@ struct ChatDetailView: View {
         }
         .onReceive(store.outgoingQueue.events) { _ in
             guard let failedMessageID else { return }
-            if !store.outgoingQueue.pendingMessages(chatID: chat.id).contains(where: {
+            if !store.outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID).contains(where: {
                 $0.clientGeneratedID == failedMessageID && $0.state == .failed
             }) {
                 showsRetryOptions = false
@@ -114,15 +131,17 @@ struct ChatDetailView: View {
             }
         }
         .onDisappear {
+            model.setReadTrackingActive(false)
             store.unregisterTimeline(model)
             model.close()
-            Task { await drafts.flushDraft(chatID: chat.id) }
+            Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
         }
     }
 
     private func loadInteractionPermissions() async {
         if let permissions = await reactions.loadPermissions(chatID: chat.id) {
             interactionContext = permissions
+            interactionContext.isThreadView = threadID != nil
             hasLoadedInteractionPermissions = true
         }
     }
@@ -132,8 +151,8 @@ struct ChatDetailView: View {
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
         if interactionContext.canWrite {
             actions.replyToMessage = { message in
-                guard !drafts.committingDrafts.contains(chat.id) else { return }
-                drafts.setDraftReply(message.replyPreview, chatID: chat.id)
+                guard !drafts.committingDrafts.contains(conversationKey) else { return }
+                drafts.setDraftReply(message.replyPreview, chatID: chat.id, threadID: threadID)
                 replyFocusRequest &+= 1
             }
             actions.toggleReaction = { row, emoji in
@@ -154,7 +173,7 @@ struct ChatDetailView: View {
         failedMessageID = nil
         Task {
             // The queue surfaces local-storage errors and treats a late acknowledgement as a no-op.
-            try? await store.outgoingQueue.retry(chatID: chat.id, clientGeneratedID: id, scope: scope)
+            try? await store.outgoingQueue.retry(chatID: chat.id, threadID: threadID, clientGeneratedID: id, scope: scope)
         }
     }
 }

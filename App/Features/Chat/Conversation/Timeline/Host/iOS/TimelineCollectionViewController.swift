@@ -409,14 +409,18 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         }
     }
 
-    private func visibleItems() -> [UICollectionViewLayoutAttributes] {
+    private var unobscuredViewport: CGRect {
         let insets = collectionView.adjustedContentInset
-        let visible = CGRect(
+        return CGRect(
             x: collectionView.contentOffset.x + insets.left,
             y: collectionView.contentOffset.y + insets.top,
             width: availableRowWidth,
             height: max(0, collectionView.bounds.height - insets.top - insets.bottom)
         )
+    }
+
+    private func visibleItems() -> [UICollectionViewLayoutAttributes] {
+        let visible = unobscuredViewport
         // Visible cells can lag an offset change until the next display pass. Layout
         // geometry identifies the reader's message even if its cell is not installed yet.
         return (collectionView.collectionViewLayout.layoutAttributesForElements(in: visible) ?? []).filter {
@@ -469,7 +473,8 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
             }
             let insets = collectionView.adjustedContentInset
             let height = max(0, collectionView.bounds.height - insets.top - insets.bottom)
-            scroll(to: frame.midY - height / 2 - insets.top, animated: animated, requestID: request.id)
+            let target = id == .unreadSeparator ? frame.minY - insets.top : frame.midY - height / 2 - insets.top
+            scroll(to: target, animated: animated, requestID: request.id)
         }
     }
 
@@ -536,7 +541,13 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
               reason == .user || (!userScrolling && !collectionView.isDragging && !collectionView.isDecelerating),
               installedRevision >= 0, geometry == currentGeometry else { return }
         position = capturePosition()
-        let visible = visibleItems().map(\.indexPath.item)
+        let visibleItems = visibleItems()
+        let visible = visibleItems.map(\.indexPath.item)
+        let unobscured = unobscuredViewport
+        let fullyVisibleMessageIDs = visibleItems.sorted { $0.indexPath < $1.indexPath }.compactMap { item -> String? in
+            guard !unobscured.isEmpty, unobscured.contains(item.frame) else { return nil }
+            return rows[item.indexPath.item].messageID
+        }
         let top = max(0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top)
         let height = max(0, collectionView.bounds.height - collectionView.adjustedContentInset.top - collectionView.adjustedContentInset.bottom)
         model.viewportDidChange(.init(
@@ -544,7 +555,8 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
             lastVisibleIndex: visible.max(),
             distanceToTop: top,
             distanceToBottom: max(0, collectionView.contentSize.height - top - height),
-            height: height
+            height: height,
+            fullyVisibleMessageIDs: fullyVisibleMessageIDs
         ), reason: reason, revision: installedRevision)
     }
 }

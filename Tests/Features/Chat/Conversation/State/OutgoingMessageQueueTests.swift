@@ -6,6 +6,96 @@ import XCTest
 
 @MainActor
 final class OutgoingMessageQueueTests: XCTestCase {
+    func testThreadSendRetryAndAcknowledgementsUseOnlyTheirConversation() async throws {
+        let h = try await openHarness()
+        try await h.queue.enqueueText(chatID: "chat", threadID: "one", text: "reply", clearedDraftRevision: 1)
+        try await eventually { await h.api.requests().count == 1 }
+        let first = try await firstRequest(h.api)
+        XCTAssertEqual(first.chatID, "chat")
+        XCTAssertEqual(first.threadID, "one")
+        await h.api.finish(0, with: .failure(QueueTestError.network))
+        try await eventually { h.queue.pendingMessages(chatID: "chat", threadID: "one").first?.state == .failed }
+        try await h.queue.enqueueText(chatID: "chat", text: "parent", clearedDraftRevision: 1)
+        try await eventually { await h.api.requests().count == 2 }
+        try await h.queue.enqueueText(chatID: "chat", threadID: "two", text: "other reply", clearedDraftRevision: 1)
+        try await eventually { await h.api.requests().count == 3 }
+        let requests = await h.api.requests()
+        XCTAssertNil(requests[1].threadID)
+        XCTAssertEqual(requests[2].threadID, "two")
+        let wrongRoot = try TimelineTestFixtures.message(id: "wrong", at: 1, clientGeneratedID: first.body.clientGeneratedId, fields: ["replyRootId": "two"])
+        let acceptedWrongRoot = await h.queue.acceptAcknowledgement(wrongRoot)
+        XCTAssertFalse(acceptedWrongRoot)
+        let wrongParent = try TimelineTestFixtures.message(id: "wrong-parent", at: 1, clientGeneratedID: first.body.clientGeneratedId)
+        let acceptedWrongParent = await h.queue.acceptAcknowledgement(wrongParent)
+        XCTAssertFalse(acceptedWrongParent)
+        try await h.queue.retry(chatID: "chat", threadID: "one", clientGeneratedID: first.body.clientGeneratedId, scope: .messageAndSubsequent)
+        try await eventually { await h.api.requests().count == 4 }
+        let retried = await h.api.requests()
+        XCTAssertEqual(retried[3].threadID, "one")
+        XCTAssertEqual(retried[3].body.clientGeneratedId, first.body.clientGeneratedId)
+        XCTAssertEqual(retried[3].body.message, "reply")
+        let accepted = await h.queue.acceptAcknowledgement(try response(retried[3]))
+        XCTAssertTrue(accepted)
+        await h.api.finish(3, with: .failure(QueueTestError.network))
+        await h.api.finish(1, with: .success(try response(requests[1])))
+        await h.api.finish(2, with: .success(try response(requests[2])))
+        try await eventually {
+            h.queue.pendingMessages(chatID: "chat").isEmpty &&
+                h.queue.pendingMessages(chatID: "chat", threadID: "one").isEmpty &&
+                h.queue.pendingMessages(chatID: "chat", threadID: "two").isEmpty
+        }
+        await h.close()
+        let store = try await h.openStore(uid: 1)
+        let restored = try await store.restore()
+        XCTAssertTrue(restored.flatMap(\.outgoing).isEmpty)
+    }
+
+    func testDraftCompositionSubmissionAndRestartAreThreadScoped() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let h = try await openHarness(root: root, foreground: false)
+        let drafts = ChatDraftStore(outgoingQueue: h.queue)
+        let observation = h.queue.events.sink { event in
+            if case .snapshot(let snapshot) = event { drafts.install(snapshot) }
+        }
+        drafts.setDraftText("parent draft", chatID: "chat")
+        drafts.setDraftComposing(true, chatID: "chat", threadID: "one")
+        drafts.setDraftText("composing draft", chatID: "chat", threadID: "one")
+        drafts.setDraftText("thread send", chatID: "chat", threadID: "two")
+        let blocked = await drafts.submitDraft(chatID: "chat", threadID: "one")
+        XCTAssertFalse(blocked)
+        let submitted = await drafts.submitDraft(chatID: "chat", threadID: "two")
+        XCTAssertTrue(submitted)
+        XCTAssertEqual(drafts.draftText(chatID: "chat"), "parent draft")
+        XCTAssertEqual(drafts.draftText(chatID: "chat", threadID: "one"), "composing draft")
+        XCTAssertEqual(drafts.draftText(chatID: "chat", threadID: "two"), "")
+        XCTAssertNotNil(drafts.draftUpdatedAt[ConversationKey(chatID: "chat", threadID: "one")])
+        XCTAssertNil(drafts.draftUpdatedAt[ConversationKey(chatID: "chat", threadID: "two")])
+        drafts.setDraftComposing(false, chatID: "chat", threadID: "one")
+        await drafts.flushAll()
+        observation.cancel()
+        drafts.reset()
+        await h.close()
+
+        let reopened = try await openHarness(root: root, foreground: false)
+        let restoredDrafts = ChatDraftStore(outgoingQueue: reopened.queue)
+        for snapshot in reopened.queue.snapshots.values { restoredDrafts.install(snapshot) }
+        XCTAssertEqual(restoredDrafts.draftText(chatID: "chat"), "parent draft")
+        XCTAssertEqual(restoredDrafts.draftText(chatID: "chat", threadID: "one"), "composing draft")
+        XCTAssertEqual(restoredDrafts.draftText(chatID: "chat", threadID: "two"), "")
+        XCTAssertTrue(reopened.queue.pendingMessages(chatID: "chat").isEmpty)
+        XCTAssertTrue(reopened.queue.pendingMessages(chatID: "chat", threadID: "one").isEmpty)
+        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat", threadID: "two").map(\.text), ["thread send"])
+        await reopened.queue.setForegroundActive(true)
+        try await eventually { await reopened.api.requests().count == 1 }
+        let request = try await firstRequest(reopened.api)
+        XCTAssertEqual(request.chatID, "chat")
+        XCTAssertEqual(request.threadID, "two")
+        await reopened.api.finish(0, with: .success(try response(request)))
+        try await eventually { reopened.queue.pendingMessages(chatID: "chat", threadID: "two").isEmpty }
+        await reopened.close()
+    }
+
     func testFailureAtomicallyPausesSuccessorsWithoutBlockingAnotherChat() async throws {
         let h = try await openHarness()
         var transitions: [[LocalOutgoingMessage.State]] = []
@@ -284,7 +374,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
             try await h.queue.enqueueText(chatID: "chat", text: "hello\n世界", clearedDraftRevision: 2)
             XCTFail("Enqueue must fail before committing")
         } catch {}
-        XCTAssertEqual(h.queue.snapshots["chat"]?.draft.text, "hello\n世界")
+        XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft.text, "hello\n世界")
         XCTAssertEqual(h.queue.pendingMessages(chatID: "chat"), [])
         var requests = await h.api.requests()
         XCTAssertEqual(requests.count, 0)
@@ -326,7 +416,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         try await eventually { await h.api.requests().count == 2 }
         let resumed = await h.api.requests()
         XCTAssertEqual(resumed[1].body.message, "B")
-        XCTAssertFalse(h.queue.snapshots["chat"]!.outgoing.contains { $0.clientGeneratedID == message.clientGeneratedId })
+        XCTAssertFalse(h.queue.snapshots[ConversationKey(chatID: "chat")]!.outgoing.contains { $0.clientGeneratedID == message.clientGeneratedId })
         observation.cancel()
         await h.close()
         let store = try await h.openStore(uid: 1)
@@ -432,7 +522,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
     }
 
     private func response(_ request: HeldQueueAPI.Request) throws -> MessageResponse {
-        try TimelineTestFixtures.message(id: "server-\(request.body.clientGeneratedId)", chatID: request.chatID, at: 1, clientGeneratedID: request.body.clientGeneratedId)
+        try TimelineTestFixtures.message(id: "server-\(request.body.clientGeneratedId)", chatID: request.chatID, at: 1, clientGeneratedID: request.body.clientGeneratedId, fields: request.threadID.map { ["replyRootId": $0] } ?? [:])
     }
 
     private func eventually(_ condition: @MainActor () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
@@ -524,6 +614,7 @@ private enum QueueTestError: Error { case network, storage, timeout }
 private actor HeldQueueAPI: ChahuaAPIClient {
     struct Request: Sendable {
         let chatID: String
+        let threadID: String?
         let body: CreateMessageBody
     }
 
@@ -536,17 +627,28 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func createDevSession(uid: Int32, clientID: String) async throws -> String { throw APIError.unavailable }
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
+    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { throw APIError.unavailable }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
+    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
+    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
 
     // Intentionally ignores cancellation until explicitly completed, exercising late responses.
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse {
+        try await hold(chatID: chatID, threadID: nil, body: body)
+    }
+
+    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse {
+        try await hold(chatID: chatID, threadID: threadID, body: body)
+    }
+
+    private func hold(chatID: String, threadID: String?, body: CreateMessageBody) async throws -> MessageResponse {
         let index = recorded.count
-        recorded.append(Request(chatID: chatID, body: body))
+        recorded.append(Request(chatID: chatID, threadID: threadID, body: body))
         active[chatID, default: 0] += 1
         maximum[chatID] = max(maximum[chatID, default: 0], active[chatID, default: 0])
         return try await withCheckedThrowingContinuation { held[index] = $0 }

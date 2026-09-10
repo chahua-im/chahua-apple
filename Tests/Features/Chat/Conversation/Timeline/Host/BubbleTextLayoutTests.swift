@@ -117,6 +117,17 @@ final class BubbleTextLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(geometry.metadataFrame.maxY, geometry.size.height)
     }
 
+    func testMetadataUsesWidthAssignedByWiderBubbleHeader() {
+        let layout = makeLayout("Hi")
+        let ideal = layout.idealSize
+        let assignedWidth = ideal.width + 100
+        let fitted = layout.fittingSize(width: assignedWidth)
+        let geometry = layout.geometry(for: fitted.width)
+        XCTAssertEqual(geometry.metadataFrame.maxX, assignedWidth, accuracy: 0.5)
+        XCTAssertTrue(geometry.metadataIsInline)
+        XCTAssertEqual(layout.fittingSize(width: nil).width, ideal.width, accuracy: 0.5)
+    }
+
     func testMetadataMovesBelowCrowdedFinalLineAndBackAfterResize() {
         let layout = makeLayout("A final line that nearly fills its container")
         let ideal = layout.idealSize

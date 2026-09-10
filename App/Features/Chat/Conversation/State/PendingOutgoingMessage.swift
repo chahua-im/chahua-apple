@@ -9,6 +9,7 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     }
 
     let chatID: String
+    var threadID: String? = nil
     let clientGeneratedID: String
     let body: CreateMessageBody
     let enqueuedAt: Date

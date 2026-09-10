@@ -1,5 +1,20 @@
 import Foundation
 
+/// Authoritative current-member read state returned by chat and thread read endpoints.
+public struct ReadStateResponse: Codable, Hashable, Sendable {
+    public let lastReadMessageId: String?
+    public let unreadCount: Int64
+
+    public init(lastReadMessageId: String?, unreadCount: Int64) {
+        self.lastReadMessageId = lastReadMessageId
+        self.unreadCount = unreadCount
+    }
+}
+
+struct MarkReadBody: Encodable {
+    let messageId: String
+}
+
 /// Query fields accepted by `GET /chats/{chatID}/messages`.
 ///
 /// Cursors are opaque server strings. A request may select one position policy
@@ -37,12 +52,19 @@ public struct ListMessagesQuery: Sendable, Equatable {
             around.map { URLQueryItem(name: "around", value: $0) },
             after.map { URLQueryItem(name: "after", value: $0) },
             max.map { URLQueryItem(name: "max", value: String($0)) },
-            threadID.map { URLQueryItem(name: "thread_id", value: $0) },
+            threadID.map { URLQueryItem(name: "threadId", value: $0) },
         ].compactMap { $0 }
     }
 }
 
 public extension ChahuaClient {
+    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+        try await send(
+            HTTPRequestSpec.json(.post, ["chats", chatID, "read"], body: MarkReadBody(messageId: messageID)),
+            decoding: ReadStateResponse.self
+        )
+    }
+
     /// Fetches a message page with authenticated `GET /chats/{chatID}/messages`.
     func listMessages(
         chatID: String,

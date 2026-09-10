@@ -5,6 +5,46 @@ import ChahuaAPI
 
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    func testReadResponseUpdatesOnlyItsConversationBadge() async throws {
+        let parent = ChatListItem(id: "chat", name: "Group", unreadCount: 7, archived: false, kind: .group)
+        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: "root")
+        let api = FakeChatAPI(
+            chatResults: [.success(.init(chats: [parent]))],
+            threadResults: [.success(.init(threads: [thread]))],
+            readResults: [.success(.init(lastReadMessageId: "reply", unreadCount: 0)),
+                          .success(.init(lastReadMessageId: "message", unreadCount: 2))])
+        let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        await store.loadActiveChats()
+        await store.loadActiveThreads()
+        try await store.markRead(chatID: "chat", threadID: "root", messageID: "reply")
+        XCTAssertEqual(store.state.threads.first?.lastReadMessageId, "reply")
+        XCTAssertEqual(store.state.threads.first?.unreadCount, 0)
+        XCTAssertEqual(store.state.chats.first, parent)
+        try await store.markRead(chatID: "chat", threadID: nil, messageID: "message")
+        XCTAssertEqual(store.state.chats.first?.lastReadMessageId, "message")
+        XCTAssertEqual(store.state.chats.first?.unreadCount, 2)
+        XCTAssertEqual(store.state.threads.first?.lastReadMessageId, "reply")
+    }
+
+    func testReadReceiptFencesListSnapshotStartedBeforeAcknowledgement() async throws {
+        let api = FakeChatAPI(readResults: [.success(.init(lastReadMessageId: "read", unreadCount: 0))], suspendChatRequests: true)
+        let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let refresh = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        try await store.markRead(chatID: "chat", threadID: nil, messageID: "read")
+        await api.resumeChatRequest(with: .success(.init(chats: [
+            ChatListItem(id: "chat", unreadCount: 9, archived: false, kind: .group)
+        ])))
+        await api.waitForChatRequest()
+        XCTAssertTrue(store.state.chats.isEmpty)
+        await api.resumeChatRequest(with: .success(.init(chats: [
+            ChatListItem(id: "chat", unreadCount: 0, lastReadMessageId: "read", archived: false, kind: .group)
+        ])))
+        await refresh.value
+        XCTAssertEqual(store.state.chats.first?.unreadCount, 0)
+        XCTAssertEqual(store.state.chats.first?.lastReadMessageId, "read")
+    }
+
     func testLoadActiveChatsPreservesServerOrder() async {
         let api = FakeChatAPI(chatResults: [.success(ListChatsResponse(chats: [chat(id: "2"), chat(id: "1")]))])
         let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
@@ -276,7 +316,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "keep this")
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), reply)
         XCTAssertTrue(h.store.drafts.draftSaveFailed)
-        XCTAssertFalse(h.store.drafts.committingDrafts.contains("chat"))
+        XCTAssertFalse(h.store.drafts.committingDrafts.contains(ConversationKey(chatID: "chat")))
         XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
         let afterFailure = try await h.localStore.restore()
         XCTAssertEqual(afterFailure.first?.draft.text, "keep this")
@@ -309,7 +349,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "")
 
         h.store.drafts.setDraftReply(replacement, chatID: "chat")
-        let stale = try XCTUnwrap(h.queue.snapshots["chat"])
+        let stale = try XCTUnwrap(h.queue.snapshots[ConversationKey(chatID: "chat")])
         h.store.drafts.install(stale)
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), replacement)
         await h.store.drafts.flushDraft(chatID: "chat")
@@ -318,7 +358,7 @@ final class ChatStoreTests: XCTestCase {
 
         h.store.drafts.setDraftText("keep text", chatID: "chat")
         h.store.drafts.setDraftReply(nil, chatID: "chat")
-        h.store.drafts.install(try XCTUnwrap(h.queue.snapshots["chat"]))
+        h.store.drafts.install(try XCTUnwrap(h.queue.snapshots[ConversationKey(chatID: "chat")]))
         XCTAssertNil(h.store.drafts.draftReply(chatID: "chat"))
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "keep text")
         await h.store.drafts.flushDraft(chatID: "chat")
@@ -377,7 +417,7 @@ final class ChatStoreTests: XCTestCase {
         _ text: String, in harness: DraftHarness, file: StaticString = #filePath, line: UInt = #line
     ) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while harness.queue.snapshots["chat"]?.draft.text != text {
+        while harness.queue.snapshots[ConversationKey(chatID: "chat")]?.draft.text != text {
             guard ContinuousClock.now < deadline else {
                 XCTFail("Timed out awaiting persisted draft", file: file, line: line)
                 throw DraftStorageProbe.Failure.timeout
@@ -408,6 +448,42 @@ final class ChatStoreTests: XCTestCase {
         await queue.activate(uid: 1)
         XCTAssertTrue(queue.pendingMessages(chatID: "chat").isEmpty)
         await queue.deactivate()
+    }
+    func testThreadPaginationDeduplicatesAndFailedRefreshRetainsCompleteSnapshot() async throws {
+        let first = try ScopeTestFixtures.thread(id: "first")
+        let second = try ScopeTestFixtures.thread(id: "second")
+        let api = FakeChatAPI(threadResults: [
+            .success(.init(threads: [first], nextCursor: "next")),
+            .success(.init(threads: [first, second])),
+            .success(.init(threads: [second], nextCursor: "loop")),
+            .success(.init(threads: [], nextCursor: "loop")),
+        ])
+        let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        await store.loadActiveThreads()
+        XCTAssertEqual(store.state.threads, [first, second])
+        await store.refreshActiveThreads()
+        XCTAssertEqual(store.state.threads, [first, second])
+        XCTAssertEqual(store.state.threadListLoadPhase, .loaded)
+        XCTAssertTrue(store.state.threadListRefreshFailed)
+    }
+
+    func testChatsOnlyRefreshDoesNotDiscardPendingRealtimeThreadRefresh() async throws {
+        let first = try ScopeTestFixtures.thread(id: "first")
+        let second = try ScopeTestFixtures.thread(id: "second")
+        let api = FakeChatAPI(
+            chatResults: [.success(.init(chats: [])), .success(.init(chats: []))],
+            threadResults: [.success(.init(threads: [first])), .success(.init(threads: [second]))])
+        let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        await store.loadActiveThreads()
+        await store.applyRealtimeEvent(.threadUpdate(.init(
+            threadRootId: "second", chatId: "chat", lastReplyAt: Date(), replyCount: 2)), currentUserID: 1)
+        await store.refreshActiveChats()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while store.state.threads != [second], ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(store.state.threads, [second])
+        store.cancelRealtimeRecovery()
     }
 }
 
@@ -444,6 +520,8 @@ private final class DraftStorageProbe {
 private actor FakeChatAPI: ChahuaAPIClient {
     var chatQueries: [ListChatsQuery] = []
     private var chatResults: [Result<ListChatsResponse, Error>]
+    private var threadResults: [Result<ListThreadsResponse, Error>]
+    private var readResults: [Result<ReadStateResponse, Error>]
     private var messageResults: [String: [Result<ListMessagesResponse, Error>]]
     private let suspendChatRequests: Bool
     private var pendingChatRequest: CheckedContinuation<ListChatsResponse, Error>?
@@ -451,11 +529,15 @@ private actor FakeChatAPI: ChahuaAPIClient {
 
     init(
         chatResults: [Result<ListChatsResponse, Error>] = [],
+        threadResults: [Result<ListThreadsResponse, Error>] = [],
         messageResults: [String: [Result<ListMessagesResponse, Error>]] = [:],
+        readResults: [Result<ReadStateResponse, Error>] = [],
         suspendChatRequests: Bool = false
     ) {
         self.chatResults = chatResults
+        self.threadResults = threadResults
         self.messageResults = messageResults
+        self.readResults = readResults
         self.suspendChatRequests = suspendChatRequests
     }
 
@@ -469,8 +551,21 @@ private actor FakeChatAPI: ChahuaAPIClient {
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
+    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+        guard !readResults.isEmpty else { throw APIError.unavailable }
+        return try readResults.removeFirst().get()
+    }
+    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse {
+        guard !readResults.isEmpty else { throw APIError.unavailable }
+        return try readResults.removeFirst().get()
+    }
     func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
+    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
+        guard !threadResults.isEmpty else { return .init(threads: []) }
+        return try threadResults.removeFirst().get()
+    }
+    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
 
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         chatQueries.append(query)

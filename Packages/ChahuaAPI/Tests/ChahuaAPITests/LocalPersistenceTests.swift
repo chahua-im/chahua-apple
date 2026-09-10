@@ -1,8 +1,104 @@
 import Foundation
+import GRDB
 import XCTest
 @testable import ChahuaAPI
 
 final class LocalPersistenceTests: XCTestCase {
+    func testLegacyParentDraftAndOutboxMigrateWithoutLosingOrderOrRevisions() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do {
+            let legacy = try DatabaseQueue(path: directory.appendingPathComponent("chat.sqlite").path)
+            try await legacy.write { db in
+                try db.execute(sql: """
+                    CREATE TABLE grdb_migrations(identifier TEXT NOT NULL PRIMARY KEY);
+                    INSERT INTO grdb_migrations VALUES ('v1_drafts_outbox');
+                    CREATE TABLE local_conversation (
+                        chat_id TEXT PRIMARY KEY NOT NULL,
+                        revision INTEGER NOT NULL DEFAULT 0,
+                        next_enqueue_sequence INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE TABLE draft (
+                        chat_id TEXT PRIMARY KEY NOT NULL REFERENCES local_conversation(chat_id),
+                        text TEXT NOT NULL, edit_revision INTEGER NOT NULL, updated_at REAL NOT NULL
+                    );
+                    CREATE TABLE outgoing_message (
+                        client_generated_id TEXT PRIMARY KEY NOT NULL,
+                        chat_id TEXT NOT NULL REFERENCES local_conversation(chat_id),
+                        sender_id INTEGER NOT NULL, text TEXT NOT NULL, enqueued_at REAL NOT NULL,
+                        enqueue_sequence INTEGER NOT NULL, dispatch_order INTEGER NOT NULL,
+                        state TEXT NOT NULL CHECK(state IN ('queued','sending','failed')),
+                        UNIQUE(chat_id, enqueue_sequence)
+                    );
+                    CREATE INDEX outgoing_dispatch ON outgoing_message(chat_id, dispatch_order);
+                    INSERT INTO local_conversation VALUES ('chat', 7, 2);
+                    INSERT INTO draft VALUES ('chat', 'unsent 世界', 5, 123);
+                    INSERT INTO outgoing_message VALUES ('A', 'chat', 1, 'first', 100, 0, 1, 'failed');
+                    INSERT INTO outgoing_message VALUES ('B', 'chat', 1, 'retry', 101, 1, 0, 'sending');
+                    """)
+            }
+        }
+        let store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store.restore()
+        let parent = try XCTUnwrap(restored.first)
+        XCTAssertEqual(parent.conversationKey, ConversationKey(chatID: "chat"))
+        XCTAssertEqual(parent.draft.text, "unsent 世界")
+        XCTAssertEqual(parent.draft.editRevision, 5)
+        XCTAssertEqual(parent.draft.updatedAt, Date(timeIntervalSince1970: 123))
+        XCTAssertEqual(parent.revision, 8)
+        XCTAssertEqual(parent.outgoing.map(\.clientGeneratedID), ["B", "A"])
+        XCTAssertEqual(parent.outgoing.map(\.state), [.queued, .failed])
+        XCTAssertEqual(parent.outgoing.map(\.enqueueSequence), [1, 0])
+        _ = try await store.saveDraft(chatID: "chat", threadID: "root", text: "thread", editRevision: 1, updatedAt: Date())
+        let stale = try await store.saveDraft(chatID: "chat", text: "stale", editRevision: 4, updatedAt: Date())
+        XCTAssertEqual(stale.draft.text, "unsent 世界")
+        let queued = try await store.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "C", text: "next", enqueuedAt: Date(), clearedDraftRevision: 6)
+        XCTAssertEqual(queued.outgoing.last?.enqueueSequence, 2)
+        XCTAssertEqual(queued.outgoing.last?.state, .failed)
+    }
+
+    func testThreadDraftFailureRetryAndAcknowledgementStayIsolatedAcrossReopen() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let keys = [ConversationKey(chatID: "chat"), ConversationKey(chatID: "chat", threadID: "one"), ConversationKey(chatID: "chat", threadID: "two")]
+        for (index, key) in keys.enumerated() {
+            _ = try await store!.enqueueText(chatID: key.chatID, threadID: key.threadID, senderID: 1, clientGeneratedID: "id-\(index)", text: "outgoing-\(index)", enqueuedAt: Date(), clearedDraftRevision: 1)
+            _ = try await store!.saveDraft(chatID: key.chatID, threadID: key.threadID, text: "draft-\(index)", editRevision: 2, updatedAt: Date())
+        }
+        _ = try await store!.fail(chatID: "chat", threadID: "one", clientGeneratedID: "id-1")
+        _ = try await store!.claimNext(chatID: "chat", threadID: "two")
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        let snapshots = Dictionary(uniqueKeysWithValues: restored.map { ($0.conversationKey, $0) })
+        for (index, key) in keys.enumerated() {
+            XCTAssertEqual(snapshots[key]?.draft.text, "draft-\(index)")
+            XCTAssertEqual(snapshots[key]?.outgoing.map(\.clientGeneratedID), ["id-\(index)"])
+            XCTAssertEqual(snapshots[key]?.outgoing.first?.conversationKey, key)
+        }
+        XCTAssertEqual(snapshots[keys[0]]?.outgoing.first?.state, .queued)
+        XCTAssertEqual(snapshots[keys[1]]?.outgoing.first?.state, .failed)
+        XCTAssertEqual(snapshots[keys[2]]?.outgoing.first?.state, .queued)
+        _ = try await store!.retry(chatID: "chat", clientGeneratedID: "id-1", scope: .messageAndSubsequent)
+        let stillFailed = try await store!.claimNext(chatID: "chat", threadID: "one")
+        XCTAssertNil(stillFailed.message)
+        _ = try await store!.retry(chatID: "chat", threadID: "one", clientGeneratedID: "id-1", scope: .messageAndSubsequent)
+        let retry = try await store!.claimNext(chatID: "chat", threadID: "one")
+        XCTAssertEqual(retry.message?.clientGeneratedID, "id-1")
+        _ = try await store!.acknowledge(chatID: "chat", clientGeneratedID: "id-1")
+        let wrongAcknowledgement = try await store!.claimNext(chatID: "chat", threadID: "one")
+        XCTAssertEqual(wrongAcknowledgement.snapshot.outgoing.map(\.clientGeneratedID), ["id-1"])
+        let acknowledged = try await store!.acknowledge(chatID: "chat", threadID: "one", clientGeneratedID: "id-1")
+        XCTAssertTrue(acknowledged.outgoing.isEmpty)
+        XCTAssertEqual(acknowledged.draft.text, "draft-1")
+        let parent = try await store!.claimNext(chatID: "chat")
+        let otherThread = try await store!.claimNext(chatID: "chat", threadID: "two")
+        XCTAssertEqual(parent.message?.clientGeneratedID, "id-0")
+        XCTAssertEqual(otherThread.message?.clientGeneratedID, "id-2")
+    }
+
     func testDraftHandoffRollbackAndAccountIsolationAcrossReopen() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

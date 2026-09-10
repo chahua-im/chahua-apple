@@ -449,7 +449,10 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                 return
             }
             if highlight && beginHighlight { highlightRow(id) }
-            let target = constrainedOrigin(y: tableView.rect(ofRow: index).midY - scrollView.contentView.bounds.height / 2)
+            let frame = tableView.rect(ofRow: index)
+            let target = constrainedOrigin(y: id == .unreadSeparator
+                ? frame.minY - scrollView.contentInsets.top
+                : frame.midY - scrollView.contentView.bounds.height / 2)
             scroll(to: target, animated: animated, requestID: request.id)
         }
     }
@@ -713,13 +716,31 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         guard visible.height > 0 else { return }
         let range = tableView.rows(in: visible)
         let hasVisibleRows = range.location != NSNotFound && range.length > 0 && range.location < rows.count
+        // AppKit's documentVisibleRect includes content underneath the floating chrome.
+        // Preserve the existing pagination/anchor geometry, but never count obscured rows as read.
+        let insets = scrollView.contentInsets
+        let unobscured = NSRect(
+            x: visible.minX + insets.left,
+            y: visible.minY + insets.top,
+            width: max(0, visible.width - insets.left - insets.right),
+            height: max(0, visible.height - insets.top - insets.bottom)
+        )
+        var fullyVisibleMessageIDs: [String] = []
+        if hasVisibleRows, !unobscured.isEmpty {
+            for index in range.location ..< min(NSMaxRange(range), rows.count) {
+                guard let id = rows[index].messageID,
+                      unobscured.contains(tableView.rect(ofRow: index)) else { continue }
+                fullyVisibleMessageIDs.append(id)
+            }
+        }
         settledPosition = capturePosition()
         model.viewportDidChange(.init(
             firstVisibleIndex: hasVisibleRows ? range.location : nil,
             lastVisibleIndex: hasVisibleRows ? min(NSMaxRange(range), rows.count) - 1 : nil,
             distanceToTop: max(0, visible.minY + scrollView.contentInsets.top),
             distanceToBottom: max(0, tableView.bounds.maxY + scrollView.contentInsets.bottom - visible.maxY),
-            height: visible.height
+            height: visible.height,
+            fullyVisibleMessageIDs: fullyVisibleMessageIDs
         ), reason: reason, revision: installedRevision)
     }
 }

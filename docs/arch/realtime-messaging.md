@@ -42,8 +42,8 @@ The diagram separates connection lifecycle, event routing, message reconciliatio
 | `ChahuaClient` | App/session | HTTP transport, bearer credential and refresh, opening a WS connection | Retry scheduling or feature state |
 | `URLSessionRealtimeConnection` | Connection attempt | Socket operations and typed frame decoding | App lifecycle or UI |
 | `RealtimeCoordinator` | App | One desired connection, receive loop, heartbeat, backoff, scene aggregation, connection generation | Message merge or scroll policy |
-| `ChatStore` | App/session | Active-chat projection, event routing, coalesced list refresh, weak visible-timeline registry | A second full-message cache |
-| `ChatDraftStore` | App/session, owned by `ChatStore` | Committed draft text, edit revisions, debounced persistence, composition deferral, durable submission and session fencing | Network delivery or chat/message projections |
+| `ChatStore` | App/session | Active-chat and subscribed-thread projections, event routing, coalesced list refresh, weak visible-timeline registry | A second full-message cache |
+| `ChatDraftStore` | App/session, owned by `ChatStore` | Conversation-scoped committed drafts, activity timestamps, edit revisions, debounced persistence, composition deferral, durable submission and session fencing | Network delivery or chat/message projections |
 | `ConversationMessageStore` | App/session | Pending sends, synchronous change broadcast, request-scoped event journal | A complete canonical message database or a globally consumable live buffer |
 | `ConversationTimelineModel` | Conversation presentation | Loaded window, local deferred arrivals, unseen identities, request generations, reconciliation and scroll policy | Authentication or socket ownership |
 | Native timeline host | Presentation | Rendering, measurement, viewport reporting and scroll effects | Network or reconciliation decisions |
@@ -77,8 +77,8 @@ Remote lookup uses `(chatId, message.id)`. The existing nonempty `clientGenerate
 | `messageDeleted` | Apply the received full redacted record to known targets and redact loaded reply previews referencing it. |
 | `messagesBulkDeleted` | Redact known targets/previews by ID; do not manufacture records. Coalesce same-chat visible-window and list recovery. |
 | `reactionUpdated` | Replace the full reaction array on a known target, preserving unrelated fields. Empty means clear, not no change. |
-| `threadUpdate` | Patch a known root's reply count; do not infer thread unread/read state. |
-| `chatArchiveStateChanged` | Invalidate the active-chat list; HTTP supplies the resulting list membership/order. |
+| `threadUpdate` | Patch a known root's reply count and invalidate conversation lists; HTTP supplies thread unread/read state. |
+| `chatArchiveStateChanged` / `threadMembershipChanged` | Invalidate conversation lists; HTTP supplies the resulting membership/order. |
 
 Deleted content must not reappear due to a later duplicate create or nondeleted WS snapshot for a known deleted record. An authoritative HTTP replacement can remove ordinary deleted messages from the window; a deleted root with a thread can remain as a placeholder.
 
@@ -142,15 +142,23 @@ Two windows can temporarily contain different HTTP slices or snapshot ages. They
 
 | Trigger | HTTP action | Presentation policy |
 |---|---|---|
-| Chat-list pull-to-refresh or macOS refresh button | Fetch the full active-list projection | Keep loaded rows during refresh; show retry on failure; support an empty list |
-| Every conversation open/reopen | Fetch latest message window | Do not rely on SwiftUI destroying the previous model |
-| First ready connection/reconnect | Refresh chat list and visible conversation windows | Receive and apply WS events concurrently with recovery |
-| Message/archive events affecting chat summaries | Coalesced active-list refresh | Server controls unread counts, preview and ordering |
+| Conversation-list pull-to-refresh | Fetch the full active projection for the selected scope | Keep loaded rows during refresh; failures are logged without an error row or Retry action; successful chat/thread data remains visible if the other source fails |
+| Every conversation open/reopen | Fetch around the last-read boundary when the chat/thread has unread messages; otherwise fetch latest | Freeze an unread separator before the first unread message and reveal it below the header; do not rely on SwiftUI destroying the previous model |
+| First ready connection/reconnect | Refresh chats, subscribed threads, and visible conversation windows | Receive and apply WS events concurrently with recovery |
+| Message/archive/thread/friendship events affecting summaries | Coalesced conversation-list refresh | Server controls unread counts and previews; local draft activity participates in ordering |
 | Bulk deletion batches | Coalesced same-chat visible-window/list refresh | Immediate local redaction, then scoped HTTP repair |
 
 Reconnect recovery follows latest only if that model was already following latest. Otherwise fetch around a visible remote anchor and restore it without animation/highlight. Keep old rows while recovery runs; on failure retain a readable window with explicit retry. Navigation/jump supersedes an older recovery request.
 
 No timer periodically refreshes data. Silent drops and cross-device read-state changes can remain stale until an applicable manual/open/reconnect refresh. The backend has no bulk-completion event, so batch-triggered repair cannot prove the background job has finished.
+
+### Visible-message read progress
+
+Both native timeline hosts report confirmed messages whose entire row fits between the floating header and composer. The latest fully visible message becomes eligible after remaining the candidate for 500 ms. Partial rows, pending messages, and separators never advance read progress. Navigation, programmatic scrolling, invalid geometry, and inactive scenes cancel the dwell; resuming requires fresh host geometry. Requests are serialized and failures retry only after another stable viewport.
+
+Parent chats use `POST /chats/{chatID}/read`; threads use `POST /chats/{chatID}/threads/{threadID}/read`, with an opaque string `messageId`. The response supplies authoritative `lastReadMessageId` and `unreadCount` for that scope only. List requests started before an acknowledgement are discarded and refreshed rather than overwriting the new count. The server only advances read cursors; local known-order watermarks suppress backward scrolling without parsing IDs.
+
+The entry separator stays fixed as read progress advances. A nil or unavailable entry cursor seeks the oldest accessible page using opaque older cursors, retaining one page while seeking because the API has no oldest-position query. Native scroll bounds still apply near the end of a short conversation.
 
 ## Protocol boundaries
 
@@ -160,7 +168,23 @@ The app router handles current messaging events and explicitly groups the remain
 
 Malformed payloads for known events fail the connection rather than being silently discarded, allowing HTTP recovery on reconnect. Complete protocol modeling does not add screens, feature stores, or HTTP requests for domains the app does not yet handle. Verification decodes each known wire type and proves an unhandled/future event does not interrupt subsequent message delivery.
 
-The realtime layer handles existing chat/timeline state only. It does not introduce typing/read-receipt protocols, APNs, or friend/pin/sticker/thread-list screens. Reaction controls use the separate mutation controller described above. Outgoing persistence and delivery belong to the existing `OutgoingMessageQueue`, not to the realtime connection.
+The realtime layer handles existing conversation lists and timelines. It does not introduce typing/read-receipt protocols, APNs, or friend/pin/sticker-management screens. Reaction controls use the separate mutation controller described above. Outgoing persistence and delivery belong to the existing `OutgoingMessageQueue`, not to the realtime connection.
+
+## Conversation scopes
+
+The shared segmented picker controls list membership, not selection identity. Messages combines active group chats, DMs, and subscribed active threads; Groups and DMs filter the active chats by kind; Threads shows subscribed active threads. Lists sort by the later of server activity and local draft activity. Changing scope does not discard the selected conversation.
+
+The selected scope presents one unlabeled loading animation for all of its initial requests, not separate chat/thread loading rows. Preserve available rows throughout. Failures remain in diagnostic logs only; the list has no error message or Retry action. Pull-to-refresh uses only the native refresh indicator, suppressing duplicate in-list loading UI. Background refreshes do not add loading animations to an already loaded list.
+
+Thread avatars follow the PWA overlay composition in both the list and floating conversation header. Group threads use the group's name/image with the root sender's avatar at the top-right; DM threads use the peer's name/image with a chat-bubble badge instead. Missing DM peer metadata falls back to the other participant, then the thread's chat name/image. The overlay is 55% of the primary diameter (minimum 16 points), offset two points outward, with a two-point background ring. Thread titles never supply avatar initials. Missing active-list parents resolve their metadata so archived-parent DM threads retain the DM treatment.
+
+`ConversationKey(chatID:threadID:)` distinguishes a parent chat from each of its threads throughout navigation, drafts, pending projections, persistence, and delivery. Threads paginate `GET /threads` independently from chats. A thread can resolve its parent metadata even when the parent is absent from the active-chat list. Its timeline requests use the backend's camel-case `threadId` query key, and replies use `POST /chats/{chatID}/threads/{threadID}/messages`. Group and DM parents continue using the ordinary chat message route. DM sending observes the peer's messaging permission.
+
+The thread-list `before` cursor is an RFC3339 timestamp, not a message ID. Preserve the server's `nextCursor` exactly; the backend emits UTC offsets as `+00:00`. The shared HTTP encoder percent-escapes literal `+` as `%2B`, because Axum's form-style query decoder otherwise turns it into a space and rejects the datetime with HTTP 400. Do not double-encode existing percent escapes.
+
+HTTP request failures use unified logging under subsystem `app.chahua.chat`, category `http`. Entries expose method, static resource, response type, HTTP status or transport code, and structural decoding paths (for example `$.threads[0].threadRootMessage.messageType`). Tokens, headers, query values, message bodies, response bodies, and raw decoder debug descriptions are not logged. Cancellation is not an error. Thread pagination/parent consistency failures use category `conversations`. On macOS, inspect failures with `log stream --predicate 'subsystem == "app.chahua.chat"'`.
+
+Local schema v2 preserves existing parent drafts, revisions, and queued-message order while adding thread-scoped conversation keys. Parent and thread drafts, retry batches, and pending acknowledgements cannot consume one another's state. API/storage and app regressions cover migration, pagination, scope membership, realtime invalidation, and thread send/retry/restoration isolation.
 
 ## Composer and durable enqueue boundary
 

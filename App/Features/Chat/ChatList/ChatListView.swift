@@ -1,128 +1,100 @@
 import ChahuaAPI
-import ChahuaMediaCache
 import SwiftUI
 
 struct ChatListView: View {
     @ObservedObject var store: ChatStore
-    let selectedChatID: String?
-    let showsDisclosureIndicator: Bool
-    let onSelectChat: (ChatListItem) -> Void
+    @ObservedObject var drafts: ChatDraftStore
+    let currentUserID: Int32
+    let scope: ConversationListScope
+    let selectedConversationID: ConversationKey?
+    let onSelectConversation: (ConversationListItem) -> Void
+    @State private var isPullRefreshing = false
 
     var body: some View {
-        content
-            .task { await store.loadActiveChats() }
+        let items = ConversationListItem.entries(
+            chats: store.state.chats, threads: store.state.threads,
+            scope: scope, draftUpdatedAt: drafts.draftUpdatedAt)
+        List {
+            ConversationListLoadStatus(
+                state: store.state, scope: scope, isPullRefreshing: isPullRefreshing)
+            if items.isEmpty && isLoaded {
+                ChahuaEmptyStateView(
+                    title: "No conversations",
+                    message: "Conversations in this category will appear here.",
+                    systemImage: scope == .threads ? "text.bubble" : "bubble.left.and.bubble.right")
+            }
+            ForEach(items) { item in
+                Button {
+                    guard selectedConversationID != item.id else { return }
+                    onSelectConversation(item)
+                } label: {
+                    ConversationListRow(
+                        item: item, draft: drafts.draftText(chatID: item.id.chatID, threadID: item.id.threadID),
+                        store: store, currentUserID: currentUserID, isSelected: selectedConversationID == item.id)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(selectedConversationID == item.id ? ChahuaTheme.ChatList.primary : Color.clear)
+                .accessibilityAddTraits(selectedConversationID == item.id ? .isSelected : [])
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .task(id: scope) { await loadScope() }
+        .refreshable {
+            isPullRefreshing = true
+            defer { isPullRefreshing = false }
+            await refreshScope()
+        }
     }
 
-    @ViewBuilder private var content: some View {
-        switch store.state.chatListLoadPhase {
-        case .idle, .loading:
-            ChahuaLoadingView(title: "Loading chats")
-        case .failed:
-            ChahuaRecoverableErrorView(
-                title: "Couldn’t load chats",
-                message: "Check your connection and try again.",
-                retryTitle: "Try again",
-                onRetry: { Task { await store.loadActiveChats() } }
-            )
-        case .loaded:
-            List {
-                if store.state.chatListRefreshFailed {
-                    HStack {
-                        Text("Couldn’t refresh chats.")
-                        Spacer()
-                        Button("Retry") { Task { await store.refreshActiveChats() } }
-                    }
-                }
-                if store.state.chats.isEmpty {
-                    ChahuaEmptyStateView(
-                        title: "No active chats",
-                        message: "Active chats will appear here.",
-                        systemImage: "bubble.left.and.bubble.right"
-                    )
-                }
-                ForEach(store.state.chats) { chat in
-                    Button {
-                        guard selectedChatID != chat.id else { return }
-                        onSelectChat(chat)
-                    } label: {
-                        ChatListRow(chat: chat, showsDisclosureIndicator: showsDisclosureIndicator)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(
-                        selectedChatID == chat.id
-                            ? ChahuaTheme.accent.opacity(0.14)
-                            : Color.clear
-                    )
-                    .accessibilityAddTraits(selectedChatID == chat.id ? .isSelected : [])
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .refreshable { await store.refreshActiveChats() }
-        }
+    private var isLoaded: Bool {
+        (!scope.includesChats || store.state.chatListLoadPhase == .loaded)
+            && (!scope.includesThreads || store.state.threadListLoadPhase == .loaded)
+    }
+
+
+    private func loadScope() async {
+        async let chats: Void = loadChatsIfNeeded()
+        async let threads: Void = loadThreadsIfNeeded()
+        _ = await (chats, threads)
+    }
+
+    private func loadChatsIfNeeded() async {
+        if scope.includesChats { await store.loadActiveChats() }
+    }
+
+    private func loadThreadsIfNeeded() async {
+        if scope.includesThreads { await store.loadActiveThreads() }
+    }
+
+    private func refreshScope() async {
+        if scope == .messages { await store.refreshActiveConversations() }
+        else if scope == .threads { await store.refreshActiveThreads() }
+        else { await store.refreshActiveChats() }
     }
 }
 
-private struct ChatListRow: View {
-    let chat: ChatListItem
-    let showsDisclosureIndicator: Bool
+/// The selected scope has one presentation state even when multiple lists load independently.
+struct ConversationListLoadStatus: View {
+    let state: ChatState
+    let scope: ConversationListScope
+    var isPullRefreshing = false
+
+    private var isLoading: Bool {
+        (scope.includesChats && (state.chatListLoadPhase == .idle || state.chatListLoadPhase == .loading))
+            || (scope.includesThreads && (state.threadListLoadPhase == .idle || state.threadListLoadPhase == .loading))
+    }
 
     var body: some View {
-        ChahuaListRow {
-            AvatarView(url: avatarURL, displayName: displayName)
-        } content: {
-            Text(displayName)
-                .font(.headline)
-                .lineLimit(1)
-        } trailing: {
-            if showsDisclosureIndicator {
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(ChahuaTheme.secondaryText)
-                    .accessibilityHidden(true)
-            }
+        if isLoading && !isPullRefreshing {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("Loading conversations")
+                .listRowSeparator(.hidden)
         }
-        .onAppear { traceVisibility("row-appear") }
-        .onDisappear { traceVisibility("row-disappear") }
-    }
-
-    private var displayName: String { chat.chatDisplayName }
-
-    private var avatarURL: URL? { chat.chatAvatarURL }
-
-    private func traceVisibility(_ event: String) {
-        guard AvatarCacheTrace.enabled, case .group = chat.kind, let url = avatarURL,
-              let key = AvatarCacheTrace.key(for: MediaRequest(
-                  request: URLRequest(url: url), tags: [CacheTag(rawValue: "avatars")]
-              )) else { return }
-        AvatarCacheTrace.event("scope=chat-list-group event=\(event) key=\(key)")
     }
 }
 
-extension ChatListItem {
-    var chatDisplayName: String {
-        switch kind {
-        case .dm:
-            return nonEmpty(peer?.username) ?? nonEmpty(name) ?? String(localized: "Direct Message \(id)")
-        case .group:
-            return nonEmpty(name) ?? String(localized: "Chat \(id)")
-        }
-    }
 
-    var chatAvatarURL: URL? {
-        let value: String?
-        switch kind {
-        case .dm:
-            value = peer?.avatarUrl ?? avatar
-        case .group:
-            value = avatar
-        }
-        return value.flatMap(URL.init(string:))
-    }
-
-    private func nonEmpty(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-}

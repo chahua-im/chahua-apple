@@ -87,6 +87,88 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         XCTAssertFalse(model.state.live.followsLatest)
     }
 
+    func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
+        let messages = try (0 ..< 16).map {
+            try TimelineTestFixtures.message(id: "opaque-\(100 - $0)", senderID: 2, at: $0, text: "Visible message \($0)")
+        }
+        let pending = PendingOutgoingMessage(
+            chatID: "chat", clientGeneratedID: "pending",
+            body: .init(messageType: .text, clientGeneratedId: "pending", message: "Not confirmed"),
+            enqueuedAt: TimelineTestFixtures.date(second: 16), senderID: 1, state: .queued
+        )
+        let store = ConversationMessageStore()
+        store.replacePending(chatID: "chat", with: [pending])
+        var reads: [String] = []
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: BubbleSource(page: try TimelineTestFixtures.page(messages)), messageStore: store,
+            markRead: { reads.append($0) }
+        )
+        let parent = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = parent
+        window.makeKeyAndVisible()
+        defer { model.close(); window.isHidden = true }
+        let controller = TimelineCollectionViewController(model: model, actions: .init())
+        controller.headerInset = 64
+        controller.composerInset = 80
+        parent.addChild(controller)
+        parent.view.addSubview(controller.view)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 400)
+        controller.didMove(toParent: parent)
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.contentInsetAdjustmentBehavior = .never
+        parent.view.layoutIfNeeded()
+        await model.loadInitial(position: .unread(after: messages[3].id))
+        controller.viewDidLayoutSubviews()
+        try await Task.sleep(for: .milliseconds(100))
+        collection.layoutIfNeeded()
+        let markerIndex = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        let markerPath = IndexPath(item: markerIndex, section: 0)
+        let markerFrame = try XCTUnwrap(collection.layoutAttributesForItem(at: markerPath)).frame
+        let marker = try XCTUnwrap(collection.cellForItem(at: markerPath))
+        XCTAssertEqual(markerFrame.minY, collection.contentOffset.y + controller.headerInset, accuracy: 1)
+        let rendered = marker.contentView.systemLayoutSizeFitting(
+            CGSize(width: 400, height: 0), withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        XCTAssertEqual(marker.bounds.height, rendered.height, accuracy: 1,
+                       "The separator must use its rendered SwiftUI height, not a guessed row height.")
+
+        func frame(_ messageIndex: Int) throws -> CGRect {
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[messageIndex].id })
+            return try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))).frame
+        }
+        func show(top: CGFloat, bottom: CGFloat) {
+            model.setReadTrackingActive(false)
+            controller.scrollViewWillBeginDragging(collection)
+            controller.view.frame.size.height = bottom - top + controller.headerInset + controller.composerInset
+            parent.view.layoutIfNeeded()
+            controller.viewDidLayoutSubviews()
+            collection.setContentOffset(CGPoint(x: 0, y: top - controller.headerInset), animated: false)
+            collection.layoutIfNeeded()
+            controller.scrollViewDidScroll(collection)
+            controller.scrollViewDidEndDragging(collection, willDecelerate: false)
+            model.setReadTrackingActive(true)
+        }
+
+        let partial = try frame(6)
+        show(top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(reads, [], "A row clipped by both overlays must never be marked read.")
+
+        show(top: try frame(5).midY, bottom: try frame(8).midY)
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(reads, [messages[7].id],
+                       "Choose the last fully visible row, not the partially visible row under the composer.")
+
+        show(top: try frame(14).midY, bottom: collection.contentSize.height)
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(reads, [messages[7].id, messages[15].id],
+                       "Pending rows cannot advance read progress; opaque IDs remain in timeline order.")
+    }
+
     func testRowHeightsFollowWidthAndDynamicTypeWhileReadingHistory() async throws {
         let messages = try (0 ..< 15).map {
             try TimelineTestFixtures.message(

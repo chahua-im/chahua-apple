@@ -99,6 +99,23 @@ final class TimelineRowsBuilderTests: XCTestCase {
         #endif
     }
 
+    func testUnreadBoundaryBreaksSenderGroupingWithoutChangingMessageIdentity() throws {
+        let messages = [
+            try TimelineTestFixtures.message(id: "read", senderID: 2, at: 0),
+            try TimelineTestFixtures.message(id: "unread", senderID: 2, at: 10),
+            try TimelineTestFixtures.message(id: "next", senderID: 2, at: 20),
+        ]
+        let rows = builder().build(messages, unreadBeforeMessageID: "unread")
+        let separator = try XCTUnwrap(rows.firstIndex { $0.id == .unreadSeparator })
+
+        XCTAssertEqual(rows[separator - 1].messageID, "read")
+        XCTAssertEqual(rows[separator + 1].messageID, "unread")
+        XCTAssertNil(rows[separator].messageID)
+        XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.single, .first, .last])
+        XCTAssertEqual(rows.compactMap(messageRow).map(\.showsSenderName), [true, true, false])
+        XCTAssertEqual(rows.compactMap(\.stableMessageKey), builder().build(messages).compactMap(\.stableMessageKey))
+    }
+
     private func builder(isGroupChat: Bool = true) -> TimelineRowsBuilder {
         TimelineRowsBuilder(currentUserID: 1, isGroupChat: isGroupChat, calendar: calendar)
     }

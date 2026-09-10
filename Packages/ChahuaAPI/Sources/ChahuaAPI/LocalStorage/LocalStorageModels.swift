@@ -1,6 +1,16 @@
 import CryptoKit
 import Foundation
 
+public struct ConversationKey: Hashable, Codable, Sendable {
+    public let chatID: String
+    public let threadID: String?
+
+    public init(chatID: String, threadID: String? = nil) {
+        self.chatID = chatID
+        self.threadID = threadID
+    }
+}
+
 public struct LocalStorageScope: Sendable {
     public let apiBaseURL: URL
     public let userID: Int32
@@ -30,6 +40,8 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public enum State: String, Sendable { case queued, sending, failed }
     public let clientGeneratedID: String
     public let chatID: String
+    public let threadID: String?
+    public var conversationKey: ConversationKey { ConversationKey(chatID: chatID, threadID: threadID) }
     public let senderID: Int32
     public let text: String
     public let replyToMessage: MessagePreview?
@@ -41,6 +53,8 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
 
 public struct LocalConversationSnapshot: Sendable, Equatable {
     public let chatID: String
+    public let threadID: String?
+    public var conversationKey: ConversationKey { ConversationKey(chatID: chatID, threadID: threadID) }
     public let revision: Int64
     public let draft: LocalDraft
     public let outgoing: [LocalOutgoingMessage]

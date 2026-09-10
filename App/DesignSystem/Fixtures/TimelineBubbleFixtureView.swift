@@ -14,6 +14,7 @@
         @State private var event = "No action"
         @State private var threadScope = false
         @State private var draft = ""
+        @State private var listScope: ConversationListScope = .messages
         @State private var replyToMessage: MessagePreview?
         @State private var replyFocusRequest = 0
 
@@ -21,7 +22,7 @@
             if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
                 ChatSplitLayout(hasSelection: true) { _ in
                     VStack(alignment: .leading, spacing: 0) {
-                        ConversationListHeader {
+                        ConversationListHeader(selection: $listScope) {
                             Menu {
                                 Text("Alex")
                             } label: {
@@ -47,7 +48,9 @@
                     timelineContent
                         .modifier(
                             ChatHeaderOverlay {
-                                ChatFloatingHeader(title: "Native bubble timeline")
+                                ChatFloatingHeader(title: "Native bubble timeline") {
+                                    AvatarView(url: nil, displayName: "Native bubble timeline", diameter: 32)
+                                }
                                     .padding(.horizontal, 12)
                                     .padding(.top, ChatSplitMetrics.outerInset)
                             })

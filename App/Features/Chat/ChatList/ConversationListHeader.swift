@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ConversationListHeader<Account: View>: View {
+    @Binding var selection: ConversationListScope
     @ViewBuilder let account: () -> Account
 
     var body: some View {
@@ -27,11 +28,11 @@ struct ConversationListHeader<Account: View>: View {
                 .help("New message")
                 .disabled(true)
             }
-            ConversationScopePicker()
+            ConversationScopePicker(selection: $selection)
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 16)
         .padding(.bottom, 12)
         #if !os(macOS)
         // macOS already reserves vertical clearance in the window-controls row.

@@ -5,6 +5,7 @@ import Foundation
 enum TimelineInitialPosition: Equatable {
     case liveEdge
     case message(String)
+    case unread(after: String?)
 }
 
 @MainActor
@@ -25,6 +26,7 @@ final class ConversationTimelineModel: ObservableObject {
     private let source: any TimelineMessageSource
     private let messageStore: ConversationMessageStore
     private let builder: TimelineRowsBuilder
+    private let markRead: (@MainActor (String) async throws -> Void)?
     private var window = TimelineWindow()
     private var observation: AnyCancellable?
     private var deferredCreates: [ConversationMessageStableKey: MessageResponse] = [:]
@@ -48,27 +50,37 @@ final class ConversationTimelineModel: ObservableObject {
     private var newerTask: Task<Void, Never>?
     // A committed pending publication invalidates the host's viewport revision before reveal runs.
     private var canReuseLatestWindowAfterPendingChange = false
+    // The entry boundary is frozen until the next open, independent of read receipts.
+    private var unreadBeforeMessageID: String?
+    private var readWatermark: (id: String, createdAt: Date)?
+    private var readTrackingActive = false
+    private var readCandidateID: String?
+    private var readCandidateMature = false
+    private var readDwellTask: Task<Void, Never>?
+    private var readSendTask: Task<Void, Never>?
 
-    init(chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource, messageStore: ConversationMessageStore, threadID: String? = nil, calendar: Calendar = .autoupdatingCurrent) {
+    init(chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource, messageStore: ConversationMessageStore, threadID: String? = nil, calendar: Calendar = .autoupdatingCurrent, markRead: (@MainActor (String) async throws -> Void)? = nil) {
         self.chatID = chatID
         self.threadID = threadID
         self.currentUserID = currentUserID
         self.source = source
         self.messageStore = messageStore
+        self.markRead = markRead
         builder = TimelineRowsBuilder(currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar)
         observeChanges()
         publish()
     }
 
-    /// Unlike fixture-oriented loadInitial, every appearance requests a fresh latest window.
-    func open() async {
+    /// Unlike fixture-oriented loadInitial, every appearance requests a fresh entry window.
+    func open(position: TimelineInitialPosition = .liveEdge) async {
         invalidateRequests()
         observeChanges()
         clearWindow()
-        await loadInitial()
+        await loadInitial(position: position)
     }
 
     func close() {
+        setReadTrackingActive(false)
         invalidateRequests()
         observation = nil
     }
@@ -84,6 +96,10 @@ final class ConversationTimelineModel: ObservableObject {
             guard let self else { return }
             defer { if generation == requestGeneration { initialTask = nil } }
             do {
+                if case .unread(let after) = position {
+                    try await loadUnreadEntry(after: after, generation: requestGeneration)
+                    return
+                }
                 try await fetchSnapshot(query: aroundQuery(for: position), mode: .replace(latest: position == .liveEdge), generation: requestGeneration) {
                     self.state.content = .ready
                     switch position {
@@ -94,6 +110,8 @@ final class ConversationTimelineModel: ObservableObject {
                         self.state.live.followsLatest = false
                         if let rowID = self.rowID(forServerID: id) { self.publish(position: .reveal(rowID, animated: false, highlight: true), reset: true) }
                         else { self.state.repositionFailure = .message(id); self.publish(position: .bottom(animated: false), reset: true) }
+                    case .unread:
+                        break // Resolved above, before publishing the initial window.
                     }
                 }
             } catch is CancellationError {
@@ -107,6 +125,148 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func retryInitial() async { await loadInitial(position: lastInitialPosition) }
+
+    private enum UnreadEntryError: Error { case stalledCursor }
+
+    private func loadUnreadEntry(after lastReadID: String?, generation requestGeneration: Int) async throws {
+        let query = lastReadID.map { aroundQuery(for: .message($0)) } ?? liveEdgeQuery
+        var fetchedLatest = lastReadID == nil
+        do {
+            try await fetchSnapshot(query: query, mode: .replace(latest: lastReadID == nil), generation: requestGeneration) {}
+        } catch let error as APIError {
+            guard lastReadID != nil else { throw error }
+            switch error {
+            case .http(status: 404, body: _), .invalidResponse(statusCode: 404):
+                try await fetchSnapshot(query: liveEdgeQuery, mode: .replace(latest: true), generation: requestGeneration) {}
+                fetchedLatest = true
+            default:
+                throw error
+            }
+        }
+        // Some servers return an empty around page for an unavailable target instead
+        // of 404. That is not evidence that the conversation itself is empty.
+        if !fetchedLatest, window.messages.isEmpty {
+            try await fetchSnapshot(query: liveEdgeQuery, mode: .replace(latest: true), generation: requestGeneration) {}
+        }
+
+        if let lastReadID, let index = window.index(ofServerID: lastReadID) {
+            let boundary = window.messages[index]
+            advanceReadWatermark(to: boundary)
+            var cursors: Set<String> = []
+            // An around page can end exactly at the read boundary.
+            while window.messages.last?.id == lastReadID, let cursor = window.newerCursor {
+                guard cursors.insert(cursor).inserted else { throw UnreadEntryError.stalledCursor }
+                try await fetchSnapshot(query: .init(after: cursor, max: Self.pageSize, threadID: threadID), mode: .page(.newer), generation: requestGeneration) {}
+            }
+            if let index = window.index(ofServerID: lastReadID), index + 1 < window.messages.count {
+                unreadBeforeMessageID = window.messages[index + 1].id
+            }
+        } else {
+            // No oldest-query exists. Follow opaque older cursors rather than inventing a
+            // sentinel or treating the latest page as the beginning of unread history.
+            var cursors: Set<String> = []
+            while let cursor = window.olderCursor {
+                guard cursors.insert(cursor).inserted else { throw UnreadEntryError.stalledCursor }
+                try await fetchSnapshot(query: .init(before: cursor, max: Self.pageSize, threadID: threadID), mode: .seekOlder, generation: requestGeneration) {}
+            }
+            unreadBeforeMessageID = window.messages.first?.id
+        }
+        state.content = .ready
+        state.live.followsLatest = unreadBeforeMessageID == nil && window.isAtLiveEdge
+        publish(position: unreadBeforeMessageID == nil
+            ? .bottom(animated: false)
+            : .reveal(.unreadSeparator, animated: false, highlight: false), reset: true)
+    }
+
+    func setReadTrackingActive(_ active: Bool) {
+        guard readTrackingActive != active else { return }
+        readTrackingActive = active
+        cancelReadCandidate()
+        if active {
+            // Both hosts remeasure and report on every snapshot, even at the same revision.
+            viewportRevision = nil
+            updates.send(.init(revision: snapshotRevision, windowRevision: windowRevision, rows: rows, animateFollowing: false, pendingScroll: pendingScroll))
+        } else {
+            // A callback may ignore cancellation; retain the task until it completes so
+            // reactivation can never issue overlapping writes.
+            readSendTask?.cancel()
+            viewportRevision = nil
+        }
+    }
+
+    private func cancelReadCandidate() {
+        readDwellTask?.cancel()
+        readDwellTask = nil
+        readCandidateID = nil
+        readCandidateMature = false
+    }
+
+    private var visibleReadCandidate: MessageResponse? {
+        guard readTrackingActive, markRead != nil, observation != nil,
+              state.content == .ready, pendingScroll == nil, viewportRevision == snapshotRevision,
+              lastViewport.isValid(forRowCount: rows.count),
+              let first = lastViewport.firstVisibleIndex, let last = lastViewport.lastVisibleIndex,
+              let candidateID = lastViewport.fullyVisibleMessageIDs.last else { return nil }
+        for index in (first ... last).reversed() {
+            guard case .message(let row) = rows[index], let message = row.entry.remoteMessage,
+                  message.id == candidateID else { continue }
+            return isLaterThanWatermark(message) ? message : nil
+        }
+        return nil
+    }
+
+    private func isLaterThanWatermark(_ message: MessageResponse) -> Bool {
+        // A missing/deleted entry cursor cannot establish a local baseline. The read
+        // endpoint advances monotonically, so visibility can still submit a candidate.
+        guard let readWatermark else { return true }
+        guard message.id != readWatermark.id else { return false }
+        if let boundary = window.index(ofServerID: readWatermark.id),
+           let candidate = window.index(ofServerID: message.id) { return candidate > boundary }
+        // Across disjoint windows, equal timestamps cannot establish an order.
+        return message.createdAt > readWatermark.createdAt
+    }
+
+    private func advanceReadWatermark(to message: MessageResponse) {
+        if isLaterThanWatermark(message) { readWatermark = (message.id, message.createdAt) }
+    }
+
+    private func updateReadCandidate() {
+        guard let candidate = visibleReadCandidate else { cancelReadCandidate(); return }
+        guard readCandidateID != candidate.id else { return }
+        cancelReadCandidate()
+        readCandidateID = candidate.id
+        let requestGeneration = generation
+        readDwellTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+            guard let self, generation == requestGeneration,
+                  readCandidateID == candidate.id, visibleReadCandidate?.id == candidate.id else { return }
+            readDwellTask = nil
+            readCandidateMature = true
+            sendMatureReadCandidate()
+        }
+    }
+
+    private func sendMatureReadCandidate() {
+        guard readSendTask == nil, readCandidateMature, let markRead,
+              let candidate = visibleReadCandidate, candidate.id == readCandidateID else { return }
+        let requestGeneration = generation
+        readSendTask = Task { [weak self] in
+            do {
+                try Task.checkCancellation()
+                guard self?.generation == requestGeneration,
+                      self?.readCandidateID == candidate.id,
+                      self?.visibleReadCandidate?.id == candidate.id else { throw CancellationError() }
+                try await markRead(candidate.id)
+                self?.advanceReadWatermark(to: candidate)
+            } catch {
+                // A later viewport can retry; failures must not spin a write loop.
+            }
+            guard let self else { return }
+            readSendTask = nil
+            if readCandidateID == candidate.id { cancelReadCandidate() }
+            sendMatureReadCandidate()
+        }
+    }
 
     func reconcileAfterReconnect() async {
         guard observation != nil else { return }
@@ -169,6 +329,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func viewportDidChange(_ viewport: TimelineViewport, reason: TimelineViewportChangeReason, revision: Int) {
+        if revision == snapshotRevision, !viewport.isValid(forRowCount: rows.count) { cancelReadCandidate() }
         guard revision == snapshotRevision, viewport.isValid(forRowCount: rows.count) else { return }
         canReuseLatestWindowAfterPendingChange = false
         lastViewport = viewport
@@ -187,6 +348,7 @@ final class ConversationTimelineModel: ObservableObject {
         if pinned && isAtLiveEdge { unseenKeys.removeAll() }
         nextLive.unseenCount = unseenKeys.count
         if nextLive != state.live { state.live = nextLive }
+        updateReadCandidate()
         guard reason == .user, state.content == .ready, recoveryTask == nil else { return }
         let threshold = Self.edgePrefetchScreens * viewport.height
         if viewport.distanceToTop < threshold { loadEdge(.older) }
@@ -312,7 +474,7 @@ final class ConversationTimelineModel: ObservableObject {
         switch side { case .older: olderTask = task; case .newer: newerTask = task }
     }
 
-    private enum SnapshotMode { case replace(latest: Bool), page(EdgeSide) }
+    private enum SnapshotMode { case replace(latest: Bool), page(EdgeSide), seekOlder }
 
     private struct MessageNotFound: Error {}
 
@@ -339,6 +501,11 @@ final class ConversationTimelineModel: ObservableObject {
             visibleAnchorID = nil
             pendingScroll = nil
             if latest { reconcileDeferredWithLatest() }
+        case .seekOlder:
+            // Seeking the oldest page must not retain the entire conversation.
+            // An empty terminal page still leaves the previous accessible page usable.
+            if page.messages.isEmpty { window.prependOlder(page, accepting: accepts) }
+            else { window.replace(with: page, accepting: accepts) }
         case .page(.older): window.prependOlder(page, accepting: accepts)
         case .page(.newer): window.appendNewer(page, accepting: accepts)
         }
@@ -482,6 +649,7 @@ final class ConversationTimelineModel: ObservableObject {
     private func clearWindow() {
         window = TimelineWindow()
         windowRevision &+= 1
+        unreadBeforeMessageID = nil
         deferredCreates.removeAll()
         preHistoryAcknowledgementKeys.removeAll()
         canReuseLatestWindowAfterPendingChange = false
@@ -497,6 +665,9 @@ final class ConversationTimelineModel: ObservableObject {
 
     private func invalidateRequests() {
         canReuseLatestWindowAfterPendingChange = false
+        cancelReadCandidate()
+        readSendTask?.cancel()
+        viewportRevision = nil
         generation &+= 1
         initialTask?.cancel(); initialTask = nil
         recoveryTask?.cancel(); recoveryTask = nil
@@ -519,14 +690,15 @@ final class ConversationTimelineModel: ObservableObject {
                 remoteMessages.append(message)
             }
         }
-        let projection = messageStore.projection(for: chatID, remoteMessages: remoteMessages, includePendingOutgoing: threadID == nil)
+        let projection = messageStore.projection(for: chatID, threadID: threadID, remoteMessages: remoteMessages, includePendingOutgoing: true)
         let changed = projection != lastProjection || reset
         if changed {
-            let newRows = builder.build(projection.entries)
+            let newRows = builder.build(projection.entries, unreadBeforeMessageID: unreadBeforeMessageID)
             if newRows != rows { rows = newRows }
             lastProjection = projection
             snapshotRevision &+= 1
             viewportRevision = nil
+            cancelReadCandidate()
         }
         if let position { issueScroll(position) }
         guard changed || position != nil else { return }
@@ -534,5 +706,10 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func requestScroll(_ intent: TimelineScrollIntent) { issueScroll(intent); updates.send(.init(revision: snapshotRevision, windowRevision: windowRevision, rows: rows, animateFollowing: false, pendingScroll: pendingScroll)) }
-    private func issueScroll(_ intent: TimelineScrollIntent) { scrollRequestID &+= 1; pendingScroll = .init(id: scrollRequestID, intent: intent) }
+    private func issueScroll(_ intent: TimelineScrollIntent) {
+        cancelReadCandidate()
+        viewportRevision = nil
+        scrollRequestID &+= 1
+        pendingScroll = .init(id: scrollRequestID, intent: intent)
+    }
 }

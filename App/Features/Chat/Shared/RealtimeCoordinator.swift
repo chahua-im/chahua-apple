@@ -96,7 +96,7 @@ final class RealtimeCoordinator: ObservableObject {
                             recovery?.cancel()
                             recovery = Task { [weak self] in
                                 guard let self, self.generation == currentGeneration else { return }
-                                async let chats: Void = self.store.refreshActiveChats()
+                                async let chats: Void = self.store.refreshActiveConversations()
                                 async let messages: Void = self.store.reconcileVisibleTimelines()
                                 _ = await (chats, messages)
                             }

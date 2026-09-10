@@ -4,6 +4,7 @@ import Foundation
 enum TimelineRowID: Hashable {
     case message(ConversationMessageStableKey)
     case dateSeparator(Int)
+    case unreadSeparator
 }
 
 enum TimelineGroupPosition: Hashable {
@@ -28,11 +29,13 @@ struct TimelineDateSeparatorRow: Hashable {
 enum TimelineRow: Hashable, Identifiable {
     case message(TimelineMessageRow)
     case dateSeparator(TimelineDateSeparatorRow)
+    case unreadSeparator
 
     var id: TimelineRowID {
         switch self {
         case .message(let row): .message(row.entry.stableKey)
         case .dateSeparator(let row): .dateSeparator(row.ordinalDay)
+        case .unreadSeparator: .unreadSeparator
         }
     }
 
@@ -53,17 +56,18 @@ struct TimelineRowsBuilder {
 
     var calendar: Calendar
     var groupingGap: TimeInterval = 300
-    func build(_ messages: [MessageResponse]) -> [TimelineRow] {
-        build(messages.map(ConversationTimelineEntry.remote))
+    func build(_ messages: [MessageResponse], unreadBeforeMessageID: String? = nil) -> [TimelineRow] {
+        build(messages.map(ConversationTimelineEntry.remote), unreadBeforeMessageID: unreadBeforeMessageID)
     }
 
-    func build(_ entries: [ConversationTimelineEntry]) -> [TimelineRow] {
+    func build(_ entries: [ConversationTimelineEntry], unreadBeforeMessageID: String? = nil) -> [TimelineRow] {
         guard !entries.isEmpty else { return [] }
 
         var rows: [TimelineRow] = []
         rows.reserveCapacity(entries.count * 2)
 
         var previousDay: Int?
+        let unreadIndex = unreadBeforeMessageID.flatMap { id in entries.firstIndex { $0.serverID == id } }
         for index in entries.indices {
             let entry = entries[index]
             let day = calendar.startOfDay(for: entry.createdAt)
@@ -73,8 +77,9 @@ struct TimelineRowsBuilder {
                 previousDay = ordinalDay
             }
 
-            let groupedWithPrevious = index > entries.startIndex && grouped(entries[index - 1], entry)
-            let groupedWithNext = index < entries.index(before: entries.endIndex) && grouped(entry, entries[index + 1])
+            if index == unreadIndex { rows.append(.unreadSeparator) }
+            let groupedWithPrevious = index > entries.startIndex && index != unreadIndex && grouped(entries[index - 1], entry)
+            let groupedWithNext = index < entries.index(before: entries.endIndex) && index + 1 != unreadIndex && grouped(entry, entries[index + 1])
             let groupPosition = groupPosition(
                 groupedWithPrevious: groupedWithPrevious,
                 groupedWithNext: groupedWithNext

@@ -167,11 +167,10 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
 }
 
 /// In-content chrome shared by the adaptive conversation and its diagnostic surface.
-struct ChatFloatingHeader: View {
+struct ChatFloatingHeader<Avatar: View>: View {
     let title: String
-    var avatarURL: URL?
-    var showsAvatar = true
     var onBack: (() -> Void)?
+    @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
         HStack(spacing: 12) {
@@ -182,10 +181,7 @@ struct ChatFloatingHeader: View {
                 }
                 .buttonStyle(.plain)
             }
-            if showsAvatar {
-                AvatarView(url: avatarURL, displayName: title, diameter: 32)
-                    .accessibilityHidden(true)
-            }
+            avatar().accessibilityHidden(true)
             Text(title)
                 .font(.headline)
                 .lineLimit(1)

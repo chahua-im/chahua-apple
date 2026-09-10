@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Actor-backed production implementation of `ChahuaAPIClient`.
 ///
@@ -6,6 +7,7 @@ import Foundation
 /// instance across callers. Authenticated requests refresh a rejected token once;
 /// callers receiving `APIError.invalidToken` must clear their persisted session.
 public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
+    private static let logger = Logger(subsystem: "app.chahua.chat", category: "http")
     private let configuration: ChahuaConfiguration
     private let session: URLSession
     private var token: String?
@@ -129,17 +131,57 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     }
 
     func send<Response: Decodable>(_ spec: HTTPRequestSpec, decoding: Response.Type) async throws -> Response {
-        let generation = sessionGeneration
-        let (data, status) = try await perform(spec)
-        try checkSession(generation)
-        do { return try JSONCoding.decoder.decode(Response.self, from: data) }
-        catch { throw APIError.decoding(statusCode: status, description: String(describing: error)) }
+        do {
+            let generation = sessionGeneration
+            let (data, status) = try await perform(spec)
+            try checkSession(generation)
+            do { return try JSONCoding.decoder.decode(Response.self, from: data) }
+            catch { throw APIError.decoding(statusCode: status, description: JSONCoding.decodingDescription(error)) }
+        } catch {
+            logFailure(spec, response: String(reflecting: Response.self), error: error)
+            throw error
+        }
     }
 
     func send(_ spec: HTTPRequestSpec) async throws {
-        let generation = sessionGeneration
-        _ = try await perform(spec)
-        try checkSession(generation)
+        do {
+            let generation = sessionGeneration
+            _ = try await perform(spec)
+            try checkSession(generation)
+        } catch {
+            logFailure(spec, response: "empty", error: error)
+            throw error
+        }
+    }
+
+    private func logFailure(_ spec: HTTPRequestSpec, response: String, error: Error) {
+        let detail: String
+        switch error {
+        case is CancellationError:
+            return
+        case APIError.transport(let error):
+            detail = "transport code=\(error.code.rawValue)"
+        case APIError.http(let status, _), APIError.invalidResponse(let status):
+            detail = "HTTP status=\(status)"
+        case APIError.decoding(let status, let description):
+            detail = "decoding status=\(status) \(description)"
+        case APIError.invalidToken:
+            detail = "authentication rejected after refresh"
+        case APIError.unauthorized:
+            detail = "authentication required"
+        case APIError.invalidBaseURL:
+            detail = "invalid base URL"
+        case APIError.encoding:
+            detail = "request encoding failed"
+        case APIError.unavailable:
+            detail = "service unavailable"
+        case APIError.unexpectedResponse:
+            detail = "unexpected response"
+        default:
+            detail = "error type=\(String(reflecting: type(of: error)))"
+        }
+        // Only the static resource name is public: omit IDs, query values, headers, and bodies.
+        Self.logger.error("Request failed method=\(spec.method.rawValue, privacy: .public) resource=/\(spec.path.first ?? "", privacy: .public) response=\(response, privacy: .public) \(detail, privacy: .public)")
     }
 
     private func perform(_ spec: HTTPRequestSpec) async throws -> (Data, Int) {
@@ -200,6 +242,11 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             ? String(components.percentEncodedPath.dropLast()) + path
             : components.percentEncodedPath + path
         components.queryItems = spec.query.isEmpty ? nil : spec.query
+        // Axum's form-style query decoder treats '+' as a space. URLComponents
+        // leaves it literal, so escape it after encoding (without double-encoding '%').
+        if let query = components.percentEncodedQuery, query.contains("+") {
+            components.percentEncodedQuery = query.replacingOccurrences(of: "+", with: "%2B")
+        }
         guard let url = components.url else { throw APIError.invalidBaseURL(configuration.baseURL) }
 
         var request = URLRequest(url: url)
@@ -222,7 +269,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         if status == 401 { throw APIError.invalidToken }
         guard (200 ..< 300).contains(status) else { throw APIError.invalidResponse(statusCode: status) }
         do { return try JSONCoding.decoder.decode(MeResponse.self, from: data) }
-        catch { throw APIError.decoding(statusCode: status, description: String(describing: error)) }
+        catch { throw APIError.decoding(statusCode: status, description: JSONCoding.decodingDescription(error)) }
     }
 
     private func decodeAuthToken(_ data: Data, status: Int) throws -> String {
@@ -232,7 +279,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             guard !token.isEmpty else { throw APIError.invalidToken }
             return token
         } catch let error as APIError { throw error }
-        catch { throw APIError.decoding(statusCode: status, description: String(describing: error)) }
+        catch { throw APIError.decoding(statusCode: status, description: JSONCoding.decodingDescription(error)) }
     }
 
     private func refreshedToken() async throws -> String {

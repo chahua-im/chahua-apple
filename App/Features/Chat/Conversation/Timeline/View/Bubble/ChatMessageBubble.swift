@@ -157,9 +157,10 @@ struct ChatMessageBubble: View {
         HStack(spacing: 8) {
             Text(senderName)
                 .font(.system(size: senderSize, weight: .semibold))
-                .foregroundStyle(row.isOutgoing && hasBackground ? .white : bubbleColorForUser(name: senderName, dark: colorScheme == .dark))
+                .foregroundStyle(row.isOutgoing && hasBackground ? .white : bubbleColorForUser(uid: row.entry.senderID, dark: colorScheme == .dark))
                 .opacity(0.85)
                 .lineLimit(1)
+            Spacer(minLength: 0)
             if let group = message?.sender.userGroup, let name = group.name, !name.isEmpty {
                 Text(name)
                     .font(.system(size: senderSize * 10 / 12))
@@ -186,7 +187,7 @@ struct ChatMessageBubble: View {
 
     @ViewBuilder private func reply(_ preview: MessagePreview) -> some View {
         let name = preview.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(preview.sender.uid)"
-        let color = row.isOutgoing && hasBackground ? Color.white : bubbleColorForUser(name: name, dark: colorScheme == .dark)
+        let color = row.isOutgoing && hasBackground ? Color.white : bubbleColorForUser(uid: preview.sender.uid, dark: colorScheme == .dark)
         let content = VStack(alignment: .leading, spacing: 2) {
             Text(name).font(.system(size: senderSize * 11 / 12, weight: .semibold)).opacity(0.85).lineLimit(1)
             Text(messagePreview(preview)).font(.system(size: senderSize)).opacity(0.7).lineLimit(1).truncationMode(.tail)
@@ -347,14 +348,13 @@ struct BubbleShape: Shape {
     }
 }
 
-func bubbleColorForUser(name: String, dark: Bool) -> Color {
+func bubbleColorForUser(uid: Int32, dark: Bool) -> Color {
     let light = ["CA5650", "D87B29", "9B66DC", "50B232", "379EB8", "4E92CC", "CF5C95"]
     let darkPalette = ["D45246", "F68136", "6C61DF", "46BA43", "5CAFFA", "408ACF", "D95574"]
     var hash: Int32 = 0
-    // JavaScript iterates code points but charCodeAt(0) takes the first UTF-16 unit.
-    for scalar in name.unicodeScalars {
-        let unit = scalar.value > 0xffff ? 0xd800 + ((scalar.value - 0x10000) >> 10) : scalar.value
-        hash = (hash &* 31) &+ Int32(unit)
+    // Hash the stable decimal UID, not the mutable display name.
+    for byte in String(uid).utf8 {
+        hash = (hash &* 31) &+ Int32(byte)
     }
     let palette = dark ? darkPalette : light
     return bubbleColor(hex: palette[Int(abs(Int64(hash)) % Int64(palette.count))]) ?? .primary

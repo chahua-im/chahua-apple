@@ -26,7 +26,9 @@ final class TimelineTableViewControllerTests: XCTestCase {
                                         isEnabled: true, canSend: false, onSubmit: {})
                 })
                 .modifier(ChatHeaderOverlay {
-                    ChatFloatingHeader(title: "Conversation")
+                    ChatFloatingHeader(title: "Conversation") {
+                        AvatarView(url: nil, displayName: "Conversation", diameter: 32)
+                    }
                         .padding(.top, ChatSplitMetrics.outerInset)
                 })
         }
@@ -66,6 +68,83 @@ final class TimelineTableViewControllerTests: XCTestCase {
                        "The indicator track must end at the composer, without counting its inset twice.")
         XCTAssertEqual(scroller.doubleValue, 1, accuracy: 0.001,
                        "At the latest message, the indicator must be at the bottom of its track.")
+    }
+
+    func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
+        let messages = try (0 ..< 16).map {
+            try TimelineTestFixtures.message(id: "opaque-\(100 - $0)", senderID: 2, at: $0, text: "Visible message \($0)")
+        }
+        let pending = PendingOutgoingMessage(
+            chatID: "chat", clientGeneratedID: "pending",
+            body: .init(messageType: .text, clientGeneratedId: "pending", message: "Not confirmed"),
+            enqueuedAt: TimelineTestFixtures.date(second: 16), senderID: 1, state: .queued
+        )
+        let store = ConversationMessageStore()
+        store.replacePending(chatID: "chat", with: [pending])
+        let page = try TimelineTestFixtures.page(messages)
+        var reads: [String] = []
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: HistorySource(initial: page, older: page), messageStore: store,
+            markRead: { reads.append($0) }
+        )
+        let controller = TimelineTableViewController(model: model)
+        controller.headerInset = 64
+        controller.composerInset = 80
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.setContentSize(NSSize(width: 400, height: 400))
+        window.orderFront(nil)
+        defer { model.close(); window.close() }
+        controller.view.layoutSubtreeIfNeeded()
+        await model.loadInitial(position: .unread(after: messages[3].id))
+        controller.view.layoutSubtreeIfNeeded()
+        controller.viewDidLayout()
+        let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        let markerIndex = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        let marker = try XCTUnwrap(table.view(atColumn: 0, row: markerIndex, makeIfNecessary: true) as? TimelineTableCellView)
+        marker.layoutSubtreeIfNeeded()
+        XCTAssertEqual(table.rect(ofRow: markerIndex).minY,
+                       scroll.documentVisibleRect.minY + controller.headerInset, accuracy: 1)
+        let rendered = NSHostingController(rootView: marker.hosting.rootView)
+            .sizeThatFits(in: NSSize(width: marker.bounds.width, height: 10_000))
+        XCTAssertEqual(marker.bounds.height, rendered.height, accuracy: 1,
+                       "The separator must use its rendered SwiftUI height, not a guessed row height.")
+
+        func frame(_ messageIndex: Int) throws -> NSRect {
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[messageIndex].id })
+            return table.rect(ofRow: index)
+        }
+        func show(top: CGFloat, bottom: CGFloat) {
+            model.setReadTrackingActive(false)
+            NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+            window.setContentSize(NSSize(width: 400, height: bottom - top + controller.headerInset + controller.composerInset))
+            controller.view.layoutSubtreeIfNeeded()
+            controller.viewDidLayout()
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: top - controller.headerInset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+            NotificationCenter.default.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+            model.setReadTrackingActive(true)
+        }
+
+        let partial = try frame(6)
+        show(top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(reads, [], "A row clipped by both overlays must never be marked read.")
+
+        show(top: try frame(5).midY, bottom: try frame(8).midY)
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(reads, [messages[7].id],
+                       "Choose the last fully visible row, not the partially visible row under the composer.")
+
+        show(top: try frame(14).midY, bottom: table.bounds.maxY)
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(reads, [messages[7].id, messages[15].id],
+                       "Pending rows cannot advance read progress; opaque IDs remain in timeline order.")
     }
 
     func testUserScrollLoadsHistoryButLayoutDoesNot() async throws {
@@ -389,7 +468,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
                 guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
                 let matches = outgoing
                     ? color.blueComponent > color.redComponent + 0.2 && color.greenComponent > 0.3 && color.greenComponent < 0.7
-                    : abs(color.redComponent - color.greenComponent) < 0.02 && abs(color.greenComponent - color.blueComponent) < 0.02 && color.redComponent > 0.8 && color.redComponent < 0.97
+                    : abs(color.redComponent - color.greenComponent) < 0.02 && abs(color.greenComponent - color.blueComponent) < 0.02 && color.redComponent > 0.98
                 run = matches ? run + 1 : 0
                 longest = max(longest, run)
             }

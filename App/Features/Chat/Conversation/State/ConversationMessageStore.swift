@@ -17,7 +17,7 @@ enum ConversationChange {
 final class ConversationMessageStore: ObservableObject {
     let changes = PassthroughSubject<ConversationChange, Never>()
 
-    private var pendingOutgoingByChatID: [String: [PendingOutgoingMessage]] = [:]
+    private var pendingOutgoing: [ConversationKey: [PendingOutgoingMessage]] = [:]
     private var deletedReplyIDs: [String: Set<String>] = [:]
     private var receiveRevision: UInt64 = 0
     private struct Snapshot {
@@ -31,10 +31,11 @@ final class ConversationMessageStore: ObservableObject {
     private var snapshots: [UUID: Snapshot] = [:]
     private var journals: [String: [JournalEntry]] = [:]
 
-    func replacePending(chatID: String, with pending: [PendingOutgoingMessage], acknowledging message: MessageResponse? = nil) {
-        pendingOutgoingByChatID[chatID] = deletedReplyIDs[chatID]?.isEmpty == false ? pending.map(normalizingReply) : pending
+    func replacePending(chatID: String, threadID: String? = nil, with pending: [PendingOutgoingMessage], acknowledging message: MessageResponse? = nil) {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        pendingOutgoing[key] = deletedReplyIDs[chatID]?.isEmpty == false ? pending.map(normalizingReply) : pending
         if let message {
-            precondition(message.chatId == chatID, "Acknowledgement and pending batch must belong to the same chat.")
+            precondition(message.chatId == chatID && message.replyRootId == threadID, "Acknowledgement and pending batch must belong to the same conversation.")
             apply(.message(message))
         } else {
             changes.send(.pendingChanged(chatID: chatID))
@@ -44,24 +45,25 @@ final class ConversationMessageStore: ObservableObject {
     func enqueue(_ pending: PendingOutgoingMessage) {
         precondition(!pending.clientGeneratedID.isEmpty, "Queued messages require a client-generated ID.")
         precondition(pending.body.clientGeneratedId == pending.clientGeneratedID, "Queue and request IDs must match.")
+        let key = ConversationKey(chatID: pending.chatID, threadID: pending.threadID)
         precondition(
-            !(pendingOutgoingByChatID[pending.chatID, default: []].contains { $0.clientGeneratedID == pending.clientGeneratedID }),
+            !(pendingOutgoing[key, default: []].contains { $0.clientGeneratedID == pending.clientGeneratedID }),
             "A client-generated ID may be queued only once per chat."
         )
-        pendingOutgoingByChatID[pending.chatID, default: []].append(normalizingReply(pending))
+        pendingOutgoing[key, default: []].append(normalizingReply(pending))
         changes.send(.pendingChanged(chatID: pending.chatID))
     }
 
-    func markSending(chatID: String, clientGeneratedID: String) {
-        mutatePending(chatID: chatID, clientGeneratedID: clientGeneratedID) { $0.state = .sending }
+    func markSending(chatID: String, threadID: String? = nil, clientGeneratedID: String) {
+        mutatePending(chatID: chatID, threadID: threadID, clientGeneratedID: clientGeneratedID) { $0.state = .sending }
     }
 
-    func markFailed(chatID: String, clientGeneratedID: String) {
-        mutatePending(chatID: chatID, clientGeneratedID: clientGeneratedID) { $0.state = .failed }
+    func markFailed(chatID: String, threadID: String? = nil, clientGeneratedID: String) {
+        mutatePending(chatID: chatID, threadID: threadID, clientGeneratedID: clientGeneratedID) { $0.state = .failed }
     }
 
-    func discard(chatID: String, clientGeneratedID: String) {
-        guard removePending(chatID: chatID, clientGeneratedID: clientGeneratedID) else { return }
+    func discard(chatID: String, threadID: String? = nil, clientGeneratedID: String) {
+        guard removePending(chatID: chatID, threadID: threadID, clientGeneratedID: clientGeneratedID) else { return }
         changes.send(.pendingChanged(chatID: chatID))
     }
 
@@ -70,7 +72,7 @@ final class ConversationMessageStore: ObservableObject {
     func apply(_ event: RealtimeServerEvent) {
         // Acknowledgement and remote insertion are one observable transition.
         if case .message(let message) = event {
-            removePending(chatID: message.chatId, clientGeneratedID: message.clientGeneratedId)
+            removePending(chatID: message.chatId, threadID: message.replyRootId, clientGeneratedID: message.clientGeneratedId)
         }
         switch event {
         case .messageDeleted(let message):
@@ -108,7 +110,7 @@ final class ConversationMessageStore: ObservableObject {
     }
 
     func reset() {
-        pendingOutgoingByChatID.removeAll()
+        pendingOutgoing.removeAll()
         deletedReplyIDs.removeAll()
         snapshots.removeAll()
         journals.removeAll()
@@ -118,13 +120,14 @@ final class ConversationMessageStore: ObservableObject {
 
     func projection(
         for chatID: String,
+        threadID: String? = nil,
         remoteMessages: [MessageResponse],
         includePendingOutgoing: Bool
     ) -> ConversationProjection {
         var entriesByKey: [ConversationMessageStableKey: ConversationTimelineEntry] = [:]
         for message in remoteMessages { entriesByKey[message.timelineStableKey] = .remote(message) }
         if includePendingOutgoing {
-            for pending in pendingOutgoingByChatID[chatID, default: []] where entriesByKey[.clientGenerated(pending.clientGeneratedID)] == nil {
+            for pending in pendingOutgoing[ConversationKey(chatID: chatID, threadID: threadID), default: []] where entriesByKey[.clientGenerated(pending.clientGeneratedID)] == nil {
                 entriesByKey[.clientGenerated(pending.clientGeneratedID)] = .pending(pending)
             }
         }
@@ -144,26 +147,30 @@ final class ConversationMessageStore: ObservableObject {
 
     private func redactPendingReplies(_ messageIDs: Set<String>, chatID: String) {
         deletedReplyIDs[chatID, default: []].formUnion(messageIDs)
-        guard let pending = pendingOutgoingByChatID[chatID] else { return }
-        pendingOutgoingByChatID[chatID] = pending.map(normalizingReply)
+        for key in pendingOutgoing.keys where key.chatID == chatID {
+            pendingOutgoing[key] = pendingOutgoing[key, default: []].map(normalizingReply)
+        }
     }
 
     private func mutatePending(
         chatID: String,
+        threadID: String?,
         clientGeneratedID: String,
         mutation: (inout PendingOutgoingMessage) -> Void
     ) {
-        guard var pending = pendingOutgoingByChatID[chatID], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else { return }
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        guard var pending = pendingOutgoing[key], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else { return }
         mutation(&pending[index])
-        pendingOutgoingByChatID[chatID] = pending
+        pendingOutgoing[key] = pending
         changes.send(.pendingChanged(chatID: chatID))
     }
 
     @discardableResult
-    private func removePending(chatID: String, clientGeneratedID: String) -> Bool {
-        guard !clientGeneratedID.isEmpty, var pending = pendingOutgoingByChatID[chatID], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else { return false }
+    private func removePending(chatID: String, threadID: String?, clientGeneratedID: String) -> Bool {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        guard !clientGeneratedID.isEmpty, var pending = pendingOutgoing[key], let index = pending.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID }) else { return false }
         pending.remove(at: index)
-        pendingOutgoingByChatID[chatID] = pending
+        pendingOutgoing[key] = pending
         return true
     }
 }

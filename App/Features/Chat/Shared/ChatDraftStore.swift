@@ -4,15 +4,16 @@ import ChahuaAPI
 
 @MainActor
 final class ChatDraftStore: ObservableObject {
-    @Published private(set) var drafts: [String: String] = [:]
-    @Published private var draftReplies: [String: MessagePreview] = [:]
-    @Published private(set) var committingDrafts = Set<String>()
+    @Published private(set) var drafts: [ConversationKey: String] = [:]
+    @Published private var draftReplies: [ConversationKey: MessagePreview] = [:]
+    @Published private(set) var draftUpdatedAt: [ConversationKey: Date] = [:]
+    @Published private(set) var committingDrafts = Set<ConversationKey>()
     @Published private(set) var draftSaveFailed = false
-    private var draftRevisions: [String: Int64] = [:]
-    private var unsavedDrafts = Set<String>()
-    private var composingDrafts = Set<String>()
-    private var deferredDraftFlushes = Set<String>()
-    private var pendingDraftSaves: [String: Task<Void, Never>] = [:]
+    private var draftRevisions: [ConversationKey: Int64] = [:]
+    private var unsavedDrafts = Set<ConversationKey>()
+    private var composingDrafts = Set<ConversationKey>()
+    private var deferredDraftFlushes = Set<ConversationKey>()
+    private var pendingDraftSaves: [ConversationKey: Task<Void, Never>] = [:]
     private var deletedReplyIDs: [String: Set<String>] = [:]
 
     private let outgoingQueue: OutgoingMessageQueue
@@ -24,40 +25,48 @@ final class ChatDraftStore: ObservableObject {
 
     /// Receives snapshots after ChatStore rejects stale outgoing revisions.
     func install(_ snapshot: LocalConversationSnapshot) {
+        let key = snapshot.conversationKey
         let reply = normalizedReply(snapshot.draft.replyToMessage, chatID: snapshot.chatID)
-        if unsavedDrafts.contains(snapshot.chatID), !committingDrafts.contains(snapshot.chatID),
-           (draftText(chatID: snapshot.chatID) != snapshot.draft.text ||
-            draftReplies[snapshot.chatID] != reply) {
-            draftRevisions[snapshot.chatID] = max(draftRevisions[snapshot.chatID, default: 0], snapshot.draft.editRevision + 1)
-        } else if snapshot.draft.editRevision >= draftRevisions[snapshot.chatID, default: 0] {
-            drafts[snapshot.chatID] = snapshot.draft.text
-            draftReplies[snapshot.chatID] = reply
-            draftRevisions[snapshot.chatID] = snapshot.draft.editRevision
-            unsavedDrafts.remove(snapshot.chatID)
+        if unsavedDrafts.contains(key), !committingDrafts.contains(key),
+           (drafts[key] != snapshot.draft.text || draftReplies[key] != reply) {
+            draftRevisions[key] = max(draftRevisions[key, default: 0], snapshot.draft.editRevision + 1)
+        } else if snapshot.draft.editRevision >= draftRevisions[key, default: 0] {
+            drafts[key] = snapshot.draft.text
+            draftReplies[key] = reply
+            draftRevisions[key] = snapshot.draft.editRevision
+            draftUpdatedAt[key] = snapshot.draft.text.isEmpty ? nil : snapshot.draft.updatedAt
+            unsavedDrafts.remove(key)
         }
     }
 
-    func draftText(chatID: String) -> String { drafts[chatID, default: ""] }
+    func draftText(chatID: String, threadID: String? = nil) -> String {
+        drafts[ConversationKey(chatID: chatID, threadID: threadID), default: ""]
+    }
 
-    func draftReply(chatID: String) -> MessagePreview? { draftReplies[chatID] }
+    func draftReply(chatID: String, threadID: String? = nil) -> MessagePreview? {
+        draftReplies[ConversationKey(chatID: chatID, threadID: threadID)]
+    }
 
-    func setDraftReply(_ reply: MessagePreview?, chatID: String) {
+    func setDraftReply(_ reply: MessagePreview?, chatID: String, threadID: String? = nil) {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
         let reply = normalizedReply(reply, chatID: chatID)
-        guard !committingDrafts.contains(chatID), draftReplies[chatID] != reply else { return }
-        draftReplies[chatID] = reply
-        if drafts[chatID] == nil { drafts[chatID] = "" }
-        unsavedDrafts.insert(chatID)
-        draftRevisions[chatID, default: 0] += 1
-        scheduleDraftSave(chatID: chatID)
+        guard !committingDrafts.contains(key), draftReplies[key] != reply else { return }
+        draftReplies[key] = reply
+        if drafts[key] == nil { drafts[key] = "" }
+        unsavedDrafts.insert(key)
+        draftRevisions[key, default: 0] += 1
+        scheduleDraftSave(key: key)
     }
 
     func redactReplyTargets(_ messageIDs: Set<String>, chatID: String) {
         deletedReplyIDs[chatID, default: []].formUnion(messageIDs)
-        guard let reply = draftReplies[chatID], !reply.isDeleted, messageIDs.contains(reply.id) else { return }
-        draftReplies[chatID] = reply.redactedForDeletion()
-        unsavedDrafts.insert(chatID)
-        draftRevisions[chatID, default: 0] += 1
-        scheduleDraftSave(chatID: chatID)
+        for key in draftReplies.keys where key.chatID == chatID {
+            guard let reply = draftReplies[key], !reply.isDeleted, messageIDs.contains(reply.id) else { continue }
+            draftReplies[key] = reply.redactedForDeletion()
+            unsavedDrafts.insert(key)
+            draftRevisions[key, default: 0] += 1
+            scheduleDraftSave(key: key)
+        }
     }
 
     private func normalizedReply(_ reply: MessagePreview?, chatID: String) -> MessagePreview? {
@@ -65,55 +74,59 @@ final class ChatDraftStore: ObservableObject {
         return reply.redactedForDeletion()
     }
 
-    func setDraftText(_ text: String, chatID: String) {
-        guard !committingDrafts.contains(chatID), drafts[chatID] != text else { return }
-        drafts[chatID] = text
-        unsavedDrafts.insert(chatID)
-        draftRevisions[chatID, default: 0] += 1
-        scheduleDraftSave(chatID: chatID)
+    func setDraftText(_ text: String, chatID: String, threadID: String? = nil) {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        guard !committingDrafts.contains(key), drafts[key] != text else { return }
+        drafts[key] = text
+        draftUpdatedAt[key] = text.isEmpty ? nil : Date()
+        unsavedDrafts.insert(key)
+        draftRevisions[key, default: 0] += 1
+        scheduleDraftSave(key: key)
     }
 
-    func setDraftComposing(_ isComposing: Bool, chatID: String) {
+    func setDraftComposing(_ isComposing: Bool, chatID: String, threadID: String? = nil) {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
         if isComposing {
-            composingDrafts.insert(chatID)
-            pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        } else if composingDrafts.remove(chatID) != nil {
-            scheduleDraftSave(chatID: chatID)
+            composingDrafts.insert(key)
+            pendingDraftSaves.removeValue(forKey: key)?.cancel()
+        } else if composingDrafts.remove(key) != nil {
+            scheduleDraftSave(key: key)
         }
     }
 
-    private func scheduleDraftSave(chatID: String, immediately: Bool = false) {
-        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        if immediately { deferredDraftFlushes.insert(chatID) }
-        guard !composingDrafts.contains(chatID) else { return }
-        guard unsavedDrafts.contains(chatID) else {
-            deferredDraftFlushes.remove(chatID)
+    private func scheduleDraftSave(key: ConversationKey, immediately: Bool = false) {
+        pendingDraftSaves.removeValue(forKey: key)?.cancel()
+        if immediately { deferredDraftFlushes.insert(key) }
+        guard !composingDrafts.contains(key) else { return }
+        guard unsavedDrafts.contains(key) else {
+            deferredDraftFlushes.remove(key)
             return
         }
-        let shouldFlushImmediately = deferredDraftFlushes.contains(chatID)
+        let shouldFlushImmediately = deferredDraftFlushes.contains(key)
         let requestGeneration = generation
-        pendingDraftSaves[chatID] = Task { [weak self] in
+        pendingDraftSaves[key] = Task { [weak self] in
             if !shouldFlushImmediately {
                 do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
             }
             guard let self, self.generation == requestGeneration, !Task.isCancelled else { return }
-            self.pendingDraftSaves[chatID] = nil
-            await self.flushDraft(chatID: chatID)
+            self.pendingDraftSaves[key] = nil
+            await self.flushDraft(chatID: key.chatID, threadID: key.threadID)
         }
     }
 
-    func flushDraft(chatID: String) async {
-        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        guard !composingDrafts.contains(chatID) else {
-            deferredDraftFlushes.insert(chatID)
+    func flushDraft(chatID: String, threadID: String? = nil) async {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        pendingDraftSaves.removeValue(forKey: key)?.cancel()
+        guard !composingDrafts.contains(key) else {
+            deferredDraftFlushes.insert(key)
             return
         }
-        deferredDraftFlushes.remove(chatID)
-        guard let text = drafts[chatID], unsavedDrafts.contains(chatID), !committingDrafts.contains(chatID) else { return }
-        let revision = draftRevisions[chatID, default: 0]
+        deferredDraftFlushes.remove(key)
+        guard let text = drafts[key], unsavedDrafts.contains(key), !committingDrafts.contains(key) else { return }
+        let revision = draftRevisions[key, default: 0]
         let requestGeneration = generation
         do {
-            try await outgoingQueue.saveDraft(chatID: chatID, text: text, editRevision: revision, updatedAt: Date(), replyToMessage: draftReplies[chatID])
+            try await outgoingQueue.saveDraft(chatID: chatID, threadID: threadID, text: text, editRevision: revision, updatedAt: Date(), replyToMessage: draftReplies[key])
             guard generation == requestGeneration else { return }
             draftSaveFailed = false
         } catch {
@@ -122,23 +135,25 @@ final class ChatDraftStore: ObservableObject {
         }
     }
 
-    func submitDraft(chatID: String) async -> Bool {
-        let text = draftText(chatID: chatID).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !composingDrafts.contains(chatID),
-              !committingDrafts.contains(chatID), outgoingQueue.storageState == .ready else { return false }
-        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
-        committingDrafts.insert(chatID)
+    func submitDraft(chatID: String, threadID: String? = nil) async -> Bool {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let text = draftText(chatID: chatID, threadID: threadID).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !composingDrafts.contains(key),
+              !committingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
+        pendingDraftSaves.removeValue(forKey: key)?.cancel()
+        committingDrafts.insert(key)
         let requestGeneration = generation
-        let revision = draftRevisions[chatID, default: 0] + 1
-        defer { if generation == requestGeneration { committingDrafts.remove(chatID) } }
+        let revision = draftRevisions[key, default: 0] + 1
+        defer { if generation == requestGeneration { committingDrafts.remove(key) } }
         do {
-            try await outgoingQueue.enqueueText(chatID: chatID, text: text, clearedDraftRevision: revision, replyToMessage: draftReplies[chatID])
+            try await outgoingQueue.enqueueText(chatID: chatID, threadID: threadID, text: text, clearedDraftRevision: revision, replyToMessage: draftReplies[key])
             guard generation == requestGeneration else { return false }
-            draftRevisions[chatID] = revision
-            drafts[chatID] = ""
-            draftReplies[chatID] = nil
-            unsavedDrafts.remove(chatID)
-            deferredDraftFlushes.remove(chatID)
+            draftRevisions[key] = revision
+            drafts[key] = ""
+            draftReplies[key] = nil
+            unsavedDrafts.remove(key)
+            draftUpdatedAt[key] = nil
+            deferredDraftFlushes.remove(key)
             draftSaveFailed = false
             return true
         } catch {
@@ -150,15 +165,15 @@ final class ChatDraftStore: ObservableObject {
 
     func flushAll() async {
         let requestGeneration = generation
-        for chatID in Array(drafts.keys) {
-            await flushDraft(chatID: chatID)
+        for key in Array(drafts.keys) {
+            await flushDraft(chatID: key.chatID, threadID: key.threadID)
             guard generation == requestGeneration else { return }
         }
     }
 
     func scheduleBackgroundFlush() {
-        for chatID in drafts.keys {
-            scheduleDraftSave(chatID: chatID, immediately: true)
+        for key in drafts.keys {
+            scheduleDraftSave(key: key, immediately: true)
         }
     }
 
@@ -172,6 +187,7 @@ final class ChatDraftStore: ObservableObject {
         draftRevisions.removeAll()
         unsavedDrafts.removeAll()
         composingDrafts.removeAll()
+        draftUpdatedAt.removeAll()
         deferredDraftFlushes.removeAll()
         committingDrafts.removeAll()
         draftSaveFailed = false

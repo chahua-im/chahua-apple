@@ -23,7 +23,7 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     @Published private(set) var storageState: OutgoingStorageState = .inactive
-    @Published private(set) var snapshots: [String: LocalConversationSnapshot] = [:]
+    @Published private(set) var snapshots: [ConversationKey: LocalConversationSnapshot] = [:]
     let events = PassthroughSubject<OutgoingQueueEvent, Never>()
 
     private let apiClient: any ChahuaAPIClient
@@ -38,7 +38,7 @@ final class OutgoingMessageQueue: ObservableObject {
     private var foregroundActive = false
     private var transportReady = false
     private var lifecycle: Task<Void, Never>?
-    private var workers: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var workers: [ConversationKey: (id: UUID, task: Task<Void, Never>)] = [:]
     private var acknowledgements: [String: MessageResponse] = [:]
     private var uncommittedFailures: [String: LocalOutgoingMessage] = [:]
     private var authenticationFailed = false
@@ -140,18 +140,18 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     /// A known acknowledgement is hidden until its durable deletion succeeds.
-    func pendingMessages(chatID: String) -> [LocalOutgoingMessage] {
-        let outgoing = snapshots[chatID]?.outgoing ?? []
+    func pendingMessages(chatID: String, threadID: String? = nil) -> [LocalOutgoingMessage] {
+        let outgoing = snapshots[ConversationKey(chatID: chatID, threadID: threadID)]?.outgoing ?? []
         guard !acknowledgements.isEmpty else { return outgoing }
         return outgoing.filter { acknowledgements[$0.clientGeneratedID] == nil }
     }
 
-    func saveDraft(chatID: String, text: String, editRevision: Int64, updatedAt: Date, replyToMessage: MessagePreview? = nil) async throws {
+    func saveDraft(chatID: String, threadID: String? = nil, text: String, editRevision: Int64, updatedAt: Date, replyToMessage: MessagePreview? = nil) async throws {
         guard let store, requestedUID != nil else { throw QueueError.storageUnavailable }
         let current = generation
         do {
             try await checkpoint(.saveDraft, generation: current)
-            let snapshot = try await store.saveDraft(chatID: chatID, text: text, editRevision: editRevision, updatedAt: updatedAt, replyToMessage: replyToMessage)
+            let snapshot = try await store.saveDraft(chatID: chatID, threadID: threadID, text: text, editRevision: editRevision, updatedAt: updatedAt, replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
         } catch {
@@ -160,7 +160,7 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func enqueueText(chatID: String, text: String, clearedDraftRevision: Int64, replyToMessage: MessagePreview? = nil) async throws {
+    func enqueueText(chatID: String, threadID: String? = nil, text: String, clearedDraftRevision: Int64, replyToMessage: MessagePreview? = nil) async throws {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LocalStorageError.blankMessage }
         guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed else {
             throw QueueError.storageUnavailable
@@ -170,25 +170,25 @@ final class OutgoingMessageQueue: ObservableObject {
         let date = Date()
         do {
             try await checkpoint(.enqueue, generation: current)
-            let snapshot = try await store.enqueueText(chatID: chatID, senderID: uid, clientGeneratedID: id, text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision, replyToMessage: replyToMessage)
+            let snapshot = try await store.enqueueText(chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: id, text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision, replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
-            wakeWorker(chatID: chatID)
+            wakeWorker(key: snapshot.conversationKey)
         } catch {
             storageFailed(error, generation: current)
             throw error
         }
     }
 
-    func retry(chatID: String, clientGeneratedID: String, scope: OutgoingRetryScope) async throws {
+    func retry(chatID: String, threadID: String? = nil, clientGeneratedID: String, scope: OutgoingRetryScope) async throws {
         guard storageState == .ready, let store, !authenticationFailed else { throw QueueError.storageUnavailable }
         let current = generation
         do {
             try await checkpoint(.retry, generation: current)
-            let snapshot = try await store.retry(chatID: chatID, clientGeneratedID: clientGeneratedID, scope: scope)
+            let snapshot = try await store.retry(chatID: chatID, threadID: threadID, clientGeneratedID: clientGeneratedID, scope: scope)
             try checkGeneration(current)
             publish(snapshot)
-            wakeWorker(chatID: chatID)
+            wakeWorker(key: snapshot.conversationKey)
         } catch {
             storageFailed(error, generation: current)
             throw error
@@ -198,10 +198,12 @@ final class OutgoingMessageQueue: ObservableObject {
     func acceptAcknowledgement(_ message: MessageResponse) async -> Bool {
         guard let store, let uid = requestedUID, !message.clientGeneratedId.isEmpty,
               message.sender.uid == uid else { return false }
-        let known = snapshots[message.chatId]?.outgoing.first { $0.clientGeneratedID == message.clientGeneratedId }
+        let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
+        let known = snapshots[key]?.outgoing.first { $0.clientGeneratedID == message.clientGeneratedId }
         let retained = acknowledgements[message.clientGeneratedId]
         guard known.map({ matches(message, pending: $0) }) == true ||
-                (retained?.chatId == message.chatId && retained?.sender.uid == message.sender.uid) else { return false }
+                (retained?.chatId == message.chatId && retained?.replyRootId == message.replyRootId &&
+                 retained?.sender.uid == message.sender.uid) else { return false }
         let current = generation
         await acknowledge(message, store: store, generation: current)
         return generation == current
@@ -216,7 +218,7 @@ final class OutgoingMessageQueue: ObservableObject {
             // Deletions precede interrupted-send recovery: never redispatch known delivery.
             for message in Array(acknowledgements.values) {
                 try await checkpoint(.acknowledge, generation: current)
-                let snapshot = try await local.acknowledge(chatID: message.chatId, clientGeneratedID: message.clientGeneratedId)
+                let snapshot = try await local.acknowledge(chatID: message.chatId, threadID: message.replyRootId, clientGeneratedID: message.clientGeneratedId)
                 try checkGeneration(current)
                 publish(snapshot, acknowledging: message)
                 acknowledgements[message.clientGeneratedId] = nil
@@ -224,7 +226,7 @@ final class OutgoingMessageQueue: ObservableObject {
             }
             for pending in Array(uncommittedFailures.values) {
                 try await checkpoint(.fail, generation: current)
-                let snapshot = try await local.fail(chatID: pending.chatID, clientGeneratedID: pending.clientGeneratedID)
+                let snapshot = try await local.fail(chatID: pending.chatID, threadID: pending.threadID, clientGeneratedID: pending.clientGeneratedID)
                 try checkGeneration(current)
                 publish(snapshot)
                 uncommittedFailures[pending.clientGeneratedID] = nil
@@ -254,36 +256,36 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func wakeWorkers() {
-        for chatID in snapshots.keys { wakeWorker(chatID: chatID) }
+        for key in snapshots.keys { wakeWorker(key: key) }
     }
 
-    private func wakeWorker(chatID: String) {
+    private func wakeWorker(key: ConversationKey) {
         guard foregroundActive, transportReady, storageState == .ready, !authenticationFailed,
-              workers[chatID] == nil, let store,
-              let head = snapshots[chatID]?.outgoing.first(where: { acknowledgements[$0.clientGeneratedID] == nil }),
+              workers[key] == nil, let store,
+              let head = snapshots[key]?.outgoing.first(where: { acknowledgements[$0.clientGeneratedID] == nil }),
               head.state == .queued else { return }
         let current = generation
         let transport = transportGeneration
         let id = UUID()
         let task = Task { [weak self] in
             guard let self else { return }
-            await self.run(chatID: chatID, store: store, generation: current, transport: transport)
-            if self.workers[chatID]?.id == id {
-                self.workers[chatID] = nil
+            await self.run(key: key, store: store, generation: current, transport: transport)
+            if self.workers[key]?.id == id {
+                self.workers[key] = nil
                 // A retry/enqueue may have committed while the old worker was ending.
-                self.wakeWorker(chatID: chatID)
+                self.wakeWorker(key: key)
             }
         }
-        workers[chatID] = (id, task)
+        workers[key] = (id, task)
     }
 
-    private func run(chatID: String, store: ChahuaLocalStore, generation current: UInt64, transport: UInt64) async {
+    private func run(key: ConversationKey, store: ChahuaLocalStore, generation current: UInt64, transport: UInt64) async {
         while canDispatch(generation: current, transport: transport) {
             let pending: LocalOutgoingMessage
             do {
                 try await checkpoint(.claim, generation: current)
                 guard canDispatch(generation: current, transport: transport) else { return }
-                let claim = try await store.claimNext(chatID: chatID)
+                let claim = try await store.claimNext(chatID: key.chatID, threadID: key.threadID)
                 guard generation == current else { return }
                 publish(claim.snapshot)
                 guard let message = claim.message, canDispatch(generation: current, transport: transport) else { return }
@@ -293,7 +295,13 @@ final class OutgoingMessageQueue: ObservableObject {
                 return
             }
             do {
-                let response = try await apiClient.sendMessage(chatID: chatID, body: CreateMessageBody(messageType: .text, clientGeneratedId: pending.clientGeneratedID, message: pending.text, replyToId: pending.replyToMessage?.id))
+                let body = CreateMessageBody(messageType: .text, clientGeneratedId: pending.clientGeneratedID, message: pending.text, replyToId: pending.replyToMessage?.id)
+                let response: MessageResponse
+                if let threadID = pending.threadID {
+                    response = try await apiClient.sendThreadMessage(chatID: pending.chatID, threadID: threadID, body: body)
+                } else {
+                    response = try await apiClient.sendMessage(chatID: pending.chatID, body: body)
+                }
                 guard generation == current else { return }
                 guard matches(response, pending: pending) else { throw QueueError.invalidAcknowledgement }
                 // Even a socket-first success must emit this validated HTTP acknowledgement.
@@ -304,14 +312,14 @@ final class OutgoingMessageQueue: ObservableObject {
                 if case APIError.invalidToken = error { invalidToken = true } else { invalidToken = false }
                 if invalidToken {
                     authenticationFailed = true
-                    for (otherChat, worker) in workers where otherChat != chatID { worker.task.cancel() }
+                    for (otherKey, worker) in workers where otherKey != key { worker.task.cancel() }
                 }
                 if acknowledgements[pending.clientGeneratedID] == nil,
-                   snapshots[chatID]?.outgoing.contains(where: { $0.clientGeneratedID == pending.clientGeneratedID }) == true {
+                   snapshots[key]?.outgoing.contains(where: { $0.clientGeneratedID == pending.clientGeneratedID }) == true {
                     uncommittedFailures[pending.clientGeneratedID] = pending
                     do {
                         try await checkpoint(.fail, generation: current)
-                        let snapshot = try await store.fail(chatID: chatID, clientGeneratedID: pending.clientGeneratedID)
+                        let snapshot = try await store.fail(chatID: key.chatID, threadID: key.threadID, clientGeneratedID: pending.clientGeneratedID)
                         try checkGeneration(current)
                         publish(snapshot)
                         uncommittedFailures[pending.clientGeneratedID] = nil
@@ -325,7 +333,7 @@ final class OutgoingMessageQueue: ObservableObject {
                     return
                 }
                 // A socket/history confirmation makes an obsolete HTTP error harmless.
-                if snapshots[chatID]?.outgoing.contains(where: { $0.clientGeneratedID == pending.clientGeneratedID }) == true { return }
+                if snapshots[key]?.outgoing.contains(where: { $0.clientGeneratedID == pending.clientGeneratedID }) == true { return }
             }
         }
     }
@@ -335,7 +343,7 @@ final class OutgoingMessageQueue: ObservableObject {
         uncommittedFailures[message.clientGeneratedId] = nil
         do {
             try await checkpoint(.acknowledge, generation: current)
-            let snapshot = try await store.acknowledge(chatID: message.chatId, clientGeneratedID: message.clientGeneratedId)
+            let snapshot = try await store.acknowledge(chatID: message.chatId, threadID: message.replyRootId, clientGeneratedID: message.clientGeneratedId)
             try checkGeneration(current)
             publish(snapshot, acknowledging: message)
             acknowledgements[message.clientGeneratedId] = nil
@@ -344,17 +352,18 @@ final class OutgoingMessageQueue: ObservableObject {
             storageFailed(error, generation: current)
             events.send(.acknowledged(snapshot: nil, message: message))
         }
-        if generation == current { wakeWorker(chatID: message.chatId) }
+        if generation == current { wakeWorker(key: ConversationKey(chatID: message.chatId, threadID: message.replyRootId)) }
     }
 
     private func matches(_ message: MessageResponse, pending: LocalOutgoingMessage) -> Bool {
         !message.clientGeneratedId.isEmpty && message.clientGeneratedId == pending.clientGeneratedID &&
-            message.chatId == pending.chatID && message.sender.uid == pending.senderID
+            message.chatId == pending.chatID && message.replyRootId == pending.threadID &&
+            message.sender.uid == pending.senderID
     }
 
     private func publish(_ snapshot: LocalConversationSnapshot, acknowledging message: MessageResponse? = nil) {
-        let accepted = snapshots[snapshot.chatID].map { snapshot.revision >= $0.revision } ?? true
-        if accepted { snapshots[snapshot.chatID] = snapshot }
+        let accepted = snapshots[snapshot.conversationKey].map { snapshot.revision >= $0.revision } ?? true
+        if accepted { snapshots[snapshot.conversationKey] = snapshot }
         if let message {
             events.send(.acknowledged(snapshot: accepted ? snapshot : nil, message: message))
         } else if accepted {

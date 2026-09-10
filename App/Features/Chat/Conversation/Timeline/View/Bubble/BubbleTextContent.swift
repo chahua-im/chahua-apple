@@ -193,8 +193,7 @@ struct BubbleMetadata {
         if let state {
             let name: String
             switch state {
-            case .queued: name = "clock"
-            case .sending: name = "ellipsis"
+            case .queued, .sending: name = "checkmark.circle"
             case .delivered: name = "checkmark.circle.fill"
             case .failed: name = "exclamationmark.circle.fill"
             }
@@ -326,8 +325,7 @@ final class BubbleTextLayout {
     }
 
     func fittingSize(width: CGFloat?) -> CGSize {
-        let ideal = idealSize
-        return geometry(for: min(ideal.width, width ?? ideal.width)).size
+        geometry(for: width ?? idealSize.width).size
     }
 
     func geometry(for proposedWidth: CGFloat) -> BubbleTextGeometry {

@@ -30,6 +30,7 @@ struct TimelineViewport: Equatable {
     var distanceToTop: CGFloat
     var distanceToBottom: CGFloat
     var height: CGFloat
+    var fullyVisibleMessageIDs: [String] = []
 
     static let empty = TimelineViewport(
         firstVisibleIndex: nil,

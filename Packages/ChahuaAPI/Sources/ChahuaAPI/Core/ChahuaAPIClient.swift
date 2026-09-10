@@ -26,6 +26,12 @@ public protocol ChahuaAPIClient: Sendable {
     /// reorder pages.
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse
 
+    /// Fetches one server-ordered page of subscriptions with `GET /threads`.
+    ///
+    /// Use `archived: false` for active threads and pass `nextCursor` as
+    /// `ListThreadsQuery.before` for the next page.
+    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse
+
     /// Fetches current membership and DM peer identity with `GET /group/{chatID}`.
     func groupInfo(chatID: String) async throws -> GroupInfoResponse
 
@@ -50,4 +56,16 @@ public protocol ChahuaAPIClient: Sendable {
     /// `clientGeneratedId` in the body identifies the client-side send attempt;
     /// the returned `MessageResponse.id` is the server message identifier.
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse
+
+    /// Sends a reply with `POST /chats/{chatID}/threads/{threadID}/messages`.
+    ///
+    /// `threadID` is the root message identifier within `chatID`; the body uses
+    /// the same client-generated idempotency identifier as a parent-chat send.
+    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse
+
+    /// Advances the current member's read cursor with `POST /chats/{chatID}/read`.
+    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse
+
+    /// Advances a subscribed thread's read cursor without marking its parent chat read.
+    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse
 }

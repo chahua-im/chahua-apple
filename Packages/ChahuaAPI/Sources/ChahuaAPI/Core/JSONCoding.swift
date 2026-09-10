@@ -21,6 +21,36 @@ enum JSONCoding {
         return decoder
     }()
 
+    /// Keep structural decoding evidence, never values from debugDescription or underlying errors.
+    static func decodingDescription(_ error: Error) -> String {
+        let context: DecodingError.Context
+        let reason: String
+        var missingKey: CodingKey?
+        switch error {
+        case DecodingError.keyNotFound(let key, let detail):
+            context = detail
+            missingKey = key
+            reason = "missing required field"
+        case DecodingError.valueNotFound(let type, let detail):
+            context = detail
+            reason = "null value; expected \(String(reflecting: type))"
+        case DecodingError.typeMismatch(let type, let detail):
+            context = detail
+            reason = "type mismatch; expected \(String(reflecting: type))"
+        case DecodingError.dataCorrupted(let detail):
+            context = detail
+            reason = "invalid value or malformed JSON"
+        default:
+            return "decoder failure (\(String(reflecting: type(of: error))))"
+        }
+        let keys = context.codingPath + (missingKey.map { [$0] } ?? [])
+        let path = keys.reduce("$") { path, key in
+            if let index = key.intValue { return "\(path)[\(index)]" }
+            return "\(path).\(key.stringValue)"
+        }
+        return "\(path): \(reason)"
+    }
+
     static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .custom { date, encoder in

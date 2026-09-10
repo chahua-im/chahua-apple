@@ -691,6 +691,263 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(model).map(\.id), ["3"])
     }
 
+    func testUnreadEntryRevealsFrozenBoundaryAndPreservesOlderPagination() async throws {
+        let read = try TimelineTestFixtures.message(id: "zz-read", at: 2)
+        let unread = try TimelineTestFixtures.message(id: "aa-unread", at: 3)
+        let (model, source, _) = try makeModel(pages: [
+            .success(try TimelineTestFixtures.page([read, unread], olderCursor: "older", newerCursor: nil)),
+            .success(try livePage(ids: 1 ... 1)),
+        ])
+        await model.open(position: .unread(after: read.id))
+
+        XCTAssertEqual(source.queries.first?.around, read.id)
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .reveal(.unreadSeparator, animated: false, highlight: false))
+        XCTAssertFalse(model.state.live.followsLatest)
+        model.retryOlder()
+        await source.drain()
+        source.store.apply(.message(try TimelineTestFixtures.message(id: "live", at: 4)))
+        let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        XCTAssertEqual(model.rows[boundary - 1].messageID, read.id)
+        XCTAssertEqual(model.rows[boundary + 1].messageID, unread.id)
+        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", read.id, unread.id, "live"])
+    }
+
+    func testUnreadEntryFetchesBeyondBoundaryAtEndOfAroundPage() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .success(try historyPage(ids: 1 ... 2, newerCursor: "forward")),
+            .success(try livePage(ids: 3 ... 4)),
+        ])
+        await model.open(position: .unread(after: "2"))
+
+        XCTAssertEqual(source.queries.map(\.after), [nil, "forward"])
+        let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        XCTAssertEqual(model.rows[boundary - 1].messageID, "2")
+        XCTAssertEqual(model.rows[boundary + 1].messageID, "3")
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .reveal(.unreadSeparator, animated: false, highlight: false))
+    }
+
+    func testUnreadWithoutCursorSeeksOldestPageWithoutRetainingEntireHistory() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .success(try historyPage(ids: 5 ... 6, olderCursor: "middle", newerCursor: nil)),
+            .success(try historyPage(ids: 3 ... 4, olderCursor: "oldest", newerCursor: "newest")),
+            .success(try historyPage(ids: 1 ... 2, newerCursor: "middle-forward")),
+            .success(try historyPage(ids: 3 ... 4, newerCursor: "newest")),
+        ])
+        await model.open(position: .unread(after: nil))
+
+        XCTAssertEqual(source.queries.map(\.before), [nil, "middle", "oldest"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertFalse(model.isAtLiveEdge)
+        let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        XCTAssertEqual(model.rows[boundary + 1].messageID, "1")
+        model.retryNewer()
+        await source.drain()
+        XCTAssertEqual(source.queries.last?.after, "middle-forward")
+        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2", "3", "4"])
+        XCTAssertEqual(model.rows.firstIndex { $0.id == .unreadSeparator }, boundary)
+    }
+
+    func testMissingUnreadTargetUsesAccessibleBeginningAndStillMarksVisibleMessages() async throws {
+        var marked: [String] = []
+        let (model, source, _) = try makeModel(pages: [
+            .success(try historyPage(ids: 3 ... 4, olderCursor: "older", newerCursor: nil)),
+            .success(try historyPage(ids: 1 ... 2, newerCursor: "newer")),
+        ], markRead: { marked.append($0) })
+        model.setReadTrackingActive(true)
+        await model.open(position: .unread(after: "deleted-opaque-cursor"))
+
+        XCTAssertEqual(source.queries.first?.around, "deleted-opaque-cursor")
+        let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        XCTAssertEqual(model.rows[boundary + 1].messageID, "1")
+        reportVisible(["1", "2"], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, ["2"], "The monotonic server endpoint resolves an unknown baseline.")
+        XCTAssertEqual(model.rows[boundary + 1].messageID, "1", "A successful receipt does not move the entry boundary.")
+        model.close()
+    }
+
+    func testDeletedUnreadTarget404FallsBackButOtherFailuresRemainRetryable() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .failure(APIError.http(status: 404, body: Data())),
+            .success(try livePage(ids: 1 ... 2)),
+            .failure(StubError()),
+        ])
+        await model.open(position: .unread(after: "deleted"))
+        XCTAssertEqual(model.state.content, .ready)
+        XCTAssertEqual(source.queries.count, 2)
+        XCTAssertTrue(model.rows.contains { $0.id == .unreadSeparator })
+
+        await model.open(position: .unread(after: "unavailable"))
+        XCTAssertEqual(model.state.content, .initialLoadFailed)
+        XCTAssertEqual(source.queries.count, 3)
+    }
+
+    func testEmptyUnreadHistoryAndFullyReadBoundaryDoNotInventSeparator() async throws {
+        let (model, _, _) = try makeModel(pages: [
+            .success(try TimelineTestFixtures.page([])),
+            .success(try livePage(ids: 1 ... 2)),
+        ])
+        await model.open(position: .unread(after: nil))
+        XCTAssertEqual(model.state.content, .ready)
+        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: false))
+
+        await model.open(position: .unread(after: "2"))
+        XCTAssertFalse(model.rows.contains { $0.id == .unreadSeparator })
+        XCTAssertTrue(model.state.live.followsLatest)
+    }
+
+    func testEmptyAroundResponseDoesNotHideAccessibleUnreadHistory() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .success(try TimelineTestFixtures.page([])),
+            .success(try historyPage(ids: 3 ... 4, olderCursor: "older", newerCursor: nil)),
+            .success(try historyPage(ids: 1 ... 2, newerCursor: "newer")),
+        ])
+        await model.open(position: .unread(after: "missing"))
+
+        XCTAssertEqual(model.state.content, .ready)
+        XCTAssertEqual(source.queries.map(\.before), [nil, nil, "older"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .reveal(.unreadSeparator, animated: false, highlight: false))
+    }
+
+    func testUnreadSeekRejectsRepeatedCursorInsteadOfPublishingWrongBeginning() async throws {
+        let (model, _, _) = try makeModel(pages: [
+            .success(try historyPage(ids: 3 ... 4, olderCursor: "stuck", newerCursor: nil)),
+            .success(try historyPage(ids: 1 ... 2, olderCursor: "stuck", newerCursor: "newer")),
+        ])
+        await model.open(position: .unread(after: nil))
+        XCTAssertEqual(model.state.content, .initialLoadFailed)
+        XCTAssertFalse(model.rows.contains { $0.id == .unreadSeparator })
+    }
+
+    func testReadDwellUsesStableLatestFullyVisibleCandidateWithoutLexicalOrdering() async throws {
+        var marked: [String] = []
+        let messages = [
+            try TimelineTestFixtures.message(id: "z", at: 1),
+            try TimelineTestFixtures.message(id: "a", at: 2),
+            try TimelineTestFixtures.message(id: "m", at: 3),
+        ]
+        let (model, _, _) = try makeModel(pages: [.success(try TimelineTestFixtures.page(messages))], markRead: { marked.append($0) })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible(["z"], to: model)
+        try await Task.sleep(for: .milliseconds(300))
+        reportVisible(["z", "a"], to: model)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(marked.isEmpty, "Changing the latest fully visible message restarts dwell.")
+        reportVisible(["a"], to: model)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(marked, ["a"], "Repeated geometry reports for the same candidate do not restart dwell.")
+        reportVisible(["z"], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, ["a"], "Scrolling backwards cannot regress local progress.")
+        reportVisible(["m"], to: model)
+        try await Task.sleep(for: .milliseconds(200))
+        reportVisible([], to: model)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(marked, ["a"], "Losing all fully visible rows cancels dwell.")
+        model.close()
+    }
+
+    func testReadDwellCancelsForInactiveStaleInvalidAndClosedViewports() async throws {
+        var marked: [String] = []
+        let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 2))], markRead: { marked.append($0) })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible(["2"], to: model)
+        model.setReadTrackingActive(false)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(marked.isEmpty)
+
+        model.setReadTrackingActive(true)
+        reportVisible(["2"], to: model, revision: model.updates.value.revision - 1)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(marked.isEmpty, "Activation requires a fresh matching host viewport.")
+        reportVisible(["2"], to: model)
+        source.store.apply(.message(try TimelineTestFixtures.message(id: "3", at: 3)))
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(marked.isEmpty, "Publication invalidates the previous viewport's dwell.")
+
+        reportVisible(["3"], to: model)
+        model.viewportDidChange(.empty, reason: .layout, revision: model.updates.value.revision)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(marked.isEmpty, "A fully obscured host cancels the previous candidate.")
+        reportVisible(["3"], to: model)
+        model.close()
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(marked.isEmpty)
+    }
+
+    func testReadRequestsSerializeAndRevalidateQueuedCandidates() async throws {
+        var marked: [String] = []
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 3))], markRead: { id in
+            marked.append(id)
+            if id == "1" { await withCheckedContinuation { releaseFirst = $0 } }
+        })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible(["1"], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, ["1"])
+        reportVisible(["2"], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, ["1"], "A mature candidate waits for the in-flight receipt.")
+        reportVisible(["3"], to: model)
+        releaseFirst?.resume()
+        await source.drain()
+        XCTAssertEqual(marked, ["1"], "An obsolete mature candidate must not be sent.")
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, ["1", "3"])
+        model.close()
+    }
+
+    func testReadFailureRetriesOnlyAfterAnotherStableViewport() async throws {
+        var marked: [String] = []
+        let (model, _, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 1))], markRead: { id in
+            marked.append(id)
+            if marked.count == 1 { throw StubError() }
+        })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible(["1"], to: model)
+        try await Task.sleep(for: .milliseconds(1_100))
+        XCTAssertEqual(marked, ["1"], "Failures cannot trigger an automatic retry loop.")
+        reportVisible(["1"], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, ["1", "1"])
+        model.close()
+    }
+
+    func testExistingWindowScrollCancelsDwellUntilFreshCompletedViewport() async throws {
+        var marked: [String] = []
+        let (model, _, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 2))], markRead: { marked.append($0) })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible(["1"], to: model)
+        await model.jumpToLiveEdge()
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: true))
+
+        var duringAnimation = TimelineViewport(firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1, distanceToTop: 0, distanceToBottom: 0, height: 400)
+        duringAnimation.fullyVisibleMessageIDs = ["1"]
+        model.viewportDidChange(duringAnimation, reason: .programmatic, revision: model.updates.value.revision)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(marked.isEmpty, "A scroll command invalidates old geometry even without changing rows.")
+
+        reportVisible(["2"], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, ["2"])
+        model.close()
+    }
+
+    private func reportVisible(_ ids: [String], to model: ConversationTimelineModel, revision: Int? = nil) {
+        if let request = model.updates.value.pendingScroll { model.scrollRequestDidFinish(id: request.id) }
+        var viewport = TimelineViewport(firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1, distanceToTop: 5_000, distanceToBottom: 5_000, height: 400)
+        viewport.fullyVisibleMessageIDs = ids
+        model.viewportDidChange(viewport, reason: .layout, revision: revision ?? model.updates.value.revision)
+    }
+
     private func remoteMessages(_ model: ConversationTimelineModel) -> [MessageResponse] {
         model.rows.compactMap {
             guard case .message(let row) = $0 else { return nil }
@@ -712,7 +969,8 @@ final class ConversationTimelineModelTests: XCTestCase {
     // MARK: Helpers
 
     private func makeModel(
-        pages: [Result<ListMessagesResponse, Error>]
+        pages: [Result<ListMessagesResponse, Error>],
+        markRead: (@MainActor (String) async throws -> Void)? = nil
     ) throws -> (ConversationTimelineModel, ScriptedTimelineSource, CurrentValueSubject<[TimelineHostSnapshot], Never>) {
         let source = ScriptedTimelineSource(pages: pages)
         let model = ConversationTimelineModel(
@@ -720,7 +978,8 @@ final class ConversationTimelineModelTests: XCTestCase {
             currentUserID: 1,
             isGroupChat: true,
             source: source,
-            messageStore: source.store
+            messageStore: source.store,
+            markRead: markRead
         )
         let updates = CurrentValueSubject<[TimelineHostSnapshot], Never>([])
         model.updates.sink { updates.value.append($0) }.store(in: &cancellables)
