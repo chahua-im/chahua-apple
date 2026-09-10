@@ -67,7 +67,8 @@ struct ChatDetailView: View {
                                                 await model.revealLatestAfterSend()
                                             }
                                         }
-                                    }
+                                    },
+                                    onCompositionChanged: { store.setDraftComposing($0, chatID: chat.id) }
                                 )
                             }
                         })

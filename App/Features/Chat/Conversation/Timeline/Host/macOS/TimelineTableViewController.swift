@@ -103,7 +103,6 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         didSet {
             guard headerInset != oldValue, isViewLoaded else { return }
             scrollView.contentInsets.top = headerInset
-            scrollView.scrollerInsets.top = headerInset
             view.needsLayout = true
         }
     }
@@ -111,7 +110,6 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         didSet {
             guard composerInset != oldValue, isViewLoaded else { return }
             scrollView.contentInsets.bottom = composerInset
-            scrollView.scrollerInsets.bottom = composerInset
             view.needsLayout = true
         }
     }
@@ -166,10 +164,10 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         scrollView.horizontalScrollElasticity = .none
         scrollView.drawsBackground = false
         scrollView.automaticallyAdjustsContentInsets = false
+        // AppKit already insets the scroller by contentInsets. Setting
+        // scrollerInsets too would count the header and composer padding twice.
         scrollView.contentInsets.top = headerInset
-        scrollView.scrollerInsets.top = headerInset
         scrollView.contentInsets.bottom = composerInset
-        scrollView.scrollerInsets.bottom = composerInset
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.wheelWillScroll = { [weak self] in
             guard let self else { return }

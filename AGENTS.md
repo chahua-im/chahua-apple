@@ -21,11 +21,9 @@ The Xcode target uses a filesystem-synchronized group rooted at `App/` — files
 
 ### Packages/
 
-First-party local Swift packages. Today there is only **ChahuaAPI** (`Packages/ChahuaAPI/`), linked by the app target.
+First-party local Swift packages.
 
 - Prefer putting reusable, non-UI logic in packages rather than the app target.
-- Do **not** add extra packages (e.g. Core, Chat, UI) unless the user asks — keep the surface small for now.
-- Package platforms should match the app: iOS 16+, macOS 13+.
 
 ### Vendor/
 

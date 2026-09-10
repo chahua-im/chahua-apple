@@ -97,7 +97,7 @@ Keep the existing separation:
 
 The native hosts require platform-specific code and careful measurement lifecycle management. They are not automatically bug-free. However, they give us direct control of row updates, layout, content offsets, and native input callbacks at the layer responsible for those operations. That is a better fit for exact anchoring and interruption-safe navigation.
 
-The rollback also restores the pre-experiment deployment settings: iOS 16.6/macOS 13.5 for the app and the original 26.5 test-target floors. Package and visionOS declarations remain unchanged. Raising the app's minimum OS solely to access newer scrolling APIs did not resolve the architectural mismatch.
+At rollback, the app returned to iOS 16.6/macOS 13.5 and the test-target floors stayed at 26.5. The subsequent composer redesign raised the app and ChahuaAPI baselines to iOS 17/macOS 14; it did not change this scroll-host decision. Raising the app's minimum OS solely to access newer scrolling APIs did not resolve the architectural mismatch.
 
 ## Conditions for revisiting this decision
 

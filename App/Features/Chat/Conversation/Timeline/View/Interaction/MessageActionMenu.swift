@@ -9,10 +9,12 @@ struct MessageActionMenu<Preview: View>: View {
     let onReaction: (String) -> Void
     let onAction: (MessageMenuAction) -> Void
     let onClose: () -> Void
+    var controlsWidth: CGFloat = 276
     @ViewBuilder let preview: () -> Preview
 
     @AppStorage(MessageReactionPreferences.recentStorageKey)
     private var recentStorage = MessageReactionPreferences.defaultRecentStorage
+    @ScaledMetric(relativeTo: .caption2) private var actionRowHeight: CGFloat = 63
 
     private var policy: MessageActionPolicy { .init(row: row, context: context) }
     private var eligibility: MessageReactionEligibility {
@@ -31,7 +33,7 @@ struct MessageActionMenu<Preview: View>: View {
                 actionGrid
             }
         }
-        .frame(maxWidth: 360)
+        .frame(maxWidth: .infinity, alignment: row.isOutgoing ? .trailing : .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Message actions")
     }
@@ -43,7 +45,8 @@ struct MessageActionMenu<Preview: View>: View {
                     react(emoji)
                 }
             }
-            Button {} label: {
+            Button {
+            } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 21, weight: .medium))
                     .frame(maxWidth: .infinity)
@@ -57,8 +60,10 @@ struct MessageActionMenu<Preview: View>: View {
             .accessibilityHint("Not implemented yet")
             .help("Not implemented yet")
         }
-        .padding(6)
-        .background(.regularMaterial, in: Capsule())
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .frame(width: controlsWidth)
+        .background(MessageMenuSurface(shape: Capsule()))
         .overlay {
             if isReacting {
                 ProgressView().controlSize(.small).allowsHitTesting(false)
@@ -68,39 +73,55 @@ struct MessageActionMenu<Preview: View>: View {
     }
 
     private var actionGrid: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 0), count: 5), spacing: 0) {
-            ForEach(policy.actions) { action in
-                let enabled = policy.availability(of: action) == .enabled
-                Button(role: action == .delete ? .destructive : nil) {
-                    guard enabled else { return }
-                    onAction(action)
-                    onClose()
-                } label: {
-                    VStack(spacing: 6) {
-                        Image(systemName: action.symbol)
-                            .font(.system(size: 21))
-                        Text(action.label(hasAttachments: row.entry.remoteMessage?.hasAttachments == true))
-                            .font(.caption2)
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 70)
-                    .padding(.horizontal, 3)
-                    .contentShape(Rectangle())
+        let menuActions = policy.actions
+        let rowCount = (menuActions.count + 4) / 5
+        return VStack(spacing: 0) {
+            ForEach(0..<rowCount, id: \.self) { rowIndex in
+                if rowIndex > 0 {
+                    Divider()
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(action == .delete ? Color.red : Color.primary)
-                .opacity(enabled ? 1 : 0.4)
-                .disabled(!enabled)
-                .accessibilityHint(enabled ? Text("") : Text("Not implemented yet"))
-                .help(
-                    enabled
-                        ? action.label(hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
-                        : String(localized: "Not implemented yet"))
+                HStack(spacing: 0) {
+                    ForEach(menuActions[(rowIndex * 5)..<min((rowIndex + 1) * 5, menuActions.count)]) { action in
+                        actionButton(action)
+                            .frame(width: controlsWidth / 5)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(4)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .frame(width: controlsWidth)
+        .background(MessageMenuSurface(shape: RoundedRectangle(cornerRadius: 14)))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func actionButton(_ action: MessageMenuAction) -> some View {
+        let enabled = policy.availability(of: action) == .enabled
+        return Button(role: action == .delete ? .destructive : nil) {
+            guard enabled else { return }
+            onAction(action)
+            onClose()
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: action.symbol)
+                    .font(.system(size: 22))
+                Text(action.label(hasAttachments: row.entry.remoteMessage?.hasAttachments == true))
+                    .font(.caption2)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .padding(.horizontal, 3)
+            .frame(maxWidth: .infinity, minHeight: actionRowHeight)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(action == .delete ? Color.red : Color.primary)
+        .opacity(enabled ? 1 : 0.4)
+        .disabled(!enabled)
+        .accessibilityHint(enabled ? Text("") : Text("Not implemented yet"))
+        .help(
+            enabled
+                ? action.label(hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
+                : String(localized: "Not implemented yet"))
     }
 
     private func react(_ emoji: String) {
@@ -110,6 +131,19 @@ struct MessageActionMenu<Preview: View>: View {
         }
         onReaction(emoji)
         onClose()
+    }
+}
+
+/// Keep native translucency, but prevent the dimmed backdrop from tinting the controls gray.
+private struct MessageMenuSurface<S: InsettableShape>: View {
+    let shape: S
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        shape.fill(.regularMaterial)
+            .overlay {
+                shape.fill(colorScheme == .dark ? Color(white: 0.12).opacity(0.65) : Color.white.opacity(0.65))
+            }
     }
 }
 
@@ -158,7 +192,7 @@ struct MessageReactionButton: View {
         let enabled = eligibility.canToggle(emoji)
         Button(action: onSelect) {
             Text(verbatim: emoji)
-                .font(.system(size: 26))
+                .font(.system(size: 24))
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
                 .background(selected ? Color.accentColor.opacity(0.18) : .clear, in: Circle())

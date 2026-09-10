@@ -1,24 +1,31 @@
 import SwiftUI
 
-#if os(macOS)
-import AppKit
-#endif
-
 struct MessageComposerView: View {
     @Binding var text: String
     let maxHeight: CGFloat
     let isEnabled: Bool
     let canSend: Bool
     let onSubmit: () -> Void
+    var onCompositionChanged: ((Bool) -> Void)? = nil
+    @StateObject private var input = ComposerInputState()
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
     @FocusState private var isInputFocused: Bool
+    @State private var restoresFocusAfterSend = false
 
-    private var canSubmit: Bool { isEnabled && canSend }
-    private var hasText: Bool { !text.isEmpty }
+    private var canSubmit: Bool { isEnabled && canSend && !input.isComposing }
+    private var hasText: Bool { !(input.editorText ?? text).isEmpty }
+
+    private var editorText: Binding<String> {
+        Binding(
+            get: { input.editorText ?? text },
+            set: { input.receiveEditorText($0) }
+        )
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Button {} label: {
+            Button {
+            } label: {
                 Image(systemName: "paperclip")
                     .font(.system(size: 20))
                     .frame(width: 44, height: 44)
@@ -29,7 +36,7 @@ struct MessageComposerView: View {
             .modifier(ChatGlassSurface(cornerRadius: 22))
 
             HStack(alignment: .bottom, spacing: 0) {
-                TextField("Message", text: $text, axis: .vertical)
+                TextField("Message", text: editorText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: fontSize))
                     .lineLimit(1...6)
@@ -40,12 +47,17 @@ struct MessageComposerView: View {
                     .disabled(!isEnabled)
                     .focused($isInputFocused)
                     .onSubmit(submit)
-                    #if os(macOS)
-                    .background(ComposerShiftReturn(isFocused: isInputFocused, isEnabled: isEnabled))
-                    #endif
+                    .background(
+                        ComposerInputBridge(
+                            input: input, draft: $text, isFocused: isInputFocused,
+                            isEnabled: isEnabled, onCompositionChanged: onCompositionChanged
+                        )
+                        .accessibilityHidden(true)
+                    )
                     .accessibilityLabel("Message")
 
-                Button {} label: {
+                Button {
+                } label: {
                     Image(systemName: "face.smiling")
                         .font(.system(size: 20))
                         .foregroundStyle(.secondary)
@@ -67,67 +79,26 @@ struct MessageComposerView: View {
             .disabled(!hasText || !canSubmit)
             .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: hasText && canSubmit))
             .accessibilityLabel(hasText ? Text("Send message") : Text("Voice message (unavailable)"))
-            #if os(macOS)
-            .focusable(false)
-            #endif
+            .modifier(ComposerSendFocus())
         }
         .buttonStyle(.plain)
         .padding(12)
+        .onAppear { input.receiveExternalText(text) }
+        .onChange(of: text) { _, text in input.receiveExternalText(text) }
+        .onChange(of: isEnabled) { _, enabled in
+            guard enabled, restoresFocusAfterSend else { return }
+            restoresFocusAfterSend = false
+            isInputFocused = true
+        }
     }
 
     private func submit() {
-        guard canSubmit else { return }
+        guard canSubmit, input.prepareSubmission() else { return }
+        restoresFocusAfterSend = true
+        isInputFocused = true
         onSubmit()
     }
 }
-
-#if os(macOS)
-// SwiftUI's multiline TextField submits on Shift-Return on macOS. Its onSubmit
-// callback is too late to intercept the key, and macOS 13 lacks onKeyPress.
-// This command-only bridge leaves text, selection, undo, and IME ownership with
-// SwiftUI's field editor; it never synchronizes or replaces the draft itself.
-private struct ComposerShiftReturn: NSViewRepresentable {
-    let isFocused: Bool
-    let isEnabled: Bool
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        context.coordinator.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
-            [weak view, weak coordinator = context.coordinator] event in
-            guard let view, let coordinator,
-                  coordinator.isFocused, coordinator.isEnabled,
-                  let window = view.window, event.window === window,
-                  event.keyCode == 36 || event.keyCode == 76,
-                  event.modifierFlags.intersection([.shift, .control, .option, .command]) == .shift,
-                  let editor = window.firstResponder as? NSTextView,
-                  !editor.hasMarkedText() else { return event }
-            editor.insertNewlineIgnoringFieldEditor(nil)
-            return nil
-        }
-        return view
-    }
-
-    func updateNSView(_ view: NSView, context: Context) {
-        context.coordinator.isFocused = isFocused
-        context.coordinator.isEnabled = isEnabled
-    }
-
-    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
-        if let monitor = coordinator.monitor {
-            NSEvent.removeMonitor(monitor)
-            coordinator.monitor = nil
-        }
-    }
-
-    final class Coordinator {
-        var isFocused = false
-        var isEnabled = false
-        var monitor: Any?
-    }
-}
-#endif
 
 private struct ChatComposerInsetKey: EnvironmentKey {
     nonisolated static let defaultValue: CGFloat = 0
@@ -154,7 +125,7 @@ struct ChatComposerOverlay<Composer: View>: ViewModifier {
                         GeometryReader { geometry in
                             Color.clear
                                 .onAppear { composerHeight = geometry.size.height }
-                                .onChange(of: geometry.size.height) { composerHeight = $0 }
+                                .onChange(of: geometry.size.height) { _, height in composerHeight = height }
                         }
                     }
             }

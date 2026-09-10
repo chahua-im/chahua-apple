@@ -159,7 +159,17 @@ The app router handles current messaging events and explicitly groups the remain
 
 Malformed payloads for known events fail the connection rather than being silently discarded, allowing HTTP recovery on reconnect. Complete protocol modeling does not add screens, feature stores, or HTTP requests for domains the app does not yet handle. Verification decodes each known wire type and proves an unhandled/future event does not interrupt subsequent message delivery.
 
-The realtime layer handles existing chat/timeline state only. It does not introduce typing/read-receipt protocols, APNs, a composer/send worker, or friend/pin/sticker/thread-list screens. Reaction controls use the separate mutation controller described above. Pending-send identity is preserved for existing machinery without claiming that a production send worker already exists.
+The realtime layer handles existing chat/timeline state only. It does not introduce typing/read-receipt protocols, APNs, or friend/pin/sticker/thread-list screens. Reaction controls use the separate mutation controller described above. Outgoing persistence and delivery belong to the existing `OutgoingMessageQueue`, not to the realtime connection.
+
+## Composer and durable enqueue boundary
+
+The iOS and macOS composer use one growing SwiftUI `TextField`, one `ComposerInputState`, and the same `ChatStore`/`OutgoingMessageQueue` pipeline. `MessageComposerView` owns layout, submission, and focus; the editing session owns only transient input and composition boundaries. The external draft binding remains the committed authority—there is no second cached committed string or retained send callback.
+
+`ComposerNativeInput.swift` isolates the native facts SwiftUI does not expose: marked text, editor ownership, editing-end snapshots, and undo/redo notifications. It observes SwiftUI's editor without installing a delegate or replacing editing, selection, or undo. A temporary run-loop observer settles edits after native input transactions and detects unchanged-string unmark. Native teardown captures the final owned snapshot before deferring observable publication outside SwiftUI's update.
+
+The hosted macOS `onKeyPress` experiment exposed reentrant view-update publication during newline insertion. The adapter therefore retains the scoped Shift-Return command monitor; it is not an IME polling hook. UIKit keeps its existing keyboard behavior. Shared submission synchronously settles owned committed text, including an editing-end snapshot when AppKit ends editing before `onSubmit`, and refuses candidate-confirmation Return.
+
+Marked text never enters draft persistence. Local enqueue must succeed before clearing the draft; editing pauses during that commit, then the composer's own send restores focus on success or failure. Network delivery is independent. Failure keeps the draft and the existing retry/error flow. Unchanged native binding echoes on focus/editability transitions are not user edits and cannot undo a committed draft clear.
 
 ## Source map and verification invariants
 

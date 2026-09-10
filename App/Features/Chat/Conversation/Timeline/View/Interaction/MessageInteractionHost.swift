@@ -97,11 +97,14 @@ private struct MessageInteractionOverlay: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let width = min(276, max(1, geometry.size.width - 24))
+            let availableWidth = max(1, geometry.size.width - 32)
+            let controlsWidth = min(276, availableWidth)
+            let previewWidth = min(source.width > 0 ? source.width : controlsWidth, availableWidth)
+            let width = max(controlsWidth, previewWidth)
             let origin = geometry.frame(in: .global).origin
             let localSource = source.offsetBy(dx: -origin.x, dy: -origin.y)
             let proposedX = row.isOutgoing ? localSource.maxX - width : localSource.minX
-            let x = min(max(12, proposedX), max(12, geometry.size.width - width - 12))
+            let x = min(max(16, proposedX), max(16, geometry.size.width - width - 16))
             let proposedY = source == .zero ? (geometry.size.height - panelSize.height) / 2 : localSource.minY - 60
             let y = min(max(12, proposedY), max(12, geometry.size.height - panelSize.height - 12))
             ZStack(alignment: .topLeading) {
@@ -114,22 +117,25 @@ private struct MessageInteractionOverlay: View {
                 ScrollView {
                     MessageActionMenu(
                         row: row, context: context, isReacting: isReacting,
-                        onReaction: onReaction, onAction: onAction, onClose: onClose
+                        onReaction: onReaction, onAction: onAction, onClose: onClose,
+                        controlsWidth: controlsWidth
                     ) {
                         // Read-only preview uses the production bubble surface, not a second renderer.
                         TimelineBubbleView(
                             row: .message(row),
                             context: .init(
-                                viewportSize: CGSize(width: width, height: geometry.size.height),
+                                viewportSize: geometry.size,
                                 currentUserID: currentUserID, isThreadTimeline: context.isThreadView,
                                 isInteractionPreview: true),
                             mediaContext: mediaContext
                         )
-                        .frame(width: width, alignment: row.isOutgoing ? .trailing : .leading)
+                        .frame(width: previewWidth, alignment: row.isOutgoing ? .trailing : .leading)
                         .frame(maxHeight: min(220, geometry.size.height * 0.3), alignment: .top)
-                        .clipped()
+                        .clipShape(Rectangle().inset(by: -8))
                         .accessibilityHidden(true)
                     }
+                    // Leave drawing room for the bubble tail without changing the text width.
+                    .padding(.horizontal, 8)
                     .background {
                         GeometryReader { panel in
                             Color.clear
@@ -139,8 +145,8 @@ private struct MessageInteractionOverlay: View {
                     }
                 }
                 .scrollIndicators(.hidden)
-                .frame(width: width, height: min(panelSize.height, max(1, geometry.size.height - 24)))
-                .offset(x: x, y: y)
+                .frame(width: width + 16, height: min(panelSize.height, max(1, geometry.size.height - 24)))
+                .offset(x: x - 8, y: y)
                 .shadow(color: .black.opacity(0.28), radius: 16, y: 8)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)

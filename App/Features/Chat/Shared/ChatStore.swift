@@ -25,6 +25,8 @@ final class ChatStore: ObservableObject {
     @Published private(set) var draftSaveFailed = false
     private var draftRevisions: [String: Int64] = [:]
     private var unsavedDrafts = Set<String>()
+    private var composingDrafts = Set<String>()
+    private var deferredDraftFlushes = Set<String>()
     private var pendingDraftSaves: [String: Task<Void, Never>] = [:]
     private var outgoingObservation: AnyCancellable?
     private var storageObservation: AnyCancellable?
@@ -111,16 +113,45 @@ final class ChatStore: ObservableObject {
         drafts[chatID] = text
         unsavedDrafts.insert(chatID)
         draftRevisions[chatID, default: 0] += 1
-        pendingDraftSaves[chatID]?.cancel()
+        scheduleDraftSave(chatID: chatID)
+    }
+
+    func setDraftComposing(_ isComposing: Bool, chatID: String) {
+        if isComposing {
+            composingDrafts.insert(chatID)
+            pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
+        } else if composingDrafts.remove(chatID) != nil {
+            scheduleDraftSave(chatID: chatID)
+        }
+    }
+
+    private func scheduleDraftSave(chatID: String, immediately: Bool = false) {
+        pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
+        if immediately { deferredDraftFlushes.insert(chatID) }
+        guard !composingDrafts.contains(chatID) else { return }
+        guard unsavedDrafts.contains(chatID) else {
+            deferredDraftFlushes.remove(chatID)
+            return
+        }
+        let shouldFlushImmediately = deferredDraftFlushes.contains(chatID)
+        let requestGeneration = generation
         pendingDraftSaves[chatID] = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
-            self?.pendingDraftSaves[chatID] = nil
-            await self?.flushDraft(chatID: chatID)
+            if !shouldFlushImmediately {
+                do { try await Task.sleep(for: .seconds(0.5)) } catch { return }
+            }
+            guard let self, self.generation == requestGeneration, !Task.isCancelled else { return }
+            self.pendingDraftSaves[chatID] = nil
+            await self.flushDraft(chatID: chatID)
         }
     }
 
     func flushDraft(chatID: String) async {
         pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
+        guard !composingDrafts.contains(chatID) else {
+            deferredDraftFlushes.insert(chatID)
+            return
+        }
+        deferredDraftFlushes.remove(chatID)
         guard let text = drafts[chatID], unsavedDrafts.contains(chatID), !committingDrafts.contains(chatID) else { return }
         let revision = draftRevisions[chatID, default: 0]
         let requestGeneration = generation
@@ -136,7 +167,8 @@ final class ChatStore: ObservableObject {
 
     func submitDraft(chatID: String) async -> Bool {
         let text = draftText(chatID: chatID).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !committingDrafts.contains(chatID), outgoingQueue.storageState == .ready else { return false }
+        guard !text.isEmpty, !composingDrafts.contains(chatID),
+              !committingDrafts.contains(chatID), outgoingQueue.storageState == .ready else { return false }
         pendingDraftSaves.removeValue(forKey: chatID)?.cancel()
         committingDrafts.insert(chatID)
         let requestGeneration = generation
@@ -148,6 +180,7 @@ final class ChatStore: ObservableObject {
             draftRevisions[chatID] = revision
             drafts[chatID] = ""
             unsavedDrafts.remove(chatID)
+            deferredDraftFlushes.remove(chatID)
             draftSaveFailed = false
             return true
         } catch {
@@ -158,19 +191,20 @@ final class ChatStore: ObservableObject {
     }
 
     func retryLocalStorage() async {
+        let requestGeneration = generation
         await outgoingQueue.retryStorage()
-        for chatID in Array(drafts.keys) { await flushDraft(chatID: chatID) }
+        guard generation == requestGeneration else { return }
+        for chatID in Array(drafts.keys) {
+            await flushDraft(chatID: chatID)
+            guard generation == requestGeneration else { return }
+        }
     }
 
     func setForegroundActive(_ active: Bool) {
         outgoingQueue.requestForegroundActive(active)
         if !active {
             for chatID in drafts.keys {
-                pendingDraftSaves[chatID]?.cancel()
-                pendingDraftSaves[chatID] = Task { [weak self] in
-                    self?.pendingDraftSaves[chatID] = nil
-                    await self?.flushDraft(chatID: chatID)
-                }
+                scheduleDraftSave(chatID: chatID, immediately: true)
             }
         }
     }
@@ -373,6 +407,8 @@ final class ChatStore: ObservableObject {
         drafts.removeAll()
         draftRevisions.removeAll()
         unsavedDrafts.removeAll()
+        composingDrafts.removeAll()
+        deferredDraftFlushes.removeAll()
         outgoingRevisions.removeAll()
         committingDrafts.removeAll()
         draftSaveFailed = false

@@ -53,6 +53,19 @@ final class TimelineTableViewControllerTests: XCTestCase {
                        "Opening must reveal the latest message: clip=\(scroll.contentView.bounds), visible=\(scroll.documentVisibleRect), insets=\(scroll.contentInsets)")
         XCTAssertTrue(model.state.live.followsLatest)
         XCTAssertTrue(model.state.live.isPinnedToBottom)
+
+        scroll.scrollerStyle = .overlay
+        scroll.tile()
+        let scroller = try XCTUnwrap(scroll.verticalScroller)
+        let track = scroll.convert(scroller.bounds, from: scroller)
+        let topGap = scroll.isFlipped ? track.minY - scroll.bounds.minY : scroll.bounds.maxY - track.maxY
+        let bottomGap = scroll.isFlipped ? scroll.bounds.maxY - track.maxY : track.minY - scroll.bounds.minY
+        XCTAssertEqual(topGap, scroll.contentInsets.top, accuracy: 1,
+                       "The indicator track must start below the header, without counting its inset twice.")
+        XCTAssertEqual(bottomGap, scroll.contentInsets.bottom, accuracy: 1,
+                       "The indicator track must end at the composer, without counting its inset twice.")
+        XCTAssertEqual(scroller.doubleValue, 1, accuracy: 0.001,
+                       "At the latest message, the indicator must be at the bottom of its track.")
     }
 
     func testUserScrollLoadsHistoryButLayoutDoesNot() async throws {
