@@ -124,10 +124,10 @@ struct MessageComposerView: View {
                     Text(
                         "Reply to \(reply.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(reply.sender.uid)")"
                     )
-                    .font(.system(size: fontSize, weight: .semibold))
+                    .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
                     Text(reply.isDeleted ? String(localized: "Message deleted") : messagePreview(reply))
-                        .font(.system(size: fontSize))
+                        .font(.system(size: fontSize * 12 / 15))
                         .foregroundStyle(.primary)
                 }
                 .lineLimit(1)
