@@ -216,6 +216,8 @@ The coordinator captures geometry and actions at touch-down. Movement beyond 5 p
 
 `TextMessage/MessageTextContent` constructs attributed body text; `MessageTextLayout` owns TextKit wrapping, mention backgrounds, and inline metadata geometry. AppKit/UIKit text adapters retain native selection and link handling. Shared `MessageMetadata` supplies timestamp/delivery content and drawing; `MessageMetadataView` renders standalone media/sticker metadata without empty text storage. Inline metadata remains outside selectable body text.
 
+On macOS, `TimelineBubbleHostingView` forwards cursor updates inside a visible native message text view to that view. SwiftUI can receive the row's cursor events while separately forwarding link clicks, so configuring `NSTextView.linkTextAttributes` alone is insufficient. AppKit still chooses hand versus I-beam from its existing text/link geometry; the host does not parse URLs or alter click/selection handling. Other regions keep SwiftUI's cursor routing. Hover regression coverage enters through the host rather than calling the native text handler directly.
+
 `TimelineRowMeasurer` measures the same row composition used by the visible hosts. Its macOS text-only fast path uses `MessageTextLayout` and excludes headers, attachments, replies, reactions, and thread indicators. Complex rows use hosted measurement. A future renderer change must migrate both visible layout and measurement rather than leaving two wrapping algorithms.
 
 ## Source map and verification invariants

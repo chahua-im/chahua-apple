@@ -4,9 +4,38 @@ import ChahuaAPI
 import Combine
 import SwiftUI
 
+// SwiftUI receives cursor updates at the row host even when it forwards clicks
+// into a represented NSTextView. Route text-region updates to AppKit as well:
+// it already owns link hit testing and selection, which SwiftUI cannot reproduce.
+@MainActor
+final class TimelineBubbleHostingView<Content: View>: NSHostingView<Content> {
+    override func cursorUpdate(with event: NSEvent) {
+        if let text = textView(at: event.locationInWindow, in: self) {
+            text.cursorUpdate(with: event)
+        } else {
+            super.cursorUpdate(with: event)
+        }
+    }
+
+    private func textView(at point: NSPoint, in view: NSView) -> AppKitMessageTextView? {
+        guard !view.isHidden else { return nil }
+        if let text = view as? AppKitMessageTextView {
+            let local = text.convert(point, from: nil)
+            guard text.bounds.contains(local), text.visibleRect.contains(local),
+                  let parent = text.superview,
+                  text.hitTest(parent.convert(point, from: nil)) === text else { return nil }
+            return text
+        }
+        for child in view.subviews.reversed() {
+            if let text = textView(at: point, in: child) { return text }
+        }
+        return nil
+    }
+}
+
 @MainActor
 final class TimelineTableCellView: NSTableCellView {
-    let hosting = NSHostingView(rootView: TimelineBubbleView(row: .dateSeparator(.init(day: .now, ordinalDay: 0)), context: .init()))
+    let hosting = TimelineBubbleHostingView(rootView: TimelineBubbleView(row: .dateSeparator(.init(day: .now, ordinalDay: 0)), context: .init()))
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         // The table supplies exact row geometry. Intrinsic/minimum-size probes

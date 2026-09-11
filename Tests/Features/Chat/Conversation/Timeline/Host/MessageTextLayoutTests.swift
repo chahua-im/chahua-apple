@@ -47,7 +47,7 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertEqual(text.string, "Hello https://example.com")
     }
 
-    func testNativeLinkHoverUsesHandWithoutDisablingTextSelection() throws {
+    func testHostedLinkHoverUsesHandWithoutDisablingTextSelection() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 160, height: 100),
             styleMask: [.borderless], backing: .buffered, defer: false
@@ -58,15 +58,22 @@ final class MessageTextLayoutTests: XCTestCase {
             window.close()
             previousCursor.set()
         }
-        let text = AppKitMessageTextView()
-        window.contentView = text
-        text.contentLayout.update(
-            attributedText: MessageTextContent.attributedText(
+        let host = TimelineBubbleHostingView(rootView:
+            MessageTextContent(
                 text: "Hello https://example.com", mentions: [], currentUserID: 1,
-                isOutgoing: false, linksEnabled: true
-            ),
-            metadata: nil
+                isOutgoing: false, action: { _ in }
+            )
+            .padding(12)
+            .onHover { _ in }
         )
+        host.sizingOptions = []
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        func textView(in view: NSView) -> AppKitMessageTextView? {
+            if let text = view as? AppKitMessageTextView { return text }
+            return view.subviews.lazy.compactMap { textView(in: $0) }.first
+        }
+        let text = try XCTUnwrap(textView(in: host))
         text.layoutSubtreeIfNeeded()
         text.setSelectedRange(NSRange(location: 0, length: 5))
 
@@ -85,7 +92,7 @@ final class MessageTextLayoutTests: XCTestCase {
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
             ))
-            text.cursorUpdate(with: event)
+            host.cursorUpdate(with: event)
         }
 
         try hover(8)
