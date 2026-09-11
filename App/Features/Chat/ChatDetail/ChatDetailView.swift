@@ -17,6 +17,7 @@ struct ChatDetailView: View {
     @State private var failedMessageID: String?
     @State private var showsRetryOptions = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @State private var replyFocusRequest = 0
     @State private var editingMessage: MessageResponse?
     @State private var editText = ""
@@ -196,6 +197,9 @@ struct ChatDetailView: View {
         }
         actions.blockPendingMessage = { pending in changePending(pending, revoke: false) }
         actions.revokePendingMessage = { pending in changePending(pending, revoke: true) }
+        actions.openLink = { url in
+            _ = openURL(url)
+        }
         if interactionContext.canWrite {
             actions.replyToMessage = { message in
                 guard !drafts.committingDrafts.contains(conversationKey) else { return }

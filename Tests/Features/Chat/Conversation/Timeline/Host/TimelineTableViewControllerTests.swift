@@ -241,7 +241,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
 
     func testIncomingMetadataRemainsReadableInDarkAppearance() async throws {
         try await inspectRenderedMessage(text: "Hello", senderID: 2, widths: [320], appearance: .darkAqua) { cell, textView, bitmap in
-            guard let native = textView as? AppKitBubbleTextView else { return XCTFail("Missing native text view") }
+            guard let native = textView as? AppKitMessageTextView else { return XCTFail("Missing native text view") }
             let frame = cell.convert(native.contentLayout.geometry(for: native.bounds.width).metadataFrame, from: native)
             let scaleX = CGFloat(bitmap.pixelsWide) / cell.bounds.width
             let scaleY = CGFloat(bitmap.pixelsHigh) / cell.bounds.height
@@ -288,12 +288,12 @@ final class TimelineTableViewControllerTests: XCTestCase {
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let measurer = TimelineRowMeasurer(parent: controller)
 
-        func renderedMessage(_ id: String) throws -> (NSView, AppKitBubbleTextView) {
+        func renderedMessage(_ id: String) throws -> (NSView, AppKitMessageTextView) {
             let index = try XCTUnwrap(model.rows.firstIndex { $0.stableMessageKey == .clientGenerated(id) })
             table.scrollRowToVisible(index)
             let cell = try XCTUnwrap(table.view(atColumn: 0, row: index, makeIfNecessary: true))
             cell.layoutSubtreeIfNeeded()
-            let native = try XCTUnwrap(textViews(in: cell).compactMap { $0 as? AppKitBubbleTextView }.first)
+            let native = try XCTUnwrap(textViews(in: cell).compactMap { $0 as? AppKitMessageTextView }.first)
             XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
             return (cell, native)
         }

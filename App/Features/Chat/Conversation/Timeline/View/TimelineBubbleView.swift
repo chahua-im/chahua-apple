@@ -41,8 +41,7 @@ extension EnvironmentValues {
     }
 }
 
-/// Closed rendering surface. Per-kind components live under `View/Bubble/`; adding a new row
-/// requires an explicit case here rather than runtime registration.
+/// Separators render directly; every message shares one row container around its bubble.
 struct TimelineBubbleView: View {
     let row: TimelineRow
     let context: TimelineRowContext
@@ -70,25 +69,14 @@ struct TimelineBubbleView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, ChahuaTheme.Spacing.medium)
             case .message(let message):
-                messageBody(message)
+                MessageRowContainer(row: message, context: context) {
+                    MessageBubble(row: message, context: context, actions: actions)
+                }
             }
         }
         .background(context.isHighlighted ? ChahuaTheme.accent.opacity(0.15) : .clear)
         .animation(.easeOut(duration: 0.3), value: context.isHighlighted)
         .environment(\.mediaContext, mediaContext)
         .environment(\.messageBubbleActions, actions)
-    }
-
-    @ViewBuilder
-    private func messageBody(_ row: TimelineMessageRow) -> some View {
-        if row.entry.messageType == .system {
-            SystemMessageBubble(row: row)
-        } else if row.entry.remoteMessage?.isDeleted == true {
-            DeletedMessageBubble(row: row, context: context)
-        } else if row.entry.messageType == .text || row.entry.messageType == .sticker {
-            ChatMessageBubble(row: row, context: context, actions: actions)
-        } else {
-            UnsupportedMessageBubble(row: row, context: context)
-        }
     }
 }

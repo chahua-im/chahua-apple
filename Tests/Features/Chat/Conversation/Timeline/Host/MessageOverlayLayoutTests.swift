@@ -69,8 +69,8 @@
             }
         }
 
-        private func textViews(in view: NSView) -> [AppKitBubbleTextView] {
-            if let text = view as? AppKitBubbleTextView, text.string.contains("The original message") { return [text] }
+        private func textViews(in view: NSView) -> [AppKitMessageTextView] {
+            if let text = view as? AppKitMessageTextView, text.string.contains("The original message") { return [text] }
             return view.subviews.flatMap { textViews(in: $0) }
         }
     }

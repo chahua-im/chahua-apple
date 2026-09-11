@@ -5,7 +5,7 @@
     @testable import chahua_apple
 
     @MainActor
-    final class BubbleRowLayoutTests: XCTestCase {
+    final class MessageRowLayoutTests: XCTestCase {
         func testReactionsStayBelowBubbleAndAvatarOnBothSides() async throws {
             for outgoing in [false, true] {
                 for bubbleHeight: CGFloat in [24, 80] {
@@ -13,7 +13,7 @@
                         let bubble = NSView()
                         let avatar = NSView()
                         let reactions = NSView()
-                        let content = BubbleRowLayout(isOutgoing: outgoing, avatarSize: 36) {
+                        let content = MessageRowLayout(isOutgoing: outgoing, avatarSize: 36) {
                             Marker(view: bubble).frame(width: 180, height: bubbleHeight)
                             Marker(view: avatar).frame(width: 36, height: 36)
                             Marker(view: reactions).frame(width: 180, height: reactionHeight)

@@ -1,13 +1,11 @@
 import ChahuaAPI
 import SwiftUI
 
-/// Shared row geometry and reactions, independent of the message's content surface.
-struct MessageBubbleShell<Content: View>: View {
+/// Owns message alignment and surrounding affordances, never the bubble's surface.
+struct MessageRowContainer<Content: View>: View {
     let row: TimelineMessageRow
     var context: TimelineRowContext = .init()
-    var styled = true
     @ViewBuilder let content: () -> Content
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.messageBubbleActions) private var actions
     @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = BubbleMetrics.avatarSize
     @State private var isRowHovered = false
@@ -25,16 +23,16 @@ struct MessageBubbleShell<Content: View>: View {
     }
 
     var body: some View {
-        if context.isInteractionPreview {
-            surface
+        if context.isInteractionPreview || row.entry.messageType == .system {
+            content()
         } else {
             messageRow
         }
     }
 
     private var messageRow: some View {
-        BubbleRowLayout(isOutgoing: row.isOutgoing, avatarSize: avatarSize) {
-            surface
+        MessageRowLayout(isOutgoing: row.isOutgoing, avatarSize: avatarSize) {
+            content()
                 .modifier(
                     MessageContextSource(
                         open: context.isMeasuring
@@ -60,18 +58,7 @@ struct MessageBubbleShell<Content: View>: View {
                     }
                 }
             avatar
-            if row.entry.remoteMessage?.isDeleted != true,
-                let reactions = row.entry.remoteMessage?.reactions, !reactions.isEmpty
-            {
-                BubbleReactions(
-                    reactions: reactions, isOutgoing: row.isOutgoing, isMeasuring: context.isMeasuring,
-                    isPending: actions.pendingReactionMessageIDs.contains(row.entry.remoteMessage?.id ?? ""),
-                    toggle: context.isMeasuring
-                        || !MessageActionPolicy(row: row, context: actions.interactionContext).canReact
-                        ? nil : actions.toggleReaction.map { action in { emoji in action(row, emoji) } }
-                )
-                .padding(.vertical, 8)
-            }
+            accessories
         }
         .padding(.horizontal, BubbleMetrics.rowHorizontalInset)
         .padding(.vertical, BubbleMetrics.rowVerticalInset)
@@ -88,27 +75,20 @@ struct MessageBubbleShell<Content: View>: View {
         }
     }
 
-    @ViewBuilder private var surface: some View {
-        if styled {
-            content()
-                .padding(.horizontal, BubbleMetrics.textHorizontalInset)
-                .padding(.vertical, BubbleMetrics.textVerticalInset)
-                .foregroundStyle(
-                    row.isOutgoing
-                        ? ChahuaTheme.ChatBubble.outgoingForeground
-                        : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme)
-                )
-                .background {
-                    BubbleShape(
-                        isOutgoing: row.isOutgoing, hasTail: row.groupPosition == .single || row.groupPosition == .last
+    private var accessories: some View {
+        VStack(alignment: row.isOutgoing ? .trailing : .leading, spacing: 0) {
+            if row.entry.remoteMessage?.isDeleted != true {
+                if let reactions = row.entry.remoteMessage?.reactions, !reactions.isEmpty {
+                    BubbleReactions(
+                        reactions: reactions, isOutgoing: row.isOutgoing, isMeasuring: context.isMeasuring,
+                        isPending: actions.pendingReactionMessageIDs.contains(row.entry.remoteMessage?.id ?? ""),
+                        toggle: context.isMeasuring
+                            || !MessageActionPolicy(row: row, context: actions.interactionContext).canReact
+                            ? nil : actions.toggleReaction.map { action in { emoji in action(row, emoji) } }
                     )
-                    .fill(
-                        row.isOutgoing
-                            ? ChahuaTheme.ChatBubble.outgoingBackground
-                            : ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme))
+                    .padding(.vertical, 8)
                 }
-        } else {
-            content()
+            }
         }
     }
 

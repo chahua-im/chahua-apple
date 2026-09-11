@@ -8,12 +8,12 @@ import XCTest
 @testable import chahua_apple
 
 @MainActor
-final class BubbleTextLayoutTests: XCTestCase {
+final class MessageTextLayoutTests: XCTestCase {
     #if os(macOS)
     func testNativeTextPreservesSelectionAndUsesCurrentLinkActions() throws {
         var opened: [String] = []
-        func content(_ prefix: String?) -> BubbleTextContent {
-            BubbleTextContent(
+        func content(_ prefix: String?) -> MessageTextContent {
+            MessageTextContent(
                 text: "Hello https://example.com", mentions: [], currentUserID: 1,
                 isOutgoing: false,
                 action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } }
@@ -23,8 +23,8 @@ final class BubbleTextLayoutTests: XCTestCase {
         host.sizingOptions = []
         host.frame = NSRect(x: 0, y: 0, width: 340, height: 100)
         host.layoutSubtreeIfNeeded()
-        func textView(in view: NSView) -> AppKitBubbleTextView? {
-            if let text = view as? AppKitBubbleTextView { return text }
+        func textView(in view: NSView) -> AppKitMessageTextView? {
+            if let text = view as? AppKitMessageTextView { return text }
             return view.subviews.lazy.compactMap { textView(in: $0) }.first
         }
         let text = try XCTUnwrap(textView(in: host))
@@ -46,16 +46,70 @@ final class BubbleTextLayoutTests: XCTestCase {
         XCTAssertEqual(opened, ["first:https://example.com", "replacement:https://example.com"])
         XCTAssertEqual(text.string, "Hello https://example.com")
     }
+
+    func testNativeLinkHoverUsesHandWithoutDisablingTextSelection() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 160, height: 100),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        let previousCursor = NSCursor.current
+        defer {
+            window.close()
+            previousCursor.set()
+        }
+        let text = AppKitMessageTextView()
+        window.contentView = text
+        text.contentLayout.update(
+            attributedText: MessageTextContent.attributedText(
+                text: "Hello https://example.com", mentions: [], currentUserID: 1,
+                isOutgoing: false, linksEnabled: true
+            ),
+            metadata: nil
+        )
+        text.layoutSubtreeIfNeeded()
+        text.setSelectedRange(NSRange(location: 0, length: 5))
+
+        func hover(_ characterIndex: Int) throws {
+            let layout = text.contentLayout
+            let glyphs = layout.layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: characterIndex, length: 1), actualCharacterRange: nil
+            )
+            let rect = layout.layoutManager.boundingRect(forGlyphRange: glyphs, in: layout.textContainer)
+            let point = text.convert(
+                NSPoint(x: rect.midX + text.textContainerOrigin.x, y: rect.midY + text.textContainerOrigin.y),
+                to: nil
+            )
+            let event = try XCTUnwrap(NSEvent.enterExitEvent(
+                with: .cursorUpdate, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+            ))
+            text.cursorUpdate(with: event)
+        }
+
+        try hover(8)
+        XCTAssertEqual(NSCursor.current, .pointingHand)
+        try hover(1)
+        XCTAssertEqual(NSCursor.current, .iBeam)
+        try hover(text.string.utf16.count - 1)
+        XCTAssertEqual(NSCursor.current, .pointingHand)
+        XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 5))
+
+        text.textStorage?.removeAttribute(.link, range: NSRange(location: 0, length: text.string.utf16.count))
+        try hover(8)
+        XCTAssertEqual(NSCursor.current, .iBeam)
+    }
     #else
     func testUIKitSelectionSurvivesActionReplacementAndDisabledLinksCannotEscape() async throws {
         var opened: [String] = []
-        func content(_ prefix: String?) -> BubbleTextContent {
-            BubbleTextContent(
+        func content(_ prefix: String?) -> MessageTextContent {
+            MessageTextContent(
                 text: "Hello https://example.com @[uid:2]", mentions: [], currentUserID: 1,
                 isOutgoing: false,
                 action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
                 mentionAction: prefix.map { prefix in { opened.append(prefix + "mention:\($0)") } },
-                metadata: BubbleMetadata(time: "12:34", state: nil, isOutgoing: false)
+                metadata: MessageMetadata(time: "12:34", state: nil, isOutgoing: false)
             )
         }
         let host = UIHostingController(rootView: content("first:"))
@@ -71,8 +125,8 @@ final class BubbleTextLayoutTests: XCTestCase {
             host.view.layoutIfNeeded()
         }
         try await settle()
-        func textView(in view: UIView) -> UIKitBubbleTextView? {
-            if let text = view as? UIKitBubbleTextView { return text }
+        func textView(in view: UIView) -> UIKitMessageTextView? {
+            if let text = view as? UIKitMessageTextView { return text }
             return view.subviews.lazy.compactMap { textView(in: $0) }.first
         }
         let text = try XCTUnwrap(textView(in: host.view))
@@ -141,11 +195,11 @@ final class BubbleTextLayoutTests: XCTestCase {
     }
     #if os(macOS)
     func testMetadataAdoptsDarkAppearanceRatherThanItsCreationAppearance() throws {
-        var metadata: BubbleMetadata?
+        var metadata: MessageMetadata?
         NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
-            metadata = BubbleMetadata(time: "12:34", state: nil, isOutgoing: false)
+            metadata = MessageMetadata(time: "12:34", state: nil, isOutgoing: false)
         }
-        let view = AppKitBubbleTextView()
+        let view = AppKitMessageTextView()
         view.appearance = NSAppearance(named: .darkAqua)
         view.drawsBackground = true
         view.backgroundColor = .black
@@ -164,13 +218,13 @@ final class BubbleTextLayoutTests: XCTestCase {
     }
     #endif
 
-    private func makeLayout(_ text: String) -> BubbleTextLayout {
-        BubbleTextLayout(
-            attributedText: BubbleTextContent.attributedText(
+    private func makeLayout(_ text: String) -> MessageTextLayout {
+        MessageTextLayout(
+            attributedText: MessageTextContent.attributedText(
                 text: text, mentions: [], currentUserID: 1, isOutgoing: false,
                 font: .systemFont(ofSize: 14)
             ),
-            metadata: BubbleMetadata(time: "12:34", state: nil, isOutgoing: false)
+            metadata: MessageMetadata(time: "12:34", state: nil, isOutgoing: false)
         )
     }
 }

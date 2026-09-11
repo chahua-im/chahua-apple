@@ -1,4 +1,8 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
+
 
 /// Row actions must defer touch activation until the shared row coordinator has
 /// ruled out a hold, swipe, or scroll. SwiftUI Button owns its own touch tracking,
@@ -36,8 +40,14 @@ struct MessageRowActionButton<Label: View>: View {
                     if isEnabled { action() }
                 }
         #else
+            // Plain SwiftUI buttons retain the text-selection cursor when embedded
+            // in a selectable message. Use AppKit's standard hand cursor for every
+            // clickable timeline target (replies, media, threads, and reactions).
             Button(action: action) { label }
                 .buttonStyle(.plain)
+                .onHover { hovering in
+                    (hovering ? NSCursor.pointingHand : .arrow).set()
+                }
         #endif
     }
 }

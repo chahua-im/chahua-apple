@@ -2,14 +2,14 @@
 import SwiftUI
 import UIKit
 
-extension BubbleTextContent: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIKitBubbleTextView {
-        let view = UIKitBubbleTextView()
+extension MessageTextContent: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIKitMessageTextView {
+        let view = UIKitMessageTextView()
         view.delegate = context.coordinator
         return view
     }
 
-    func updateUIView(_ view: UIKitBubbleTextView, context: Context) {
+    func updateUIView(_ view: UIKitMessageTextView, context: Context) {
         let selection = view.selectedRange
         let geometryChanged = update(view.contentLayout, coordinator: context.coordinator)
         if view.selectedRange != selection, selection.location != NSNotFound {
@@ -24,12 +24,12 @@ extension BubbleTextContent: UIViewRepresentable {
         view.setNeedsDisplay()
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIKitBubbleTextView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIKitMessageTextView, context: Context) -> CGSize? {
         uiView.contentLayout.fittingSize(width: proposal.width)
     }
 }
 
-extension BubbleTextContent.Coordinator: UITextViewDelegate {
+extension MessageTextContent.Coordinator: UITextViewDelegate {
     func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
         if interaction == .invokeDefaultAction {
             activateLink(in: textView.textStorage, at: characterRange.location)
@@ -52,8 +52,8 @@ extension BubbleTextContent.Coordinator: UITextViewDelegate {
     }
 }
 
-final class UIKitBubbleTextView: UITextView {
-    let contentLayout: BubbleTextLayout
+final class UIKitMessageTextView: UITextView {
+    let contentLayout: MessageTextLayout
     var failureAction: (() -> Void)? {
         didSet { updateFailureButton() }
     }
@@ -61,7 +61,7 @@ final class UIKitBubbleTextView: UITextView {
     private var laidOutWidth: CGFloat?
 
     init() {
-        let layout = BubbleTextLayout()
+        let layout = MessageTextLayout()
         contentLayout = layout
         // Supplying the shared TextKit 1 container keeps sizing and visible glyphs
         // on the same layout manager rather than UITextView's TextKit 2 default.

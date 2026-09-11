@@ -2,7 +2,7 @@ import ChahuaAPI
 import ChahuaMediaCache
 import SwiftUI
 
-struct BubbleSticker: View {
+struct StickerContent: View {
     let sticker: MessageStickerResponse?
     let viewport: CGSize
     let availableWidth: CGFloat

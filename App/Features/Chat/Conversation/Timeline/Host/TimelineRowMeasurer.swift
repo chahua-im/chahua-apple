@@ -77,7 +77,7 @@ final class TimelineRowMeasurer {
         let typographySignature: CGFloat
         let scale: CGFloat
         let height: CGFloat
-        let textLayout: BubbleTextLayout?
+        let textLayout: MessageTextLayout?
     }
 
     private unowned let parent: NSViewController
@@ -101,21 +101,21 @@ final class TimelineRowMeasurer {
         if let cached = cache[row.id], cached.row == row, cached.width == width, cached.context == measurementContext, cached.typographySignature == typographySignature, cached.scale == scale { return cached.height }
         let previous = cache[row.id]
         let measured: CGFloat
-        let textLayout: BubbleTextLayout?
+        let textLayout: MessageTextLayout?
         if let previous, previous.row == row, previous.context == measurementContext,
            previous.typographySignature == typographySignature, let layout = previous.textLayout {
             measured = BubbleMetrics.textOnlyHeight(layout: layout, rowWidth: width)
             textLayout = layout
         } else if isTextOnly(row), case .message(let message) = row {
             let text = message.entry.text ?? ""
-            let layout = BubbleTextLayout(
-                attributedText: BubbleTextContent.attributedText(
+            let layout = MessageTextLayout(
+                attributedText: MessageTextContent.attributedText(
                     text: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : text,
                     mentions: message.entry.remoteMessage?.mentions ?? [],
                     currentUserID: context.currentUserID, isOutgoing: message.isOutgoing,
                     font: .systemFont(ofSize: typographySignature)
                 ),
-                metadata: BubbleMetadata(row: message)
+                metadata: MessageMetadata(row: message)
             )
             measured = BubbleMetrics.textOnlyHeight(layout: layout, rowWidth: width)
             textLayout = layout

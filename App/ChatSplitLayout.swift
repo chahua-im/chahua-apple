@@ -1,4 +1,8 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
+
 
 /// Shared geometry for the adaptive chat shell and its macOS window minimum.
 enum ChatSplitMetrics {
@@ -115,6 +119,14 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                     .frame(width: 24)
                     .contentShape(Rectangle())
                     .gesture(resizeGesture(availableWidth: availableWidth))
+                    #if os(macOS)
+                    // SwiftUI's drag gesture does not expose a cursor affordance.
+                    // AppKit supplies the standard horizontal-resize cursor for this
+                    // macOS-only draggable hit area.
+                    .onHover { hovering in
+                        (hovering ? NSCursor.resizeLeftRight : .arrow).set()
+                    }
+                    #endif
                     .accessibilityLabel("Conversation list width")
                     .accessibilityValue("\(Int(effectiveSidebarWidth(for: availableWidth))) points")
                     .accessibilityAdjustableAction { direction in

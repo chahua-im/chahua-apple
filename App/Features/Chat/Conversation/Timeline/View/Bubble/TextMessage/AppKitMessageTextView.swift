@@ -2,14 +2,14 @@
 import AppKit
 import SwiftUI
 
-extension BubbleTextContent: NSViewRepresentable {
-    func makeNSView(context: Context) -> AppKitBubbleTextView {
-        let view = AppKitBubbleTextView()
+extension MessageTextContent: NSViewRepresentable {
+    func makeNSView(context: Context) -> AppKitMessageTextView {
+        let view = AppKitMessageTextView()
         view.delegate = context.coordinator
         return view
     }
 
-    func updateNSView(_ view: AppKitBubbleTextView, context: Context) {
+    func updateNSView(_ view: AppKitMessageTextView, context: Context) {
         let geometryChanged = update(view.contentLayout, coordinator: context.coordinator)
         view.failureAction = failureAction
         if geometryChanged {
@@ -19,12 +19,12 @@ extension BubbleTextContent: NSViewRepresentable {
         view.needsDisplay = true
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AppKitBubbleTextView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: AppKitMessageTextView, context: Context) -> CGSize? {
         nsView.contentLayout.fittingSize(width: proposal.width)
     }
 }
 
-extension BubbleTextContent.Coordinator: NSTextViewDelegate {
+extension MessageTextContent.Coordinator: NSTextViewDelegate {
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         if let storage = textView.textStorage { activateLink(in: storage, at: charIndex) }
         // Never let AppKit open a URL itself, including after a handler is removed.
@@ -32,15 +32,15 @@ extension BubbleTextContent.Coordinator: NSTextViewDelegate {
     }
 }
 
-final class AppKitBubbleTextView: NSTextView {
-    let contentLayout: BubbleTextLayout
+final class AppKitMessageTextView: NSTextView {
+    let contentLayout: MessageTextLayout
     var failureAction: (() -> Void)? {
         didSet { updateFailureButton() }
     }
     private var failureButton: NSButton?
 
     init() {
-        let layout = BubbleTextLayout()
+        let layout = MessageTextLayout()
         contentLayout = layout
         super.init(frame: .zero, textContainer: layout.textContainer)
         isEditable = false
@@ -52,14 +52,15 @@ final class AppKitBubbleTextView: NSTextView {
         isVerticallyResizable = false
         layout.textContainer.widthTracksTextView = false
         layout.textContainer.heightTracksTextView = false
-        linkTextAttributes = [:]
+        // Keep bubble colors, but retain AppKit's link cursor attribute so native
+        // text selection and link hovering use the same cursor handling.
+        linkTextAttributes = [.cursor: NSCursor.pointingHand]
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: NSSize { contentLayout.idealSize }
-
     private func updateFailureButton() {
         guard failureAction != nil, let metadata = contentLayout.metadata, metadata.state == .failed else {
             failureButton?.removeFromSuperview()
@@ -70,7 +71,7 @@ final class AppKitBubbleTextView: NSTextView {
         if let failureButton {
             button = failureButton
         } else {
-            button = NSButton(frame: .zero)
+            button = BubbleFailureButton(frame: .zero)
             button.title = ""
             button.isBordered = false
             button.imagePosition = .imageOnly
@@ -95,6 +96,7 @@ final class AppKitBubbleTextView: NSTextView {
     override func layout() {
         super.layout()
         let geometry = contentLayout.geometry(for: bounds.width)
+
         if let metadata = contentLayout.metadata {
             failureButton?.frame = metadata.symbolFrame(in: geometry.metadataFrame)
         }
@@ -119,6 +121,11 @@ final class AppKitBubbleTextView: NSTextView {
             children.append(failureButton)
         }
         return children
+    }
+}
+private final class BubbleFailureButton: NSButton {
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
     }
 }
 #endif
