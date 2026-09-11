@@ -25,8 +25,8 @@ final class MessageActionPolicyTests: XCTestCase {
     }
 
     func testOwnershipAndAdminHaveDifferentEditAndDeletePermissions() {
-        let owner = MessageActionPolicy(messageType: .text, isOwn: true, context: writable)
-        XCTAssertEqual(owner.availability(of: .edit), .unimplemented)
+        let owner = MessageActionPolicy(messageType: .text, text: "Mine", isOwn: true, context: writable)
+        XCTAssertEqual(owner.availability(of: .edit), .enabled)
         XCTAssertEqual(owner.availability(of: .delete), .unimplemented)
         XCTAssertEqual(owner.availability(of: .pin), .hidden)
 

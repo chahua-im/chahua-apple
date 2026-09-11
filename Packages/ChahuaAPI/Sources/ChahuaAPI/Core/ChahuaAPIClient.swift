@@ -19,6 +19,14 @@ public protocol ChahuaAPIClient: Sendable {
     /// Fetches the currently authenticated account with `GET /users/me`.
     func me() async throws -> MeResponse
 
+    /// Fetches the current attachment size limit with `GET /attachments/config`.
+    func attachmentConfig() async throws -> AttachmentConfigResponse
+
+    /// Allocates an attachment ID and presigned PUT URL; allocation is not upload completion.
+    func requestAttachmentUpload(
+        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+    ) async throws -> OutgoingUploadAllocation
+
     /// Fetches one server-ordered page from `GET /chats`.
     ///
     /// Use `ListChatsQuery(archived: false)` for active chats. `nextCursor` in
@@ -47,6 +55,9 @@ public protocol ChahuaAPIClient: Sendable {
     /// Fetches authoritative, current-recipient state with `GET /chats/{chatID}/messages/{messageID}`.
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse
 
+    /// Replaces the text of an existing message with `PATCH /chats/{chatID}/messages/{messageID}`.
+    func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws -> MessageResponse
+
     /// Idempotent reaction mutation at `/chats/{chatID}/messages/{messageID}/reactions/{emoji}`.
     func putReaction(chatID: String, messageID: String, emoji: String) async throws
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws
@@ -68,4 +79,10 @@ public protocol ChahuaAPIClient: Sendable {
 
     /// Advances a subscribed thread's read cursor without marking its parent chat read.
     func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse
+}
+
+public extension ChahuaAPIClient {
+    func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws -> MessageResponse {
+        throw APIError.unavailable
+    }
 }

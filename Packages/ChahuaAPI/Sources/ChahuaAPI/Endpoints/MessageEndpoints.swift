@@ -99,6 +99,19 @@ public extension ChahuaClient {
         )
     }
 
+    /// Replaces the text of an existing message.
+    func updateMessage(
+        chatID: String,
+        messageID: String,
+        body: UpdateMessageBody
+    ) async throws -> MessageResponse {
+        try await send(
+            HTTPRequestSpec.json(.patch, ["chats", chatID, "messages", messageID], body: body),
+            decoding: MessageResponse.self
+        )
+    }
+
+
     /// Adds the current user's reaction. The server returns an empty 204 response.
     func putReaction(chatID: String, messageID: String, emoji: String) async throws {
         try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "messages", messageID, "reactions", emoji]))
@@ -107,5 +120,12 @@ public extension ChahuaClient {
     /// Removes the current user's reaction. Emoji remains one encoded path segment.
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
         try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "messages", messageID, "reactions", emoji]))
+    }
+}
+public struct UpdateMessageBody: Codable, Hashable, Sendable {
+    public let message: String
+
+    public init(message: String) {
+        self.message = message
     }
 }

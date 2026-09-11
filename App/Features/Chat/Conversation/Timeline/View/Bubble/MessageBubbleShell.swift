@@ -112,11 +112,20 @@ struct MessageBubbleShell<Content: View>: View {
         }
     }
 
+    private var pendingSenderProfile: MeResponse? {
+        guard row.entry.remoteMessage == nil,
+            let profile = actions.currentUserProfile, profile.uid == row.entry.senderID
+        else { return nil }
+        return profile
+    }
+
     @ViewBuilder private var avatar: some View {
         if !context.isMeasuring && (row.groupPosition == .single || row.groupPosition == .last) {
             AvatarView(
-                url: row.entry.remoteMessage?.sender.avatarUrl.flatMap(URL.init(string:)),
+                url: (row.entry.remoteMessage?.sender.avatarUrl ?? pendingSenderProfile?.avatarUrl)
+                    .flatMap(URL.init(string:)),
                 displayName: row.entry.remoteMessage?.sender.name.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? pendingSenderProfile?.username
                     ?? "User \(row.entry.senderID)",
                 diameter: avatarSize
             )

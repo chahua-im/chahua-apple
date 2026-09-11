@@ -11,12 +11,18 @@ struct ChatDetailView: View {
     @StateObject private var model: ConversationTimelineModel
     @ObservedObject private var reactions: MessageReactionController
     @ObservedObject private var drafts: ChatDraftStore
+    @ObservedObject private var outgoingQueue: OutgoingMessageQueue
     @State private var interactionContext: MessageInteractionContext
     @State private var hasLoadedInteractionPermissions = false
     @State private var failedMessageID: String?
     @State private var showsRetryOptions = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var replyFocusRequest = 0
+    @State private var editingMessage: MessageResponse?
+    @State private var editText = ""
+    @State private var isUpdatingMessage = false
+    @State private var editError: String?
+    @State private var outboxError: String?
 
     init(chat: ChatListItem, currentUserID: Int32, store: ChatStore, threadID: String? = nil, initialPosition: TimelineInitialPosition? = nil) {
         self.chat = chat
@@ -25,6 +31,7 @@ struct ChatDetailView: View {
         self.store = store
         self.reactions = store.reactions
         self.drafts = store.drafts
+        self.outgoingQueue = store.outgoingQueue
         _interactionContext = State(initialValue: .init(isDM: chat.kind == .dm, isThreadView: threadID != nil))
         _model = StateObject(
             wrappedValue: ConversationTimelineModel(
@@ -65,28 +72,47 @@ struct ChatDetailView: View {
                                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                                 }
                                 MessageComposerView(
-                                    text: Binding(
-                                        get: { drafts.draftText(chatID: chat.id, threadID: threadID) },
-                                        set: { drafts.setDraftText($0, chatID: chat.id, threadID: threadID) }),
+                                    text: composerText,
                                     maxHeight: max(36, geometry.size.height / 3),
-                                    isEnabled: interactionContext.canWrite && !drafts.committingDrafts.contains(conversationKey),
-                                    canSend: interactionContext.canWrite && store.outgoingQueue.storageState == .ready
-                                        && !drafts.committingDrafts.contains(conversationKey)
-                                        && !drafts.draftText(chatID: chat.id, threadID: threadID).trimmingCharacters(
-                                            in: .whitespacesAndNewlines
-                                        ).isEmpty,
-                                    onSubmit: {
-                                        Task {
-                                            if await drafts.submitDraft(chatID: chat.id, threadID: threadID) {
-                                                await model.revealLatestAfterSend()
-                                            }
-                                        }
+                                    isEnabled: interactionContext.canWrite && (editingMessage != nil
+                                        ? !isUpdatingMessage
+                                        : !drafts.committingDrafts.contains(conversationKey)),
+                                    canSend: canSubmitComposer,
+                                    onSubmit: submitComposer,
+                                    onCompositionChanged: { composing in
+                                        guard editingMessage == nil else { return }
+                                        drafts.setDraftComposing(composing, chatID: chat.id, threadID: threadID)
                                     },
-                                    onCompositionChanged: { drafts.setDraftComposing($0, chatID: chat.id, threadID: threadID) },
                                     replyToMessage: drafts.draftReply(chatID: chat.id, threadID: threadID),
                                     replyFocusRequest: replyFocusRequest,
                                     onCancelReply: { drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID) },
-                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } }
+                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } },
+                                    editingMessage: editingMessage,
+                                    onCancelEdit: cancelEditing,
+                                    onRequestEditLastMessage: requestEditLastOwnMessage,
+                                    attachments: outgoingQueue.draftAttachments(chatID: chat.id, threadID: threadID),
+                                    attachmentProgress: outgoingQueue.attachmentProgress,
+                                    compressionEnabled: outgoingQueue.compressionEnabled(chatID: chat.id, threadID: threadID),
+                                    onImportImages: { urls in
+                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.importImages(urls: urls, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onRemoveAttachment: { id in
+                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.removeAttachment(id: id, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onRetryAttachment: { id in
+                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.retryAttachment(id: id, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onCompressionChanged: { enabled in
+                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.setCompressionEnabled(enabled, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onReorderAttachments: { ids in
+                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.reorderAttachments(ids: ids, chatID: chat.id, threadID: threadID)
+                                    }
                                 )
                             }
                         })
@@ -121,6 +147,19 @@ struct ChatDetailView: View {
             Button("Retry this and subsequent messages") { retry(.messageAndSubsequent) }
             Button("Cancel", role: .cancel) { failedMessageID = nil }
         }
+        .alert(
+            "Couldn’t edit message",
+            isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })
+        ) {
+            Button("OK") { editError = nil }
+        } message: {
+            Text(editError ?? "")
+        }
+        .alert("Couldn’t update outbox", isPresented: Binding(get: { outboxError != nil }, set: { if !$0 { outboxError = nil } })) {
+            Button("OK") { outboxError = nil }
+        } message: {
+            Text(outboxError ?? "")
+        }
         .onReceive(store.outgoingQueue.events) { _ in
             guard let failedMessageID else { return }
             if !store.outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID).contains(where: {
@@ -148,13 +187,22 @@ struct ChatDetailView: View {
 
     private var bubbleActions: TimelineBubbleActions {
         var actions = TimelineBubbleActions()
+        actions.currentUserProfile = store.currentUserProfile
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
+        actions.attachmentProgress = outgoingQueue.attachmentProgress
+        if let tail = outgoingQueue.snapshots[conversationKey]?.outgoing.last,
+           outgoingQueue.snapshots[conversationKey]?.composingItem == nil, !tail.dispatchClaimed {
+            actions.modifiablePendingMessageIDs = [tail.clientGeneratedID]
+        }
+        actions.blockPendingMessage = { pending in changePending(pending, revoke: false) }
+        actions.revokePendingMessage = { pending in changePending(pending, revoke: true) }
         if interactionContext.canWrite {
             actions.replyToMessage = { message in
                 guard !drafts.committingDrafts.contains(conversationKey) else { return }
                 drafts.setDraftReply(message.replyPreview, chatID: chat.id, threadID: threadID)
                 replyFocusRequest &+= 1
             }
+            actions.editMessage = startEditing
             actions.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage, !message.isDeleted else { return }
                 Task { await reactions.toggle(message: message, emoji: emoji, currentUserID: model.currentUserID) }
@@ -168,12 +216,108 @@ struct ChatDetailView: View {
         return actions
     }
 
+    private var composerText: Binding<String> {
+        Binding(
+            get: { editingMessage == nil ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText },
+            set: {
+                if editingMessage == nil {
+                    drafts.setDraftText($0, chatID: chat.id, threadID: threadID)
+                } else {
+                    editText = $0
+                }
+            }
+        )
+    }
+
+    private var canSubmitComposer: Bool {
+        let text = (editingMessage == nil ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard interactionContext.canWrite else { return false }
+        if let editingMessage {
+            return !text.isEmpty && !isUpdatingMessage
+                && text != editingMessage.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return (!text.isEmpty || !outgoingQueue.draftAttachments(chatID: chat.id, threadID: threadID).isEmpty)
+            && outgoingQueue.storageState == .ready && !drafts.committingDrafts.contains(conversationKey)
+    }
+
+    private func submitComposer() {
+        guard let message = editingMessage else {
+            Task {
+                if await drafts.submitDraft(chatID: chat.id, threadID: threadID) {
+                    await model.revealLatestAfterSend()
+                }
+            }
+            return
+        }
+        guard !isUpdatingMessage else { return }
+        isUpdatingMessage = true
+        Task {
+            let didUpdate = await store.updateMessage(message, text: editText)
+            isUpdatingMessage = false
+            if didUpdate {
+                cancelEditing()
+            } else {
+                editError = String(localized: "Couldn’t edit this message. Please try again.")
+            }
+        }
+    }
+
+    private func isEditable(_ message: MessageResponse) -> Bool {
+        MessageActionPolicy(
+            messageType: message.messageType, text: message.message, isDeleted: message.isDeleted,
+            isOwn: message.sender.uid == model.currentUserID, context: interactionContext
+        ).availability(of: .edit) == .enabled
+    }
+
+    private func startEditing(_ message: MessageResponse) {
+        guard !isUpdatingMessage, isEditable(message) else { return }
+        drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID)
+        editingMessage = message
+        editText = message.message ?? ""
+        replyFocusRequest &+= 1
+    }
+
+    private func cancelEditing() {
+        editingMessage = nil
+        editText = ""
+        isUpdatingMessage = false
+    }
+
+    private func requestEditLastOwnMessage() -> Bool {
+        for row in model.rows.reversed() {
+            guard case .message(let timelineRow) = row,
+                let message = timelineRow.entry.remoteMessage,
+                message.sender.uid == model.currentUserID, isEditable(message)
+            else { continue }
+            startEditing(message)
+            return true
+        }
+        return false
+    }
+
+    private func changePending(_ pending: PendingOutgoingMessage, revoke: Bool) {
+        guard !pending.dispatchClaimed, !drafts.committingDrafts.contains(conversationKey), editingMessage == nil else { return }
+        Task {
+            do {
+                try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                if revoke {
+                    try await outgoingQueue.revokeTail(chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID, expectedRevision: pending.editRevision)
+                } else {
+                    try await outgoingQueue.blockTail(chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID, expectedRevision: pending.editRevision)
+                    replyFocusRequest &+= 1
+                }
+            } catch { outboxError = error.localizedDescription }
+        }
+    }
+
     private func retry(_ scope: OutgoingRetryScope) {
         guard let id = failedMessageID else { return }
         failedMessageID = nil
         Task {
-            // The queue surfaces local-storage errors and treats a late acknowledgement as a no-op.
-            try? await store.outgoingQueue.retry(chatID: chat.id, threadID: threadID, clientGeneratedID: id, scope: scope)
+            do {
+                try await outgoingQueue.retry(chatID: chat.id, threadID: threadID, clientGeneratedID: id, scope: scope)
+            } catch { outboxError = error.localizedDescription }
         }
     }
 }

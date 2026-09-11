@@ -327,6 +327,8 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     func authenticate(candidateJWT: String) async throws -> MeResponse { throw APIError.unavailable }
     func createDevSession(uid: Int32, clientID: String) async throws -> String { throw APIError.unavailable }
     func me() async throws -> MeResponse { throw APIError.unavailable }
+    func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
+    func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }

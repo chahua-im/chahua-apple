@@ -14,6 +14,7 @@ struct TimelineBubbleActions {
     var openMedia: ((String, [AttachmentResponse], String) -> Void)?
     var openReply: ((String) -> Void)?
     var replyToMessage: ((MessageResponse) -> Void)?
+    var editMessage: ((MessageResponse) -> Void)?
     var openThread: ((String) -> Void)?
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?
@@ -21,7 +22,12 @@ struct TimelineBubbleActions {
     var openContextMenu: ((TimelineMessageRow, CGRect) -> Void)?
     var toggleReaction: ((TimelineMessageRow, String) -> Void)?
     var pendingReactionMessageIDs: Set<String> = []
+    var currentUserProfile: MeResponse?
     var interactionContext = MessageInteractionContext()
+    var attachmentProgress: [String: Double] = [:]
+    var modifiablePendingMessageIDs: Set<String> = []
+    var blockPendingMessage: ((PendingOutgoingMessage) -> Void)?
+    var revokePendingMessage: ((PendingOutgoingMessage) -> Void)?
 }
 
 private struct MessageBubbleActionsKey: EnvironmentKey {

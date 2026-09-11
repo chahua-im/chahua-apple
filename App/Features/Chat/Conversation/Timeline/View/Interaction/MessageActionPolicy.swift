@@ -114,9 +114,7 @@ struct MessageActionPolicy {
         case .unpin:
             applicable = context.canWrite && context.isAdmin && context.isPinned
         case .edit:
-            applicable =
-                context.canWrite && isOwn && messageType != .audio
-                && messageType != .sticker && messageType != .file
+            return context.canWrite && isOwn && messageType == .text && hasCopyableText ? .enabled : .hidden
         case .delete:
             applicable = context.canWrite && (isOwn || context.isAdmin)
         case .favorite:

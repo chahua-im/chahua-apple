@@ -51,7 +51,7 @@ final class ComposerInputState: ObservableObject {
         scheduleSettlement()
     }
 
-    func prepareSubmission() -> Bool {
+    func prepareSubmission(allowEmptyUnfocused: Bool = false) -> Bool {
         var snapshot = nativeInput?.snapshot() ?? .unavailable
         // AppKit ends editing before SwiftUI calls onSubmit. This snapshot was
         // captured while the editor still belonged to us, in this transaction.
@@ -62,6 +62,10 @@ final class ComposerInputState: ObservableObject {
         }
         // Candidate-confirmation Return must not send, even after native unmark
         // but before the composition boundary has settled.
+        if allowEmptyUnfocused, !isComposing, !hasPendingEdit,
+           (editorText ?? draft?.wrappedValue ?? "").isEmpty, case .unavailable = snapshot {
+            return true
+        }
         guard !isComposing, case .committed = snapshot else { return false }
         hasPendingEdit = true
         finishEditing(snapshot: snapshot)

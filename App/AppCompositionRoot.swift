@@ -55,9 +55,11 @@ final class AppCompositionRoot {
         sessionObservation = sessionModel.$state.sink { [weak self] state in
             guard let self else { return }
             if case .authenticated(let me) = state {
+                self.chatStore.currentUserProfile = me
                 self.mediaContext.activate(uid: me.uid)
                 self.realtimeCoordinator.setSession(uid: me.uid)
             } else {
+                self.chatStore.currentUserProfile = nil
                 self.mediaContext.activate(uid: nil)
                 self.realtimeCoordinator.setSession(uid: nil)
             }

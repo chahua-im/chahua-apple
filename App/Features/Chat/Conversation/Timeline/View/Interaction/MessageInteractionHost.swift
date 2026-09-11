@@ -51,6 +51,15 @@ struct MessageInteractionHost<Content: View>: View {
                     MessageInteractionOverlay(
                         row: row, context: context, currentUserID: model.currentUserID,
                         source: target.source, mediaContext: mediaContext,
+                        actions: actions,
+                        onBlock: { pending in
+                            self.target = nil
+                            actions.blockPendingMessage?(pending)
+                        },
+                        onRevoke: { pending in
+                            self.target = nil
+                            actions.revokePendingMessage?(pending)
+                        },
                         isReacting: actions.pendingReactionMessageIDs.contains(row.entry.serverID ?? ""),
                         onReaction: { emoji in
                             guard let liveRow = selectedRow,
@@ -66,6 +75,15 @@ struct MessageInteractionHost<Content: View>: View {
                             {
                                 self.target = nil
                                 reply(message)
+                                return
+                            }
+                            if action == .edit, let liveRow = selectedRow,
+                                MessageActionPolicy(row: liveRow, context: context).availability(of: action) == .enabled,
+                                let message = liveRow.entry.remoteMessage,
+                                let edit = actions.editMessage
+                            {
+                                self.target = nil
+                                edit(message)
                                 return
                             }
                             if action == .copy, let liveRow = selectedRow,
@@ -99,6 +117,9 @@ private struct MessageInteractionOverlay: View {
     let currentUserID: Int32
     let source: CGRect
     let mediaContext: AppMediaContext?
+    let actions: TimelineBubbleActions
+    let onBlock: (PendingOutgoingMessage) -> Void
+    let onRevoke: (PendingOutgoingMessage) -> Void
     let isReacting: Bool
     let onReaction: (String) -> Void
     let onAction: (MessageMenuAction) -> Void
@@ -125,6 +146,7 @@ private struct MessageInteractionOverlay: View {
                     .accessibilityLabel("Dismiss message actions")
                     .accessibilityAddTraits(.isButton)
                 ScrollView {
+                    VStack(spacing: 8) {
                     MessageActionMenu(
                         row: row, context: context, isReacting: isReacting,
                         onReaction: onReaction, onAction: onAction, onClose: onClose,
@@ -137,12 +159,21 @@ private struct MessageInteractionOverlay: View {
                                 viewportSize: geometry.size,
                                 currentUserID: currentUserID, isThreadTimeline: context.isThreadView,
                                 isInteractionPreview: true),
+                            actions: actions,
                             mediaContext: mediaContext
                         )
                         .frame(width: previewWidth, alignment: row.isOutgoing ? .trailing : .leading)
                         .frame(maxHeight: min(220, geometry.size.height * 0.3), alignment: .top)
                         .clipShape(Rectangle().inset(by: -8))
                         .accessibilityHidden(true)
+                    }
+                    if case .pending(let pending) = row.entry, !pending.dispatchClaimed,
+                       actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID) {
+                        Button("Move back to composer", systemImage: "square.and.pencil") { onBlock(pending) }
+                            .disabled(actions.blockPendingMessage == nil)
+                        Button("Revoke unsent message", systemImage: "trash", role: .destructive) { onRevoke(pending) }
+                            .disabled(actions.revokePendingMessage == nil)
+                    }
                     }
                     // Leave drawing room for the bubble tail without changing the text width.
                     .padding(.horizontal, 8)

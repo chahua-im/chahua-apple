@@ -15,7 +15,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     public let messageType: MessageType
     public let sender: User
     public let createdAt: Date
-    public let isEdited: Bool
+    public private(set) var isEdited: Bool
     public private(set) var isDeleted: Bool
     public private(set) var hasAttachments: Bool
     public private(set) var attachments: [AttachmentResponse]
@@ -96,6 +96,13 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         guard let preview = replyToMessage, messageIDs.contains(preview.id) else { return self }
         var copy = self
         copy.replyToMessage = preview.redactedForDeletion()
+        return copy
+    }
+
+    public func replacingMessageText(_ text: String) -> Self {
+        var copy = self
+        copy.message = text
+        copy.isEdited = true
         return copy
     }
 }

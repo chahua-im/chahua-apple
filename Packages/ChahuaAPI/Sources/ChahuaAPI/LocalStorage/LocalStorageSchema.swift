@@ -84,6 +84,53 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
             ALTER TABLE outgoing_message ADD COLUMN reply_to_message BLOB;
             """)
     }
+    migrator.registerMigration("v4_blocked_image_outbox") { db in
+        try db.execute(sql: """
+            ALTER TABLE outgoing_message ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE outgoing_message ADD COLUMN edit_revision INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE outgoing_message ADD COLUMN updated_at REAL NOT NULL DEFAULT 0;
+            ALTER TABLE outgoing_message ADD COLUMN compression_enabled INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE outgoing_message ADD COLUMN dispatch_claimed INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE outgoing_message ADD COLUMN attachments BLOB NOT NULL DEFAULT X'5B5D';
+            UPDATE outgoing_message SET
+                dispatch_order = enqueue_sequence,
+                updated_at = enqueued_at,
+                dispatch_claimed = CASE WHEN state IN ('sending', 'failed') THEN 1 ELSE 0 END;
+            CREATE UNIQUE INDEX outgoing_blocked_tail
+                ON outgoing_message(chat_id, thread_id) WHERE is_blocked = 1;
+            CREATE INDEX outgoing_fifo ON outgoing_message(chat_id, thread_id, enqueue_sequence);
+            DROP INDEX outgoing_dispatch;
+
+            INSERT INTO outgoing_message
+                (client_generated_id, chat_id, thread_id, sender_id, text, enqueued_at,
+                 enqueue_sequence, dispatch_order, state, reply_to_message,
+                 is_blocked, edit_revision, updated_at)
+            SELECT lower(hex(randomblob(16))), d.chat_id, d.thread_id,
+                   COALESCE((SELECT sender_id FROM outgoing_message o
+                       WHERE o.chat_id = d.chat_id AND o.thread_id = d.thread_id
+                       ORDER BY enqueue_sequence DESC LIMIT 1), 0),
+                   d.text, d.updated_at, c.next_enqueue_sequence, c.next_enqueue_sequence,
+                   'queued', d.reply_to_message, 1, d.edit_revision, d.updated_at
+            FROM draft d JOIN local_conversation c
+                ON c.chat_id = d.chat_id AND c.thread_id = d.thread_id
+            WHERE d.text != '' OR d.reply_to_message IS NOT NULL;
+            UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1
+                WHERE EXISTS (SELECT 1 FROM outgoing_message o
+                    WHERE o.chat_id = local_conversation.chat_id
+                    AND o.thread_id = local_conversation.thread_id AND o.is_blocked = 1);
+
+            CREATE TABLE draft_revision (
+                chat_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL DEFAULT '',
+                edit_revision INTEGER NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(chat_id, thread_id),
+                FOREIGN KEY(chat_id, thread_id) REFERENCES local_conversation(chat_id, thread_id)
+            );
+            INSERT INTO draft_revision SELECT chat_id, thread_id, edit_revision, updated_at FROM draft;
+            DROP TABLE draft;
+            """)
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }

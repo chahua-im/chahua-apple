@@ -73,6 +73,9 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                 || (actions.openContextMenu == nil) != (oldValue.openContextMenu == nil)
                 || (actions.toggleReaction == nil) != (oldValue.toggleReaction == nil)
                 || actions.pendingReactionMessageIDs != oldValue.pendingReactionMessageIDs
+                || actions.currentUserProfile != oldValue.currentUserProfile
+                || actions.attachmentProgress != oldValue.attachmentProgress
+                || actions.modifiablePendingMessageIDs != oldValue.modifiablePendingMessageIDs
                 || actions.interactionContext != oldValue.interactionContext else { return }
             rowActions = makeRowActions()
             guard isViewLoaded else { return }
@@ -634,14 +637,22 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             openContextMenu: actions.openContextMenu == nil ? nil : { [weak self] in self?.actions.openContextMenu?($0, $1) },
             toggleReaction: actions.toggleReaction == nil ? nil : { [weak self] in self?.actions.toggleReaction?($0, $1) },
             pendingReactionMessageIDs: actions.pendingReactionMessageIDs,
-            interactionContext: actions.interactionContext
+            currentUserProfile: actions.currentUserProfile,
+            interactionContext: actions.interactionContext,
+            attachmentProgress: actions.attachmentProgress,
+            modifiablePendingMessageIDs: actions.modifiablePendingMessageIDs,
+            blockPendingMessage: { [weak self] in self?.actions.blockPendingMessage?($0) },
+            revokePendingMessage: { [weak self] in self?.actions.revokePendingMessage?($0) }
         )
     }
 
     private func rowContext(for row: TimelineRow) -> TimelineRowContext {
         let dependsOnViewportHeight: Bool
         if case .message(let message) = row {
-            dependsOnViewportHeight = message.entry.messageType == .sticker || !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
+            let hasLocalMedia: Bool
+            if case .pending(let pending) = message.entry { hasLocalMedia = !pending.attachments.isEmpty }
+            else { hasLocalMedia = false }
+            dependsOnViewportHeight = hasLocalMedia || message.entry.messageType == .sticker || !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
         } else {
             dependsOnViewportHeight = false
         }

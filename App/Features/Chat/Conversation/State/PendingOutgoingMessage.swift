@@ -16,6 +16,9 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     let senderID: Int32
     var state: State
     var replyToMessage: MessagePreview? = nil
+    var attachments: [LocalOutgoingAttachment] = []
+    var dispatchClaimed = false
+    var editRevision: Int64 = 0
 
     var id: String { clientGeneratedID }
 }

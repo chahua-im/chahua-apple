@@ -23,6 +23,7 @@ struct ChatState: Equatable {
 final class ChatStore: ObservableObject {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "conversations")
     @Published private(set) var state = ChatState()
+    @Published var currentUserProfile: MeResponse?
     let conversationMessages = ConversationMessageStore()
     let outgoingQueue: OutgoingMessageQueue
     let reactions: MessageReactionController
@@ -98,7 +99,9 @@ final class ChatStore: ObservableObject {
                 chatID: message.chatID, threadID: message.threadID, clientGeneratedID: message.clientGeneratedID,
                 body: .init(messageType: .text, clientGeneratedId: message.clientGeneratedID, message: message.text, replyToId: message.replyToMessage?.id),
                 enqueuedAt: message.enqueuedAt, senderID: message.senderID,
-                state: state, replyToMessage: message.replyToMessage
+                state: state, replyToMessage: message.replyToMessage,
+                attachments: message.attachments, dispatchClaimed: message.dispatchClaimed,
+                editRevision: message.editRevision
             )
         }
     }
@@ -334,6 +337,29 @@ final class ChatStore: ObservableObject {
             break
         case .unknown:
             break
+        }
+    }
+
+    func updateMessage(_ message: MessageResponse, text: String) async -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text != message.message?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return false
+        }
+        let requestGeneration = generation
+        let optimistic = message.replacingMessageText(text)
+        conversationMessages.apply(.messageUpdated(optimistic))
+        do {
+            let updated = try await apiClient.updateMessage(
+                chatID: message.chatId, messageID: message.id, body: .init(message: text))
+            guard generation == requestGeneration else { return false }
+            conversationMessages.apply(.messageUpdated(updated))
+            invalidateChatList()
+            return true
+        } catch {
+            guard generation == requestGeneration else { return false }
+            conversationMessages.apply(.messageUpdated(message))
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            return false
         }
     }
 

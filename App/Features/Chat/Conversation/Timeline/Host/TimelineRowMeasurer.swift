@@ -144,6 +144,7 @@ final class TimelineRowMeasurer {
     private func isTextOnly(_ row: TimelineRow) -> Bool {
         guard case .message(let message) = row, message.entry.messageType == .text,
               !message.showsSenderName, message.entry.remoteMessage?.isDeleted != true else { return false }
+        if case .pending(let pending) = message.entry, !pending.attachments.isEmpty { return false }
         let remote = message.entry.remoteMessage
         return (remote?.attachments.isEmpty ?? true) && (remote?.reactions.isEmpty ?? true)
             && message.entry.replyToMessage == nil && remote?.threadInfo == nil

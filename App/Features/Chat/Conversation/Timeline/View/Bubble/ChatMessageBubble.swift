@@ -34,6 +34,10 @@ struct ChatMessageBubble: View {
     private var isSticker: Bool { row.entry.messageType == .sticker }
     private var showsSender: Bool { row.showsSenderName && !isSticker }
     private var attachments: [AttachmentResponse] { message?.attachments ?? [] }
+    private var localAttachments: [LocalOutgoingAttachment] {
+        guard case .pending(let pending) = row.entry else { return [] }
+        return pending.attachments
+    }
     private var bodyText: String { row.entry.text ?? "" }
     private var hasBody: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var mediaOnly: Bool { !attachments.isEmpty && !hasBody }
@@ -90,6 +94,12 @@ struct ChatMessageBubble: View {
                             .padding(4)
                     }
             }
+            if !localAttachments.isEmpty {
+                BubbleLocalMedia(
+                    attachments: localAttachments, width: min(280, max(1, availableMediaWidth)),
+                    progress: actions.attachmentProgress, isMeasuring: context.isMeasuring
+                )
+            }
             if !isSticker, let mediaSize, mediaSize.width > 0, mediaSize.height > 0 {
                 BubbleMedia(
                     messageID: message?.id ?? "", attachments: attachments,
@@ -122,7 +132,7 @@ struct ChatMessageBubble: View {
                     .padding(.bottom, 8)
             }
         }
-        .frame(width: isSticker ? min(200, max(1, availableMediaWidth)) : mediaSize?.width)
+        .frame(width: isSticker ? min(200, max(1, availableMediaWidth)) : (!localAttachments.isEmpty ? min(280, max(1, availableMediaWidth)) : mediaSize?.width))
         .foregroundStyle(foreground)
         // Clip the content, never the background droplet extending outside it.
         .clipShape(BubbleShape(isOutgoing: row.isOutgoing, hasTail: hasTail, drawsTail: false, cornerRadius: isSticker ? 0 : 18))
@@ -230,7 +240,9 @@ struct ChatMessageBubble: View {
     }
 
     private var senderName: String {
-        message?.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(row.entry.senderID)"
+        message?.sender.name.flatMap { $0.isEmpty ? nil : $0 }
+            ?? (row.isOutgoing ? actions.currentUserProfile.map(\.username) : nil)
+            ?? "User \(row.entry.senderID)"
     }
 }
 

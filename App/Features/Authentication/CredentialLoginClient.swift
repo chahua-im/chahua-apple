@@ -7,7 +7,7 @@ protocol CredentialLoginProviding: Sendable {
 enum CredentialLoginError: Error, Sendable { case unavailable }
 
 struct PrototypeCredentialLoginClient: CredentialLoginProviding {
-    private static let endpoint = URL(string: "https://www.shireyishunjian.com/main/shireyishunjian-telegram-api/chahua_login.php")!
+    private static let endpoint = URL(string: "https://chahui.app/main/shireyishunjian-telegram-api/chahua_login.php")!
     private let session: URLSession
 
     init(session: URLSession? = nil) {

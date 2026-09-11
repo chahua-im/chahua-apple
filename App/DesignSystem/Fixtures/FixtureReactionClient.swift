@@ -78,6 +78,8 @@
         func authenticate(candidateJWT: String) async throws -> MeResponse { throw Failure.unexpectedOperation }
         func createDevSession(uid: Int32, clientID: String) async throws -> String { throw Failure.unexpectedOperation }
         func me() async throws -> MeResponse { throw Failure.unexpectedOperation }
+        func attachmentConfig() async throws -> AttachmentConfigResponse { throw Failure.unexpectedOperation }
+        func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw Failure.unexpectedOperation }
         func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw Failure.unexpectedOperation }
         func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
         func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }

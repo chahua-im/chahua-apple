@@ -34,7 +34,7 @@ final class ChatDraftStore: ObservableObject {
             drafts[key] = snapshot.draft.text
             draftReplies[key] = reply
             draftRevisions[key] = snapshot.draft.editRevision
-            draftUpdatedAt[key] = snapshot.draft.text.isEmpty ? nil : snapshot.draft.updatedAt
+            draftUpdatedAt[key] = snapshot.draft.text.isEmpty && snapshot.draft.attachments.isEmpty ? nil : snapshot.draft.updatedAt
             unsavedDrafts.remove(key)
         }
     }
@@ -78,7 +78,7 @@ final class ChatDraftStore: ObservableObject {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard !committingDrafts.contains(key), drafts[key] != text else { return }
         drafts[key] = text
-        draftUpdatedAt[key] = text.isEmpty ? nil : Date()
+        draftUpdatedAt[key] = text.isEmpty && outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty ? nil : Date()
         unsavedDrafts.insert(key)
         draftRevisions[key, default: 0] += 1
         scheduleDraftSave(key: key)
@@ -135,10 +135,31 @@ final class ChatDraftStore: ObservableObject {
         }
     }
 
+    /// Attachment commands share the blocked item's revision with text and reply edits.
+    /// Flush committed text first, rather than replacing an in-flight IME composition.
+    func flushForAttachmentChange(chatID: String, threadID: String? = nil) async throws {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        guard !composingDrafts.contains(key), !committingDrafts.contains(key) else {
+            throw AttachmentDraftError.busy
+        }
+        await flushDraft(chatID: chatID, threadID: threadID)
+        guard !draftSaveFailed, !unsavedDrafts.contains(key) else { throw AttachmentDraftError.notSaved }
+    }
+
+    private enum AttachmentDraftError: LocalizedError {
+        case busy, notSaved
+        var errorDescription: String? {
+            switch self {
+            case .busy: "Finish editing this message before changing its images."
+            case .notSaved: "Your draft couldn’t be saved. Retry local storage before changing its images."
+            }
+        }
+    }
+
     func submitDraft(chatID: String, threadID: String? = nil) async -> Bool {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let text = draftText(chatID: chatID, threadID: threadID).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !composingDrafts.contains(key),
+        guard (!text.isEmpty || !outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty), !composingDrafts.contains(key),
               !committingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
         pendingDraftSaves.removeValue(forKey: key)?.cancel()
         committingDrafts.insert(key)

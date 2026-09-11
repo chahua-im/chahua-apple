@@ -1,5 +1,7 @@
 import ChahuaAPI
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct MessageComposerView: View {
     @Binding var text: String
@@ -12,13 +14,31 @@ struct MessageComposerView: View {
     var replyFocusRequest = 0
     var onCancelReply: (() -> Void)? = nil
     var onOpenReply: ((String) -> Void)? = nil
+    var editingMessage: MessageResponse? = nil
+    var onCancelEdit: (() -> Void)? = nil
+    var onRequestEditLastMessage: (() -> Bool)? = nil
+    var attachments: [LocalOutgoingAttachment] = []
+    var attachmentProgress: [String: Double] = [:]
+    var compressionEnabled = true
+    var onImportImages: (([URL]) async throws -> Void)? = nil
+    var onRemoveAttachment: ((String) async throws -> Void)? = nil
+    var onRetryAttachment: ((String) async throws -> Void)? = nil
+    var onCompressionChanged: ((Bool) async throws -> Void)? = nil
+    var onReorderAttachments: (([String]) async throws -> Void)? = nil
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var showsPhotos = false
+    @State private var showsFiles = false
+    @State private var isAcquiring = false
+    @State private var imageError: String?
     @StateObject private var input = ComposerInputState()
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
     @FocusState private var isInputFocused: Bool
     @State private var restoresFocusAfterSend = false
 
-    private var canSubmit: Bool { isEnabled && canSend && !input.isComposing }
+    private var canSubmit: Bool { isEnabled && canSend && !input.isComposing && !isAcquiring }
     private var hasText: Bool { !(input.editorText ?? text).isEmpty }
+    private var hasContent: Bool { hasText || (editingMessage == nil && !attachments.isEmpty) }
+    private var canAcquire: Bool { isEnabled && !input.isComposing && !isAcquiring && editingMessage == nil && onImportImages != nil }
 
     private var editorText: Binding<String> {
         Binding(
@@ -28,20 +48,40 @@ struct MessageComposerView: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Button {
-            } label: {
-                Image(systemName: "paperclip")
-                    .font(.system(size: 20))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+        VStack(spacing: 0) {
+            if editingMessage == nil, !attachments.isEmpty {
+                ComposerImageTray(
+                    attachments: attachments, progress: attachmentProgress,
+                    isEnabled: canAcquire, compressionEnabled: compressionEnabled,
+                    onRemove: { id in performImageOperation { try await onRemoveAttachment?(id) } },
+                    onRetry: { id in performImageOperation { try await onRetryAttachment?(id) } },
+                    onCompressionChanged: { enabled in performImageOperation { try await onCompressionChanged?(enabled) } },
+                    onReorder: { ids in performImageOperation { try await onReorderAttachments?(ids) } }
+                )
             }
-            .disabled(true)
-            .accessibilityLabel("Attachments (unavailable)")
-            .modifier(ChatGlassSurface(cornerRadius: 22))
+            if isAcquiring {
+                ProgressView("Saving images on this device…")
+                    .font(.caption).controlSize(.small).padding(8)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    Button("Photos", systemImage: "photo.on.rectangle") { showsPhotos = true }
+                    Button("Files", systemImage: "folder") { showsFiles = true }
+                    PasteButton(supportedContentTypes: [.image, .fileURL]) { importProviders($0) }
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 20))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .disabled(!canAcquire)
+                .accessibilityLabel(editingMessage == nil ? "Add images" : "Images cannot be changed while editing")
+                .modifier(ChatGlassSurface(cornerRadius: 22))
 
             VStack(spacing: 0) {
-                if let reply = replyToMessage {
+                if let editing = editingMessage {
+                    editMarker(editing)
+                } else if let reply = replyToMessage {
                     replyMarker(reply)
                 }
 
@@ -54,22 +94,30 @@ struct MessageComposerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 12)
                         .padding(.vertical, 12)
-                        .disabled(!isEnabled)
+                        .disabled(!isEnabled || isAcquiring)
                         .focused($isInputFocused)
                         .onSubmit(submit)
                         .onKeyPress(.escape) {
                             guard !input.isComposing else { return .ignored }
-                            if replyToMessage != nil {
+                            if let editing = editingMessage, (input.editorText ?? text) == editing.message {
+                                onCancelEdit?()
+                            } else if replyToMessage != nil {
                                 onCancelReply?()
                             } else {
                                 isInputFocused = false
                             }
                             return .handled
                         }
+                        .onKeyPress(.upArrow) {
+                            guard !input.isComposing, !hasText, attachments.isEmpty, replyToMessage == nil, editingMessage == nil,
+                                onRequestEditLastMessage?() == true
+                            else { return .ignored }
+                            return .handled
+                        }
                         .background(
                             ComposerInputBridge(
                                 input: input, draft: $text, isFocused: isInputFocused,
-                                isEnabled: isEnabled, onCompositionChanged: onCompositionChanged
+                                isEnabled: isEnabled && !isAcquiring, onCompositionChanged: onCompositionChanged
                             )
                             .accessibilityHidden(true)
                         )
@@ -90,19 +138,57 @@ struct MessageComposerView: View {
             .modifier(ChatGlassSurface(cornerRadius: 22))
 
             Button(action: submit) {
-                Image(systemName: hasText ? "paperplane.fill" : "mic")
+                Image(systemName: hasContent ? "paperplane.fill" : "mic")
                     .font(.system(size: 20))
-                    .foregroundStyle(hasText && canSubmit ? ChahuaTheme.accent : .secondary)
+                    .foregroundStyle(hasContent && canSubmit ? ChahuaTheme.accent : .secondary)
                     .frame(width: 44, height: 44)
                     .contentShape(Circle())
             }
-            .disabled(!hasText || !canSubmit)
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: hasText && canSubmit))
-            .accessibilityLabel(hasText ? Text("Send message") : Text("Voice message (unavailable)"))
+            .disabled(!hasContent || !canSubmit)
+            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: hasContent && canSubmit))
+            .accessibilityLabel(hasContent ? Text("Send message") : Text("Voice message (unavailable)"))
             .modifier(ComposerSendFocus())
         }
         .buttonStyle(.plain)
         .padding(12)
+        }
+        .photosPicker(isPresented: $showsPhotos, selection: $selectedPhotos, matching: .images)
+        .onChange(of: selectedPhotos) { _, photos in
+            guard !photos.isEmpty else { return }
+            performImageOperation {
+                var urls: [URL] = []
+                defer {
+                    ComposerImageAcquisition.removeTemporary(urls)
+                    selectedPhotos = []
+                }
+                for photo in photos {
+                    guard let image = try await photo.loadTransferable(type: ComposerImportedImage.self) else {
+                        throw ComposerImageAcquisition.AcquisitionError.unavailable
+                    }
+                    urls.append(image.url)
+                }
+                try await onImportImages?(urls)
+            }
+        }
+        .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): performImageOperation { try await onImportImages?(urls) }
+            case .failure(let error): imageError = error.localizedDescription
+            }
+        }
+        #if os(macOS)
+        .onPasteCommand(of: [.image, .fileURL]) { importProviders($0) }
+        #endif
+        .onDrop(of: [.image, .fileURL], isTargeted: nil) { providers in
+            guard canAcquire else { return false }
+            importProviders(providers)
+            return true
+        }
+        .alert("Couldn’t update images", isPresented: Binding(get: { imageError != nil }, set: { if !$0 { imageError = nil } })) {
+            Button("OK") { imageError = nil }
+        } message: {
+            Text(imageError ?? "")
+        }
         .onAppear { input.receiveExternalText(text) }
         .onChange(of: text) { _, text in input.receiveExternalText(text) }
         .onChange(of: replyFocusRequest) { _, _ in
@@ -112,6 +198,33 @@ struct MessageComposerView: View {
             guard enabled, restoresFocusAfterSend else { return }
             restoresFocusAfterSend = false
             isInputFocused = true
+        }
+    }
+
+    private func performImageOperation(_ operation: @escaping @MainActor () async throws -> Void) {
+        guard canAcquire else { return }
+        input.settleNativeInput()
+        guard !input.isComposing else { return }
+        let restoresInputFocus = isInputFocused
+        isAcquiring = true
+        Task {
+            defer {
+                isAcquiring = false
+                if restoresInputFocus && isEnabled { isInputFocused = true }
+            }
+            do { try await operation() }
+            catch { imageError = error.localizedDescription }
+        }
+    }
+
+    private func importProviders(_ providers: [NSItemProvider]) {
+        performImageOperation {
+            var urls: [URL] = []
+            defer { ComposerImageAcquisition.removeTemporary(urls) }
+            for provider in providers {
+                urls.append(try await ComposerImageAcquisition.materialize(provider))
+            }
+            try await onImportImages?(urls)
         }
     }
 
@@ -158,8 +271,43 @@ struct MessageComposerView: View {
         .padding(.top, 12)
     }
 
+    private func editMarker(_ message: MessageResponse) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Edit message")
+                    .font(.system(size: fontSize * 13 / 15, weight: .semibold))
+                    .foregroundStyle(ChahuaTheme.accent)
+                Text(message.message ?? "")
+                    .font(.system(size: fontSize * 12 / 15))
+                    .foregroundStyle(.primary)
+            }
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 10)
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(ChahuaTheme.accent)
+                    .frame(width: 3)
+            }
+            Button {
+                onCancelEdit?()
+                isInputFocused = true
+            } label: {
+                Image(systemName: "xmark")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, height: 36, alignment: .topTrailing)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Cancel edit")
+            .disabled(!isEnabled)
+            .modifier(ComposerSendFocus())
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+    }
+
     private func submit() {
-        guard canSubmit, input.prepareSubmission() else { return }
+        guard canSubmit, input.prepareSubmission(allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty) else { return }
         restoresFocusAfterSend = true
         isInputFocused = true
         onSubmit()

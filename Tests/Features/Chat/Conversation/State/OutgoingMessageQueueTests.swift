@@ -96,7 +96,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await reopened.close()
     }
 
-    func testFailureAtomicallyPausesSuccessorsWithoutBlockingAnotherChat() async throws {
+    func testFailureLeavesSuccessorsQueuedWithoutBlockingAnotherChat() async throws {
         let h = try await openHarness()
         var transitions: [[LocalOutgoingMessage.State]] = []
         let observation = h.queue.events.sink { event in
@@ -108,9 +108,9 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let initialRequests = await h.api.requests()
         XCTAssertEqual(initialRequests.map(\.body.message), ["A"])
         await h.api.finish(0, with: .failure(QueueTestError.network))
-        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.state) == [.failed, .failed, .failed] }
-        XCTAssertTrue(transitions.contains([.failed, .failed, .failed]))
-        XCTAssertFalse(transitions.contains([.failed, .queued, .queued]))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.state) == [.failed, .queued, .queued] }
+        XCTAssertTrue(transitions.contains([.failed, .queued, .queued]))
+        XCTAssertFalse(transitions.contains([.failed, .failed, .failed]))
         try await h.queue.enqueueText(chatID: "other", text: "independent", clearedDraftRevision: 1)
         try await eventually { await h.api.requests().count == 2 }
         let requests = await h.api.requests()
@@ -120,87 +120,101 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await h.close()
     }
 
-    func testRetryOnePromotesOnlySelectionAndPreservesIdentityAndDisplayOrder() async throws {
+    func testRetrySuccessorCannotBypassFailedHeadOrChangeFIFOIdentity() async throws {
         let h = try await openHarness()
         let rows = try await pausedABC(h)
         try await h.queue.enqueueText(chatID: "chat", text: "D", clearedDraftRevision: 4)
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.state), [.failed, .failed, .failed, .failed])
+        for scope in [OutgoingRetryScope.message, .messageAndSubsequent] {
+            try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: scope)
+        }
         let pausedRequests = await h.api.requests()
-        XCTAssertEqual(pausedRequests.count, 1)
-        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .message)
+        XCTAssertEqual(pausedRequests.map(\.body.message), ["A"])
+        let pending = h.queue.pendingMessages(chatID: "chat")
+        XCTAssertEqual(pending.map(\.text), ["A", "B", "C", "D"])
+        XCTAssertEqual(pending.map(\.state), [.failed, .queued, .queued, .queued])
+        XCTAssertEqual(Array(pending.prefix(3)).map(\.clientGeneratedID), rows.map(\.clientGeneratedID))
+        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID, scope: .message)
         try await eventually { await h.api.requests().count == 2 }
-        let requests = await h.api.requests()
-        XCTAssertEqual(requests[1].body.clientGeneratedId, rows[1].clientGeneratedID)
-        XCTAssertEqual(requests[1].body.message, "B")
-        let retried = h.queue.pendingMessages(chatID: "chat")
-        XCTAssertEqual(retried.map(\.text), ["B", "A", "C", "D"])
-        let displayed = retried.sorted { $0.enqueueSequence < $1.enqueueSequence }
-        XCTAssertEqual(displayed.map(\.text), ["A", "B", "C", "D"])
-        for original in rows {
-            let current = try XCTUnwrap(retried.first { $0.clientGeneratedID == original.clientGeneratedID })
-            XCTAssertEqual(current.enqueuedAt, original.enqueuedAt)
-            XCTAssertEqual(current.enqueueSequence, original.enqueueSequence)
-        }
-        await h.api.finish(1, with: .success(try response(requests[1])))
-        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.text) == ["A", "C", "D"] }
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.state), [.failed, .failed, .failed])
-        await h.close()
-    }
-
-    func testRetrySubsequentSendsSelectedBatchOnlyAndRepeatedTapsDoNotOverlap() async throws {
-        let h = try await openHarness()
-        let rows = try await pausedABC(h)
-        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .messageAndSubsequent)
-        try await eventually { await h.api.requests().count == 2 }
-        for _ in 0..<3 {
-            try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .messageAndSubsequent)
-        }
         var requests = await h.api.requests()
-        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[1].body, requests[0].body)
         await h.api.finish(1, with: .success(try response(requests[1])))
         try await eventually { await h.api.requests().count == 3 }
         requests = await h.api.requests()
-        XCTAssertEqual(requests.map(\.body.message), ["A", "B", "C"])
-        XCTAssertEqual(requests[2].body.clientGeneratedId, rows[2].clientGeneratedID)
-        await h.api.finish(2, with: .success(try response(requests[2])))
-        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.text) == ["A"] }
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").first?.state, .failed)
+        XCTAssertEqual(requests[2].body.clientGeneratedId, rows[1].clientGeneratedID)
+        XCTAssertEqual(requests[2].body.message, "B")
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.text), ["B", "C", "D"])
+        await h.close()
+    }
+
+    func testRetryHeadDrainsFIFOAndRepeatedTapsDoNotOverlap() async throws {
+        let h = try await openHarness()
+        let rows = try await pausedABC(h)
+        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID, scope: .messageAndSubsequent)
+        try await eventually { await h.api.requests().count == 2 }
+        for _ in 0..<3 {
+            try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID, scope: .messageAndSubsequent)
+        }
+        var requests = await h.api.requests()
+        XCTAssertEqual(requests.count, 2)
+        for index in 1...3 {
+            XCTAssertEqual(requests[index].body.clientGeneratedId, rows[index - 1].clientGeneratedID)
+            await h.api.finish(index, with: .success(try response(requests[index])))
+            if index < 3 {
+                try await eventually { await h.api.requests().count == index + 2 }
+                requests = await h.api.requests()
+            }
+        }
+        try await eventually { h.queue.pendingMessages(chatID: "chat").isEmpty }
+        XCTAssertEqual(requests.map(\.body.message), ["A", "A", "B", "C"])
         let concurrency = await h.api.maximumConcurrency(chatID: "chat")
         XCTAssertEqual(concurrency, 1)
         await h.close()
     }
 
-    func testRetryFailureDoesNotAttemptRemainingBatchAndReusesOriginalBody() async throws {
+    func testRetryFailureDoesNotAttemptSuccessorsAndReusesOriginalBody() async throws {
         let h = try await openHarness()
         let rows = try await pausedABC(h)
-        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .messageAndSubsequent)
+        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID, scope: .messageAndSubsequent)
         try await eventually { await h.api.requests().count == 2 }
         await h.api.finish(1, with: .failure(QueueTestError.network))
-        try await eventually { h.queue.pendingMessages(chatID: "chat").allSatisfy { $0.state == .failed } }
+        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.state) == [.failed, .queued, .queued] }
         let requests = await h.api.requests()
-        XCTAssertEqual(requests.map(\.body.message), ["A", "B"])
-        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .message)
+        XCTAssertEqual(requests.map(\.body.message), ["A", "A"])
+        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID, scope: .message)
         try await eventually { await h.api.requests().count == 3 }
         let repeated = await h.api.requests()
+        XCTAssertEqual(repeated[0].body, repeated[1].body)
         XCTAssertEqual(repeated[1].body, repeated[2].body)
         await h.close()
     }
 
-    func testRetryDuringSendingDoesNotPreemptAndMovesAheadOfFailedRows() async throws {
+    func testBlockedTailWaitsForReleaseAndRetainsCompositionIdentity() async throws {
         let h = try await openHarness()
-        let rows = try await pausedABC(h)
-        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .message)
+        try await h.queue.enqueueText(chatID: "chat", text: "A", clearedDraftRevision: 1)
+        try await eventually { await h.api.requests().count == 1 }
+        try await h.queue.enqueueText(chatID: "chat", text: "B", clearedDraftRevision: 2)
+        let tail = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").last)
+        try await h.queue.blockTail(
+            chatID: "chat", itemID: tail.clientGeneratedID, expectedRevision: tail.editRevision)
+        let key = ConversationKey(chatID: "chat")
+        let composition = try XCTUnwrap(h.queue.snapshots[key]?.composingItem)
+        XCTAssertEqual(composition.clientGeneratedID, tail.clientGeneratedID)
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.text), ["A"])
+        let first = try await firstRequest(h.api)
+        await h.api.finish(0, with: .success(try response(first)))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").isEmpty }
+        try await h.queue.enqueueText(chatID: "other", text: "independent", clearedDraftRevision: 1)
         try await eventually { await h.api.requests().count == 2 }
-        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[2].clientGeneratedID, scope: .message)
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.text), ["B", "C", "A"])
-        let held = await h.api.requests()
-        XCTAssertEqual(held.count, 2)
-        await h.api.finish(1, with: .success(try response(held[1])))
+        let whileBlocked = await h.api.requests()
+        XCTAssertEqual(whileBlocked.map(\.body.message), ["A", "independent"])
+        XCTAssertEqual(h.queue.snapshots[key]?.composingItem?.text, "B")
+        try await h.queue.enqueueText(
+            chatID: "chat", text: "edited B", clearedDraftRevision: composition.editRevision + 1)
         try await eventually { await h.api.requests().count == 3 }
-        let requests = await h.api.requests()
-        XCTAssertEqual(requests[2].body.message, "C")
-        let concurrency = await h.api.maximumConcurrency(chatID: "chat")
-        XCTAssertEqual(concurrency, 1)
+        let released = await h.api.requests()
+        XCTAssertEqual(released[2].body.clientGeneratedId, tail.clientGeneratedID)
+        XCTAssertEqual(released[2].body.message, "edited B")
+        XCTAssertNil(h.queue.snapshots[key]?.composingItem)
         await h.close()
     }
 
@@ -323,10 +337,10 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await h.close()
     }
 
-    func testRestartResumesInterruptedRetryBatchBeforeEarlierFailure() async throws {
+    func testRestartReplaysInterruptedHeadBeforeQueuedSuccessors() async throws {
         let h = try await openHarness()
         let rows = try await pausedABC(h)
-        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .messageAndSubsequent)
+        try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID, scope: .messageAndSubsequent)
         try await eventually { await h.api.requests().count == 2 }
         let firstRun = await h.api.requests()
         await h.close()
@@ -334,13 +348,16 @@ final class OutgoingMessageQueueTests: XCTestCase {
         try await eventually { await second.api.requests().count == 1 }
         var requests = await second.api.requests()
         XCTAssertEqual(requests[0].body, firstRun[1].body)
-        await second.api.finish(0, with: .success(try response(requests[0])))
-        try await eventually { await second.api.requests().count == 2 }
-        requests = await second.api.requests()
-        XCTAssertEqual(requests.map(\.body.message), ["B", "C"])
-        await second.api.finish(1, with: .success(try response(requests[1])))
-        try await eventually { second.queue.pendingMessages(chatID: "chat").map(\.text) == ["A"] }
-        XCTAssertEqual(second.queue.pendingMessages(chatID: "chat").first?.state, .failed)
+        for index in 0...2 {
+            XCTAssertEqual(requests[index].body.clientGeneratedId, rows[index].clientGeneratedID)
+            await second.api.finish(index, with: .success(try response(requests[index])))
+            if index < 2 {
+                try await eventually { await second.api.requests().count == index + 2 }
+                requests = await second.api.requests()
+            }
+        }
+        try await eventually { second.queue.pendingMessages(chatID: "chat").isEmpty }
+        XCTAssertEqual(requests.map(\.body.message), ["A", "B", "C"])
         await second.close()
     }
 
@@ -432,7 +449,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         try await eventually { h.queue.storageState == .failed }
         h.faults.failures = []
         await h.queue.retryStorage()
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.state), [.failed, .failed, .failed])
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.state), [.failed, .queued, .queued])
         let requests = await h.api.requests()
         XCTAssertEqual(requests.count, 1)
         await h.close()
@@ -460,7 +477,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         _ = try await enqueueABC(h)
         await h.api.finish(0, with: .failure(APIError.invalidToken))
         try await eventually { h.invalidTokenStates != nil }
-        XCTAssertEqual(h.invalidTokenStates, [.failed, .failed, .failed])
+        XCTAssertEqual(h.invalidTokenStates, [.failed, .queued, .queued])
         await h.queue.setForegroundActive(false)
         await h.queue.setForegroundActive(true)
         let requests = await h.api.requests()
@@ -473,16 +490,16 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let rows = try await pausedABC(h)
         await h.close()
         let reopened = try await openHarness(root: h.root)
-        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat").map(\.state), [.failed, .failed, .failed])
+        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat").map(\.state), [.failed, .queued, .queued])
         await reopened.queue.setForegroundActive(false)
         await reopened.queue.setForegroundActive(true)
         let requests = await reopened.api.requests()
         XCTAssertEqual(requests.count, 0)
-        try await reopened.queue.retry(chatID: "chat", clientGeneratedID: rows[1].clientGeneratedID, scope: .message)
+        try await reopened.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID, scope: .message)
         try await eventually { await reopened.api.requests().count == 1 }
         let retried = try await firstRequest(reopened.api)
-        XCTAssertEqual(retried.body.clientGeneratedId, rows[1].clientGeneratedID)
-        XCTAssertEqual(retried.body.message, "B")
+        XCTAssertEqual(retried.body.clientGeneratedId, rows[0].clientGeneratedID)
+        XCTAssertEqual(retried.body.message, "A")
         await reopened.close()
     }
 
@@ -517,7 +534,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
     private func pausedABC(_ h: Harness) async throws -> [LocalOutgoingMessage] {
         let rows = try await enqueueABC(h)
         await h.api.finish(0, with: .failure(QueueTestError.network))
-        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.state) == [.failed, .failed, .failed] }
+        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.state) == [.failed, .queued, .queued] }
         return rows
     }
 
@@ -626,6 +643,8 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func authenticate(candidateJWT: String) async throws -> MeResponse { throw APIError.unavailable }
     func createDevSession(uid: Int32, clientID: String) async throws -> String { throw APIError.unavailable }
     func me() async throws -> MeResponse { throw APIError.unavailable }
+    func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
+    func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { throw APIError.unavailable }

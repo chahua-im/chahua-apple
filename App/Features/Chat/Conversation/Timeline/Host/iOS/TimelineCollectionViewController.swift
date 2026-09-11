@@ -174,6 +174,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         let paths = collectionView.indexPathsForVisibleItems.filter { path in
             guard !widthChanged else { return true }
             guard rows.indices.contains(path.item), case .message(let message) = rows[path.item] else { return false }
+            if case .pending(let pending) = message.entry, !pending.attachments.isEmpty { return true }
             return message.entry.messageType == .sticker || !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
         }
         if !paths.isEmpty { collectionView.reconfigureItems(at: paths) }
@@ -208,7 +209,10 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     private func rowContext(for row: TimelineRow) -> TimelineRowContext {
         let hasMedia: Bool
         if case .message(let message) = row {
-            hasMedia = message.entry.messageType == .sticker || !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
+            let hasLocalMedia: Bool
+            if case .pending(let pending) = message.entry { hasLocalMedia = !pending.attachments.isEmpty }
+            else { hasLocalMedia = false }
+            hasMedia = hasLocalMedia || message.entry.messageType == .sticker || !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
         } else {
             hasMedia = false
         }
