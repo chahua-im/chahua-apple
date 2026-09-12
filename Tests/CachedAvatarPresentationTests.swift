@@ -75,6 +75,36 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 1)
     }
 
+    func testSingleFrameWebPDisplaysSharpForegroundOverBackdrop() async throws {
+        let fixture = MediaImageFixture(
+            data: try makeMediaWebPCheckerboard(),
+            contentType: "image/webp"
+        )
+        let context = try makeContext(fixture: fixture)
+        let size = CGSize(width: 300, height: 347)
+        let root = MessageRowActionButton {} label: {
+            RemoteImageView(
+                url: fixture.url,
+                contentMode: .fit,
+                animates: true,
+                showsBlurredBackdrop: true,
+                thumbnailPixelSize: CGSize(width: size.width * 2, height: size.height * 2)
+            )
+            .modifier(BubbleMediaTileSurface(size: size, gallery: false, isVideo: false, overflowCount: 0))
+        }
+        .environment(\.mediaContext, context)
+        let host = try AvatarPresentationHost(root: AnyView(root), size: size)
+        host.mount()
+        defer { host.close() }
+
+        try await waitUntil("The single-frame WebP foreground stayed blurred or empty") {
+            try self.hasSharpBlackAndWhitePixels(host.snapshot())
+        }
+        XCTAssertEqual(fixture.requestCount, 1)
+    }
+
+
+
     private func makeContext(fixture: MediaImageFixture) throws -> AppMediaContext {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("KingfisherPresentation-\(UUID().uuidString)", isDirectory: true)
@@ -159,6 +189,26 @@ final class CachedAvatarPresentationTests: XCTestCase {
         return false
     }
 
+    private func hasSharpBlackAndWhitePixels(_ image: CGImage) throws -> Bool {
+        let bytes = try pixels(image, width: image.width, height: image.height)
+        let xRange = (image.width / 8) ..< (image.width * 7 / 8)
+        let yRange = (image.height / 8) ..< (image.height * 7 / 8)
+        var darkPixels = 0
+        var lightPixels = 0
+        for y in yRange {
+            for x in xRange {
+                let index = (y * image.width + x) * 4
+                let channels = bytes[index ... index + 2]
+                if channels.allSatisfy({ $0 < 32 }) {
+                    darkPixels += 1
+                } else if channels.allSatisfy({ $0 > 150 }) {
+                    lightPixels += 1
+                }
+            }
+        }
+        return darkPixels >= 100 && lightPixels >= 100
+    }
+
     private func pixels(_ image: CGImage, width: Int, height: Int) throws -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         try bytes.withUnsafeMutableBytes { storage in
@@ -199,7 +249,7 @@ private final class AvatarPhaseRecorder {
 
 @MainActor
 private final class AvatarPresentationHost {
-    private static let bounds = CGRect(x: 0, y: 0, width: 96, height: 96)
+    private let bounds: CGRect
     #if os(macOS)
     private let controller: NSHostingController<AnyView>
     private let window: NSWindow
@@ -208,11 +258,12 @@ private final class AvatarPresentationHost {
     private let window: UIWindow
     #endif
 
-    init(root: AnyView) throws {
+    init(root: AnyView, size: CGSize = CGSize(width: 96, height: 96)) throws {
+        bounds = CGRect(origin: .zero, size: size)
         #if os(macOS)
         controller = NSHostingController(rootView: root)
         window = NSWindow(
-            contentRect: Self.bounds,
+            contentRect: bounds,
             styleMask: [.titled],
             backing: .buffered,
             defer: false
@@ -224,22 +275,22 @@ private final class AvatarPresentationHost {
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         )
         window = UIWindow(windowScene: scene)
-        window.frame = Self.bounds
+        window.frame = bounds
         #endif
     }
 
     func mount() {
         #if os(macOS)
         window.contentViewController = controller
-        window.setContentSize(Self.bounds.size)
+        window.setContentSize(bounds.size)
         window.orderFront(nil)
-        controller.view.frame = Self.bounds
+        controller.view.frame = bounds
         controller.view.layoutSubtreeIfNeeded()
         #else
         window.rootViewController = controller
-        window.frame = Self.bounds
+        window.frame = bounds
         window.makeKeyAndVisible()
-        controller.view.frame = Self.bounds
+        controller.view.frame = bounds
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
         #endif

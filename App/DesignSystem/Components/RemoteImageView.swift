@@ -78,41 +78,36 @@ struct RemoteImageView: View {
 
     @ViewBuilder private func animatedContent(_ url: URL) -> some View {
         ZStack {
-            if showsBlurredBackdrop {
-                CachedImageView(url: url, thumbnailPixelSize: thumbnailPixelSize) { phase in
-                    if case .success(let image) = phase {
-                        blurredBackdrop(image)
-                    } else {
-                        Color.black
+            CachedImageView(url: url, thumbnailPixelSize: thumbnailPixelSize) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView()
+                case .failure:
+                    Image(systemName: "photo").foregroundStyle(.secondary)
+                case .success(let image):
+                    imageContent(backdrop: image) {
+                        image.resizable().aspectRatio(contentMode: contentMode)
                     }
                 }
             }
             KFAnimatedImage(url)
                 .targetCache(mediaContext?.cache ?? .default)
                 .downloader(mediaContext?.downloader ?? .default)
-                .placeholder {
-                    if let image = cachedAnimatedImage(for: url) {
-                        swiftUIImage(image).resizable().aspectRatio(contentMode: contentMode)
-                    } else {
-                        ProgressView()
-                    }
+                .placeholder { Color.clear }
+                .onFailureView { Color.clear }
+                .configure { view in
+                    #if os(macOS)
+                    view.imageScaling = contentMode == .fit ? .scaleProportionallyUpOrDown : .scaleAxesIndependently
+                    #else
+                    view.contentMode = contentMode == .fit ? .scaleAspectFit : .scaleAspectFill
+                    #endif
                 }
-                .onFailureView { Image(systemName: "photo").foregroundStyle(.secondary) }
-                .contentConfigure { image, isLoaded in
-                    if isLoaded {
-                        image.aspectRatio(contentMode: contentMode)
-                    }
-                }
+                .aspectRatio(contentMode: contentMode)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .clipped()
     }
 
-    private func cachedAnimatedImage(for url: URL) -> KFCrossPlatformImage? {
-        (mediaContext?.cache ?? .default).retrieveImageInMemoryCache(
-            forKey: url.absoluteString,
-            options: [.scaleFactor(1)]
-        )
-    }
 
     @ViewBuilder private func imageContent<Foreground: View>(
         backdrop: Image,

@@ -65,6 +65,12 @@ private func makeSolidMediaImage(
     return try XCTUnwrap(context.makeImage())
 }
 
+func makeMediaWebPCheckerboard() throws -> Data {
+    try XCTUnwrap(Data(base64Encoded: """
+    UklGRhICAABXRUJQVlA4WAoAAAAgAAAAHwAAHwAASUNDUMgBAAAAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADZWUDhMIwAAAC8fwAcADzD/8z//8x94EAgkCPtbBjJARP/rUFVVVQUAsL8AAA==
+    """))
+}
+
 final class MediaImageFixture: @unchecked Sendable {
     struct Response: Sendable {
         let data: Data
@@ -90,7 +96,12 @@ final class MediaImageFixture: @unchecked Sendable {
         suspended: Bool = false,
         onRequest: (@Sendable () -> Void)? = nil
     ) {
-        let pathExtension = contentType == "image/gif" ? "gif" : "png"
+        let pathExtension: String
+        switch contentType {
+        case "image/gif": pathExtension = "gif"
+        case "image/webp": pathExtension = "webp"
+        default: pathExtension = "png"
+        }
         url = URL(string: "https://image.invalid/\(UUID().uuidString).\(pathExtension)")!
         body = data
         self.contentType = contentType
