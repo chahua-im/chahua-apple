@@ -17,8 +17,6 @@ final class AppCompositionRoot {
             realtimeProvider: client,
             credentialLoginClient: PrototypeCredentialLoginClient(),
             tokenStorage: KeychainTokenStorage(),
-            mediaDirectory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-                .appendingPathComponent("app.chahua.chat/MediaCache", isDirectory: true),
             mediaNamespace: apiConfiguration.baseURL.absoluteString,
             localStoreFactory: { uid in
                 try await Task.detached {
@@ -35,7 +33,6 @@ final class AppCompositionRoot {
         realtimeProvider: any RealtimeConnectionProviding,
         credentialLoginClient: any CredentialLoginProviding,
         tokenStorage: any SessionTokenStorage,
-        mediaDirectory: URL? = nil,
         mediaNamespace: String = "injected",
         localStoreFactory: @escaping @Sendable (Int32) async throws -> ChahuaLocalStore
     ) {
@@ -50,17 +47,16 @@ final class AppCompositionRoot {
         }
         let outgoingQueue = OutgoingMessageQueue(apiClient: apiClient, localStoreFactory: localStoreFactory, onInvalidToken: invalidToken)
         chatStore = ChatStore(apiClient: apiClient, outgoingQueue: outgoingQueue, onInvalidToken: invalidToken)
-        mediaContext = AppMediaContext(rootDirectory: mediaDirectory, namespace: mediaNamespace)
+        mediaContext = AppMediaContext(namespace: mediaNamespace)
         realtimeCoordinator = RealtimeCoordinator(provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
         sessionObservation = sessionModel.$state.sink { [weak self] state in
             guard let self else { return }
+            self.mediaContext.clearMemoryCache()
             if case .authenticated(let me) = state {
                 self.chatStore.currentUserProfile = me
-                self.mediaContext.activate(uid: me.uid)
                 self.realtimeCoordinator.setSession(uid: me.uid)
             } else {
                 self.chatStore.currentUserProfile = nil
-                self.mediaContext.activate(uid: nil)
                 self.realtimeCoordinator.setSession(uid: nil)
             }
         }

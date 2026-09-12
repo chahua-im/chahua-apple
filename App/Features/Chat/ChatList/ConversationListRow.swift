@@ -1,5 +1,4 @@
 import ChahuaAPI
-import ChahuaMediaCache
 import SwiftUI
 
 struct ConversationListRow: View {
@@ -65,8 +64,6 @@ struct ConversationListRow: View {
         .padding(.horizontal, 8)
         .frame(height: 60)
         .foregroundStyle(isSelected ? Color.white : Color.primary)
-        .onAppear { traceVisibility("row-appear") }
-        .onDisappear { traceVisibility("row-disappear") }
     }
 
     private func activityLabel(now: Date) -> String {
@@ -85,13 +82,6 @@ struct ConversationListRow: View {
             ? format : format.year())
     }
 
-    private func traceVisibility(_ event: String) {
-        guard AvatarCacheTrace.enabled, case .chat(let chat) = item, case .group = chat.kind, let url = chat.chatAvatarURL,
-              let key = AvatarCacheTrace.key(for: MediaRequest(
-                  request: URLRequest(url: url), tags: [CacheTag(rawValue: "avatars")]
-              )) else { return }
-        AvatarCacheTrace.event("scope=chat-list-group event=\(event) key=\(key)")
-    }
 }
 
 #if DEBUG

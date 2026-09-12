@@ -1,4 +1,3 @@
-import ChahuaMediaCache
 import SwiftUI
 
 struct AvatarView: View {
@@ -18,7 +17,6 @@ struct AvatarView: View {
             if let url {
                 CachedImageView(
                     url: url,
-                    tag: CacheTag(rawValue: "avatars"),
                     thumbnailPixelSize: CGSize(
                         width: ceil(scaledDiameter * displayScale),
                         height: ceil(scaledDiameter * displayScale)

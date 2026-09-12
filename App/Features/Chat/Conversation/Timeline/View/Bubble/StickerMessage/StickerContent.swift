@@ -1,8 +1,8 @@
 import ChahuaAPI
-import ChahuaMediaCache
 import SwiftUI
 
 struct StickerContent: View {
+    @Environment(\.displayScale) private var displayScale
     let sticker: MessageStickerResponse?
     let viewport: CGSize
     let availableWidth: CGFloat
@@ -25,8 +25,13 @@ struct StickerContent: View {
                 Color.clear
             } else if let sticker, sticker.media.contentType.hasPrefix("image/") {
                 RemoteImageView(
-                    url: URL(string: sticker.media.url), contentMode: .fit,
-                    animates: true, tag: CacheTag(rawValue: "chatMedia")
+                    url: URL(string: sticker.media.url),
+                    contentMode: .fit,
+                    animates: RemoteImageFormat.isAnimated(contentType: sticker.media.contentType),
+                    thumbnailPixelSize: CGSize(
+                        width: size.width * displayScale,
+                        height: size.height * displayScale
+                    )
                 )
             } else {
                 VStack(spacing: 4) {
