@@ -30,7 +30,8 @@ struct ComposerSendFocus: ViewModifier {
 }
 
 // SwiftUI exposes no marked-text API. Observe its editor without replacing its
-// delegate or editing model; only the newline command mutates native input.
+// delegate or editing model. On macOS intercept submission before AppKit's
+// field-editor Return command ends editing and subsequent focus selects all.
 #if os(macOS)
     struct ComposerInputBridge: NSViewRepresentable {
         let input: ComposerInputState
@@ -38,6 +39,7 @@ struct ComposerSendFocus: ViewModifier {
         let isFocused: Bool
         let isEnabled: Bool
         let onCompositionChanged: ((Bool) -> Void)?
+        var onSubmit: (() -> Void)? = nil
 
         func makeNSView(context: Context) -> ComposerInputMarker {
             let marker = ComposerInputMarker()
@@ -48,7 +50,7 @@ struct ComposerSendFocus: ViewModifier {
         func updateNSView(_ marker: ComposerInputMarker, context: Context) {
             marker.connect(
                 input: input, draft: draft, isFocused: isFocused, isEnabled: isEnabled,
-                onCompositionChanged: onCompositionChanged)
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
         }
 
         static func dismantleNSView(_ marker: ComposerInputMarker, coordinator: ()) { marker.disconnect() }
@@ -62,6 +64,7 @@ struct ComposerSendFocus: ViewModifier {
         let isFocused: Bool
         let isEnabled: Bool
         let onCompositionChanged: ((Bool) -> Void)?
+        var onSubmit: (() -> Void)? = nil
 
         func makeUIView(context: Context) -> ComposerInputMarker {
             let marker = ComposerInputMarker()
@@ -72,7 +75,7 @@ struct ComposerSendFocus: ViewModifier {
         func updateUIView(_ marker: ComposerInputMarker, context: Context) {
             marker.connect(
                 input: input, draft: draft, isFocused: isFocused, isEnabled: isEnabled,
-                onCompositionChanged: onCompositionChanged)
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
         }
 
         static func dismantleUIView(_ marker: ComposerInputMarker, coordinator: ()) { marker.disconnect() }
@@ -85,6 +88,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
     private var input: ComposerInputState?
     private var isComposerFocused = false
     private var isComposerEnabled = false
+    private var onSubmit: (() -> Void)?
     #if os(macOS)
         private weak var editor: NSTextView?
         private weak var editorOwner: AnyObject?
@@ -95,11 +99,12 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
     func connect(
         input: ComposerInputState, draft: Binding<String>, isFocused: Bool, isEnabled: Bool,
-        onCompositionChanged: ((Bool) -> Void)?
+        onCompositionChanged: ((Bool) -> Void)?, onSubmit: (() -> Void)? = nil
     ) {
         self.input = input
         self.isComposerFocused = isFocused
         self.isComposerEnabled = isEnabled
+        self.onSubmit = onSubmit
         input.configure(draft: draft, onCompositionChanged: onCompositionChanged)
         input.nativeInput = self
     }
@@ -109,6 +114,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         stopMonitoring()
         input?.nativeInput = nil
         input = nil
+        onSubmit = nil
     }
 
     private func stopMonitoring() {
@@ -162,16 +168,27 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 NotificationCenter.default.addObserver(
                     self, selector: #selector(nativeChanged(_:)), name: name, object: nil)
             }
-            // Native insertion from SwiftUI onKeyPress reenters view updates in
-            // the hosted composer. Keep this command outside SwiftUI's update;
-            // IME observation does not use the monitor.
+            // SwiftUI onSubmit runs after AppKit ends field editing. Consume
+            // ordinary Return here instead, preserving the editing session and
+            // selection. Shift-Return uses native insertion outside SwiftUI's
+            // update so selection replacement and undo remain native.
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, self.isComposerFocused, self.isComposerEnabled,
                     event.window === self.window,
                     event.keyCode == 36 || event.keyCode == 76,
-                    event.modifierFlags.intersection([.shift, .control, .option, .command]) == .shift,
-                    self.insertNewline()
+                    let editor = self.resolveEditor(), self.window?.firstResponder === editor
                 else { return event }
+                // Inspect before native dispatch: candidate confirmation can
+                // unmark and invoke SwiftUI onSubmit in the very same event.
+                // macOS submission belongs only to this monitor, not onSubmit.
+                if editor.hasMarkedText() {
+                    self.input?.nativeInputChanged()
+                    return event
+                }
+                let modifiers = event.modifierFlags.intersection([.shift, .control, .option, .command])
+                if modifiers == .shift { return self.insertNewline() ? nil : event }
+                guard modifiers.isEmpty, let onSubmit = self.onSubmit else { return event }
+                onSubmit()
                 return nil
             }
         }

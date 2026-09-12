@@ -667,7 +667,7 @@ final class OutgoingMessageQueue: ObservableObject {
         case tooLarge(Int64)
         var errorDescription: String? {
             switch self {
-            case .tooLarge(let bytes): "Image exceeds the server limit of \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))."
+            case .tooLarge(let bytes): "Attachment exceeds the server limit of \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))."
             }
         }
     }

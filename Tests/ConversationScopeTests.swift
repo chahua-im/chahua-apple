@@ -41,6 +41,47 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(store.projection(for: "chat", threadID: "two", remoteMessages: [], includePendingOutgoing: true).entries.map(\.stableKey), [.clientGenerated("two")])
         XCTAssertEqual(store.projection(for: "chat", remoteMessages: [], includePendingOutgoing: true).entries.map(\.stableKey), [.clientGenerated("parent")])
     }
+    func testMessagePreviewsExpandMentionsInSharedRenderer() throws {
+        let message = try TimelineTestFixtures.message(
+            id: "mentioned", at: 1,
+            text: "Hi 👋 @[uid:2], @[uid:9], @[uid:2], @[uid:nope]",
+            fields: [
+                "mentions": [
+                    ["uid": 2, "gender": 0, "username": "Grace"],
+                    ["uid": 2, "gender": 0, "username": "Ada"],
+                    ["uid": 2, "gender": 0, "username": ""],
+                ],
+            ])
+        let preview = message.replyPreview
+        let group = ConversationListItem.chat(ChatListItem(
+            id: "group", name: "Group", lastMessageAt: message.createdAt,
+            unreadCount: 0, lastMessage: preview, archived: false, kind: .group))
+        let expected = "Hi 👋 @Ada, @User 9, @Ada, @[uid:nope]"
+
+        XCTAssertEqual(messagePreview(preview), expected)
+        XCTAssertEqual(group.preview, expected)
+        XCTAssertEqual(group.previewSenderName(), "Ada")
+    }
+
+    func testThreadPreviewUsesLatestReplyThenRootMessageFallback() throws {
+        let root = try TimelineTestFixtures.message(id: "root", at: 1, text: "Root message").replyPreview
+        let reply = try TimelineTestFixtures.message(id: "reply", at: 2, text: "Latest reply").replyPreview
+
+        func thread(lastReply: MessagePreview?) -> ConversationListItem {
+            .thread(ThreadListItem(
+                chatId: "chat", chatName: "Parent chat", threadRootMessage: root,
+                participants: [], lastReply: lastReply, replyCount: 1,
+                lastReplyAt: Date(timeIntervalSince1970: 2), unreadCount: 0,
+                subscribedAt: .distantPast, archived: false))
+        }
+
+        XCTAssertEqual(thread(lastReply: reply).title, "Root message")
+        XCTAssertEqual(thread(lastReply: reply).preview, "Latest reply")
+        XCTAssertEqual(thread(lastReply: reply).previewSenderName(), "Ada")
+        XCTAssertNil(thread(lastReply: reply).previewSenderName(parentKind: .dm))
+        XCTAssertEqual(thread(lastReply: nil).preview, "Root message")
+    }
+
 }
 
 @MainActor

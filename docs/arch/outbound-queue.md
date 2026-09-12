@@ -10,7 +10,7 @@ A composing message is the **blocked tail of its outbound queue**, not a separat
 |---|---|
 | `OutgoingMessageQueue` | Main-actor commands, revision-filtered snapshots/events, session isolation, bounded scheduling and acknowledgement reconciliation |
 | `ChahuaLocalStore` | Transactional items, blocked-tail ownership, ordered slots, checkpoints, dispatch claims and migrations in the existing account database |
-| `OutgoingImageProcessor` | Cancellable detached file import, ImageIO inspection, previews and optional compression |
+| `OutgoingImageProcessor` | Cancellable detached photo/video import, ImageIO/AVFoundation inspection, previews and optional image compression |
 | `OutgoingAttachmentUploader` | File-backed URLSession PUT, native byte progress and cancellation |
 | `OutgoingFileCleanup` | Deferred reclamation of unreferenced account-owned media |
 | `ChatDraftStore` | Composer presentation and committed-text persistence, not an independent attachment owner |
@@ -38,7 +38,7 @@ For slots `[A, B, C]`, completion order `C, A, B` still produces message IDs `[i
 
 - `beginComposition` returns or creates the sole blocked tail. Multiple windows share that item.
 - Committed text/reply updates and attachment add/remove/reorder/options mutate only composition. IME marked text remains transient in `ComposerInputState`.
-- `enqueueText` is the retained submission entry point for both captions and image-only messages. It atomically releases the blocked identity and clears the draft projection; it does not create a second item or restart its uploads.
+- `enqueueText` is the retained submission entry point for both captions and media-only messages. It atomically releases the blocked identity and clears the draft projection; it does not create a second item or restart its uploads.
 - Send waits only for local acquisition/import durability, not compression or upload. Temporary Photos/picker/provider URLs are not durable input. The composer disables submission while acquisition is in progress. A failed release leaves composition intact.
 - `blockTail` transfers an undispatched released tail back to the composer. `revokeTail` discards an eligible tail. Both require item identity and expected edit revision and serialize against dispatch claims in SQLite.
 - A non-tail item cannot be moved into composition or revoked. Once claimed, even a failed request cannot be unsealed; these commands return `dispatchAlreadyClaimed`.
@@ -73,6 +73,7 @@ The persisted `compressionEnabled` option selects the current fixed preparation 
 - Disabled: upload the validated original.
 - Enabled: target a longest edge of 1920 pixels, preserve orientation, use PNG for transparency and JPEG otherwise, and replace the original only if the result is less than 75% of its byte size.
 - Multi-frame images retain their original bytes rather than flattening animation.
+- Videos retain their original bytes regardless of this option. AVFoundation validates playable video and extracts an oriented preview; container extensions are normalized from file headers before loading.
 - Local previews use an oriented thumbnail up to 480 pixels; preparation records actual output MIME type, dimensions and byte count.
 
 Changing compression while blocked invalidates prepared/uploaded work and reprocesses the original. Prepared checkpoints survive restart. Any future algorithm change must explicitly account for persisted unprepared work; the current option is a Boolean, not a versioned policy registry.
@@ -98,13 +99,21 @@ Recovery resumes from durable boundaries:
 
 Every unresolved upload retry allocates a new ID, including after HTTP 403 or restart. There are no allocation expiry checks or persisted upload URLs. A lost PUT response or local success checkpoint can therefore cause the bytes to be uploaded again under another ID. This deliberately trades extra remote orphans for simpler recovery: the backend has no client allocation idempotency key or explicit renew/delete-unattached endpoint. Completed slots are reused, and claimed message requests never replace their attachment IDs.
 
-Attachment metadata is sorted by allocation-time `order` and ID on the backend. Reordering therefore invalidates moved slots and reallocates them; changing the final message array alone is insufficient. The composer supports up to 20 images, matching the PWA.
+Attachment metadata is sorted by allocation-time `order` and ID on the backend. Reordering therefore invalidates moved slots and reallocates them; changing the final message array alone is insufficient. The composer supports up to 20 attachments.
 
 Message replay uses the backend's client-generated-ID conflict handling, which checks chat, sender, text, type, reply and attachment set. The client retains the exact sealed request across uncertain delivery. This is not an exactly-once attachment-allocation guarantee, nor a guarantee of remote orphan cleanup or indefinite unattached retention.
 
 ## Presentation and verification
 
-The shared SwiftUI composer provides Photos, image files, clipboard acquisition, drag/drop, a separate thumbnail tray, per-slot status/progress/retry/removal/reordering and a compression toggle. macOS also installs `onPasteCommand`; iOS uses `PasteButton` in the attachment menu. Pending bubbles consume explicit local references rather than fabricated server attachment responses and offer eligible tail edit/discard actions.
+The shared SwiftUI composer accepts photos and videos through Photos, Files, clipboard acquisition and drag/drop. Attaching media opens `ComposerAttachmentDialog`: a fixed count/close/options header, large scrollable previews and a fixed caption/send row. Per-item menus provide retry, removal and reordering; the header menu contains one image-compression option for the entire selection. Videos are sent unchanged. macOS also installs `onPasteCommand`; iOS uses `PasteButton` in the attachment menu.
+
+The caption edits the existing conversation draft. Closing the dialog preserves caption edits and attachments for later review; successful durable release clears the draft and dismisses the dialog, while failure retains both. The inline composer offers a review button for retained attachments rather than a second attachment tray.
+
+The full chat detail pane and caption dialog accept additional media drops. `ComposerAttachmentState` shares acquisition/error state and hands pane drops to the existing composer import transaction, preventing duplicate batches while a drop or import is pending. Gallery drags use an own-process slot type rather than image/file URLs, so moving a tile never imports it again. Hover shows an insertion edge and can scroll the gallery; only a validated drop commits a complete new order. Gallery/session/membership checks reject stale or foreign payloads, and cancelled/no-op drags do not change the queue.
+
+IME composition does not toggle control availability. Submission checks native marked text and the current composition boundary. On macOS, plain Return is intercepted before AppKit ends field editing, avoiding the select-all flash caused by restarting the editor. Candidate-confirmation Return remains native; Shift-Return inserts a newline with native selection and undo behavior.
+
+Pending bubbles consume explicit local references rather than fabricated server attachment responses and offer eligible tail edit/discard actions. Local and delivered attachments use the same `BubbleMediaLayout`, placement and tile chrome, including caption spacing and media-only metadata overlays. Upload progress and Ready/Processing labels are not shown in timeline media; the existing hollow checkmark identifies a pending message, with the normal failure action retained for failed sends.
 
 Verification performed for this implementation:
 
@@ -113,7 +122,11 @@ Verification performed for this implementation:
 - iOS Simulator build of the shared composer and native acquisition integration.
 - Throwaway loopback smoke using the real queue, ImageIO processor, URLSession uploader and SQLite store: release during preparation, failed PUT/retry, ordered bytes/IDs and FIFO delivery, revocation during upload, uncertain message replay, and restart of a blocked image-only thread draft.
 - Fresh-allocation retry smoke: HTTP 500, restart, HTTP 403 and successful PUT used three distinct IDs with identical prepared bytes. Only the successful ID was dispatched; uncertain message replay after another restart allocated nothing and retained the sealed request.
-- Hosted native `ComposerImageTray` rendering inspected for upload progress, failure, ready preview and compression control. Full Photos/iCloud interaction and live-backend sending were not manually exercised.
+- Native caption-dialog smoke with controlled submission outcomes: carried draft text, preserved caption on cancellation/failure, cleared caption and dismissal on success, and 20-item scrolling without moving the caption row. Three-item and scrolled-gallery rendering inspected on macOS.
+- Generated landscape MP4 and rotated portrait MOV imported/prepared with correct display dimensions, decodable previews and byte-identical originals under both image-compression settings; image preparation also produced a decodable result.
+- Pending-media smoke: local/delivered sizes and gallery cells match for 1, 2, 3, 6, 7 and 20 attachments; inspected the rendered pending gallery and hollow metadata checkmark.
+- Provider/state smoke: pane acquisition opened the caption and appended subsequent media without losing its draft; reorder payloads committed once, rejected stale/foreign membership and skipped no-op/cancelled changes. Edge-hover scrolling stopped on exit. End-to-end pointer-driven drag verification was blocked by macOS input-posting permission and remains a manual check.
+- Full Photos/iCloud interaction, iOS keyboard feel and live-backend sending still require manual verification.
 
 ## Source references
 

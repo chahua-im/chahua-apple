@@ -1,11 +1,12 @@
 import ChahuaAPI
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ChatDetailView: View {
     let chat: ChatListItem
+    let navigationTitle: String?
     let threadID: String?
     let initialPosition: TimelineInitialPosition
-
     private var conversationKey: ConversationKey { .init(chatID: chat.id, threadID: threadID) }
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ConversationTimelineModel
@@ -24,9 +25,19 @@ struct ChatDetailView: View {
     @State private var isUpdatingMessage = false
     @State private var editError: String?
     @State private var outboxError: String?
+    @StateObject private var composerAttachments = ComposerAttachmentState()
+    @State private var isMediaDropTargeted = false
 
-    init(chat: ChatListItem, currentUserID: Int32, store: ChatStore, threadID: String? = nil, initialPosition: TimelineInitialPosition? = nil) {
+    init(
+        chat: ChatListItem,
+        currentUserID: Int32,
+        store: ChatStore,
+        navigationTitle: String? = nil,
+        threadID: String? = nil,
+        initialPosition: TimelineInitialPosition? = nil
+    ) {
         self.chat = chat
+        self.navigationTitle = navigationTitle
         self.threadID = threadID
         self.initialPosition = initialPosition ?? (chat.unreadCount > 0 ? .unread(after: chat.lastReadMessageId) : .liveEdge)
         self.store = store
@@ -74,6 +85,7 @@ struct ChatDetailView: View {
                                 }
                                 MessageComposerView(
                                     text: composerText,
+                                    attachmentState: composerAttachments,
                                     maxHeight: max(36, geometry.size.height / 3),
                                     isEnabled: interactionContext.canWrite && (editingMessage != nil
                                         ? !isUpdatingMessage
@@ -119,7 +131,24 @@ struct ChatDetailView: View {
                         })
             }
         }
-        .navigationTitle(chat.chatDisplayName)
+        .contentShape(Rectangle())
+        .onDrop(of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted) { providers in
+            guard interactionContext.canWrite, editingMessage == nil,
+                outgoingQueue.storageState == .ready,
+                !drafts.committingDrafts.contains(conversationKey)
+            else { return false }
+            return composerAttachments.acceptDrop(providers)
+        }
+        .overlay {
+            if isMediaDropTargeted, interactionContext.canWrite, editingMessage == nil,
+                !composerAttachments.isAcquiring {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
+        .navigationTitle(navigationTitle ?? chat.chatDisplayName)
         .onAppear {
             store.registerTimeline(model)
             model.setReadTrackingActive(scenePhase == .active)
@@ -190,7 +219,6 @@ struct ChatDetailView: View {
         var actions = TimelineBubbleActions()
         actions.currentUserProfile = store.currentUserProfile
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
-        actions.attachmentProgress = outgoingQueue.attachmentProgress
         if let tail = outgoingQueue.snapshots[conversationKey]?.outgoing.last,
            outgoingQueue.snapshots[conversationKey]?.composingItem == nil, !tail.dispatchClaimed {
             actions.modifiablePendingMessageIDs = [tail.clientGeneratedID]
@@ -241,30 +269,25 @@ struct ChatDetailView: View {
             return !text.isEmpty && !isUpdatingMessage
                 && text != editingMessage.message?.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        return (!text.isEmpty || !outgoingQueue.draftAttachments(chatID: chat.id, threadID: threadID).isEmpty)
-            && outgoingQueue.storageState == .ready && !drafts.committingDrafts.contains(conversationKey)
+        return outgoingQueue.storageState == .ready && !drafts.committingDrafts.contains(conversationKey)
     }
 
-    private func submitComposer() {
+    private func submitComposer() async -> Bool {
         guard let message = editingMessage else {
-            Task {
-                if await drafts.submitDraft(chatID: chat.id, threadID: threadID) {
-                    await model.revealLatestAfterSend()
-                }
-            }
-            return
+            let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID)
+            if sent { await model.revealLatestAfterSend() }
+            return sent
         }
-        guard !isUpdatingMessage else { return }
+        guard !isUpdatingMessage else { return false }
         isUpdatingMessage = true
-        Task {
-            let didUpdate = await store.updateMessage(message, text: editText)
-            isUpdatingMessage = false
-            if didUpdate {
-                cancelEditing()
-            } else {
-                editError = String(localized: "Couldn’t edit this message. Please try again.")
-            }
+        let didUpdate = await store.updateMessage(message, text: editText)
+        isUpdatingMessage = false
+        if didUpdate {
+            cancelEditing()
+        } else {
+            editError = String(localized: "Couldn’t edit this message. Please try again.")
         }
+        return didUpdate
     }
 
     private func isEditable(_ message: MessageResponse) -> Bool {

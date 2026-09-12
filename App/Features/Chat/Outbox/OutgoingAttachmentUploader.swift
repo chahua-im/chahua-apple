@@ -8,9 +8,9 @@ nonisolated enum OutgoingAttachmentUploadError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsafeAllocation: "The image upload URL or headers are invalid."
-        case .invalidResponse: "The image upload returned an invalid response."
-        case .httpStatus(let status): "The image upload failed (HTTP \(status))."
+        case .unsafeAllocation: "The attachment upload URL or headers are invalid."
+        case .invalidResponse: "The attachment upload returned an invalid response."
+        case .httpStatus(let status): "The attachment upload failed (HTTP \(status))."
         }
     }
 }

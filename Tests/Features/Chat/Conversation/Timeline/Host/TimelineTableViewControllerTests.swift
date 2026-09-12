@@ -22,8 +22,8 @@ final class TimelineTableViewControllerTests: XCTestCase {
         } detail: { _ in
             ConversationTimelineView(model: model, loadsInitialAutomatically: false)
                 .modifier(ChatComposerOverlay {
-                    MessageComposerView(text: .constant(""), maxHeight: 160,
-                                        isEnabled: true, canSend: false, onSubmit: {})
+                    MessageComposerView(text: .constant(""), attachmentState: ComposerAttachmentState(), maxHeight: 160,
+                                        isEnabled: true, canSend: false, onSubmit: { false })
                 })
                 .modifier(ChatHeaderOverlay {
                     ChatFloatingHeader(title: "Conversation") {

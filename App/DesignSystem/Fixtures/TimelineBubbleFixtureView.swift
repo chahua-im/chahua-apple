@@ -9,6 +9,7 @@
     /// Local-only diagnostic surface. Uses the production timeline and decoder, never production auth.
     struct TimelineBubbleFixtureView: View {
         @StateObject private var fixture = TimelineBubbleFixtureModel()
+        @StateObject private var composerAttachments = ComposerAttachmentState()
         @State private var dark = ProcessInfo.processInfo.arguments.contains("-fixture-dark")
         @State private var handlersEnabled = true
         @State private var event = "No action"
@@ -84,13 +85,15 @@
                             ChatComposerOverlay {
                                 MessageComposerView(
                                     text: $draft,
+                                    attachmentState: composerAttachments,
                                     maxHeight: 160,
                                     isEnabled: true,
-                                    canSend: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                    canSend: true,
                                     onSubmit: {
                                         event = "Submitted: \(draft)" + (replyToMessage.map { " → \($0.id)" } ?? "")
                                         draft = ""
                                         replyToMessage = nil
+                                        return true
                                     },
                                     replyToMessage: replyToMessage,
                                     replyFocusRequest: replyFocusRequest,

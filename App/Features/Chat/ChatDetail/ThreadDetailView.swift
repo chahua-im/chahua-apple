@@ -13,6 +13,7 @@ struct ThreadDetailView: View {
             if let chat {
                 ChatDetailView(
                     chat: chat, currentUserID: currentUserID, store: store,
+                    navigationTitle: threadTitle,
                     threadID: thread.threadRootMessage.id,
                     initialPosition: thread.unreadCount > 0
                         ? .unread(after: thread.lastReadMessageId)
@@ -26,6 +27,11 @@ struct ThreadDetailView: View {
             }
         }
         .task(id: thread.chatId) { await loadChat() }
+    }
+
+    private var threadTitle: String {
+        let title = messagePreview(thread.threadRootMessage)
+        return title.isEmpty ? String(localized: "Message") : title
     }
 
     private func loadChat() async {

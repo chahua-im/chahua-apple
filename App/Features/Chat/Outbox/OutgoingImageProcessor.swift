@@ -1,3 +1,4 @@
+import AVFoundation
 import ChahuaAPI
 import CoreGraphics
 import Foundation
@@ -12,10 +13,10 @@ nonisolated enum OutgoingImageError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .outsideAccountDirectory: "The image file is outside this account’s outbox."
-        case .unsupportedImage: "This file is not a supported image."
-        case .invalidImage: "The image could not be read."
-        case .encodingFailed: "The image could not be prepared."
+        case .outsideAccountDirectory: "The attachment file is outside this account’s outbox."
+        case .unsupportedImage: "This file is not a supported photo or video."
+        case .invalidImage: "The photo or video could not be read."
+        case .encodingFailed: "The photo or video could not be prepared."
         }
     }
 }
@@ -26,48 +27,62 @@ nonisolated struct OutgoingImageProcessor: Sendable {
 
     func importImage(from url: URL, directory: URL, position: Int) async throws -> LocalOutgoingAttachment {
         let worker = Task.detached(priority: .userInitiated) {
-            try autoreleasepool {
-                try Task.checkCancellation()
-                let root = try OutgoingImageFiles.root(self.directory)
-                guard try OutgoingImageFiles.root(directory) == root else {
-                    throw OutgoingImageError.outsideAccountDirectory
-                }
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                guard url.isFileURL else { throw OutgoingImageError.unsupportedImage }
-                let inputValues = try url.resourceValues(forKeys: [.isRegularFileKey])
-                guard inputValues.isRegularFile == true else { throw OutgoingImageError.unsupportedImage }
-                let manager = FileManager.default
-                let outbox = root.appendingPathComponent("Outbox", isDirectory: true)
-                try manager.createDirectory(at: outbox, withIntermediateDirectories: true)
-                try OutgoingImageFiles.checkOutbox(outbox, root: root)
-                let id = UUID().uuidString
-                let staging = outbox.appendingPathComponent(".\(id).import", isDirectory: true)
-                let installed = outbox.appendingPathComponent(id, isDirectory: true)
-                try manager.createDirectory(at: staging, withIntermediateDirectories: false)
-                defer { try? manager.removeItem(at: staging) }
-                let copied = staging.appendingPathComponent("source")
-                try Self.copy(from: url, to: copied)
-                let metadata = try Self.metadata(copied)
-                let sourceName = "source.\(metadata.extensionName)"
-                let source = staging.appendingPathComponent(sourceName)
-                try manager.moveItem(at: copied, to: source)
-                let image = try Self.thumbnail(metadata.source, maximum: 480)
-                let previewType: UTType = Self.hasAlpha(image) ? .png : .jpeg
-                let previewName = "preview.\(previewType.preferredFilenameExtension!)"
-                try Self.encode(image, type: previewType, to: staging.appendingPathComponent(previewName))
-                try Task.checkCancellation()
-                try manager.moveItem(at: staging, to: installed)
-                // The complete directory becomes visible at once; no row can reference partial files.
-                return LocalOutgoingAttachment(
-                    id: id, generation: UUID().uuidString, position: position,
-                    sourcePath: installed.appendingPathComponent(sourceName).path,
-                    previewPath: installed.appendingPathComponent(previewName).path,
-                    fileName: Self.fileName(url.deletingPathExtension().lastPathComponent, extensionName: metadata.extensionName),
-                    mimeType: metadata.mimeType, width: metadata.width, height: metadata.height,
-                    byteCount: metadata.byteCount
-                )
+            try Task.checkCancellation()
+            let root = try OutgoingImageFiles.root(self.directory)
+            guard try OutgoingImageFiles.root(directory) == root else {
+                throw OutgoingImageError.outsideAccountDirectory
             }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard url.isFileURL else { throw OutgoingImageError.unsupportedImage }
+            let inputValues = try url.resourceValues(forKeys: [.isRegularFileKey])
+            guard inputValues.isRegularFile == true else { throw OutgoingImageError.unsupportedImage }
+            let manager = FileManager.default
+            let outbox = root.appendingPathComponent("Outbox", isDirectory: true)
+            try manager.createDirectory(at: outbox, withIntermediateDirectories: true)
+            try OutgoingImageFiles.checkOutbox(outbox, root: root)
+            let id = UUID().uuidString
+            let staging = outbox.appendingPathComponent(".\(id).import", isDirectory: true)
+            let installed = outbox.appendingPathComponent(id, isDirectory: true)
+            try manager.createDirectory(at: staging, withIntermediateDirectories: false)
+            defer { try? manager.removeItem(at: staging) }
+            var copied = staging.appendingPathComponent("source")
+            try Self.copy(from: url, to: copied)
+            // AVFoundation needs a container extension even when the bytes are valid.
+            // Provider names are untrusted, so normalize from the file header first.
+            let metadata: Metadata
+            if let image = try? autoreleasepool(invoking: { try Self.imageMetadata(copied) }) {
+                metadata = image
+            } else {
+                let type = try Self.videoType(copied)
+                guard let extensionName = type.preferredFilenameExtension else {
+                    throw OutgoingImageError.unsupportedImage
+                }
+                let video = staging.appendingPathComponent("source.\(extensionName)")
+                try manager.moveItem(at: copied, to: video)
+                copied = video
+                metadata = try await Self.metadata(copied)
+            }
+            let image = try await Self.preview(metadata, maximum: 480)
+            let sourceName = "source.\(metadata.extensionName)"
+            let source = staging.appendingPathComponent(sourceName)
+            if copied != source { try manager.moveItem(at: copied, to: source) }
+            let previewType: UTType = Self.hasAlpha(image) ? .png : .jpeg
+            let previewName = "preview.\(previewType.preferredFilenameExtension!)"
+            try autoreleasepool {
+                try Self.encode(image, type: previewType, to: staging.appendingPathComponent(previewName))
+            }
+            try Task.checkCancellation()
+            try manager.moveItem(at: staging, to: installed)
+            // The complete directory becomes visible at once; no row can reference partial files.
+            return LocalOutgoingAttachment(
+                id: id, generation: UUID().uuidString, position: position,
+                sourcePath: installed.appendingPathComponent(sourceName).path,
+                previewPath: installed.appendingPathComponent(previewName).path,
+                fileName: Self.fileName(url.deletingPathExtension().lastPathComponent, extensionName: metadata.extensionName),
+                mimeType: metadata.mimeType, width: metadata.width, height: metadata.height,
+                byteCount: metadata.byteCount
+            )
         }
         return try await withTaskCancellationHandler {
             try await worker.value
@@ -78,57 +93,41 @@ nonisolated struct OutgoingImageProcessor: Sendable {
 
     func prepare(_ attachment: LocalOutgoingAttachment, compressionEnabled: Bool) async throws -> LocalOutgoingAttachment {
         let worker = Task.detached(priority: .utility) {
-            try autoreleasepool {
-                try Task.checkCancellation()
-                let source = try OutgoingImageFiles.file(URL(fileURLWithPath: attachment.sourcePath), directory: directory)
-                let preview = try OutgoingImageFiles.file(URL(fileURLWithPath: attachment.previewPath), directory: directory)
-                guard source.deletingLastPathComponent() == preview.deletingLastPathComponent() else {
+            try Task.checkCancellation()
+            let source = try OutgoingImageFiles.file(URL(fileURLWithPath: attachment.sourcePath), directory: directory)
+            let preview = try OutgoingImageFiles.file(URL(fileURLWithPath: attachment.previewPath), directory: directory)
+            guard source.deletingLastPathComponent() == preview.deletingLastPathComponent() else {
+                throw OutgoingImageError.outsideAccountDirectory
+            }
+            if let preparedPath = attachment.preparedPath {
+                let prepared = try OutgoingImageFiles.file(URL(fileURLWithPath: preparedPath), directory: directory)
+                guard prepared.deletingLastPathComponent() == source.deletingLastPathComponent() else {
                     throw OutgoingImageError.outsideAccountDirectory
                 }
-                if let preparedPath = attachment.preparedPath {
-                    let prepared = try OutgoingImageFiles.file(URL(fileURLWithPath: preparedPath), directory: directory)
-                    guard prepared.deletingLastPathComponent() == source.deletingLastPathComponent() else {
-                        throw OutgoingImageError.outsideAccountDirectory
-                    }
-                }
-                let metadata = try Self.metadata(source)
-                var result = attachment
-                result.preparedPath = source.path
-                result.fileName = Self.fileName(
-                    URL(fileURLWithPath: attachment.fileName).deletingPathExtension().lastPathComponent,
-                    extensionName: metadata.extensionName
-                )
-                result.mimeType = metadata.mimeType
-                result.width = metadata.width
-                result.height = metadata.height
-                result.byteCount = metadata.byteCount
-                result.attachmentID = nil
-                result.error = nil
-                // Preserve every frame and its timing by sending animated/multi-image originals unchanged.
-                guard compressionEnabled, CGImageSourceGetCount(metadata.source) == 1 else { return result }
-                let image = try Self.thumbnail(metadata.source, maximum: 1920)
-                let type: UTType = Self.hasAlpha(image) ? .png : .jpeg
-                let name = UUID().uuidString
-                let folder = source.deletingLastPathComponent()
-                let staging = folder.appendingPathComponent(".\(name).partial")
-                defer { try? FileManager.default.removeItem(at: staging) }
-                try Self.encode(image, type: type, to: staging)
-                let bytes = try Self.fileSize(staging)
-                try Task.checkCancellation()
-                // The original remains authoritative unless the complete result saves at least 25%.
-                guard Double(bytes) < Double(metadata.byteCount) * 0.75 else { return result }
-                let output = folder.appendingPathComponent("prepared.\(name).\(type.preferredFilenameExtension!)")
-                try FileManager.default.moveItem(at: staging, to: output)
-                result.preparedPath = output.path
-                result.fileName = Self.fileName(
-                    URL(fileURLWithPath: attachment.fileName).deletingPathExtension().lastPathComponent,
-                    extensionName: type.preferredFilenameExtension!
-                )
-                result.mimeType = type.preferredMIMEType!
-                result.width = image.width
-                result.height = image.height
-                result.byteCount = bytes
+            }
+            let metadata = try await Self.metadata(source)
+            var result = attachment
+            result.preparedPath = source.path
+            result.fileName = Self.fileName(
+                URL(fileURLWithPath: attachment.fileName).deletingPathExtension().lastPathComponent,
+                extensionName: metadata.extensionName
+            )
+            result.mimeType = metadata.mimeType
+            result.width = metadata.width
+            result.height = metadata.height
+            result.byteCount = metadata.byteCount
+            result.attachmentID = nil
+            result.error = nil
+            try Task.checkCancellation()
+            guard compressionEnabled else { return result }
+            switch metadata.content {
+            case .video:
+                // Videos retain their original bytes regardless of the image compression setting.
                 return result
+            case .image(let imageSource):
+                return try autoreleasepool {
+                    try Self.prepareImage(result, source: imageSource)
+                }
             }
         }
         return try await withTaskCancellationHandler {
@@ -138,8 +137,41 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         }
     }
 
+    private static func prepareImage(_ attachment: LocalOutgoingAttachment, source: CGImageSource) throws -> LocalOutgoingAttachment {
+        // Preserve every frame and its timing by sending animated/multi-image originals unchanged.
+        guard CGImageSourceGetCount(source) == 1 else { return attachment }
+        let image = try thumbnail(source, maximum: 1920)
+        let type: UTType = hasAlpha(image) ? .png : .jpeg
+        let name = UUID().uuidString
+        let folder = URL(fileURLWithPath: attachment.sourcePath).deletingLastPathComponent()
+        let staging = folder.appendingPathComponent(".\(name).partial")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        try encode(image, type: type, to: staging)
+        let bytes = try fileSize(staging)
+        try Task.checkCancellation()
+        // The original remains authoritative unless the complete result saves at least 25%.
+        guard Double(bytes) < Double(attachment.byteCount) * 0.75 else { return attachment }
+        let output = folder.appendingPathComponent("prepared.\(name).\(type.preferredFilenameExtension!)")
+        try FileManager.default.moveItem(at: staging, to: output)
+        var result = attachment
+        result.preparedPath = output.path
+        result.fileName = fileName(
+            URL(fileURLWithPath: attachment.fileName).deletingPathExtension().lastPathComponent,
+            extensionName: type.preferredFilenameExtension!
+        )
+        result.mimeType = type.preferredMIMEType!
+        result.width = image.width
+        result.height = image.height
+        result.byteCount = bytes
+        return result
+    }
+
     private struct Metadata {
-        let source: CGImageSource
+        enum Content {
+            case image(CGImageSource)
+            case video(AVURLAsset)
+        }
+        let content: Content
         let mimeType: String
         let extensionName: String
         let width: Int
@@ -147,7 +179,7 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         let byteCount: Int64
     }
 
-    private static func metadata(_ url: URL) throws -> Metadata {
+    private static func imageMetadata(_ url: URL) throws -> Metadata {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
             CGImageSourceGetCount(source) > 0,
             let identifier = CGImageSourceGetType(source),
@@ -161,10 +193,85 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         let orientation = (values[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
         let swapped = (5...8).contains(orientation)
         return Metadata(
-            source: source, mimeType: mime, extensionName: extensionName,
+            content: .image(source), mimeType: mime, extensionName: extensionName,
             width: swapped ? height : width, height: swapped ? width : height,
             byteCount: try fileSize(url)
         )
+    }
+
+    private static func metadata(_ url: URL) async throws -> Metadata {
+        try Task.checkCancellation()
+        if let image = try? autoreleasepool(invoking: { try imageMetadata(url) }) { return image }
+        let type = try videoType(url)
+        guard let mimeType = type.preferredMIMEType, let extensionName = type.preferredFilenameExtension else {
+            throw OutgoingImageError.unsupportedImage
+        }
+        let asset = AVURLAsset(url: url)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let playable = try await asset.load(.isPlayable)
+            let duration = try await asset.load(.duration).seconds
+            guard playable, duration.isFinite, duration > 0,
+                let track = try await asset.loadTracks(withMediaType: .video).first
+            else { throw OutgoingImageError.invalidImage }
+            let size = try await track.load(.naturalSize)
+            let transform = try await track.load(.preferredTransform)
+            let bounds = CGRect(origin: .zero, size: size).applying(transform).standardized
+            guard bounds.width.isFinite, bounds.height.isFinite,
+                bounds.width >= 1, bounds.height >= 1,
+                bounds.width < CGFloat(Int32.max), bounds.height < CGFloat(Int32.max)
+            else { throw OutgoingImageError.invalidImage }
+            try Task.checkCancellation()
+            return Metadata(
+                content: .video(asset), mimeType: mimeType, extensionName: extensionName,
+                width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()), byteCount: try fileSize(url)
+            )
+        } onCancel: {
+            asset.cancelLoading()
+        }
+    }
+
+    private static func videoType(_ url: URL) throws -> UTType {
+        // Provider filenames can be absent or wrong. Identify the container from bytes, then
+        // require AVFoundation to validate playable video tracks before accepting the file.
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let header = try handle.read(upToCount: 16) ?? Data()
+        guard header.count >= 12 else { throw OutgoingImageError.unsupportedImage }
+        let box = String(decoding: header[4..<8], as: UTF8.self)
+        if box == "ftyp" {
+            let brand = String(decoding: header[8..<12], as: UTF8.self)
+            if brand == "qt  " { return .quickTimeMovie }
+            if brand.hasPrefix("3g2"), let type = UTType("public.3gpp2") { return type }
+            if brand.hasPrefix("3g"), let type = UTType("public.3gpp") { return type }
+            return .mpeg4Movie
+        }
+        if ["moov", "mdat", "wide", "free", "skip"].contains(box) { return .quickTimeMovie }
+        if header.starts(with: [0x52, 0x49, 0x46, 0x46]),
+            String(decoding: header[8..<12], as: UTF8.self) == "AVI " {
+            return .avi
+        }
+        if header.starts(with: [0, 0, 1, 0xBA]) || header.starts(with: [0, 0, 1, 0xB3]) { return .mpeg }
+        throw OutgoingImageError.unsupportedImage
+    }
+
+    private static func preview(_ metadata: Metadata, maximum: Int) async throws -> CGImage {
+        try Task.checkCancellation()
+        switch metadata.content {
+        case .image(let source):
+            return try autoreleasepool { try thumbnail(source, maximum: maximum) }
+        case .video(let asset):
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: maximum, height: maximum)
+            let image = try await withTaskCancellationHandler {
+                try await generator.image(at: .zero).image
+            } onCancel: {
+                generator.cancelAllCGImageGeneration()
+            }
+            try Task.checkCancellation()
+            return image
+        }
     }
 
     private static func thumbnail(_ source: CGImageSource, maximum: Int) throws -> CGImage {
@@ -227,7 +334,7 @@ nonisolated struct OutgoingImageProcessor: Sendable {
 
     private static func fileName(_ stem: String, extensionName: String) -> String {
         let trimmed = stem.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "\(String((trimmed.isEmpty ? "image" : trimmed).prefix(200))).\(extensionName)"
+        return "\(String((trimmed.isEmpty ? "attachment" : trimmed).prefix(200))).\(extensionName)"
     }
 }
 

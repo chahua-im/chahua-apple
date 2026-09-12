@@ -99,6 +99,21 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertTrue(h.state.enabled)
     }
 
+    func testSendButtonDuringCompositionLeavesCandidateUnsent() async throws {
+        let h = try await mount(text: "prefix ")
+        try h.selectEnd()
+        try h.mark("ni")
+        try await pause()
+
+        h.pressSendButton()
+
+        try await pause()
+        XCTAssertEqual(h.state.submits, 0)
+        XCTAssertEqual(h.state.text, "prefix ")
+        XCTAssertTrue(h.state.composing)
+        XCTAssertTrue(h.state.enabled)
+    }
+
     func testRemovingMarkedComposerDoesNotSaveIntermediateText() async throws {
         let h = try await mount(text: "prefix ")
         try h.selectEnd()
@@ -112,6 +127,26 @@ final class ComposerFocusTests: XCTestCase {
     }
 
     #if os(macOS)
+        func testReturnPreservesSelectionAndEditingSessionBeforeCommit() async throws {
+            let h = try await mount(text: "send this")
+            let editor = try h.focusedEditor()
+            let selection = NSRange(location: 2, length: 0)
+            editor.setSelectedRange(selection)
+            let observer = NotificationCenter.default.addObserver(
+                forName: NSText.didEndEditingNotification, object: editor, queue: nil
+            ) { _ in MainActor.assumeIsolated { h.state.editingEnded = true } }
+            defer { NotificationCenter.default.removeObserver(observer) }
+
+            h.pressReturn()
+
+            XCTAssertTrue(h.window.firstResponder === editor)
+            XCTAssertEqual(editor.selectedRange(), selection)
+            XCTAssertEqual(editor.string, "send this")
+            XCTAssertFalse(h.state.editingEnded, "Return must not end and restart AppKit field editing.")
+            try await pause()
+            XCTAssertEqual(h.state.submits, 1)
+        }
+
         func testShiftReturnUsesNativeSelectionAndUndoWithoutSubmitting() async throws {
             let h = try await mount(text: "abcd")
             let editor = try h.focusedEditor()
@@ -147,11 +182,13 @@ final class ComposerFocusTests: XCTestCase {
 
 @MainActor
 private final class FocusComposerState: ObservableObject {
+    let attachments = ComposerAttachmentState()
     @Published var text: String
     @Published var enabled = true
     @Published var showsComposer = true
     var composing = false
     var submits = 0
+    var editingEnded = false
     init(text: String) { self.text = text }
 }
 
@@ -162,10 +199,12 @@ private struct FocusComposerRoot: View {
             Spacer()
             if state.showsComposer {
                 MessageComposerView(
-                    text: $state.text, maxHeight: 160, isEnabled: state.enabled, canSend: !state.text.isEmpty,
+                    text: $state.text, attachmentState: state.attachments,
+                    maxHeight: 160, isEnabled: state.enabled, canSend: true,
                     onSubmit: {
                         state.submits += 1
                         state.enabled = false
+                        return true
                     }, onCompositionChanged: { state.composing = $0 })
             }
         }

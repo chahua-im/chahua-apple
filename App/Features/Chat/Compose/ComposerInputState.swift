@@ -53,8 +53,8 @@ final class ComposerInputState: ObservableObject {
 
     func prepareSubmission(allowEmptyUnfocused: Bool = false) -> Bool {
         var snapshot = nativeInput?.snapshot() ?? .unavailable
-        // AppKit ends editing before SwiftUI calls onSubmit. This snapshot was
-        // captured while the editor still belonged to us, in this transaction.
+        // A button can submit after native focus loss. Use only the snapshot
+        // captured while the editor still belonged to us in this transaction.
         if case .unavailable = snapshot { snapshot = endingSnapshot ?? .unavailable }
         if case .marked = snapshot {
             beginComposition()

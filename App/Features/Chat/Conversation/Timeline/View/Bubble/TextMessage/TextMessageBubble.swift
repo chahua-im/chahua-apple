@@ -19,7 +19,8 @@ struct TextMessageBubble: View {
     }
     private var bodyText: String { row.entry.text ?? "" }
     private var hasBody: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    private var mediaOnly: Bool { !attachments.isEmpty && !hasBody }
+    private var hasMedia: Bool { !attachments.isEmpty || !localAttachments.isEmpty }
+    private var mediaOnly: Bool { hasMedia && !hasBody }
     private var replyPreview: MessagePreview? {
         guard let preview = row.entry.replyToMessage, !preview.isDeleted else { return nil }
         return preview
@@ -34,11 +35,10 @@ struct TextMessageBubble: View {
         BubbleMetrics.maximumBubbleWidth(rowWidth: context.viewportSize.width, avatarSize: avatarSize)
     }
     private var mediaSize: CGSize? {
-        guard let first = attachments.first else { return nil }
-        if attachments.count == 1 {
-            return BubbleMediaLayout.singleSize(for: first, viewport: context.viewportSize, availableWidth: availableMediaWidth)
+        if !localAttachments.isEmpty {
+            return BubbleMediaLayout.size(for: localAttachments, viewport: context.viewportSize, availableWidth: availableMediaWidth)
         }
-        return BubbleMediaLayout.gallery(for: attachments, viewport: context.viewportSize, availableWidth: availableMediaWidth)?.size
+        return BubbleMediaLayout.size(for: attachments, viewport: context.viewportSize, availableWidth: availableMediaWidth)
     }
 
     var body: some View {
@@ -56,18 +56,21 @@ struct TextMessageBubble: View {
                     .padding(.top, row.showsSenderName ? 0 : 8)
                     .padding(.bottom, 6)
             }
-            if !localAttachments.isEmpty {
-                BubbleLocalMedia(
-                    attachments: localAttachments, width: min(280, max(1, availableMediaWidth)),
-                    progress: actions.attachmentProgress, isMeasuring: context.isMeasuring
-                )
-            }
             if let mediaSize, mediaSize.width > 0, mediaSize.height > 0 {
-                BubbleMedia(
-                    messageID: message?.id ?? "", attachments: attachments,
-                    viewport: context.viewportSize, availableWidth: availableMediaWidth,
-                    isMeasuring: context.isMeasuring, action: actions.openMedia
-                )
+                Group {
+                    if !localAttachments.isEmpty {
+                        BubbleLocalMedia(
+                            attachments: localAttachments, viewport: context.viewportSize,
+                            availableWidth: availableMediaWidth, isMeasuring: context.isMeasuring
+                        )
+                    } else {
+                        BubbleMedia(
+                            messageID: message?.id ?? "", attachments: attachments,
+                            viewport: context.viewportSize, availableWidth: availableMediaWidth,
+                            isMeasuring: context.isMeasuring, action: actions.openMedia
+                        )
+                    }
+                }
                 .overlay(alignment: .bottomTrailing) {
                     if mediaOnly {
                         MessageMetadataView(
@@ -87,7 +90,7 @@ struct TextMessageBubble: View {
             if !mediaOnly {
                 textContent
                     .padding(.horizontal, BubbleMetrics.textHorizontalInset)
-                    .padding(.top, !attachments.isEmpty ? 4 : (row.showsSenderName || replyPreview != nil ? 0 : BubbleMetrics.textVerticalInset))
+                    .padding(.top, hasMedia ? 4 : (row.showsSenderName || replyPreview != nil ? 0 : BubbleMetrics.textVerticalInset))
                     .padding(.bottom, threadCount == nil ? BubbleMetrics.textVerticalInset : 0)
             }
             if let count = threadCount {
@@ -100,7 +103,7 @@ struct TextMessageBubble: View {
                 .padding(.bottom, 8)
             }
         }
-        .frame(width: !localAttachments.isEmpty ? min(280, max(1, availableMediaWidth)) : mediaSize?.width)
+        .frame(width: mediaSize?.width)
         .foregroundStyle(foreground)
         .modifier(MessageBubbleSurface(isOutgoing: row.isOutgoing, hasTail: hasTail, isFilled: hasBackground))
     }

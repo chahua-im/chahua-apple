@@ -150,8 +150,8 @@ final class ChatDraftStore: ObservableObject {
         case busy, notSaved
         var errorDescription: String? {
             switch self {
-            case .busy: "Finish editing this message before changing its images."
-            case .notSaved: "Your draft couldn’t be saved. Retry local storage before changing its images."
+            case .busy: "Finish editing this message before changing its attachments."
+            case .notSaved: "Your draft couldn’t be saved. Retry local storage before changing its attachments."
             }
         }
     }

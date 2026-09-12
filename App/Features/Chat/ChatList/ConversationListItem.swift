@@ -23,8 +23,11 @@ enum ConversationListItem: Hashable, Identifiable {
 
     var title: String {
         switch self {
-        case .chat(let chat): chat.chatDisplayName
-        case .thread(let thread): thread.threadRootMessage.conversationPreview
+        case .chat(let chat):
+            return chat.chatDisplayName
+        case .thread(let thread):
+            let preview = messagePreview(thread.threadRootMessage)
+            return preview.isEmpty ? String(localized: "Message") : preview
         }
     }
 
@@ -44,9 +47,29 @@ enum ConversationListItem: Hashable, Identifiable {
 
     var preview: String? {
         switch self {
-        case .chat(let chat): chat.lastMessage?.conversationPreview
-        case .thread(let thread): thread.chatName
+        case .chat(let chat):
+            guard let lastMessage = chat.lastMessage else { return nil }
+            let preview = messagePreview(lastMessage)
+            return preview.isEmpty ? String(localized: "Message") : preview
+        case .thread(let thread):
+            let message = thread.lastReply ?? thread.threadRootMessage
+            let preview = messagePreview(message)
+            return preview.isEmpty ? String(localized: "Message") : preview
         }
+    }
+
+    func previewSenderName(parentKind: ChatKind? = nil) -> String? {
+        let sender: User
+        switch self {
+        case .chat(let chat):
+            guard chat.kind == .group, let lastMessage = chat.lastMessage else { return nil }
+            sender = lastMessage.sender
+        case .thread(let thread):
+            guard parentKind != .dm else { return nil }
+            sender = (thread.lastReply ?? thread.threadRootMessage).sender
+        }
+        let name = sender.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (name?.isEmpty == false) ? name : String(localized: "User \(sender.uid)")
     }
 
     static func entries(chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope, draftUpdatedAt: [ConversationKey: Date] = [:]) -> [Self] {
@@ -69,15 +92,6 @@ enum ConversationListItem: Hashable, Identifiable {
     }
 }
 
-extension MessagePreview {
-    var conversationPreview: String {
-        if isDeleted { return String(localized: "Message deleted") }
-        if let message, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return message }
-        if let sticker { return sticker.emoji }
-        if !attachments.isEmpty { return String(localized: "Attachment") }
-        return String(localized: "Message")
-    }
-}
 extension ChatListItem {
     var chatDisplayName: String {
         switch kind {

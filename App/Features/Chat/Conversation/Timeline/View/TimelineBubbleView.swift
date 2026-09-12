@@ -24,7 +24,6 @@ struct TimelineBubbleActions {
     var pendingReactionMessageIDs: Set<String> = []
     var currentUserProfile: MeResponse?
     var interactionContext = MessageInteractionContext()
-    var attachmentProgress: [String: Double] = [:]
     var modifiablePendingMessageIDs: Set<String> = []
     var blockPendingMessage: ((PendingOutgoingMessage) -> Void)?
     var revokePendingMessage: ((PendingOutgoingMessage) -> Void)?

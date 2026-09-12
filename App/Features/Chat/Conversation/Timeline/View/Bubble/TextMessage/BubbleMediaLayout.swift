@@ -1,15 +1,28 @@
 import ChahuaAPI
 import CoreGraphics
 
+protocol BubbleMediaAttachment: Hashable {
+    var id: String { get }
+    var mediaDimensions: CGSize { get }
+}
+
+extension AttachmentResponse: BubbleMediaAttachment {
+    var mediaDimensions: CGSize { .init(width: Int(width ?? 0), height: Int(height ?? 0)) }
+}
+
+extension LocalOutgoingAttachment: BubbleMediaAttachment {
+    var mediaDimensions: CGSize { .init(width: width, height: height) }
+}
+
 enum BubbleMediaLayout {
-    struct Cell: Hashable {
-        let attachment: AttachmentResponse
+    struct Cell<Attachment: BubbleMediaAttachment>: Hashable {
+        let attachment: Attachment
         let frame: CGRect
         let overflowCount: Int
     }
 
-    struct Gallery: Hashable {
-        let cells: [Cell]
+    struct Gallery<Attachment: BubbleMediaAttachment>: Hashable {
+        let cells: [Cell<Attachment>]
         let size: CGSize
     }
 
@@ -31,10 +44,18 @@ enum BubbleMediaLayout {
         return .init(width: width, height: height)
     }
 
-    static func singleSize(for attachment: AttachmentResponse, viewport: CGSize, availableWidth: CGFloat) -> CGSize? {
+    static func size<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], viewport: CGSize, availableWidth: CGFloat) -> CGSize? {
+        guard let first = attachments.first else { return nil }
+        if attachments.count == 1 {
+            return singleSize(for: first, viewport: viewport, availableWidth: availableWidth)
+        }
+        return gallery(for: attachments, viewport: viewport, availableWidth: availableWidth)?.size
+    }
+
+    static func singleSize<Attachment: BubbleMediaAttachment>(for attachment: Attachment, viewport: CGSize, availableWidth: CGFloat) -> CGSize? {
         guard let limits = bounds(viewport: viewport, availableWidth: availableWidth) else { return nil }
-        var width = CGFloat(attachment.width ?? 0)
-        var height = CGFloat(attachment.height ?? 0)
+        var width = attachment.mediaDimensions.width
+        var height = attachment.mediaDimensions.height
         guard width > 0, height > 0 else {
             let side = min(limits.width, limits.height)
             return .init(width: side, height: side)
@@ -71,12 +92,13 @@ enum BubbleMediaLayout {
         )
     }
 
-    static func gallery(for attachments: [AttachmentResponse], viewport: CGSize, availableWidth: CGFloat) -> Gallery? {
+    static func gallery<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], viewport: CGSize, availableWidth: CGFloat) -> Gallery<Attachment>? {
         guard let limits = bounds(viewport: viewport, availableWidth: availableWidth), attachments.count > 1 else { return nil }
         let items = attachments.prefix(6)
         let ratios = items.map { attachment -> CGFloat in
-            let width = attachment.width.flatMap { $0 > 0 ? CGFloat($0) : nil } ?? 100
-            let height = attachment.height.flatMap { $0 > 0 ? CGFloat($0) : nil } ?? 100
+            let dimensions = attachment.mediaDimensions
+            let width = dimensions.width > 0 ? dimensions.width : 100
+            let height = dimensions.height > 0 ? dimensions.height : 100
             return min(2.5, max(0.5, width / height))
         }
         guard let (partition, rows) = bestRows(ratios: ratios, width: limits.width, height: limits.height) else { return nil }
@@ -85,7 +107,7 @@ enum BubbleMediaLayout {
         let totalHeight = min(contentHeight + interRowGaps, limits.height)
         let scale = min(1, (limits.height - interRowGaps) / contentHeight)
         guard scale > 0 else { return nil }
-        var cells: [Cell] = []
+        var cells: [Cell<Attachment>] = []
         cells.reserveCapacity(items.count)
         var index = 0
         var y: CGFloat = 0

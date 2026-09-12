@@ -1,7 +1,32 @@
+import Combine
 import CoreTransferable
 import Foundation
 import PhotosUI
 import UniformTypeIdentifiers
+
+/// One acquisition transaction is shared by the pane, inline composer and caption sheet.
+@MainActor
+final class ComposerAttachmentState: ObservableObject {
+    struct DropRequest {
+        let id = UUID()
+        let providers: [NSItemProvider]
+    }
+
+    @Published var isAcquiring = false
+    @Published var error: String?
+    @Published private(set) var dropRequest: DropRequest?
+
+    func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !isAcquiring, dropRequest == nil, !providers.isEmpty else { return false }
+        dropRequest = DropRequest(providers: providers)
+        return true
+    }
+
+    func takeDrop() -> [NSItemProvider]? {
+        defer { dropRequest = nil }
+        return dropRequest?.providers
+    }
+}
 
 /// Picker/provider URLs expire when their callback returns. Materialize a private temporary
 /// copy here; the outbox imports it durably before the caller removes this copy.
@@ -10,6 +35,9 @@ struct ComposerImportedImage: Transferable, Sendable {
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(importedContentType: .image) { received in
+            Self(url: try ComposerImageAcquisition.copyTemporary(received.file))
+        }
+        FileRepresentation(importedContentType: .movie) { received in
             Self(url: try ComposerImageAcquisition.copyTemporary(received.file))
         }
     }
@@ -34,7 +62,11 @@ enum ComposerImageAcquisition {
     }
 
     static func materialize(_ provider: NSItemProvider) async throws -> URL {
-        if let type = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .image) == true }) {
+        try Task.checkCancellation()
+        if let type = provider.registeredTypeIdentifiers.first(where: {
+            guard let type = UTType($0) else { return false }
+            return type.conforms(to: .image) || type.conforms(to: .movie)
+        }) {
             return try await withCheckedThrowingContinuation { continuation in
                 provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
                     do {
@@ -62,6 +94,6 @@ enum ComposerImageAcquisition {
 
     enum AcquisitionError: LocalizedError {
         case unavailable
-        var errorDescription: String? { "This image couldn’t be read. Try choosing it from Files or Photos again." }
+        var errorDescription: String? { "This photo or video couldn’t be read. Try choosing it from Files or Photos again." }
     }
 }

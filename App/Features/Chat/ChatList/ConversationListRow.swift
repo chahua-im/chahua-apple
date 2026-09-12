@@ -16,6 +16,11 @@ struct ConversationListRow: View {
         return until > .now
     }
 
+    private var threadParentKind: ChatKind? {
+        guard case .thread(let thread) = item else { return nil }
+        return store.state.chats.first(where: { $0.id == thread.chatId })?.kind
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: ChahuaTheme.Spacing.medium) {
             ConversationAvatarView(
@@ -38,7 +43,11 @@ struct ConversationListRow: View {
                         if !draft.isEmpty {
                             Text("Draft: \(draft)")
                         } else if let preview = item.preview {
-                            Text(preview)
+                            if let sender = item.previewSenderName(parentKind: threadParentKind) {
+                                Text("\(Text(verbatim: sender).bold()): \(Text(verbatim: preview))")
+                            } else {
+                                Text(verbatim: preview)
+                            }
                         } else {
                             Color.clear
                         }
@@ -108,8 +117,8 @@ private struct ConversationListRowPreview: View {
                 "id": "preview-root", "clientGeneratedId": "preview-client",
                 "createdAt": "2026-09-10T08:00:00Z",
                 "sender": {"uid": 2, "gender": 0, "name": "Ada"},
-                "messageType": "text", "message": "The latest designs are ready for review.",
-                "attachments": [], "mentions": [], "isDeleted": false
+                "messageType": "text", "message": "Hi @[uid:2], the latest designs are ready for review.",
+                "attachments": [], "mentions": [{"uid": 2, "gender": 0, "username": "Grace"}], "isDeleted": false
             }
             """.utf8))
 

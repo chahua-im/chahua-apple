@@ -103,7 +103,6 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                 || (actions.toggleReaction == nil) != (oldValue.toggleReaction == nil)
                 || actions.pendingReactionMessageIDs != oldValue.pendingReactionMessageIDs
                 || actions.currentUserProfile != oldValue.currentUserProfile
-                || actions.attachmentProgress != oldValue.attachmentProgress
                 || actions.modifiablePendingMessageIDs != oldValue.modifiablePendingMessageIDs
                 || actions.interactionContext != oldValue.interactionContext else { return }
             rowActions = makeRowActions()
@@ -668,7 +667,6 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             pendingReactionMessageIDs: actions.pendingReactionMessageIDs,
             currentUserProfile: actions.currentUserProfile,
             interactionContext: actions.interactionContext,
-            attachmentProgress: actions.attachmentProgress,
             modifiablePendingMessageIDs: actions.modifiablePendingMessageIDs,
             blockPendingMessage: { [weak self] in self?.actions.blockPendingMessage?($0) },
             revokePendingMessage: { [weak self] in self?.actions.revokePendingMessage?($0) }
