@@ -4,7 +4,7 @@ import UIKit
 
 extension MessageTextContent: UIViewRepresentable {
     func makeUIView(context: Context) -> UIKitMessageTextView {
-        let view = UIKitMessageTextView()
+        let view = UIKitMessageTextView(geometry: geometry)
         view.delegate = context.coordinator
         return view
     }
@@ -12,9 +12,13 @@ extension MessageTextContent: UIViewRepresentable {
     func updateUIView(_ view: UIKitMessageTextView, context: Context) {
         let selection = view.selectedRange
         let geometryChanged = update(view.contentLayout, coordinator: context.coordinator)
-        if view.selectedRange != selection, selection.location != NSNotFound {
-            let location = min(selection.location, view.textStorage.length)
-            view.selectedRange = NSRange(location: location, length: min(selection.length, view.textStorage.length - location))
+        if selection.location != NSNotFound {
+            let length = view.textStorage.length
+            let location = min(selection.location, length)
+            let clampedSelection = NSRange(location: location, length: min(selection.length, length - location))
+            if view.selectedRange != clampedSelection {
+                view.selectedRange = clampedSelection
+            }
         }
         view.failureAction = failureAction
         if geometryChanged {
@@ -25,7 +29,7 @@ extension MessageTextContent: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIKitMessageTextView, context: Context) -> CGSize? {
-        uiView.contentLayout.fittingSize(width: proposal.width)
+        uiView.contentLayout.assignedSize
     }
 }
 
@@ -58,10 +62,10 @@ final class UIKitMessageTextView: UITextView {
         didSet { updateFailureButton() }
     }
     private var failureButton: BubbleFailureButton?
-    private var laidOutWidth: CGFloat?
 
-    init() {
+    init(geometry: MessageTextGeometry) {
         let layout = MessageTextLayout()
+        layout.install(geometry: geometry)
         contentLayout = layout
         // Supplying the shared TextKit 1 container keeps sizing and visible glyphs
         // on the same layout manager rather than UITextView's TextKit 2 default.
@@ -88,21 +92,16 @@ final class UIKitMessageTextView: UITextView {
     required init?(coder: NSCoder) { nil }
 
     override var intrinsicContentSize: CGSize {
-        contentLayout.fittingSize(width: bounds.width > 0 ? bounds.width : nil)
+        contentLayout.assignedSize
     }
 
     override func sizeThatFits(_ size: CGSize) -> CGSize {
-        contentLayout.fittingSize(width: size.width)
+        contentLayout.assignedSize
     }
 
     override func layoutSubviews() {
-        let geometry = contentLayout.geometry(for: bounds.width)
         super.layoutSubviews()
-        if laidOutWidth != bounds.width {
-            laidOutWidth = bounds.width
-            invalidateIntrinsicContentSize()
-            setNeedsDisplay()
-        }
+        guard let geometry = contentLayout.assignedGeometry else { return }
         if let failureButton, let metadata = contentLayout.metadata {
             failureButton.frame = metadata.symbolFrame(in: geometry.metadataFrame)
             bringSubviewToFront(failureButton)
@@ -110,8 +109,8 @@ final class UIKitMessageTextView: UITextView {
     }
 
     override func draw(_ rect: CGRect) {
-        let geometry = contentLayout.geometry(for: bounds.width)
         super.draw(rect)
+        guard let geometry = contentLayout.assignedGeometry else { return }
         contentLayout.metadata?.draw(in: geometry.metadataFrame, drawsSymbol: failureButton == nil)
     }
 

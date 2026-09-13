@@ -2,16 +2,14 @@
 import SwiftUI
 import UIKit
 
-/// A row is not a screen: the collection view owns safe-area insets. Use the
-/// public hosting control for both visible and measuring roots so scrolling
-/// under a status bar cannot change a bubble's measured height.
-final class TimelineBubbleHostingController: UIHostingController<TimelineBubbleView> {
+/// Native cell frames are authoritative; the root is installed once per cell.
+final class TimelineBubbleHostingController: UIHostingController<TimelineRowHostView> {
     lazy var rowGestures = MessageRowGestureCoordinator(view: view)
 
-    override init(rootView: TimelineBubbleView) {
+    override init(rootView: TimelineRowHostView) {
         super.init(rootView: rootView)
         safeAreaRegions = []
-        sizingOptions = .intrinsicContentSize
+        sizingOptions = []
         view.backgroundColor = .clear
     }
 
@@ -19,9 +17,8 @@ final class TimelineBubbleHostingController: UIHostingController<TimelineBubbleV
 }
 
 final class TimelineCollectionViewCell: UICollectionViewCell {
-    let hosting = TimelineBubbleHostingController(
-        rootView: TimelineBubbleView(row: .dateSeparator(.init(day: .now, ordinalDay: 0)), context: .init())
-    )
+    let state = TimelineRowHostState()
+    lazy var hosting = TimelineBubbleHostingController(rootView: TimelineRowHostView(state: state))
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -40,6 +37,7 @@ final class TimelineCollectionViewCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         hosting.rowGestures.cancel()
+        state.clear()
     }
 
     func attach(to parent: UIViewController) {
@@ -51,6 +49,7 @@ final class TimelineCollectionViewCell: UICollectionViewCell {
 
     func detach() {
         hosting.rowGestures.cancel()
+        state.clear()
         guard hosting.parent != nil else { return }
         hosting.willMove(toParent: nil)
         hosting.removeFromParent()

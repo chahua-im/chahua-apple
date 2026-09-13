@@ -1,36 +1,41 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
+
+enum MessageNativeSymbol {
+    static func size(_ name: String, fontSize: CGFloat, semibold: Bool) -> CGSize {
+        #if os(macOS)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: fontSize, weight: semibold ? .semibold : .regular))?.size ?? .zero
+        #else
+        return UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: fontSize, weight: semibold ? .semibold : .regular))?.size ?? .zero
+        #endif
+    }
+}
 
 struct MessageThreadIndicator: View {
-    let count: Int64
-    let isOutgoing: Bool
-    let showsSeparator: Bool
+    let label: String
+    let fontSize: CGFloat
+    let symbolSize: CGSize
+    let labelGap: CGFloat
     var action: (() -> Void)?
-    @ScaledMetric(relativeTo: .caption) private var fontSize: CGFloat = 12
 
     var body: some View {
         if let action {
-            MessageRowActionButton(action: action) { label }
-        } else {
-            label
-        }
+            MessageRowActionButton(action: action) { content }
+        } else { content }
     }
 
-    private var label: some View {
-        HStack(spacing: 4) {
+    private var content: some View {
+        HStack(spacing: labelGap) {
             Image(systemName: "bubble.left.and.bubble.right.fill")
-            if count == 1 { Text("1 reply") } else { Text("\(count) replies") }
+                .resizable().scaledToFit().frame(width: symbolSize.width, height: symbolSize.height)
+            Text(verbatim: label).lineLimit(1).truncationMode(.tail)
         }
         .font(.system(size: fontSize, weight: .semibold))
-        .lineLimit(1)
-        .frame(maxWidth: .infinity, alignment: isOutgoing ? .trailing : .leading)
-        .padding(.top, showsSeparator ? 5 : 0)
-        .overlay(alignment: .top) {
-            if showsSeparator {
-                Rectangle()
-                    .fill(isOutgoing ? Color.white.opacity(0.2) : Color.black.opacity(0.08))
-                    .frame(height: 1)
-            }
-        }
+        .clipped()
         .opacity(0.8)
     }
 }

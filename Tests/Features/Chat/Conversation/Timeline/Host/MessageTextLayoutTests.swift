@@ -12,11 +12,13 @@ final class MessageTextLayoutTests: XCTestCase {
     #if os(macOS)
     func testNativeTextPreservesSelectionAndUsesCurrentLinkActions() throws {
         var opened: [String] = []
+        let prepared = try preparedText("Hello https://example.com", width: 340)
         func content(_ prefix: String?) -> MessageTextContent {
             MessageTextContent(
                 text: "Hello https://example.com", mentions: [], currentUserID: 1,
                 isOutgoing: false,
-                action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } }
+                action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
+                metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
             )
         }
         let host = NSHostingView(rootView: content("first:"))
@@ -58,10 +60,12 @@ final class MessageTextLayoutTests: XCTestCase {
             window.close()
             previousCursor.set()
         }
+        let prepared = try preparedText("Hello https://example.com", width: 136)
         let host = TimelineBubbleHostingView(rootView:
             MessageTextContent(
                 text: "Hello https://example.com", mentions: [], currentUserID: 1,
-                isOutgoing: false, action: { _ in }
+                isOutgoing: false, action: { _ in },
+                metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
             )
             .padding(12)
             .onHover { _ in }
@@ -110,13 +114,14 @@ final class MessageTextLayoutTests: XCTestCase {
     #else
     func testUIKitSelectionSurvivesActionReplacementAndDisabledLinksCannotEscape() async throws {
         var opened: [String] = []
+        let prepared = try preparedText("Hello https://example.com @[uid:2]", width: 300)
         func content(_ prefix: String?) -> MessageTextContent {
             MessageTextContent(
                 text: "Hello https://example.com @[uid:2]", mentions: [], currentUserID: 1,
                 isOutgoing: false,
                 action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
                 mentionAction: prefix.map { prefix in { opened.append(prefix + "mention:\($0)") } },
-                metadata: MessageMetadata(time: "12:34", state: nil, isOutgoing: false)
+                metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
             )
         }
         let host = UIHostingController(rootView: content("first:"))
@@ -178,15 +183,13 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(geometry.metadataFrame.maxY, geometry.size.height)
     }
 
-    func testMetadataUsesWidthAssignedByWiderBubbleHeader() {
+    func testMetadataUsesResolvedTextWidth() {
         let layout = makeLayout("Hi")
         let ideal = layout.idealSize
         let assignedWidth = ideal.width + 100
-        let fitted = layout.fittingSize(width: assignedWidth)
-        let geometry = layout.geometry(for: fitted.width)
+        let geometry = layout.geometry(for: assignedWidth)
         XCTAssertEqual(geometry.metadataFrame.maxX, assignedWidth, accuracy: 0.5)
         XCTAssertTrue(geometry.metadataIsInline)
-        XCTAssertEqual(layout.fittingSize(width: nil).width, ideal.width, accuracy: 0.5)
     }
 
     func testMetadataMovesBelowCrowdedFinalLineAndBackAfterResize() {
@@ -206,11 +209,13 @@ final class MessageTextLayoutTests: XCTestCase {
         NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
             metadata = MessageMetadata(time: "12:34", state: nil, isOutgoing: false)
         }
-        let view = AppKitMessageTextView()
+        let geometry = MessageTextLayout(attributedText: NSAttributedString(string: ""), metadata: metadata).geometry(for: 80)
+        let view = AppKitMessageTextView(geometry: geometry)
         view.appearance = NSAppearance(named: .darkAqua)
         view.drawsBackground = true
         view.backgroundColor = .black
         view.contentLayout.update(attributedText: NSAttributedString(string: ""), metadata: metadata)
+        view.contentLayout.install(geometry: geometry)
         view.frame = CGRect(x: 0, y: 0, width: 80, height: 24)
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -224,6 +229,15 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertGreaterThan(brightest, 0.4, "Metadata created outside a drawing pass must resolve its color in the displaying view.")
     }
     #endif
+
+    private func preparedText(_ text: String, width: CGFloat) throws -> (geometry: MessageTextGeometry, metadata: MessageMetadata?) {
+        let message = try TimelineTestFixtures.message(id: "selectable", senderID: 2, at: 0, hour: 12, minute: 34, fields: ["message": text])
+        let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false, groupPosition: .single, showsSenderName: false))
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: width + 24 + 2 * (36 + 8), bodySize: 14, timeZone: TimeZone(secondsFromGMT: 0)!)
+        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
+        let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+        return (try XCTUnwrap(layout.textGeometry), presentation.metadata)
+    }
 
     private func makeLayout(_ text: String) -> MessageTextLayout {
         MessageTextLayout(

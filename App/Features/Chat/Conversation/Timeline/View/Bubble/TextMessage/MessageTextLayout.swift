@@ -6,7 +6,7 @@ import AppKit
 import UIKit
 #endif
 
-struct MessageTextGeometry {
+struct MessageTextGeometry: Equatable {
     let size: CGSize
     let bodyBounds: CGRect
     let lastLineBounds: CGRect
@@ -14,13 +14,14 @@ struct MessageTextGeometry {
     let metadataIsInline: Bool
 }
 
-/// TextKit is the single source of line breaks and height for both the table measurer
-/// and the selectable on-screen text view. Metadata is drawn outside the text storage.
+/// The engine measures row geometry; selectable native text views install that geometry
+/// to reproduce its line breaks. Metadata is drawn outside the text storage.
 final class MessageTextLayout {
     let storage = NSTextStorage()
     let layoutManager = MessageMentionLayoutManager()
     let textContainer = NSTextContainer(size: .zero)
     private(set) var metadata: MessageMetadata?
+    private(set) var assignedGeometry: MessageTextGeometry?
     private var cachedGeometry: MessageTextGeometry?
     private var cachedIdealSize: CGSize?
 
@@ -48,6 +49,22 @@ final class MessageTextLayout {
         self.metadata = metadata
         return geometryChanged
     }
+    var assignedSize: CGSize { assignedGeometry?.size ?? .zero }
+
+    /// Installs the engine's final geometry without measuring the visible text view.
+    @discardableResult
+    func install(geometry: MessageTextGeometry) -> Bool {
+        let changed = assignedGeometry != geometry
+        let containerSize = CGSize(width: geometry.size.width, height: .greatestFiniteMagnitude)
+        if textContainer.size != containerSize {
+            textContainer.size = containerSize
+        }
+        assignedGeometry = geometry
+        cachedGeometry = geometry
+        if changed { cachedIdealSize = nil }
+        return changed
+    }
+
 
     private var metadataGap: CGFloat {
         let font = storage.length > 0 ? storage.attribute(.bubbleBodyFont, at: 0, effectiveRange: nil) as? BubbleNativeFont ?? storage.attribute(.font, at: 0, effectiveRange: nil) as? BubbleNativeFont : nil

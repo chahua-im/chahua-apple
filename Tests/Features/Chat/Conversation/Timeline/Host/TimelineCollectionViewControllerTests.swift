@@ -129,12 +129,8 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         let markerFrame = try XCTUnwrap(collection.layoutAttributesForItem(at: markerPath)).frame
         let marker = try XCTUnwrap(collection.cellForItem(at: markerPath))
         XCTAssertEqual(markerFrame.minY, collection.contentOffset.y + controller.headerInset, accuracy: 1)
-        let rendered = marker.contentView.systemLayoutSizeFitting(
-            CGSize(width: 400, height: 0), withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        )
-        XCTAssertEqual(marker.bounds.height, rendered.height, accuracy: 1,
-                       "The separator must use its rendered SwiftUI height, not a guessed row height.")
+        let markerLayout = TimelineTestFixtures.layout(row: .unreadSeparator, width: 400, parent: controller, cache: TimelineLayoutCache())
+        XCTAssertEqual(marker.bounds.height, markerLayout.size.height, accuracy: 0.5)
 
         func frame(_ messageIndex: Int) throws -> CGRect {
             let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[messageIndex].id })
@@ -197,7 +193,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
         // The 800-point fixture can extend beyond a phone window; that is not a safe-area inset.
         collection.contentInsetAdjustmentBehavior = .never
-        let referenceMeasurer = TimelineRowMeasurer(parent: controller)
+        let referenceMeasurer = TimelineLayoutCache()
         model.userScrollBegan()
         collection.setContentOffset(CGPoint(x: 0, y: 120), animated: false)
 
@@ -212,7 +208,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
             var previousBottom: CGFloat = 0
             for index in model.rows.indices {
                 let frame = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))).frame
-                let expectedHeight = referenceMeasurer.height(for: model.rows[index], width: width, context: .init(currentUserID: 1))
+                let expectedHeight = TimelineTestFixtures.layout(row: model.rows[index], width: width, parent: controller, cache: referenceMeasurer).size.height
                 XCTAssertEqual(frame.height, expectedHeight, accuracy: 1, "Row \(index) at width \(width)")
                 XCTAssertGreaterThanOrEqual(frame.minY, previousBottom - 0.5)
                 previousBottom = frame.maxY
@@ -230,10 +226,10 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         collection.layoutIfNeeded()
         let after = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.height
         XCTAssertGreaterThan(after, before)
-        XCTAssertEqual(after, referenceMeasurer.height(for: model.rows[index], width: collection.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
+        XCTAssertEqual(after, TimelineTestFixtures.layout(row: model.rows[index], width: collection.bounds.width, parent: controller, cache: referenceMeasurer).size.height, accuracy: 1)
     }
 
-    func testFailedMetadataMatchesMeasuredRowsAcrossResizeAndAcknowledgement() async throws {
+    func testFailedMetadataFitsExactRowsAcrossResizeAndAcknowledgement() async throws {
         let text = "Unsent text\n你好，世界 " + String(repeating: "Wrapping message. ", count: 3)
         let pending = PendingOutgoingMessage(
             chatID: "chat", clientGeneratedID: "failed-text",
@@ -264,7 +260,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(200))
         let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
         collection.contentInsetAdjustmentBehavior = .never
-        let measurer = TimelineRowMeasurer(parent: controller)
+        let measurer = TimelineLayoutCache()
         for width: CGFloat in [320, 600, 900] {
             controller.view.frame.size.width = width
             controller.overrideUserInterfaceStyle = width == 600 ? .dark : .light
@@ -278,13 +274,9 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
             collection.layoutIfNeeded()
             let cell = try XCTUnwrap(collection.cellForItem(at: path))
             cell.layoutIfNeeded()
-            let renderedSize = cell.contentView.systemLayoutSizeFitting(
-                CGSize(width: width, height: 0), withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel
-            )
-            XCTAssertEqual(cell.bounds.height, renderedSize.height, accuracy: 1)
-            XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: width, context: .init(currentUserID: 1)), accuracy: 1,
-                           "The hidden measurer without actions must reserve the visible failure control.")
+            try assertTextContained(in: cell)
+            XCTAssertEqual(cell.bounds.height, TimelineTestFixtures.layout(row: model.rows[index], width: width, parent: controller, cache: measurer).size.height, accuracy: 1,
+                           "Exact geometry must reserve the visible failure control.")
             let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
                 cell.layer.render(in: context.cgContext)
             }
@@ -303,7 +295,8 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         collection.layoutIfNeeded()
         let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "delivered-text" })
         let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)))
-        XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: collection.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
+        XCTAssertEqual(cell.bounds.height, TimelineTestFixtures.layout(row: model.rows[index], width: collection.bounds.width, parent: controller, cache: measurer).size.height, accuracy: 1)
+        try assertTextContained(in: cell)
         let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
             cell.layer.render(in: context.cgContext)
         }
@@ -313,7 +306,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         add(attachment)
     }
 
-    func testReplyMediaRowsRemeasureWhenOnlyViewportHeightChanges() async throws {
+    func testReplyMediaRowsKeepGeometryWhenOnlyViewportHeightChanges() async throws {
         let message = try TimelineTestFixtures.message(id: "reply-media", senderID: 2, at: 0, fields: [
             "message": "Caption below the quoted message.",
             "hasAttachments": true,
@@ -357,11 +350,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
             collection.scrollToItem(at: path, at: .top, animated: false)
             collection.layoutIfNeeded()
             let cell = try XCTUnwrap(collection.cellForItem(at: path))
-            let rendered = cell.contentView.systemLayoutSizeFitting(
-                CGSize(width: 400, height: 0), withHorizontalFittingPriority: .required,
-                verticalFittingPriority: .fittingSizeLevel
-            )
-            XCTAssertEqual(cell.bounds.height, rendered.height, accuracy: 1)
+            try assertTextContained(in: cell)
             heights.append(cell.bounds.height)
             let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { cell.layer.render(in: $0.cgContext) }
             let attachment = XCTAttachment(image: image)
@@ -369,8 +358,26 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        XCTAssertGreaterThan(heights[0], heights[1] + 100, "Portrait media must shrink when the viewport height shrinks.")
-        XCTAssertEqual(heights[0], heights[2], accuracy: 1, "Returning to the original viewport must restore row geometry.")
+        XCTAssertEqual(heights[0], heights[1], accuracy: 0.5, "Viewport height is not a row geometry dependency.")
+        XCTAssertEqual(heights[0], heights[2], accuracy: 0.5)
+    }
+
+    private func assertTextContained(in cell: UICollectionViewCell, file: StaticString = #filePath, line: UInt = #line) throws {
+        func textViews(in view: UIView) -> [UIKitMessageTextView] {
+            if let text = view as? UIKitMessageTextView { return [text] }
+            return view.subviews.flatMap { textViews(in: $0) }
+        }
+        let text = try XCTUnwrap(textViews(in: cell).first, file: file, line: line)
+        let rendered = cell.convert(text.bounds, from: text)
+        XCTAssertTrue(cell.bounds.insetBy(dx: -0.5, dy: -0.5).contains(rendered), file: file, line: line)
+        XCTAssertGreaterThanOrEqual(cell.bounds.maxY - rendered.maxY, 8, "The last text line must not consume the row's bottom padding.", file: file, line: line)
+        let glyphs = text.contentLayout.layoutManager.usedRect(for: text.contentLayout.textContainer)
+            .offsetBy(dx: text.textContainerInset.left, dy: text.textContainerInset.top)
+        XCTAssertTrue(text.bounds.insetBy(dx: -0.5, dy: -0.5).contains(glyphs), "All glyphs must fit the prepared native text frame.", file: file, line: line)
+        for button in text.subviews.compactMap({ $0 as? UIButton }) {
+            XCTAssertTrue(text.bounds.contains(button.frame), file: file, line: line)
+            XCTAssertTrue(cell.bounds.contains(cell.convert(button.bounds, from: button)), file: file, line: line)
+        }
     }
 
     private func setCategory(_ category: UIContentSizeCategory, on controller: UIViewController, parent: UIViewController) {

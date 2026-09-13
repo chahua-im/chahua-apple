@@ -3,7 +3,6 @@ import SwiftUI
 /// Apply to the whole row, with stable message identity supplied by the row host.
 struct MessageReplySwipe: ViewModifier {
     var isEnabled: Bool
-    var isMeasuring = false
     var onReply: () -> Void
 
     #if !os(macOS)
@@ -32,11 +31,9 @@ struct MessageReplySwipe: ViewModifier {
                     }
                 }
                 .background {
-                    if !isMeasuring {
-                        GeometryReader { _ in
-                            MessageRowGestureSource(isEnabled: isEnabled, onChange: update, onFinish: reset, onReply: onReply)
-                                .accessibilityHidden(true)
-                        }
+                    GeometryReader { _ in
+                        MessageRowGestureSource(isEnabled: isEnabled, onChange: update, onFinish: reset, onReply: onReply)
+                            .accessibilityHidden(true)
                     }
                 }
                 .onChange(of: isEnabled) { _, enabled in

@@ -4,14 +4,13 @@ import SwiftUI
 struct BubbleMedia: View {
     let messageID: String
     let attachments: [AttachmentResponse]
-    let viewport: CGSize
-    let availableWidth: CGFloat
-    let isMeasuring: Bool
+    let size: CGSize
+    let itemFrames: [CGRect]
     let action: ((String, [AttachmentResponse], String) -> Void)?
     @Environment(\.displayScale) private var displayScale
 
     var body: some View {
-        BubbleMediaContent(attachments: attachments, viewport: viewport, availableWidth: availableWidth) { attachment, size, gallery, overflowCount in
+        BubbleMediaContent(attachments: attachments, size: size, itemFrames: itemFrames) { attachment, size, gallery, overflowCount in
             tile(attachment, size: size, gallery: gallery, overflowCount: overflowCount)
         }
     }
@@ -19,9 +18,7 @@ struct BubbleMedia: View {
     @ViewBuilder private func tile(_ attachment: AttachmentResponse, size: CGSize, gallery: Bool, overflowCount: Int = 0) -> some View {
         let isVideo = attachment.kind.hasPrefix("video/")
         let content = Group {
-            if isMeasuring {
-                Color.clear
-            } else if isVideo {
+            if isVideo {
                 Label("Video preview unavailable", systemImage: "video.slash")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.8))
@@ -38,7 +35,7 @@ struct BubbleMedia: View {
         }
         .modifier(BubbleMediaTileSurface(size: size, gallery: gallery, isVideo: isVideo, overflowCount: overflowCount))
 
-        if let action, !isMeasuring, !isVideo {
+        if let action, !isVideo {
             MessageRowActionButton { action(messageID, attachments, attachment.id) } label: { content }
                 .accessibilityLabel("Open image")
         } else { content }
@@ -48,23 +45,42 @@ struct BubbleMedia: View {
 /// Pending and delivered attachments share placement and tile chrome, not storage records.
 struct BubbleMediaContent<Attachment: BubbleMediaAttachment, Tile: View>: View {
     let attachments: [Attachment]
-    let viewport: CGSize
-    let availableWidth: CGFloat
+    let size: CGSize
+    let itemFrames: [CGRect]
     @ViewBuilder let tile: (Attachment, CGSize, Bool, Int) -> Tile
 
     var body: some View {
-        if attachments.count == 1, let attachment = attachments.first,
-           let size = BubbleMediaLayout.singleSize(for: attachment, viewport: viewport, availableWidth: availableWidth) {
+        if attachments.count == 1, let attachment = attachments.first {
             tile(attachment, size, false, 0)
-        } else if let gallery = BubbleMediaLayout.gallery(for: attachments, viewport: viewport, availableWidth: availableWidth) {
-            ZStack(alignment: .topLeading) {
-                ForEach(gallery.cells, id: \.attachment.id) { cell in
-                    tile(cell.attachment, cell.frame.size, true, cell.overflowCount)
-                        .offset(x: cell.frame.minX, y: cell.frame.minY)
+        } else {
+            BubbleMediaItemLayout(size: size, frames: itemFrames) {
+                ForEach(attachments.indices.prefix(min(6, itemFrames.count)), id: \.self) { index in
+                    tile(
+                        attachments[index],
+                        itemFrames[index].size,
+                        true,
+                        index == 5 && attachments.count > 6 ? attachments.count - 5 : 0
+                    )
                 }
             }
-            .frame(width: gallery.size.width, height: gallery.size.height, alignment: .topLeading)
             .clipped()
+        }
+    }
+}
+
+private struct BubbleMediaItemLayout: Layout {
+    let size: CGSize
+    let frames: [CGRect]
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize { size }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        for (subview, frame) in zip(subviews, frames) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: .init(width: frame.width, height: frame.height)
+            )
         }
     }
 }

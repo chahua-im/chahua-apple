@@ -125,6 +125,21 @@ private struct MessageInteractionOverlay: View {
     let onAction: (MessageMenuAction) -> Void
     let onClose: () -> Void
     @State private var panelSize = CGSize(width: 276, height: 380)
+    @State private var previewCache = TimelineLayoutCache()
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
+    @Environment(\.layoutDirection) private var layoutDirection
+    @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 36
+    #if os(macOS)
+    @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = BubbleNativeFont.preferredFont(forTextStyle: .body).pointSize
+    @ScaledMetric(relativeTo: .caption) private var captionSize: CGFloat = BubbleNativeFont.preferredFont(forTextStyle: .caption1).pointSize
+    @ScaledMetric(relativeTo: .caption2) private var caption2Size: CGFloat = BubbleNativeFont.preferredFont(forTextStyle: .caption2).pointSize
+    #else
+    @ScaledMetric(relativeTo: .body) private var bodySize = UIFont.preferredFont(forTextStyle: .body, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)).pointSize
+    @ScaledMetric(relativeTo: .caption) private var captionSize = UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)).pointSize
+    @ScaledMetric(relativeTo: .caption2) private var caption2Size = UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)).pointSize
+    #endif
 
     var body: some View {
         GeometryReader { geometry in
@@ -152,16 +167,7 @@ private struct MessageInteractionOverlay: View {
                         onReaction: onReaction, onAction: onAction, onClose: onClose,
                         controlsWidth: controlsWidth
                     ) {
-                        // Read-only preview uses the production bubble surface, not a second renderer.
-                        TimelineBubbleView(
-                            row: .message(row),
-                            context: .init(
-                                viewportSize: geometry.size,
-                                currentUserID: currentUserID, isThreadTimeline: context.isThreadView,
-                                isInteractionPreview: true),
-                            actions: actions,
-                            mediaContext: mediaContext
-                        )
+                        preview(width: previewWidth)
                         .frame(width: previewWidth, alignment: row.isOutgoing ? .trailing : .leading)
                         .frame(maxHeight: min(220, geometry.size.height * 0.3), alignment: .top)
                         .clipShape(Rectangle().inset(by: -8))
@@ -197,5 +203,19 @@ private struct MessageInteractionOverlay: View {
         }
         .transition(.opacity)
         .zIndex(100)
+    }
+
+    private func preview(width: CGFloat) -> some View {
+        let environment = TimelineLayoutEnvironment.current(
+            timelineWidth: width + 24 + 2 * (avatarSize + 8),
+            displayScale: displayScale, bodySize: bodySize, captionSize: captionSize,
+            caption2Size: caption2Size, avatarSize: avatarSize,
+            locale: locale, timeZone: timeZone, layoutDirection: layoutDirection)
+        let presentation = TimelineRowPresentation.make(row: .message(row), currentUserProfile: actions.currentUserProfile, currentUserID: currentUserID, isThreadTimeline: context.isThreadView, environment: environment)
+        let layout = previewCache.layout(for: presentation, environment: environment)
+        return TimelineBubbleView(
+            presentation: presentation, layout: layout,
+            context: .init(currentUserID: currentUserID, isThreadTimeline: context.isThreadView, isInteractionPreview: true),
+            actions: actions, mediaContext: mediaContext)
     }
 }

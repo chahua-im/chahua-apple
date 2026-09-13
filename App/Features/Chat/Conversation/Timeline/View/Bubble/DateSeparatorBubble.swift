@@ -1,16 +1,15 @@
 import SwiftUI
 
 struct DateSeparatorBubble: View {
-    let row: TimelineDateSeparatorRow
+    let text: String
+    let fontSize: CGFloat
 
     var body: some View {
-        Text(row.day, format: .dateTime.month(.abbreviated).day().year())
-            .font(.caption)
+        Text(verbatim: text)
+            .font(.system(size: fontSize))
             .foregroundStyle(ChahuaTheme.secondaryText)
             .padding(.horizontal, ChahuaTheme.Spacing.medium)
             .padding(.vertical, ChahuaTheme.Spacing.xSmall)
             .background(ChahuaTheme.secondaryBackground, in: Capsule())
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, ChahuaTheme.Spacing.medium)
     }
 }

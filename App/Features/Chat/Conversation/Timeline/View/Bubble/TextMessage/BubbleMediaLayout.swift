@@ -35,28 +35,27 @@ enum BubbleMediaLayout {
         [[3, 3], [2, 2, 2], [4, 2], [2, 4], [2, 3, 1], [1, 3, 2]],
     ]
 
-    static func bounds(viewport: CGSize, availableWidth: CGFloat) -> CGSize? {
-        guard viewport.width.isFinite, viewport.height.isFinite, availableWidth.isFinite,
-              viewport.width > 0, viewport.height > 0, availableWidth > 0 else { return nil }
-        let width = min(viewport.width * 0.7, 420, availableWidth)
-        let height = min(viewport.height * 0.6, 560)
+    static func bounds(availableWidth: CGFloat) -> CGSize? {
+        guard availableWidth.isFinite, availableWidth > 0 else { return nil }
+        let width = min(420, availableWidth)
+        let height = min(560, width * 4 / 3)
         guard width > 0, height > 0 else { return nil }
         return .init(width: width, height: height)
     }
 
-    static func size<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], viewport: CGSize, availableWidth: CGFloat) -> CGSize? {
+    static func size<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], availableWidth: CGFloat) -> CGSize? {
         guard let first = attachments.first else { return nil }
         if attachments.count == 1 {
-            return singleSize(for: first, viewport: viewport, availableWidth: availableWidth)
+            return singleSize(for: first, availableWidth: availableWidth)
         }
-        return gallery(for: attachments, viewport: viewport, availableWidth: availableWidth)?.size
+        return gallery(for: attachments, availableWidth: availableWidth)?.size
     }
 
-    static func singleSize<Attachment: BubbleMediaAttachment>(for attachment: Attachment, viewport: CGSize, availableWidth: CGFloat) -> CGSize? {
-        guard let limits = bounds(viewport: viewport, availableWidth: availableWidth) else { return nil }
+    static func singleSize<Attachment: BubbleMediaAttachment>(for attachment: Attachment, availableWidth: CGFloat) -> CGSize? {
+        guard let limits = bounds(availableWidth: availableWidth) else { return nil }
         var width = attachment.mediaDimensions.width
         var height = attachment.mediaDimensions.height
-        guard width > 0, height > 0 else {
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else {
             let side = min(limits.width, limits.height)
             return .init(width: side, height: side)
         }
@@ -92,13 +91,20 @@ enum BubbleMediaLayout {
         )
     }
 
-    static func gallery<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], viewport: CGSize, availableWidth: CGFloat) -> Gallery<Attachment>? {
-        guard let limits = bounds(viewport: viewport, availableWidth: availableWidth), attachments.count > 1 else { return nil }
+    static func gallery<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], availableWidth: CGFloat) -> Gallery<Attachment>? {
+        guard let limits = bounds(availableWidth: availableWidth) else { return nil }
+        return gallery(for: attachments, resolvedWidth: limits.width)
+    }
+
+    /// Text may widen a gallery past its preferred 420-point media width.
+    static func gallery<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], resolvedWidth: CGFloat) -> Gallery<Attachment>? {
+        guard resolvedWidth.isFinite, resolvedWidth > 0, attachments.count > 1 else { return nil }
+        let limits = CGSize(width: resolvedWidth, height: min(560, resolvedWidth * 4 / 3))
         let items = attachments.prefix(6)
         let ratios = items.map { attachment -> CGFloat in
             let dimensions = attachment.mediaDimensions
-            let width = dimensions.width > 0 ? dimensions.width : 100
-            let height = dimensions.height > 0 ? dimensions.height : 100
+            let width = dimensions.width.isFinite && dimensions.width > 0 ? dimensions.width : 100
+            let height = dimensions.height.isFinite && dimensions.height > 0 ? dimensions.height : 100
             return min(2.5, max(0.5, width / height))
         }
         guard let (partition, rows) = bestRows(ratios: ratios, width: limits.width, height: limits.height) else { return nil }

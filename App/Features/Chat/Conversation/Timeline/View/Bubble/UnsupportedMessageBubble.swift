@@ -1,20 +1,16 @@
 import SwiftUI
 
 struct UnsupportedMessageBubble: View {
-    let row: TimelineMessageRow
-    @Environment(\.colorScheme) private var colorScheme
+    let text: String
+    let fontSize: CGFloat
+    let symbolSize: CGSize
+    let labelGap: CGFloat
     var body: some View {
-        Label("This message type isn’t supported yet", systemImage: "questionmark.square.dashed")
-            .padding(.horizontal, BubbleMetrics.textHorizontalInset)
-            .padding(.vertical, BubbleMetrics.textVerticalInset)
-            .foregroundStyle(
-                row.isOutgoing
-                    ? ChahuaTheme.ChatBubble.outgoingForeground
-                    : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme)
-            )
-            .modifier(MessageBubbleSurface(
-                isOutgoing: row.isOutgoing,
-                hasTail: row.groupPosition == .single || row.groupPosition == .last
-            ))
+        HStack(alignment: .top, spacing: labelGap) {
+            Image(systemName: "questionmark.square.dashed")
+                .resizable().scaledToFit().frame(width: symbolSize.width, height: symbolSize.height)
+            Text(verbatim: text).font(.system(size: fontSize))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }

@@ -16,13 +16,8 @@ struct MessageTextContent {
     var mentionAction: ((Int32) -> Void)? = nil
     var metadata: MessageMetadata? = nil
     var failureAction: (() -> Void)? = nil
-    #if os(macOS)
-    @ScaledMetric(relativeTo: .body) private var fontSize = NSFont.preferredFont(forTextStyle: .body).pointSize
-    #else
-    @ScaledMetric(relativeTo: .body) private var fontSize = UIFont.preferredFont(
-        forTextStyle: .body, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
-    ).pointSize
-    #endif
+    let geometry: MessageTextGeometry
+    let fontSize: CGFloat
 
     func update(_ layout: MessageTextLayout, coordinator: Coordinator) -> Bool {
         coordinator.openLink = action
@@ -43,12 +38,14 @@ struct MessageTextContent {
         } else {
             attributed = nil
         }
-        return layout.update(attributedText: attributed, metadata: metadata)
+        let textGeometryChanged = layout.update(attributedText: attributed, metadata: metadata)
+        let assignedGeometryChanged = layout.install(geometry: geometry)
+        return textGeometryChanged || assignedGeometryChanged
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    // Width proposals and replacement callbacks do not change the selectable runs.
+    // Prepared geometry and replacement callbacks do not change the selectable runs.
     // Keep this local to the native view's lifetime rather than caching message text globally.
     struct TextInput: Equatable {
         let text: String

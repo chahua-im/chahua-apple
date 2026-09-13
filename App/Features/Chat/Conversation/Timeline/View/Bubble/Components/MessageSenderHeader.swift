@@ -3,47 +3,49 @@ import SwiftUI
 
 struct MessageSenderHeader: View {
     let row: TimelineMessageRow
-    let currentUserProfile: MeResponse?
-    let usesOutgoingForeground: Bool
+    let title: TitleContent
+    let fontSize: CGFloat
+    let size: CGSize
+    let itemFrames: [CGRect]
     @Environment(\.colorScheme) private var colorScheme
-    @ScaledMetric(relativeTo: .caption) private var fontSize: CGFloat = 12
-
-    private var message: MessageResponse? { row.entry.remoteMessage }
-    private var senderName: String {
-        message?.sender.name.flatMap { $0.isEmpty ? nil : $0 }
-            ?? (row.isOutgoing ? currentUserProfile?.username : nil)
-            ?? "User \(row.entry.senderID)"
-    }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(senderName)
+        TimelineItemLayout(size: size, frames: itemFrames) {
+            Text(verbatim: title.name)
                 .font(.system(size: fontSize, weight: .semibold))
-                .foregroundStyle(usesOutgoingForeground ? .white : bubbleColorForUser(uid: row.entry.senderID, dark: colorScheme == .dark))
-                .opacity(0.85)
+                .foregroundStyle(row.isOutgoing ? .white : bubbleColorForUser(uid: row.entry.senderID, dark: colorScheme == .dark))
+                .opacity(row.isOutgoing ? 1 : 0.85)
                 .lineLimit(1)
-            Spacer(minLength: 0)
-            if let group = message?.sender.userGroup, let name = group.name, !name.isEmpty {
-                Text(name)
-                    .font(.system(size: fontSize * 10 / 12))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .background(groupColor(group), in: RoundedRectangle(cornerRadius: 2))
-                    .opacity(0.85)
+                .frame(width: itemFrames.first?.width ?? 0, height: size.height, alignment: .leading)
+                .clipped()
+            Group {
+                if let name = title.groupName {
+                    Text(verbatim: name)
+                        .font(.system(size: fontSize))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .background(groupColor, in: RoundedRectangle(cornerRadius: 2))
+                        .opacity(0.85)
+                } else { Color.clear }
             }
-            if let gender = message?.sender.gender, gender == 1 || gender == 2 {
-                Text(gender == 1 ? "♂" : "♀")
-                    .font(.system(size: fontSize))
-                    .foregroundStyle(bubbleColor(hex: gender == 1 ? "3cb4f0" : "ff8080") ?? .primary)
+            .frame(width: itemFrames.count > 1 ? itemFrames[1].width : 0, height: size.height)
+            .clipped()
+            Group {
+                if let glyph = title.genderGlyph {
+                    Text(verbatim: glyph).font(.system(size: fontSize))
+                        .foregroundStyle(bubbleColor(hex: glyph == "♂" ? "3cb4f0" : "ff8080") ?? .primary)
+                } else { Color.clear }
             }
+            .frame(width: itemFrames.count > 2 ? itemFrames[2].width : 0, height: size.height)
+            .clipped()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func groupColor(_ group: UserGroupTagInfo) -> Color {
-        let darkOverride = group.chatGroupColorDark.flatMap { $0.isEmpty ? nil : $0 }
-        let hex = colorScheme == .dark ? (darkOverride ?? group.chatGroupColor) : group.chatGroupColor
+    private var groupColor: Color {
+        guard let group = row.entry.remoteMessage?.sender.userGroup else { return Color.gray.opacity(0.44) }
+        let dark = group.chatGroupColorDark.flatMap { $0.isEmpty ? nil : $0 }
+        let hex = colorScheme == .dark ? dark ?? group.chatGroupColor : group.chatGroupColor
         return hex.flatMap(bubbleColor(hex:)) ?? Color.gray.opacity(0.44)
     }
 }

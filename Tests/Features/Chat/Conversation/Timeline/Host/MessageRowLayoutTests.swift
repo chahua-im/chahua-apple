@@ -1,58 +1,62 @@
 #if os(macOS)
-    import AppKit
-    import SwiftUI
-    import XCTest
-    @testable import chahua_apple
+import AppKit
+import SwiftUI
+import XCTest
+@testable import chahua_apple
 
-    @MainActor
-    final class MessageRowLayoutTests: XCTestCase {
-        func testReactionsStayBelowBubbleAndAvatarOnBothSides() async throws {
-            for outgoing in [false, true] {
-                for bubbleHeight: CGFloat in [24, 80] {
-                    for reactionHeight: CGFloat in [26, 78] {
-                        let bubble = NSView()
-                        let avatar = NSView()
-                        let reactions = NSView()
-                        let content = MessageRowLayout(isOutgoing: outgoing, avatarSize: 36) {
-                            Marker(view: bubble).frame(width: 180, height: bubbleHeight)
-                            Marker(view: avatar).frame(width: 36, height: 36)
-                            Marker(view: reactions).frame(width: 180, height: reactionHeight)
-                        }.frame(width: 400, height: 200, alignment: .top)
-                        let host = NSHostingController(rootView: content)
-                        let window = mount(host, size: CGSize(width: 400, height: 200))
-                        try await Task.sleep(for: .milliseconds(50))
-                        host.view.layoutSubtreeIfNeeded()
-                        let bubbleFrame = bubble.convert(bubble.bounds, to: host.view)
-                        let avatarFrame = avatar.convert(avatar.bounds, to: host.view)
-                        let reactionFrame = reactions.convert(reactions.bounds, to: host.view)
-                        XCTAssertEqual(avatarFrame.maxY, bubbleFrame.maxY, accuracy: 0.5)
-                        XCTAssertGreaterThanOrEqual(reactionFrame.minY, avatarFrame.maxY - 0.5)
-                        XCTAssertEqual(
-                            outgoing ? reactionFrame.maxX : reactionFrame.minX,
-                            outgoing ? bubbleFrame.maxX : bubbleFrame.minX, accuracy: 0.5)
-                        window.close()
-                    }
-                }
+@MainActor
+final class MessageRowLayoutTests: XCTestCase {
+    func testReactionsStayBelowBubbleAndAvatarOnBothSides() async throws {
+        for outgoing in [false, true] {
+            let message = try TimelineTestFixtures.message(id: "accessories", senderID: outgoing ? 1 : 2, at: 0, fields: [
+                "message": "Body with a final line\nFinal visible line",
+                "threadInfo": ["replyCount": 7],
+                "reactions": [
+                    ["emoji": "\u{1F44D}", "count": 8, "reactors": (1 ... 5).map { ["uid": $0] }],
+                    ["emoji": "\u{2764}", "count": 3], ["emoji": "\u{1F389}", "count": 2]
+                ]
+            ])
+            let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: outgoing, groupPosition: .single, showsSenderName: true))
+            for width: CGFloat in [320, 600] {
+                let environment = TimelineLayoutEnvironment.current(timelineWidth: width, bodySize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+                    captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize, caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize)
+                let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
+                let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+                let bubble = try XCTUnwrap(layout.frames[.bubble])
+                let avatar = try XCTUnwrap(layout.frames[.avatar])
+                let reactions = try XCTUnwrap(layout.frames[.reactions])
+                let thread = try XCTUnwrap(layout.frames[.thread])
+                XCTAssertEqual(avatar.maxY, bubble.maxY, accuracy: 0.5)
+                XCTAssertGreaterThanOrEqual(reactions.minY, max(avatar.maxY, bubble.maxY) + 8)
+                XCTAssertGreaterThanOrEqual(thread.minY, reactions.maxY + 4)
+                XCTAssertGreaterThanOrEqual(layout.size.height - thread.maxY, 8)
+                XCTAssertLessThanOrEqual(bubble.width, environment.centralWidth)
+                let host = NSHostingController(rootView: TimelineBubbleView(presentation: presentation, layout: layout, context: .init(currentUserID: 1)))
+                host.sizingOptions = []
+                let window = NSWindow(contentRect: CGRect(origin: .zero, size: layout.size), styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentViewController = host
+                window.setContentSize(layout.size)
+                host.view.frame = CGRect(origin: .zero, size: layout.size)
+                window.orderFront(nil)
+                defer { window.close() }
+                try await Task.sleep(for: .milliseconds(50))
+                host.view.layoutSubtreeIfNeeded()
+                let text = try XCTUnwrap(textView(in: host.view))
+                let rendered = text.convert(text.bounds, to: host.view)
+                XCTAssertTrue(host.view.bounds.insetBy(dx: -0.5, dy: -0.5).contains(rendered))
+                XCTAssertEqual(rendered.width, try XCTUnwrap(layout.frames[.text]).width, accuracy: 0.5)
+                XCTAssertEqual(rendered.height, try XCTUnwrap(layout.frames[.text]).height, accuracy: 0.5)
+                let glyphs = text.contentLayout.layoutManager.usedRect(for: text.contentLayout.textContainer)
+                    .offsetBy(dx: text.textContainerOrigin.x, dy: text.textContainerOrigin.y)
+                XCTAssertTrue(text.bounds.insetBy(dx: -0.5, dy: -0.5).contains(glyphs), "The last caption glyph must fit its native text frame.")
             }
         }
-
-
-        private func mount<V: View>(_ host: NSHostingController<V>, size: CGSize) -> NSWindow {
-            host.sizingOptions = []
-            let window = NSWindow(
-                contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.contentViewController = host
-            window.setContentSize(size)
-            host.view.frame = CGRect(origin: .zero, size: size)
-            window.makeKeyAndOrderFront(nil)
-            return window
-        }
     }
 
-    private struct Marker: NSViewRepresentable {
-        let view: NSView
-        func makeNSView(context: Context) -> NSView { view }
-        func updateNSView(_ nsView: NSView, context: Context) {}
+    private func textView(in view: NSView) -> AppKitMessageTextView? {
+        if let text = view as? AppKitMessageTextView { return text }
+        return view.subviews.lazy.compactMap { self.textView(in: $0) }.first
     }
+}
 #endif

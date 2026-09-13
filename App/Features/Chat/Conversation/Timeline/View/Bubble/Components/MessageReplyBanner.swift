@@ -9,7 +9,7 @@ struct MessageReplyBanner: View {
     let hasFilledBackground: Bool
     var openReply: ((String) -> Void)?
     @Environment(\.colorScheme) private var colorScheme
-    @ScaledMetric(relativeTo: .caption) private var fontSize: CGFloat = 12
+    let fontSize: CGFloat
 
     private var color: Color {
         isOutgoing && hasFilledBackground ? .white : bubbleColorForUser(uid: preview.sender.uid, dark: colorScheme == .dark)

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SystemMessageBubble: View {
     let row: TimelineMessageRow
+    let text: String
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -11,17 +12,11 @@ struct SystemMessageBubble: View {
             .foregroundStyle(textColor)
             .lineSpacing(3)
             .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var content: Text {
-        let message = row.entry.remoteMessage?.isDeleted == true
-            ? String(localized: "[Deleted]")
-            : row.entry.text ?? ""
+        let message = text
         if let senderName = row.entry.remoteMessage?.sender.name, !senderName.isEmpty {
             return Text("\(Text(verbatim: senderName).fontWeight(.semibold)) \(Text(verbatim: message))")
         }

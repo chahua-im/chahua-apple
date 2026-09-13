@@ -4,21 +4,20 @@ import SwiftUI
 struct BubbleReactions: View {
     let reactions: [ReactionSummary]
     let isOutgoing: Bool
-    let isMeasuring: Bool
+    let size: CGSize
+    let itemFrames: [CGRect]
     var isPending = false
     var toggle: ((String) -> Void)?
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        ReactionFlowLayout(isOutgoing: isOutgoing) {
-            ForEach(reactions.sorted {
-                $0.count == $1.count ? $0.emoji < $1.emoji : $0.count > $1.count
-            }, id: \.emoji) { reaction in
-                if let toggle, !isMeasuring {
-                    MessageRowActionButton { toggle(reaction.emoji) } label: { pill(reaction) }
+        TimelineItemLayout(size: size, frames: itemFrames) {
+            ForEach(Array(reactions.sorted(by: TimelineRowPresentation.reactionOrder).enumerated()), id: \.element.emoji) { index, reaction in
+                if let toggle {
+                    MessageRowActionButton { toggle(reaction.emoji) } label: { pill(reaction).frame(width: itemFrames[index].width, height: itemFrames[index].height).clipped() }
                         .disabled(isPending)
                 } else {
-                    pill(reaction)
+                    pill(reaction).frame(width: itemFrames[index].width, height: itemFrames[index].height).clipped()
                 }
             }
         }
@@ -34,13 +33,7 @@ struct BubbleReactions: View {
             if !reactors.isEmpty {
                 HStack(spacing: -9) {
                     ForEach(Array(reactors.enumerated()), id: \.element.uid) { index, reactor in
-                        Group {
-                            if isMeasuring {
-                                Color.clear.frame(width: 23, height: 23)
-                            } else {
-                                AvatarView(url: reactor.avatarUrl.flatMap(URL.init(string:)), displayName: reactor.name ?? "User \(reactor.uid)", diameter: 23)
-                            }
-                        }
+                        AvatarView(url: reactor.avatarUrl.flatMap(URL.init(string:)), displayName: reactor.name ?? "User \(reactor.uid)", diameter: 23)
                         .overlay(Circle().strokeBorder(colored ? Color.white : ChahuaTheme.ChatBubble.incomingForeground(for: colorScheme), lineWidth: 1))
                         .zIndex(Double(5 - index))
                     }
@@ -71,44 +64,3 @@ struct BubbleReactions: View {
     }
 }
 
-/// Reactions wrap independently of the content kind and align to its sending side.
-private struct ReactionFlowLayout: Layout {
-    let isOutgoing: Bool
-    private let gap: CGFloat = 4
-
-    private func rows(width: CGFloat, subviews: Subviews) -> [[CGSize]] {
-        var rows: [[CGSize]] = [[]]
-        var used: CGFloat = 0
-        for view in subviews {
-            let size = view.sizeThatFits(.init(width: width, height: nil))
-            if used > 0 && used + gap + size.width > width {
-                rows.append([])
-                used = 0
-            }
-            rows[rows.count - 1].append(size)
-            used += (used == 0 ? 0 : gap) + size.width
-        }
-        return rows
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width + gap } - gap
-        let rows = rows(width: max(0, width), subviews: subviews)
-        return CGSize(width: max(0, width), height: rows.reduce(CGFloat.zero) { $0 + ($1.map(\.height).max() ?? 0) } + CGFloat(max(0, rows.count - 1)) * gap)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var index = 0
-        var y = bounds.minY
-        for row in rows(width: bounds.width, subviews: subviews) {
-            let width = row.reduce(CGFloat.zero) { $0 + $1.width } + CGFloat(max(0, row.count - 1)) * gap
-            var x = isOutgoing ? bounds.maxX - width : bounds.minX
-            for size in row {
-                subviews[index].place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .init(size))
-                x += size.width + gap
-                index += 1
-            }
-            y += (row.map(\.height).max() ?? 0) + gap
-        }
-    }
-}

@@ -1,8 +1,42 @@
 import Foundation
 import ChahuaAPI
+import SwiftUI
+@testable import chahua_apple
 
 @MainActor
 enum TimelineTestFixtures {
+    #if os(macOS)
+    static func environment(width: CGFloat, parent: NSViewController) -> TimelineLayoutEnvironment {
+        .current(timelineWidth: width, displayScale: parent.view.window?.backingScaleFactor ?? 2,
+                 bodySize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+                 captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
+                 caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
+                 layoutDirection: parent.view.userInterfaceLayoutDirection == .rightToLeft ? .rightToLeft : .leftToRight)
+    }
+
+    static func layout(row: TimelineRow, width: CGFloat, parent: NSViewController, cache: TimelineLayoutCache) -> TimelineRowLayout {
+        let environment = environment(width: width, parent: parent)
+        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
+        return cache.layout(for: presentation, environment: environment)
+    }
+    #else
+    static func environment(width: CGFloat, parent: UIViewController) -> TimelineLayoutEnvironment {
+        let traits = parent.traitCollection
+        return .current(timelineWidth: width, displayScale: traits.displayScale,
+                        bodySize: UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize,
+                        captionSize: UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits).pointSize,
+                        caption2Size: UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits).pointSize,
+                        avatarSize: UIFontMetrics(forTextStyle: .body).scaledValue(for: 36, compatibleWith: traits),
+                        layoutDirection: parent.view.effectiveUserInterfaceLayoutDirection == .rightToLeft ? .rightToLeft : .leftToRight)
+    }
+
+    static func layout(row: TimelineRow, width: CGFloat, parent: UIViewController, cache: TimelineLayoutCache) -> TimelineRowLayout {
+        let environment = environment(width: width, parent: parent)
+        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
+        return cache.layout(for: presentation, environment: environment)
+    }
+    #endif
+
     static func message(
         id: String,
         chatID: String = "chat",

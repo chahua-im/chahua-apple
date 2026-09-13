@@ -173,6 +173,8 @@ final class TimelineTableViewControllerTests: XCTestCase {
         )
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
+        let displayWindow = mountForDisplay(controller)
+        defer { displayWindow.close() }
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
         let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
@@ -186,6 +188,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         defer { subscription.cancel() }
 
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         XCTAssertEqual(model.rows.compactMap(\.messageID), ["0", "1"])
         XCTAssertEqual(table.numberOfRows, model.rows.count,
                        "A reentrant live update must not wait for an unrelated future layout")
@@ -235,7 +238,11 @@ final class TimelineTableViewControllerTests: XCTestCase {
             }
         ) { cell, textView, bitmap in
             self.assertGlyphsVisible(textView, in: cell)
-            XCTAssertLessThanOrEqual(self.backgroundWidth(in: bitmap, outgoing: false), (cell.bounds.width - 68) * 0.75 + 1)
+            let centralWidth = max(0, cell.bounds.width - 24 - 2 * (36 + 8))
+            XCTAssertLessThanOrEqual(self.backgroundWidth(in: bitmap, outgoing: false), centralWidth + 1)
+            let textFrame = cell.convert(textView.bounds, from: textView)
+            let textBottom = cell.isFlipped ? textFrame.maxY : cell.bounds.height - textFrame.minY
+            XCTAssertGreaterThanOrEqual(cell.bounds.height - textBottom, 8, "Caption metadata, thread and bottom padding must remain below the final text line.")
         }
     }
 
@@ -284,9 +291,10 @@ final class TimelineTableViewControllerTests: XCTestCase {
         window.orderFront(nil)
         defer { window.close() }
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
-        let measurer = TimelineRowMeasurer(parent: controller)
+        let measurer = TimelineLayoutCache()
 
         func renderedMessage(_ id: String) throws -> (NSView, AppKitMessageTextView) {
             let index = try XCTUnwrap(model.rows.firstIndex { $0.stableMessageKey == .clientGenerated(id) })
@@ -294,7 +302,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             let cell = try XCTUnwrap(table.view(atColumn: 0, row: index, makeIfNecessary: true))
             cell.layoutSubtreeIfNeeded()
             let native = try XCTUnwrap(textViews(in: cell).compactMap { $0 as? AppKitMessageTextView }.first)
-            XCTAssertEqual(cell.bounds.height, measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)), accuracy: 1)
+            XCTAssertEqual(cell.bounds.height, TimelineTestFixtures.layout(row: model.rows[index], width: table.bounds.width, parent: controller, cache: measurer).size.height, accuracy: 1)
             return (cell, native)
         }
 
@@ -303,6 +311,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             window.setContentSize(NSSize(width: width, height: 900))
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
             controller.view.layoutSubtreeIfNeeded()
             for item in pending {
                 let (cell, native) = try renderedMessage(item.clientGeneratedID)
@@ -354,6 +363,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         store.replacePending(chatID: "chat", with: [pending[1]], acknowledging: acknowledgement)
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         let (_, delivered) = try renderedMessage("failed-a")
         XCTAssertTrue(delivered.subviews.compactMap { $0 as? NSButton }.isEmpty)
         let (_, remaining) = try renderedMessage("failed-b")
@@ -417,6 +427,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             window.setContentSize(NSSize(width: width, height: 1100))
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
             controller.view.layoutSubtreeIfNeeded()
             let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
             let table = try XCTUnwrap(scroll.documentView as? NSTableView)
@@ -435,6 +446,43 @@ final class TimelineTableViewControllerTests: XCTestCase {
             }
             check(cell, textView, bitmap)
         }
+    }
+
+    private func mountForDisplay(_ controller: TimelineTableViewController) -> NSWindow {
+        let window = NSWindow(contentRect: controller.view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = controller
+        window.orderFront(nil)
+        return window
+    }
+
+    private func waitForDisplay(_ controller: TimelineTableViewController, model: ConversationTimelineModel) async throws {
+        let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
+        let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+        let cache = TimelineLayoutCache()
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        // Work is coalesced at the display boundary, not installed by viewDidLayout itself.
+        repeat {
+            try await Task.sleep(for: .milliseconds(20))
+            let width = scroll.contentView.bounds.width - scroll.contentInsets.left - scroll.contentInsets.right
+            if table.numberOfRows == model.rows.count, abs(table.bounds.width - width) < 0.5 {
+                let visible = table.rows(in: scroll.documentVisibleRect)
+                if visible.location != NSNotFound {
+                    let indexes = visible.location ..< min(NSMaxRange(visible), model.rows.count)
+                    let exact = indexes.allSatisfy { index in
+                        let layout = TimelineTestFixtures.layout(row: model.rows[index], width: width, parent: controller, cache: cache)
+                        guard abs(table.rect(ofRow: index).height - layout.size.height) < 0.5 else { return false }
+                        if let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView {
+                            return cell.state.binding?.presentation.row == model.rows[index]
+                                && cell.state.binding?.presentation.environment == TimelineTestFixtures.environment(width: width, parent: controller)
+                        }
+                        return true
+                    }
+                    if exact { return }
+                } else if model.rows.isEmpty { return }
+            }
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        XCTFail("The display transaction did not install exact visible geometry.")
     }
 
     private func assertGlyphsVisible(_ textView: NSTextView, in cell: NSView, file: StaticString = #filePath, line: UInt = #line) {
@@ -494,6 +542,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         NotificationCenter.default.post(name: NSWindow.willStartLiveResizeNotification, object: window)
@@ -501,6 +550,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             window.setContentSize(NSSize(width: width, height: 600))
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
             let visible = table.rows(in: scroll.documentVisibleRect)
             for index in visible.location ..< min(NSMaxRange(visible), model.rows.count) {
                 guard let cell = table.view(atColumn: 0, row: index, makeIfNecessary: true) else { continue }
@@ -517,9 +567,12 @@ final class TimelineTableViewControllerTests: XCTestCase {
             source: HistorySource(initial: page, older: page), messageStore: ConversationMessageStore())
         let reference = TimelineTableViewController(model: referenceModel)
         reference.view.frame = controller.view.frame
+        let referenceWindow = mountForDisplay(reference)
+        defer { referenceWindow.close() }
         reference.view.layoutSubtreeIfNeeded()
         reference.viewDidLayout()
         await referenceModel.loadInitial()
+        try await waitForDisplay(reference, model: referenceModel)
         let referenceScroll = try XCTUnwrap(reference.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let referenceTable = try XCTUnwrap(referenceScroll.documentView as? NSTableView)
         try await waitForRowHeights(table, expected: model.rows.indices.map { referenceTable.rect(ofRow: $0).height }) {
@@ -564,18 +617,19 @@ final class TimelineTableViewControllerTests: XCTestCase {
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let controller = try XCTUnwrap(table.delegate as? TimelineTableViewController)
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         XCTAssertEqual(controller.view.bounds.width, 800, accuracy: 1)
         XCTAssertEqual(scroll.contentView.bounds.height, 500, accuracy: 1)
         guard table.numberOfRows == model.rows.count, scroll.documentVisibleRect.height > 0 else {
             XCTFail("The production conversation container must install rows in a nonzero viewport before resizing.")
             return
         }
-        let measurer = TimelineRowMeasurer(parent: controller)
+        let measurer = TimelineLayoutCache()
         let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
         let originalHeight = table.rect(ofRow: offscreen).height
         XCTAssertGreaterThan(originalHeight, 0)
         XCTAssertEqual(originalHeight,
-                       measurer.height(for: model.rows[offscreen], width: table.bounds.width, context: .init(currentUserID: 1)),
+                       TimelineTestFixtures.layout(row: model.rows[offscreen], width: table.bounds.width, parent: controller, cache: measurer).size.height,
                        accuracy: 1)
         let anchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "20" })
         model.userScrollBegan()
@@ -597,6 +651,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             host.view.needsLayout = true
             host.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
             XCTAssertEqual(controller.view.bounds.width, width, accuracy: 1)
             XCTAssertEqual(table.rect(ofRow: offscreen).height, originalHeight, accuracy: 1,
                            "Divider updates must not remeasure the offscreen history.")
@@ -605,7 +660,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             XCTAssertGreaterThan(visible.length, 0)
             for index in visible.location ..< min(NSMaxRange(visible), model.rows.count) {
                 XCTAssertEqual(table.rect(ofRow: index).height,
-                               measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)),
+                               TimelineTestFixtures.layout(row: model.rows[index], width: table.bounds.width, parent: controller, cache: measurer).size.height,
                                accuracy: 1)
             }
         }
@@ -622,7 +677,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         XCTAssertGreaterThan(visible.length, 0)
         for index in visible.location ..< min(NSMaxRange(visible), model.rows.count) {
             XCTAssertEqual(table.rect(ofRow: index).height,
-                           measurer.height(for: model.rows[index], width: table.bounds.width, context: .init(currentUserID: 1)),
+                           TimelineTestFixtures.layout(row: model.rows[index], width: table.bounds.width, parent: controller, cache: measurer).size.height,
                            accuracy: 1)
         }
         XCTAssertEqual(table.rect(ofRow: offscreen).height, originalHeight, accuracy: 1)
@@ -635,7 +690,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         XCTAssertFalse(controller.isSplitResizing, "Ending the gesture must reach the same native controller.")
         XCTAssertEqual(table.rect(ofRow: offscreen).height, originalHeight, accuracy: 1,
                        "Mouse-up must yield before remeasuring the offscreen history.")
-        let expected = model.rows.map { measurer.height(for: $0, width: table.bounds.width, context: .init(currentUserID: 1)) }
+        let expected = model.rows.map { TimelineTestFixtures.layout(row: $0, width: table.bounds.width, parent: controller, cache: measurer).size.height }
         try await waitForRowHeights(table, expected: expected) {
             XCTAssertEqual(table.rect(ofRow: newAnchor).minY - scroll.documentVisibleRect.minY, newOffset, accuracy: 1)
         }
@@ -659,21 +714,24 @@ final class TimelineTableViewControllerTests: XCTestCase {
         window.orderFront(nil)
         defer { window.close() }
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
-        let measurer = TimelineRowMeasurer(parent: controller)
+        let measurer = TimelineLayoutCache()
 
         for splitEndsFirst in [true, false] {
             window.setContentSize(NSSize(width: 800, height: 500))
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
             let originalHeight = table.rect(ofRow: offscreen).height
             controller.isSplitResizing = true
             NotificationCenter.default.post(name: NSWindow.willStartLiveResizeNotification, object: window)
             window.setContentSize(NSSize(width: 420, height: 500))
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
             if splitEndsFirst {
                 controller.isSplitResizing = false
             } else {
@@ -686,7 +744,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             } else {
                 controller.isSplitResizing = false
             }
-            let expected = model.rows.map { measurer.height(for: $0, width: table.bounds.width, context: .init(currentUserID: 1)) }
+            let expected = model.rows.map { TimelineTestFixtures.layout(row: $0, width: table.bounds.width, parent: controller, cache: measurer).size.height }
             try await waitForRowHeights(table, expected: expected) {
                 XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1)
             }
@@ -704,9 +762,12 @@ final class TimelineTableViewControllerTests: XCTestCase {
             source: HistorySource(initial: page, older: page), messageStore: store)
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
+        let displayWindow = mountForDisplay(controller)
+        defer { displayWindow.close() }
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let first = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
@@ -720,6 +781,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         controller.view.setFrameSize(NSSize(width: 420, height: 500))
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         controller.isSplitResizing = false
         let edited = try TimelineTestFixtures.message(id: "90", senderID: 2, at: 90,
             text: String(repeating: "Edited while native height correction restores the reader. ", count: 20))
@@ -739,9 +801,10 @@ final class TimelineTableViewControllerTests: XCTestCase {
         controller.view.setFrameSize(NSSize(width: 660, height: 500))
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         controller.isSplitResizing = false
-        let measurer = TimelineRowMeasurer(parent: controller)
-        let expected = model.rows.map { measurer.height(for: $0, width: table.bounds.width, context: .init(currentUserID: 1)) }
+        let measurer = TimelineLayoutCache()
+        let expected = model.rows.map { TimelineTestFixtures.layout(row: $0, width: table.bounds.width, parent: controller, cache: measurer).size.height }
         try await waitForRowHeights(table, expected: expected) {
             XCTAssertEqual(table.rect(ofRow: anchor).minY - scroll.documentVisibleRect.minY, -12, accuracy: 1)
         }
@@ -777,15 +840,19 @@ final class TimelineTableViewControllerTests: XCTestCase {
         )
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 500)
+        let displayWindow = mountForDisplay(controller)
+        defer { displayWindow.close() }
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
 
         controller.view.setFrameSize(NSSize(width: 600, height: 300))
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1,
                        "A height-only resize must keep the latest message attached to the bottom")
 
@@ -799,6 +866,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         controller.view.setFrameSize(NSSize(width: 320, height: 400))
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         XCTAssertEqual(table.rect(ofRow: index).minY - scroll.documentVisibleRect.minY, offset, accuracy: 1,
                        "Reflow must preserve the partially visible message, not the old absolute offset")
         try await Task.sleep(for: .milliseconds(350))
@@ -817,9 +885,12 @@ final class TimelineTableViewControllerTests: XCTestCase {
         )
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
+        let displayWindow = mountForDisplay(controller)
+        defer { displayWindow.close() }
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         let scroll = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         model.userScrollBegan()
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
@@ -859,11 +930,14 @@ final class TimelineTableViewControllerTests: XCTestCase {
         )
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let displayWindow = mountForDisplay(controller)
+        defer { displayWindow.close() }
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
         await model.loadInitial()
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         let scrollView = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let tableView = try XCTUnwrap(scrollView.documentView as? NSTableView)
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: scrollY))
@@ -895,6 +969,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         await fulfillment(of: [loaded], timeout: 2)
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         XCTAssertEqual(source.queries.compactMap(\.before), ["60"])
         let newIndex = try XCTUnwrap(model.rows.firstIndex { $0.id == messageID })
         let offsetAfter = tableView.rect(ofRow: newIndex).minY - scrollView.documentVisibleRect.minY
@@ -927,7 +1002,10 @@ final class TimelineTableViewControllerTests: XCTestCase {
         let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: false, source: source, messageStore: ConversationMessageStore())
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+        let displayWindow = mountForDisplay(controller)
+        defer { displayWindow.close() }
         await model.loadInitial()
+        try await waitForDisplay(controller, model: model)
         let scrollView = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let tableView = try XCTUnwrap(scrollView.documentView as? NSTableView)
 
@@ -935,6 +1013,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
             controller.view.setFrameSize(NSSize(width: width, height: 400))
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
             controller.view.layoutSubtreeIfNeeded()
             let clip = scrollView.contentView
             XCTAssertEqual(tableView.frame.width, clip.bounds.width, accuracy: 0.5)
@@ -959,11 +1038,14 @@ final class TimelineTableViewControllerTests: XCTestCase {
         let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: false, source: source, messageStore: ConversationMessageStore())
         let controller = TimelineTableViewController(model: model)
         controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let displayWindow = mountForDisplay(controller)
+        defer { displayWindow.close() }
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
         await model.loadInitial()
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         let scrollView = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
         let tableView = try XCTUnwrap(scrollView.documentView as? NSTableView)
         XCTAssertGreaterThan(tableView.bounds.height, scrollView.contentView.bounds.height)

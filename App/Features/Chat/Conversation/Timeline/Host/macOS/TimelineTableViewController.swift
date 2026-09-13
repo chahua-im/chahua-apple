@@ -9,6 +9,10 @@ import SwiftUI
 // it already owns link hit testing and selection, which SwiftUI cannot reproduce.
 @MainActor
 final class TimelineBubbleHostingView<Content: View>: NSHostingView<Content> {
+    // Swift 6.3.2's Release EarlyPerfInliner crashes on this generic
+    // NSHostingView subclass's synthesized deinit; an explicit body avoids it.
+    deinit {}
+
     override func cursorUpdate(with event: NSEvent) {
         if let text = textView(at: event.locationInWindow, in: self) {
             text.cursorUpdate(with: event)
@@ -35,7 +39,8 @@ final class TimelineBubbleHostingView<Content: View>: NSHostingView<Content> {
 
 @MainActor
 final class TimelineTableCellView: NSTableCellView {
-    let hosting = TimelineBubbleHostingView(rootView: TimelineBubbleView(row: .dateSeparator(.init(day: .now, ordinalDay: 0)), context: .init()))
+    let state = TimelineRowHostState()
+    lazy var hosting = TimelineBubbleHostingView(rootView: TimelineRowHostView(state: state))
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         // The table supplies exact row geometry. Intrinsic/minimum-size probes
@@ -90,23 +95,15 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private var rows: [TimelineRow] = []
     var actions = TimelineBubbleActions() {
         didSet {
-            // Closure identity is not comparable. Cells dispatch through stable closures
-            // that read the latest actions; only availability changes affect their UI.
-            guard (actions.openMedia == nil) != (oldValue.openMedia == nil)
-                || (actions.openReply == nil) != (oldValue.openReply == nil)
-                || (actions.replyToMessage == nil) != (oldValue.replyToMessage == nil)
-                || (actions.openThread == nil) != (oldValue.openThread == nil)
-                || (actions.openLink == nil) != (oldValue.openLink == nil)
-                || (actions.openMention == nil) != (oldValue.openMention == nil)
-                || (actions.openFailedMessage == nil) != (oldValue.openFailedMessage == nil)
-                || (actions.openContextMenu == nil) != (oldValue.openContextMenu == nil)
-                || (actions.toggleReaction == nil) != (oldValue.toggleReaction == nil)
-                || actions.pendingReactionMessageIDs != oldValue.pendingReactionMessageIDs
-                || actions.currentUserProfile != oldValue.currentUserProfile
-                || actions.modifiablePendingMessageIDs != oldValue.modifiablePendingMessageIDs
-                || actions.interactionContext != oldValue.interactionContext else { return }
+            guard !actions.hasSameRendering(as: oldValue) else { return }
             rowActions = makeRowActions()
             guard isViewLoaded else { return }
+            if actions.currentUserProfile != oldValue.currentUserProfile {
+                latestSnapshot = model.updates.value
+                profileNeedsPreparation = true
+                preparation = nil
+                requestDisplayUpdate()
+            }
             refreshVisibleRoots()
         }
     }
@@ -145,7 +142,13 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             view.needsLayout = true
         }
     }
-    private var measurer: TimelineRowMeasurer!
+    private let layoutCache = TimelineLayoutCache()
+    private var presentations: [TimelineRowID: TimelineRowPresentation] = [:]
+    private var installedLayouts: [TimelineRowID: TimelineRowLayout] = [:]
+    private var preparation: TimelineLayoutPreparation?
+    private var layoutEnvironment: TimelineLayoutEnvironment?
+    private var displayScheduler: TimelineDisplayScheduler!
+    private var profileNeedsPreparation = false
     private var cancellable: AnyCancellable?
     private var highlightedRowID: TimelineRowID?
     private var highlightTask: Task<Void, Never>?
@@ -160,13 +163,16 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private var handlingWheel = false
     private var liveScrolling = false
     private var windowLiveResizing = false
-    private var liveResizing: Bool { windowLiveResizing || isSplitResizing || heightSettlementTask != nil }
+    private var liveResizing: Bool { windowLiveResizing || isSplitResizing || settlingHeights }
     private var needsFullHeightRefresh = false
     private var liveResizeRows = IndexSet()
-    private var heightSettlementTask: Task<Void, Never>?
+    private var settlingHeights = false
     private var heightSettlementRevision = -1
     private var heightSettlementGeometry: Geometry?
     private var nextHeightSettlementRow = 0
+    private var heightSettlementOrder: [Int] = []
+    private var heightSettlementPriorityCount = 0
+    private var exposedHeightChanges = IndexSet()
     private var activeRequest: TimelineScrollRequest?
     private var lastStartedRequestID: Int?
     private var scrollTask: Task<Void, Never>?
@@ -229,7 +235,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        measurer = TimelineRowMeasurer(parent: self)
+        displayScheduler = TimelineDisplayScheduler(view: view)
         cancellable = model.updates.sink { [weak self] in self?.receive($0) }
         let notifications = NotificationCenter.default
         notifications.addObserver(self, selector: #selector(boundsChanged), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
@@ -239,6 +245,8 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         notifications.addObserver(self, selector: #selector(backingPropertiesChanged(_:)), name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
         notifications.addObserver(self, selector: #selector(windowWillResize(_:)), name: NSWindow.willStartLiveResizeNotification, object: nil)
         notifications.addObserver(self, selector: #selector(windowDidResize(_:)), name: NSWindow.didEndLiveResizeNotification, object: nil)
+        notifications.addObserver(self, selector: #selector(environmentChanged), name: NSLocale.currentLocaleDidChangeNotification, object: nil)
+        notifications.addObserver(self, selector: #selector(environmentChanged), name: .NSSystemTimeZoneDidChange, object: nil)
     }
 
     private func applyConversationBackground() {
@@ -251,22 +259,19 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     deinit {
         scrollTask?.cancel()
         highlightTask?.cancel()
-        heightSettlementTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
     override func viewDidLayout() {
         super.viewDidLayout()
-        installIfPossible()
+        requestDisplayUpdate()
+        if installedRevision < 0 { displayScheduler.flush() }
         reportViewport(reason: .layout)
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        if liveResizing, !liveResizeRows.contains(row), let height = measurer.cachedHeight(for: rows[row]) {
-            return height
-        }
-        return measurer.height(for: rows[row], width: measuredWidth, context: rowContext(for: rows[row]))
+        exactLayout(for: rows[row], allowingStaleOffscreen: true).size.height
     }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -274,8 +279,103 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         let cell = tableView.makeView(withIdentifier: id, owner: self) as? TimelineTableCellView ?? TimelineTableCellView()
         cell.identifier = id
         let item = rows[row]
-        cell.hosting.rootView = TimelineBubbleView(row: item, context: rowContext(for: item), actions: rowActions, mediaContext: mediaContext)
+        bind(cell, row: item)
         return cell
+    }
+
+    func tableView(_ tableView: NSTableView, didRemove rowView: NSTableRowView, forRow row: Int) {
+        for cell in rowView.subviews.compactMap({ $0 as? TimelineTableCellView }) { cell.state.clear() }
+    }
+
+    func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
+        guard !applying, !exposedHeightChanges.isEmpty else { return }
+        let position = capturePosition()
+        applying = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            flushExposedHeightChanges()
+            tableView.layoutSubtreeIfNeeded()
+            restore(position)
+        }
+        settleExposedRows(preserving: position)
+        settledPosition = capturePosition()
+        applying = false
+    }
+
+    private func flushExposedHeightChanges() {
+        guard !exposedHeightChanges.isEmpty else { return }
+        let changed = exposedHeightChanges
+        exposedHeightChanges.removeAll()
+        tableView.noteHeightOfRows(withIndexesChanged: changed)
+    }
+
+    private func settleExposedRows(preserving position: Position) {
+        guard needsFullHeightRefresh || !exposedHeightChanges.isEmpty else { return }
+        while true {
+            for index in heightRefreshIndexes {
+                let layout = exactLayout(for: rows[index])
+                liveResizeRows.insert(index)
+                if tableView.rect(ofRow: index).height != layout.size.height { exposedHeightChanges.insert(index) }
+            }
+            refreshVisibleRoots()
+            guard !exposedHeightChanges.isEmpty else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                context.allowsImplicitAnimation = false
+                flushExposedHeightChanges()
+                tableView.layoutSubtreeIfNeeded()
+                if model.state.live.followsLatest && model.isAtLiveEdge { setScrollOrigin(bottomOrigin) }
+                else { restore(position) }
+            }
+        }
+    }
+
+    private var currentEnvironment: TimelineLayoutEnvironment {
+        .current(timelineWidth: currentGeometry.rowWidth,
+                 displayScale: currentGeometry.scale,
+                 bodySize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+                 captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
+                 caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
+                 layoutDirection: view.userInterfaceLayoutDirection == .rightToLeft ? .rightToLeft : .leftToRight)
+    }
+
+    private func exactLayout(for row: TimelineRow, allowingStaleOffscreen: Bool = false) -> TimelineRowLayout {
+        let environment = layoutEnvironment ?? currentEnvironment
+        guard environment.timelineWidth.isFinite, environment.timelineWidth > 0 else {
+            return installedLayouts[row.id] ?? .empty
+        }
+        if let presentation = presentations[row.id], presentation.environment == environment,
+           presentation.row == row, let layout = installedLayouts[row.id] { return layout }
+        if allowingStaleOffscreen, needsFullHeightRefresh, let layout = installedLayouts[row.id] { return layout }
+        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: actions.currentUserProfile, currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil, environment: environment)
+        let layout = layoutCache.layout(for: presentation, environment: environment)
+        presentations[row.id] = presentation
+        installedLayouts[row.id] = layout
+        return layout
+    }
+
+    private func bind(_ cell: TimelineTableCellView, row: TimelineRow) {
+        let oldHeight = installedLayouts[row.id]?.size.height
+        let layout = exactLayout(for: row)
+        if let oldHeight, oldHeight != layout.size.height, let index = rows.firstIndex(where: { $0.id == row.id }) {
+            exposedHeightChanges.insert(index)
+        }
+        guard let presentation = presentations[row.id] else { return }
+        cell.state.bind(.init(presentation: presentation, layout: layout, context: rowContext(for: row), actions: rowActions, mediaContext: mediaContext))
+    }
+
+    private func requestDisplayUpdate() {
+        displayScheduler?.request { [weak self] in
+            guard let self else { return }
+            self.installIfPossible()
+            if self.settlingHeights, self.settleNextHeightBatch() { self.requestDisplayUpdate() }
+        }
+    }
+
+    @objc private func environmentChanged() {
+        preparation = nil
+        requestDisplayUpdate()
     }
 
     private var currentGeometry: Geometry {
@@ -294,68 +394,116 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private func receive(_ snapshot: TimelineHostSnapshot) {
         // A subscriber can synchronously publish newer data before this subscriber
         // receives the older, outer send. Never replace installed or queued newer rows.
-        guard snapshot.revision >= installedRevision,
-              snapshot.revision >= (latestSnapshot?.revision ?? installedRevision) else { return }
-        latestSnapshot = snapshot
-        installIfPossible()
+        let current = model.updates.value
+        let newest = current.revision >= snapshot.revision ? current : snapshot
+        guard newest.revision >= installedRevision,
+              newest.revision >= (latestSnapshot?.revision ?? installedRevision) else { return }
+        if let old = preparation, old.snapshot.revision != newest.revision || old.snapshot.windowRevision != newest.windowRevision {
+            let retained = Set(rows.map(\.id)).union(newest.rows.map(\.id))
+            layoutCache.remove(Set(old.snapshot.rows.map(\.id)).subtracting(retained))
+            preparation = nil
+        }
+        latestSnapshot = newest
+        requestDisplayUpdate()
+        if installedRevision < 0 || newest.pendingScroll != nil { displayScheduler?.flush() }
     }
 
     private func installIfPossible() {
-        guard !applying, measurer != nil else { return }
+        guard !applying, displayScheduler != nil else { return }
+        let environment = currentEnvironment
+        guard environment.timelineWidth.isFinite, environment.timelineWidth > 0, currentGeometry.size.height > 0 else { return }
+        // Resize installed visible content before spending a bounded tick on a pending page.
+        let deferredSnapshot = installedRevision >= 0 && layoutEnvironment != environment ? latestSnapshot : nil
+        if deferredSnapshot != nil { latestSnapshot = nil }
+        defer {
+            if deferredSnapshot != nil {
+                if latestSnapshot == nil { latestSnapshot = model.updates.value }
+                requestDisplayUpdate()
+            }
+        }
+        var prepared: TimelineLayoutPreparation?
+        if let snapshot = latestSnapshot,
+           snapshot.revision != installedRevision || snapshot.windowRevision != installedWindowRevision
+                || profileNeedsPreparation {
+            if preparation?.snapshot.revision != snapshot.revision
+                || preparation?.snapshot.windowRevision != snapshot.windowRevision
+                || preparation?.environment != environment || preparation?.profile != actions.currentUserProfile {
+                preparation = TimelineLayoutPreparation(snapshot: snapshot, environment: environment, profile: actions.currentUserProfile)
+            }
+            guard let work = preparation else { return }
+            guard work.advance(cache: layoutCache, currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil) else {
+                requestDisplayUpdate()
+                return
+            }
+            guard model.updates.value.revision == work.snapshot.revision,
+                  model.updates.value.windowRevision == work.snapshot.windowRevision,
+                  currentEnvironment == work.environment else {
+                preparation = nil
+                latestSnapshot = model.updates.value
+                requestDisplayUpdate()
+                return
+            }
+            prepared = work
+            preparation = nil
+        }
         applying = true
         var didWork = false
-
-        // Finishing a nonanimated request publishes synchronously. Drain that intent-only
-        // snapshot here instead of leaving it queued behind the applying guard.
         while true {
             let geometry = currentGeometry
-            guard geometry.rowWidth > 0, geometry.size.height > 0 else { break }
-            let geometryChanged = installedGeometry != geometry || (needsFullHeightRefresh && !liveResizing)
-            // Reflow or scrolling can expose rows that kept their previous-width
-            // heights. Drain those too, without invalidating the offscreen history.
-            let newlyVisibleResizeRows = liveResizing && needsFullHeightRefresh
-                ? heightRefreshIndexes.subtracting(liveResizeRows) : IndexSet()
+            let geometryChanged = installedGeometry != geometry || layoutEnvironment != environment
+            let heightsChanged = layoutEnvironment != environment
+            let newlyVisibleResizeRows = needsFullHeightRefresh ? heightRefreshIndexes.subtracting(liveResizeRows) : IndexSet()
+            if !newlyVisibleResizeRows.isEmpty { heightSettlementRevision = -1 }
             guard latestSnapshot != nil || geometryChanged || !newlyVisibleResizeRows.isEmpty else { break }
             let snapshot = latestSnapshot
             latestSnapshot = nil
-            let dataChanged = snapshot.map { $0.revision != installedRevision } ?? false
+            let dataChanged = prepared != nil
             let position = geometryChanged ? settledPosition ?? capturePosition() : capturePosition()
-            let typographyChanged = installedGeometry?.fontSize != geometry.fontSize
-            let heightsChanged = installedGeometry?.rowWidth != geometry.rowWidth
-                || installedGeometry?.size.height != geometry.size.height
-                || installedGeometry?.scale != geometry.scale
-                || installedGeometry?.fontSize != geometry.fontSize
-                || (needsFullHeightRefresh && !liveResizing)
-
             let layoutChanged = dataChanged || geometryChanged || !newlyVisibleResizeRows.isEmpty
             if layoutChanged {
-                // Stop before row coordinates change; an active request will be retargeted
-                // against the newly laid-out rows, never its old animation destination.
                 stopScrolling()
                 installedGeometry = geometry
-                if liveResizing {
-                    if heightsChanged || dataChanged { liveResizeRows = heightRefreshIndexes }
-                    else { liveResizeRows.formUnion(newlyVisibleResizeRows) }
-                }
+                layoutEnvironment = environment
                 measuredWidth = geometry.rowWidth
+                var changedHeights = exposedHeightChanges
+                exposedHeightChanges.removeAll()
+                if let work = prepared {
+                    for (index, row) in work.snapshot.rows.enumerated() {
+                        if installedLayouts[row.id]?.size.height != work.layouts[row.id]?.size.height { changedHeights.insert(index) }
+                    }
+                    presentations = work.presentations
+                    installedLayouts = work.layouts
+                    needsFullHeightRefresh = false
+                    profileNeedsPreparation = false
+                    settlingHeights = false
+                    liveResizeRows.removeAll()
+                } else {
+                    if heightsChanged {
+                        needsFullHeightRefresh = !rows.isEmpty
+                        settlingHeights = !rows.isEmpty
+                        liveResizeRows.removeAll()
+                        heightSettlementRevision = -1
+                        nextHeightSettlementRow = 0
+                    }
+                    for index in heightRefreshIndexes where heightsChanged || !liveResizeRows.contains(index) && needsFullHeightRefresh {
+                        let oldHeight = installedLayouts[rows[index].id]?.size.height
+                        let layout = exactLayout(for: rows[index])
+                        liveResizeRows.insert(index)
+                        if oldHeight != layout.size.height { changedHeights.insert(index) }
+                    }
+                }
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0
                     context.allowsImplicitAnimation = false
                     column.width = measuredWidth
-                    if geometryChanged || !newlyVisibleResizeRows.isEmpty {
-                        refreshVisibleRoots(geometryOnly: !typographyChanged)
-                    }
-                    if let snapshot, dataChanged {
-                        installRows(snapshot, invalidateHeights: heightsChanged)
-                    } else if heightsChanged, !rows.isEmpty {
-                        tableView.noteHeightOfRows(withIndexesChanged: heightRefreshIndexes)
-                    } else if !newlyVisibleResizeRows.isEmpty {
-                        tableView.noteHeightOfRows(withIndexesChanged: newlyVisibleResizeRows)
-                    }
-                    if heightsChanged { needsFullHeightRefresh = liveResizing }
+                    if let snapshot, dataChanged { installRows(snapshot, changedHeights: changedHeights) }
+                    else if !changedHeights.isEmpty { tableView.noteHeightOfRows(withIndexesChanged: changedHeights) }
+                    refreshVisibleRoots()
+                    flushExposedHeightChanges()
                     tableView.layoutSubtreeIfNeeded()
                     scrollView.layoutSubtreeIfNeeded()
                 }
+                if settlingHeights { requestDisplayUpdate() }
             }
 
             let current = model.updates.value
@@ -383,20 +531,23 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                     }
                 }
             }
+            settleExposedRows(preserving: capturePosition())
             if scrollTask == nil { settledPosition = capturePosition() }
             didWork = true
+            if latestSnapshot != nil { requestDisplayUpdate() }
+            break
         }
 
         applying = false
         if didWork { reportViewport(reason: .programmatic) }
     }
 
-    private func installRows(_ snapshot: TimelineHostSnapshot, invalidateHeights: Bool) {
+    private func installRows(_ snapshot: TimelineHostSnapshot, changedHeights: IndexSet) {
         let oldIDs = Set(rows.map(\.id))
         let newIDs = Set(snapshot.rows.map(\.id))
         let reset = installedRevision < 0 || installedWindowRevision != snapshot.windowRevision
         let change = reset ? TimelineChange.reset : TimelineChange.compute(from: rows, to: snapshot.rows)
-        measurer.remove(oldIDs.subtracting(newIDs))
+        layoutCache.remove(oldIDs.subtracting(newIDs))
         switch change {
         case .reset:
             rows = snapshot.rows
@@ -411,12 +562,11 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             } else {
                 rows = snapshot.rows
             }
-            if !reloads.isEmpty {
-                tableView.reloadData(forRowIndexes: reloads, columnIndexes: IndexSet(integer: 0))
+            for index in reloads {
+                guard let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView else { continue }
+                bind(cell, row: rows[index])
             }
-            // Insertions acquire their own heights. Only changed survivors need notifying
-            // unless the measurement environment changed for the entire table.
-            let changedHeights = invalidateHeights ? heightRefreshIndexes.union(reloads.subtracting(insertions)) : reloads.subtracting(insertions)
+            let changedHeights = changedHeights.subtracting(insertions)
             if !changedHeights.isEmpty {
                 if liveResizing { liveResizeRows.formUnion(changedHeights) }
                 tableView.noteHeightOfRows(withIndexesChanged: changedHeights)
@@ -473,12 +623,14 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private func execute(_ request: TimelineScrollRequest, beginHighlight: Bool) {
         switch request.intent {
         case .bottom(let animated):
+            if let index = rows.indices.last { prepareScrollTarget(index) }
             scroll(to: bottomOrigin, animated: animated, requestID: request.id)
         case .reveal(let id, let animated, let highlight):
             guard let index = rows.firstIndex(where: { $0.id == id }) else {
                 finishRequest(id: request.id)
                 return
             }
+            prepareScrollTarget(index)
             if highlight && beginHighlight { highlightRow(id) }
             let frame = tableView.rect(ofRow: index)
             let target = constrainedOrigin(y: id == .unreadSeparator
@@ -488,11 +640,24 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         }
     }
 
+    private func prepareScrollTarget(_ index: Int) {
+        let layout = exactLayout(for: rows[index])
+        liveResizeRows.insert(index)
+        guard tableView.rect(ofRow: index).height != layout.size.height else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
+            tableView.layoutSubtreeIfNeeded()
+        }
+    }
+
     private func scroll(to target: NSPoint, animated: Bool, requestID: Int?) {
         stopScrolling()
         let start = scrollView.contentView.bounds.origin
         guard animated, abs(start.y - target.y) > 0.5 || abs(start.x - target.x) > 0.5 else {
             setScrollOrigin(target)
+            settleExposedRows(preserving: capturePosition())
             if let requestID { finishRequest(id: requestID) }
             return
         }
@@ -512,6 +677,9 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                 guard self.scrollGeneration == generation else { return }
                 if progress >= 1 {
                     self.scrollTask = nil
+                    self.applying = true
+                    self.settleExposedRows(preserving: self.capturePosition())
+                    self.applying = false
                     if let requestID { self.finishRequest(id: requestID) }
                     self.installIfPossible()
                     self.reportViewport(reason: .programmatic)
@@ -550,14 +718,13 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private func refreshHighlight(_ id: TimelineRowID) {
         guard let index = rows.firstIndex(where: { $0.id == id }),
               let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView else { return }
-        cell.hosting.rootView = TimelineBubbleView(row: rows[index], context: rowContext(for: rows[index]), actions: rowActions, mediaContext: mediaContext)
+        bind(cell, row: rows[index])
     }
 
     private var heightRefreshIndexes: IndexSet {
-        guard liveResizing else { return IndexSet(rows.indices) }
         let visible = tableView.rows(in: scrollView.documentVisibleRect)
         guard visible.location != NSNotFound else { return [] }
-        return IndexSet(integersIn: max(0, visible.location - 2) ..< min(NSMaxRange(visible) + 2, rows.count))
+        return IndexSet(integersIn: max(0, visible.location) ..< min(NSMaxRange(visible), rows.count))
     }
 
     @objc private func windowWillResize(_ notification: Notification) {
@@ -573,50 +740,46 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     }
 
     private func finishResizeIfPossible() {
-        guard !windowLiveResizing, !isSplitResizing, heightSettlementTask == nil else { return }
-        guard needsFullHeightRefresh else {
-            liveResizeRows.removeAll()
-            installIfPossible()
-            return
-        }
+        guard !windowLiveResizing, !isSplitResizing else { return }
+        settlingHeights = needsFullHeightRefresh
         heightSettlementRevision = -1
-        heightSettlementTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard self?.settleNextHeightBatch() == true else { return }
-                // Yield between bounded main-actor measurement transactions so
-                // input/rendering can proceed while offscreen heights converge.
-                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-            }
-        }
+        requestDisplayUpdate()
     }
 
     private func cancelHeightSettlement() {
-        heightSettlementTask?.cancel()
-        heightSettlementTask = nil
+        heightSettlementRevision = -1
     }
 
     private func settleNextHeightBatch() -> Bool {
         guard !applying else { return true }
-        installIfPossible()
-        guard heightSettlementTask != nil, !windowLiveResizing, !isSplitResizing else { return false }
+        guard settlingHeights, latestSnapshot == nil, preparation == nil,
+              layoutEnvironment == currentEnvironment else { return false }
         // Do not repeatedly interrupt an owned scroll animation with corrections.
         guard scrollTask == nil else { return true }
         if heightSettlementRevision != installedRevision || heightSettlementGeometry != installedGeometry {
             heightSettlementRevision = installedRevision
             heightSettlementGeometry = installedGeometry
             nextHeightSettlementRow = 0
+            let visible = scrollView.documentVisibleRect
+            let range = tableView.rows(in: visible.insetBy(dx: 0, dy: -visible.height))
+            let priority = range.location == NSNotFound ? IndexSet() :
+                IndexSet(integersIn: max(0, range.location) ..< min(NSMaxRange(range), rows.count))
+            heightSettlementOrder = Array(priority) + rows.indices.filter { !priority.contains($0) }
+            heightSettlementPriorityCount = priority.count
         }
         let position = capturePosition()
         let deadline = ProcessInfo.processInfo.systemUptime + 0.004
-        let upperBound = min(rows.count, nextHeightSettlementRow + 32)
+        let settlementEnd = windowLiveResizing || isSplitResizing ? heightSettlementPriorityCount : heightSettlementOrder.count
+        let upperBound = min(settlementEnd, nextHeightSettlementRow + 32)
+        guard nextHeightSettlementRow < settlementEnd else { return false }
         var changed = IndexSet()
         applying = true
         while nextHeightSettlementRow < upperBound {
-            let index = nextHeightSettlementRow
+            let index = heightSettlementOrder[nextHeightSettlementRow]
             nextHeightSettlementRow += 1
             if !liveResizeRows.contains(index) {
-                let previousHeight = measurer.cachedHeight(for: rows[index])
-                let height = measurer.height(for: rows[index], width: measuredWidth, context: rowContext(for: rows[index]))
+                let previousHeight = installedLayouts[rows[index].id]?.size.height
+                let height = exactLayout(for: rows[index]).size.height
                 liveResizeRows.insert(index)
                 if previousHeight != height { changed.insert(index) }
             }
@@ -628,6 +791,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                 context.allowsImplicitAnimation = false
                 tableView.noteHeightOfRows(withIndexesChanged: changed)
                 tableView.layoutSubtreeIfNeeded()
+                flushExposedHeightChanges()
                 scrollView.layoutSubtreeIfNeeded()
                 if model.state.live.followsLatest && model.isAtLiveEdge {
                     setScrollOrigin(bottomOrigin)
@@ -636,18 +800,20 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
                 }
             }
         }
+        settleExposedRows(preserving: position)
         settledPosition = capturePosition()
         applying = false
         // Data/geometry can publish reentrantly during native layout. Drain it
         // before deciding this pass has settled the current revision and width.
-        installIfPossible()
-        if nextHeightSettlementRow < rows.count
+        if latestSnapshot != nil { requestDisplayUpdate() }
+        if (windowLiveResizing || isSplitResizing), nextHeightSettlementRow >= heightSettlementPriorityCount { return false }
+        if nextHeightSettlementRow < heightSettlementOrder.count
             || heightSettlementRevision != installedRevision
             || heightSettlementGeometry != installedGeometry {
             return true
         }
         needsFullHeightRefresh = false
-        heightSettlementTask = nil
+        settlingHeights = false
         liveResizeRows.removeAll()
         reportViewport(reason: .layout)
         return false
@@ -658,6 +824,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             openMedia: actions.openMedia == nil ? nil : { [weak self] in self?.actions.openMedia?($0, $1, $2) },
             openReply: actions.openReply == nil ? nil : { [weak self] in self?.actions.openReply?($0) },
             replyToMessage: actions.replyToMessage == nil ? nil : { [weak self] in self?.actions.replyToMessage?($0) },
+            editMessage: actions.editMessage == nil ? nil : { [weak self] in self?.actions.editMessage?($0) },
             openThread: actions.openThread == nil ? nil : { [weak self] in self?.actions.openThread?($0) },
             openLink: actions.openLink == nil ? nil : { [weak self] in self?.actions.openLink?($0) },
             openMention: actions.openMention == nil ? nil : { [weak self] in self?.actions.openMention?($0) },
@@ -668,37 +835,25 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             currentUserProfile: actions.currentUserProfile,
             interactionContext: actions.interactionContext,
             modifiablePendingMessageIDs: actions.modifiablePendingMessageIDs,
-            blockPendingMessage: { [weak self] in self?.actions.blockPendingMessage?($0) },
-            revokePendingMessage: { [weak self] in self?.actions.revokePendingMessage?($0) }
+            blockPendingMessage: actions.blockPendingMessage == nil ? nil : { [weak self] in self?.actions.blockPendingMessage?($0) },
+            revokePendingMessage: actions.revokePendingMessage == nil ? nil : { [weak self] in self?.actions.revokePendingMessage?($0) }
         )
     }
 
     private func rowContext(for row: TimelineRow) -> TimelineRowContext {
-        let dependsOnViewportHeight: Bool
-        if case .message(let message) = row {
-            let hasLocalMedia: Bool
-            if case .pending(let pending) = message.entry { hasLocalMedia = !pending.attachments.isEmpty }
-            else { hasLocalMedia = false }
-            dependsOnViewportHeight = hasLocalMedia || message.entry.messageType == .sticker || !(message.entry.remoteMessage?.attachments.isEmpty ?? true)
-        } else {
-            dependsOnViewportHeight = false
-        }
-        return .init(
+        .init(
             isHighlighted: row.id == highlightedRowID,
-            viewportSize: dependsOnViewportHeight ? CGSize(width: currentGeometry.rowWidth, height: currentGeometry.size.height) : .zero,
             currentUserID: model.currentUserID,
             isThreadTimeline: model.threadID != nil
         )
     }
 
-    private func refreshVisibleRoots(geometryOnly: Bool = false) {
+    private func refreshVisibleRoots() {
         let visible = tableView.rows(in: scrollView.documentVisibleRect)
         guard visible.location != NSNotFound else { return }
         for index in visible.location ..< min(NSMaxRange(visible), rows.count) {
             guard let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView else { continue }
-            let context = rowContext(for: rows[index])
-            if geometryOnly, cell.hosting.rootView.context == context { continue }
-            cell.hosting.rootView = TimelineBubbleView(row: rows[index], context: context, actions: rowActions, mediaContext: mediaContext)
+            bind(cell, row: rows[index])
         }
     }
 
@@ -748,7 +903,8 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
 
     private func reportViewport(reason: TimelineViewportChangeReason) {
         guard !applying, !settingScrollOrigin, !handlingWheel, scrollTask == nil,
-              latestSnapshot == nil, installedRevision >= 0, installedGeometry == currentGeometry,
+              latestSnapshot == nil, installedRevision >= 0, installedRevision == model.updates.value.revision,
+              installedGeometry == currentGeometry, layoutEnvironment == currentEnvironment,
               !liveScrolling || reason == .user else { return }
         let visible = scrollView.documentVisibleRect
         guard visible.height > 0 else { return }

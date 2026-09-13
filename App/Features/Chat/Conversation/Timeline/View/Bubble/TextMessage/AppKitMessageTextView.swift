@@ -4,13 +4,22 @@ import SwiftUI
 
 extension MessageTextContent: NSViewRepresentable {
     func makeNSView(context: Context) -> AppKitMessageTextView {
-        let view = AppKitMessageTextView()
+        let view = AppKitMessageTextView(geometry: geometry)
         view.delegate = context.coordinator
         return view
     }
 
     func updateNSView(_ view: AppKitMessageTextView, context: Context) {
+        let selection = view.selectedRange()
         let geometryChanged = update(view.contentLayout, coordinator: context.coordinator)
+        if selection.location != NSNotFound {
+            let length = view.contentLayout.storage.length
+            let location = min(selection.location, length)
+            let clampedSelection = NSRange(location: location, length: min(selection.length, length - location))
+            if view.selectedRange() != clampedSelection {
+                view.setSelectedRange(clampedSelection)
+            }
+        }
         view.failureAction = failureAction
         if geometryChanged {
             view.needsLayout = true
@@ -20,7 +29,7 @@ extension MessageTextContent: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: AppKitMessageTextView, context: Context) -> CGSize? {
-        nsView.contentLayout.fittingSize(width: proposal.width)
+        nsView.contentLayout.assignedSize
     }
 }
 
@@ -39,8 +48,9 @@ final class AppKitMessageTextView: NSTextView {
     }
     private var failureButton: NSButton?
 
-    init() {
+    init(geometry: MessageTextGeometry) {
         let layout = MessageTextLayout()
+        layout.install(geometry: geometry)
         contentLayout = layout
         super.init(frame: .zero, textContainer: layout.textContainer)
         isEditable = false
@@ -60,7 +70,7 @@ final class AppKitMessageTextView: NSTextView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var intrinsicContentSize: NSSize { contentLayout.idealSize }
+    override var intrinsicContentSize: NSSize { contentLayout.assignedSize }
     private func updateFailureButton() {
         guard failureAction != nil, let metadata = contentLayout.metadata, metadata.state == .failed else {
             failureButton?.removeFromSuperview()
@@ -95,7 +105,7 @@ final class AppKitMessageTextView: NSTextView {
 
     override func layout() {
         super.layout()
-        let geometry = contentLayout.geometry(for: bounds.width)
+        guard let geometry = contentLayout.assignedGeometry else { return }
 
         if let metadata = contentLayout.metadata {
             failureButton?.frame = metadata.symbolFrame(in: geometry.metadataFrame)
@@ -103,8 +113,8 @@ final class AppKitMessageTextView: NSTextView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let geometry = contentLayout.geometry(for: bounds.width)
         super.draw(dirtyRect)
+        guard let geometry = contentLayout.assignedGeometry else { return }
         effectiveAppearance.performAsCurrentDrawingAppearance {
             contentLayout.metadata?.draw(in: geometry.metadataFrame, drawsSymbol: failureButton == nil)
         }
