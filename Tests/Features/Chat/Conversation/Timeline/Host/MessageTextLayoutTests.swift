@@ -21,35 +21,27 @@ final class MessageTextLayoutTests: XCTestCase {
                 metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
             )
         }
-        let host = NSHostingView(rootView: content("first:"))
-        host.sizingOptions = []
-        host.frame = NSRect(x: 0, y: 0, width: 340, height: 100)
-        host.layoutSubtreeIfNeeded()
-        func textView(in view: NSView) -> AppKitMessageTextView? {
-            if let text = view as? AppKitMessageTextView { return text }
-            return view.subviews.lazy.compactMap { textView(in: $0) }.first
-        }
-        let text = try XCTUnwrap(textView(in: host))
+        let text = AppKitMessageTextView(geometry: prepared.geometry)
+        text.frame = NSRect(x: 0, y: 0, width: 340, height: 100)
+        text.apply(content("first:"), resetSelection: true)
         let link = try XCTUnwrap(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
         text.setSelectedRange(NSRange(location: 0, length: 5))
         _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
         XCTAssertEqual(opened, ["first:https://example.com"])
 
-        host.rootView = content("replacement:")
-        host.layoutSubtreeIfNeeded()
+        text.apply(content("replacement:"), resetSelection: false)
         XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 5))
         _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
         XCTAssertEqual(opened, ["first:https://example.com", "replacement:https://example.com"])
 
-        host.rootView = content(nil)
-        host.layoutSubtreeIfNeeded()
+        text.apply(content(nil), resetSelection: false)
         XCTAssertNil(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
         _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
         XCTAssertEqual(opened, ["first:https://example.com", "replacement:https://example.com"])
         XCTAssertEqual(text.string, "Hello https://example.com")
     }
 
-    func testHostedLinkHoverUsesHandWithoutDisablingTextSelection() throws {
+    func testNativeLinkHoverUsesHandWithoutDisablingTextSelection() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 160, height: 100),
             styleMask: [.borderless], backing: .buffered, defer: false
@@ -61,24 +53,13 @@ final class MessageTextLayoutTests: XCTestCase {
             previousCursor.set()
         }
         let prepared = try preparedText("Hello https://example.com", width: 136)
-        let host = TimelineBubbleHostingView(rootView:
-            MessageTextContent(
+        let text = AppKitMessageTextView(geometry: prepared.geometry)
+        text.apply(MessageTextContent(
                 text: "Hello https://example.com", mentions: [], currentUserID: 1,
                 isOutgoing: false, action: { _ in },
                 metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
-            )
-            .padding(12)
-            .onHover { _ in }
-        )
-        host.sizingOptions = []
-        window.contentView = host
-        host.layoutSubtreeIfNeeded()
-        func textView(in view: NSView) -> AppKitMessageTextView? {
-            if let text = view as? AppKitMessageTextView { return text }
-            return view.subviews.lazy.compactMap { textView(in: $0) }.first
-        }
-        let text = try XCTUnwrap(textView(in: host))
-        text.layoutSubtreeIfNeeded()
+            ), resetSelection: true)
+        window.contentView = text
         text.setSelectedRange(NSRange(location: 0, length: 5))
 
         func hover(_ characterIndex: Int) throws {
@@ -96,7 +77,7 @@ final class MessageTextLayoutTests: XCTestCase {
                 timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
             ))
-            host.cursorUpdate(with: event)
+            text.cursorUpdate(with: event)
         }
 
         try hover(8)

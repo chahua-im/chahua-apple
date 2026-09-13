@@ -63,6 +63,14 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(group.previewSenderName(), "Ada")
     }
 
+    func testMessagePreviewCollapsesNewlineRunsWithoutChangingBodyOrOrdinarySpaces() throws {
+        let body = "First\nsecond\r\n\r\nthird\n\n\n@[uid:2]\u{2028}\u{2029}last  words"
+        let message = try TimelineTestFixtures.message(id: "multiline-preview", at: 1,
+            fields: ["message": body, "mentions": [["uid": 2, "gender": 0, "username": "Ada\n\nLovelace"]]])
+        XCTAssertEqual(messagePreview(message.replyPreview), "First second third @Ada Lovelace last  words")
+        XCTAssertEqual(message.replyPreview.message, body, "Normalization is presentation-only; retain the original text.")
+    }
+
     func testThreadPreviewUsesLatestReplyThenRootMessageFallback() throws {
         let root = try TimelineTestFixtures.message(id: "root", at: 1, text: "Root message").replyPreview
         let reply = try TimelineTestFixtures.message(id: "reply", at: 2, text: "Latest reply").replyPreview

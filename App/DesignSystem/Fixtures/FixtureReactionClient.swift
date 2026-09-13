@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || TIMELINE_PROFILING
     import ChahuaAPI
     import Foundation
 

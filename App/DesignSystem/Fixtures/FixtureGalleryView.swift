@@ -78,8 +78,13 @@ struct FixtureGalleryView: View {
         )
         let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: nil, isThreadTimeline: false, environment: environment)
         let layout = layoutCache.layout(for: presentation, environment: environment)
+        #if os(macOS)
+        return TimelineRowRepresentable(presentation: presentation, layout: layout, context: .init())
+            .frame(width: layout.size.width, height: layout.size.height)
+        #else
         return TimelineBubbleView(presentation: presentation, layout: layout, context: .init())
             .frame(width: layout.size.width, height: layout.size.height)
+        #endif
     }
 }
 

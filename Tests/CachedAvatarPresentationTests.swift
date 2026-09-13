@@ -82,6 +82,13 @@ final class CachedAvatarPresentationTests: XCTestCase {
         )
         let context = try makeContext(fixture: fixture)
         let size = CGSize(width: 300, height: 347)
+        #if os(macOS)
+        let image = TimelineImageView(frame: CGRect(origin: .zero, size: size))
+        image.configure(url: fixture.url, contentMode: .fit, animates: true, showsBlurredBackdrop: true,
+                        thumbnailPixelSize: CGSize(width: size.width * 2, height: size.height * 2), mediaContext: context)
+        image.setVisible(true)
+        let host = AvatarPresentationHost(view: image, size: size)
+        #else
         let root = MessageRowActionButton {} label: {
             RemoteImageView(
                 url: fixture.url,
@@ -94,6 +101,7 @@ final class CachedAvatarPresentationTests: XCTestCase {
         }
         .environment(\.mediaContext, context)
         let host = try AvatarPresentationHost(root: AnyView(root), size: size)
+        #endif
         host.mount()
         defer { host.close() }
 
@@ -147,6 +155,13 @@ final class CachedAvatarPresentationTests: XCTestCase {
         context: AppMediaContext,
         fixture: MediaImageFixture
     ) throws -> AvatarPresentationHost {
+        #if os(macOS)
+        let image = TimelineImageView(frame: CGRect(x: 0, y: 0, width: 96, height: 96))
+        image.configure(url: fixture.url, contentMode: .fill, animates: true, showsBlurredBackdrop: false,
+                        thumbnailPixelSize: thumbnailSize, mediaContext: context)
+        image.setVisible(true)
+        let host = AvatarPresentationHost(view: image)
+        #else
         let root = RemoteImageView(
             url: fixture.url,
             contentMode: .fill,
@@ -158,6 +173,7 @@ final class CachedAvatarPresentationTests: XCTestCase {
         .background(Color.white)
         .environment(\.mediaContext, context)
         let host = try AvatarPresentationHost(root: AnyView(root))
+        #endif
         host.mount()
         return host
     }
@@ -251,7 +267,7 @@ private final class AvatarPhaseRecorder {
 private final class AvatarPresentationHost {
     private let bounds: CGRect
     #if os(macOS)
-    private let controller: NSHostingController<AnyView>
+    private let controller: NSViewController
     private let window: NSWindow
     #else
     private let controller: UIHostingController<AnyView>
@@ -278,6 +294,16 @@ private final class AvatarPresentationHost {
         window.frame = bounds
         #endif
     }
+
+    #if os(macOS)
+    init(view: NSView, size: CGSize = CGSize(width: 96, height: 96)) {
+        bounds = CGRect(origin: .zero, size: size)
+        controller = NSViewController()
+        controller.view = view
+        window = NSWindow(contentRect: bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+    }
+    #endif
 
     func mount() {
         #if os(macOS)

@@ -18,11 +18,10 @@
                 let model = ConversationTimelineModel(
                     chatID: "chat", currentUserID: 1, isGroupChat: true, source: source,
                     messageStore: ConversationMessageStore())
-                let root = MessageInteractionHost(
-                    model: model, context: .init(canWrite: true, isAdmin: true), actions: .init()
-                ) { actions in
-                    ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: actions)
-                }.preferredColorScheme(dark ? .dark : .light)
+                let root = ConversationTimelineView(
+                    model: model, loadsInitialAutomatically: false,
+                    interactionContext: .init(canWrite: true, isAdmin: true)
+                ).preferredColorScheme(dark ? .dark : .light)
                 let host = NSHostingController(rootView: root)
                 host.sizingOptions = []
                 let size = CGSize(width: width, height: 650)
@@ -50,7 +49,7 @@
                 NSApp.postEvent(event, atStart: false)
                 try await Task.sleep(for: .milliseconds(200))
                 host.view.layoutSubtreeIfNeeded()
-                let visibleText = textViews(in: host.view)
+                let visibleText = textViews(in: try XCTUnwrap(window.contentView?.superview))
                 XCTAssertEqual(visibleText.count, 2, "Opening the menu should add one read-only message preview.")
                 for text in visibleText {
                     XCTAssertEqual(

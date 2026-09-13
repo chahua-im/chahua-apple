@@ -1,10 +1,13 @@
-#if DEBUG
+#if DEBUG || TIMELINE_PROFILING
     import CoreText
     import ChahuaAPI
     import Combine
     import ImageIO
     import SwiftUI
     import UniformTypeIdentifiers
+    #if os(macOS)
+    import AppKit
+    #endif
 
     /// Local-only diagnostic surface. Uses the production timeline and decoder, never production auth.
     struct TimelineBubbleFixtureView: View {
@@ -18,6 +21,7 @@
         @State private var listScope: ConversationListScope = .messages
         @State private var replyToMessage: MessagePreview?
         @State private var replyFocusRequest = 0
+        @State private var scrollExperiment: TimelineDisplayScheduler?
 
         var body: some View {
             if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
@@ -69,6 +73,16 @@
                     diagnosticControls
                 }
                 if let model = fixture.timeline {
+                    #if os(macOS)
+                    ConversationTimelineView(
+                        model: model,
+                        initialPosition: ProcessInfo.processInfo.environment["CHAHUA_FIXTURE_MESSAGE"].map(TimelineInitialPosition.message) ?? .liveEdge,
+                        actions: actions,
+                        interactionContext: .init(canWrite: handlersEnabled, isAdmin: true, isThreadView: threadScope)
+                    )
+                    .id(ObjectIdentifier(model))
+                    .modifier(fixtureComposer(model: model))
+                    #else
                     MessageInteractionHost(
                         model: model,
                         context: .init(canWrite: handlersEnabled, isAdmin: true, isThreadView: threadScope),
@@ -76,32 +90,13 @@
                     ) { interactiveActions in
                         ConversationTimelineView(
                             model: model,
-                            initialPosition: ProcessInfo.processInfo.environment["CHAHUA_FIXTURE_MESSAGE"].map(
-                                TimelineInitialPosition.message) ?? .liveEdge,
+                            initialPosition: ProcessInfo.processInfo.environment["CHAHUA_FIXTURE_MESSAGE"].map(TimelineInitialPosition.message) ?? .liveEdge,
                             actions: interactiveActions
                         )
                         .id(ObjectIdentifier(model))
-                        .modifier(
-                            ChatComposerOverlay {
-                                MessageComposerView(
-                                    text: $draft,
-                                    attachmentState: composerAttachments,
-                                    maxHeight: 160,
-                                    isEnabled: true,
-                                    canSend: true,
-                                    onSubmit: {
-                                        event = "Submitted: \(draft)" + (replyToMessage.map { " → \($0.id)" } ?? "")
-                                        draft = ""
-                                        replyToMessage = nil
-                                        return true
-                                    },
-                                    replyToMessage: replyToMessage,
-                                    replyFocusRequest: replyFocusRequest,
-                                    onCancelReply: { replyToMessage = nil },
-                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } }
-                                )
-                            })
+                        .modifier(fixtureComposer(model: model))
                     }
+                    #endif
                 } else if let error = fixture.error {
                     Text(error).textSelection(.enabled).padding()
                 } else {
@@ -112,6 +107,15 @@
             .navigationTitle("Native bubble timeline")
             .frame(minWidth: 300, minHeight: 400)
             .task { fixture.prepare() }
+            #if os(macOS)
+            .task {
+                if ProcessInfo.processInfo.arguments.contains("-fixture-autoscroll") {
+                    try? await Task.sleep(for: .seconds(5))
+                    if !Task.isCancelled { startScrollExperiment() }
+                }
+            }
+            .onDisappear { scrollExperiment?.cancel(); scrollExperiment = nil }
+            #endif
             .alert(
                 "Couldn’t update reaction",
                 isPresented: Binding(
@@ -124,6 +128,29 @@
                 Text(fixture.reactions.error ?? "")
             }
         }
+
+        private func fixtureComposer(model: ConversationTimelineModel) -> some ViewModifier {
+            ChatComposerOverlay {
+                MessageComposerView(
+                    text: $draft,
+                    attachmentState: composerAttachments,
+                    maxHeight: 160,
+                    isEnabled: true,
+                    canSend: true,
+                    onSubmit: {
+                        event = "Submitted: \(draft)" + (replyToMessage.map { " → \($0.id)" } ?? "")
+                        draft = ""
+                        replyToMessage = nil
+                        return true
+                    },
+                    replyToMessage: replyToMessage,
+                    replyFocusRequest: replyFocusRequest,
+                    onCancelReply: { replyToMessage = nil },
+                    onOpenReply: { id in Task { await model.jumpToMessage(id) } }
+                )
+            }
+        }
+
 
         private var diagnosticControls: some View {
             VStack(alignment: .leading, spacing: 8) {
@@ -143,10 +170,70 @@
                     Button("Acknowledge") { fixture.acknowledge() }
                 }
                 Button("Fail next reaction") { fixture.reactionClient.failNextMutation = true }
+                #if os(macOS)
+                Button(scrollExperiment == nil ? "Run scroll sweep (1,200 frames)" : "Stop scroll sweep") {
+                    if let current = scrollExperiment {
+                        current.cancel()
+                        scrollExperiment = nil
+                        event = "Sweep stopped"
+                    }
+                    else { startScrollExperiment() }
+                }
+                .disabled(fixture.timeline == nil)
+                #endif
                 Text(event).font(.caption).lineLimit(2)
             }
             .padding(8)
         }
+
+        #if os(macOS)
+        // Exercise the production scrollWheel path without accessibility permissions
+        // or changing host geometry. SwiftUI has no equivalent native-input driver.
+        private func startScrollExperiment() {
+            guard scrollExperiment == nil else { return }
+            func table(in view: NSView) -> NSTableView? {
+                if let table = view as? NSTableView { return table }
+                for child in view.subviews {
+                    if let found = table(in: child) { return found }
+                }
+                return nil
+            }
+            guard let root = NSApp.keyWindow?.contentView,
+                  let table = table(in: root), let scroll = table.enclosingScrollView else {
+                event = "No native timeline found"
+                return
+            }
+            let scheduler = TimelineDisplayScheduler(view: scroll)
+            scrollExperiment = scheduler
+            var minimum = scroll.contentView.bounds.minY
+            var maximum = minimum
+            var tick = 0
+            event = "Scrolling: two display-linked up/down passes"
+            // Fixed deltas at display cadence, not a sleep after event handling.
+            // Neither the SwiftUI state nor console output changes per tick.
+            @MainActor func step() {
+                guard tick < 1200 else {
+                    event = "Sweep finished: \(Int(maximum - minimum)) pt traversed"
+                    scrollExperiment = nil
+                    return
+                }
+                let delta: Int32 = (tick / 300) % 2 == 0 ? 24 : -24
+                guard let cgEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                                            wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0),
+                      let wheel = NSEvent(cgEvent: cgEvent) else {
+                    event = "Could not create scroll event"
+                    scrollExperiment = nil
+                    return
+                }
+                scroll.scrollWheel(with: wheel)
+                minimum = min(minimum, scroll.contentView.bounds.minY)
+                maximum = max(maximum, scroll.contentView.bounds.minY)
+                tick += 1
+                scheduler.request(step)
+            }
+            scheduler.request(step)
+        }
+        #endif
 
         private var actions: TimelineBubbleActions {
             guard handlersEnabled else { return .init() }
@@ -288,8 +375,17 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
                 objects.append(item)
             }
             if let count = ProcessInfo.processInfo.environment["CHAHUA_PERFORMANCE_ROWS"].flatMap(Int.init) {
-                for _ in objects.count ..< max(objects.count, count) {
-                    objects.append(object(index: objects.count, text: String(repeating: "Scroll and resize wrapped text with selectable content. ", count: 4)))
+                let templates = objects
+                for index in objects.count ..< max(objects.count, count) {
+                    var item = templates[(index - templates.count) % templates.count]
+                    let identity = object(index: index, text: "")
+                    for key in ["id", "clientGeneratedId", "createdAt"] { item[key] = identity[key] }
+                    // Vary wrapping throughout the list, not just in the first screen.
+                    if item["messageType"] as? String == "text",
+                       let text = item["message"] as? String, !text.isEmpty {
+                        item["message"] = [text, String(repeating: "Wrapped selectable text with different line lengths. ", count: [0, 1, 4, 12][index % 4])].joined(separator: "\n")
+                    }
+                    objects.append(item)
                 }
             }
             messages = try objects.map { try decoder.decode(MessageResponse.self, from: JSONSerialization.data(withJSONObject: $0)) }

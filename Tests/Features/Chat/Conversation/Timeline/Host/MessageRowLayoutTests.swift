@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import ChahuaAPI
 import SwiftUI
 import XCTest
 @testable import chahua_apple
@@ -31,8 +32,10 @@ final class MessageRowLayoutTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(thread.minY, reactions.maxY + 4)
                 XCTAssertGreaterThanOrEqual(layout.size.height - thread.maxY, 8)
                 XCTAssertLessThanOrEqual(bubble.width, environment.centralWidth)
-                let host = NSHostingController(rootView: TimelineBubbleView(presentation: presentation, layout: layout, context: .init(currentUserID: 1)))
-                host.sizingOptions = []
+                let host = NSViewController()
+                let nativeRow = TimelineRowView()
+                nativeRow.bind(.init(presentation: presentation, layout: layout, context: .init(currentUserID: 1), actions: .init(), mediaContext: nil))
+                host.view = nativeRow
                 let window = NSWindow(contentRect: CGRect(origin: .zero, size: layout.size), styleMask: [.borderless], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
                 window.contentViewController = host
@@ -54,9 +57,153 @@ final class MessageRowLayoutTests: XCTestCase {
         }
     }
 
+    func testReusedRowPreservesSameMessageSelectionButResetsForAnotherMessage() async throws {
+        var opened: [String] = []
+        func binding(id: String, width: CGFloat) throws -> TimelineRowBinding {
+            let message = try TimelineTestFixtures.message(id: id, senderID: 2, at: 0, text: "Hello https://example.com")
+            let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false, groupPosition: .single, showsSenderName: true))
+            let environment = TimelineLayoutEnvironment.current(timelineWidth: width)
+            let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
+            var actions = TimelineBubbleActions()
+            actions.openLink = { _ in opened.append(id) }
+            return .init(presentation: presentation, layout: TimelineLayoutEngine().layout(presentation, environment: environment),
+                         context: .init(currentUserID: 1), actions: actions, mediaContext: nil)
+        }
+        let first = try binding(id: "first", width: 600)
+        let cell = TimelineTableCellView(frame: CGRect(origin: .zero, size: first.layout.size))
+        let window = NSWindow(contentRect: cell.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = cell
+        window.orderFront(nil)
+        defer { window.close() }
+        cell.bind(first)
+        try await Task.sleep(for: .milliseconds(50))
+        cell.layoutSubtreeIfNeeded()
+        let initialText = try XCTUnwrap(textView(in: cell))
+        initialText.setSelectedRange(NSRange(location: 0, length: 5))
+
+        let resized = try binding(id: "first", width: 400)
+        window.setContentSize(resized.layout.size)
+        cell.bind(resized)
+        try await Task.sleep(for: .milliseconds(50))
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try XCTUnwrap(textView(in: cell)).selectedRange(), NSRange(location: 0, length: 5))
+
+        cell.bind(try binding(id: "second", width: 400))
+        try await Task.sleep(for: .milliseconds(50))
+        cell.layoutSubtreeIfNeeded()
+        let reusedText = try XCTUnwrap(textView(in: cell))
+        XCTAssertEqual(reusedText.string, "Hello https://example.com")
+        XCTAssertEqual(reusedText.selectedRange().length, 0, "Selection must not transfer to another message with identical text.")
+        _ = reusedText.delegate?.textView?(reusedText, clickedOnLink: URL(string: "https://example.com")!, at: 6)
+        XCTAssertEqual(opened, ["second"], "Reused content must dispatch the current message's action.")
+    }
+
+    func testReusingReplyableRowForDeletedSystemMessageRemovesHoverAction() throws {
+        let nativeRow = TimelineRowView()
+        let window = HoverPointerWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 150),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = nativeRow
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        var replies: [String] = []
+        var actions = TimelineBubbleActions()
+        actions.replyToMessage = { replies.append($0.id) }
+        actions.interactionContext = .init(canWrite: true)
+        let entered = try XCTUnwrap(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+            trackingNumber: 0, userData: nil))
+        for system in [false, true] {
+            let message = try TimelineTestFixtures.message(id: system ? "system" : "text", at: 0,
+                fields: ["messageType": system ? "system" : "text", "isDeleted": system])
+            let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false,
+                                               groupPosition: .single, showsSenderName: true))
+            let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
+            let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil,
+                currentUserID: 1, isThreadTimeline: false, environment: environment)
+            nativeRow.bind(.init(presentation: presentation,
+                layout: TimelineLayoutEngine().layout(presentation, environment: environment),
+                context: .init(currentUserID: 1), actions: actions, mediaContext: nil))
+            nativeRow.setVisible(true)
+            nativeRow.mouseEntered(with: entered)
+            nativeRow.layoutSubtreeIfNeeded()
+            let buttons = nativeRow.subviews.compactMap { $0 as? NSButton }.filter { !$0.isHidden }
+            if system {
+                XCTAssertTrue(buttons.isEmpty, "System rows must not expose a zero-sized reply action after reuse.")
+            } else {
+                try XCTUnwrap(buttons.first).performClick(nil)
+                XCTAssertEqual(replies, ["text"])
+            }
+        }
+    }
+
+    func testScrollingUnderStationaryPointerTransfersReplyHoverWithoutExitEvent() throws {
+        let window = HoverPointerWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 200),
+                                        styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let scroll = NSScrollView(frame: CGRect(x: 0, y: 0, width: 600, height: 200))
+        let document = NSView(frame: CGRect(x: 0, y: 0, width: 600, height: 400))
+        scroll.documentView = document
+        window.contentView = scroll
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        var actions = TimelineBubbleActions()
+        actions.replyToMessage = { _ in }
+        actions.interactionContext = .init(canWrite: true)
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
+        let rows = try (0 ..< 2).map { index -> TimelineRowView in
+            let message = try TimelineTestFixtures.message(id: "hover-\(index)", at: index)
+            let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false,
+                                               groupPosition: .single, showsSenderName: true))
+            let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil,
+                currentUserID: 1, isThreadTimeline: false, environment: environment)
+            let view = TimelineRowView(frame: CGRect(x: 0, y: index * 100, width: 600, height: 100))
+            document.addSubview(view)
+            view.bind(.init(presentation: presentation,
+                layout: TimelineLayoutEngine().layout(presentation, environment: environment),
+                context: .init(), actions: actions, mediaContext: nil))
+            return view
+        }
+        let entered = try XCTUnwrap(NSEvent.enterExitEvent(
+            with: .mouseEntered, location: window.pointer, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil))
+        func showsReply(_ row: TimelineRowView) -> Bool {
+            row.subviews.contains { $0 is NSButton && !$0.isHidden }
+        }
+        scroll.contentView.scroll(to: .zero)
+        rows.forEach { $0.setVisible(true) }
+        rows[0].mouseEntered(with: entered)
+        XCTAssertEqual(rows.map(showsReply), [true, false])
+
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 60))
+        // Both rows remain visible; neither reuse nor a mouseExited event clears
+        // the old row. This is the viewport refresh used by the native table.
+        XCTAssertTrue(rows.allSatisfy { !$0.visibleRect.isEmpty })
+        rows.forEach { $0.setVisible(true) }
+        XCTAssertEqual(rows.map(showsReply), [false, true])
+        rows[0].mouseEntered(with: entered)
+        XCTAssertEqual(rows.map(showsReply), [false, true], "A delayed enter event must not resurrect the old row's hover.")
+
+        scroll.contentView.scroll(to: .zero)
+        rows.forEach { $0.setVisible(true) }
+        XCTAssertEqual(rows.map(showsReply), [true, false])
+        window.active = false
+        rows.forEach { $0.setVisible(true) }
+        XCTAssertEqual(rows.map(showsReply), [false, false])
+    }
+
     private func textView(in view: NSView) -> AppKitMessageTextView? {
         if let text = view as? AppKitMessageTextView { return text }
         return view.subviews.lazy.compactMap { self.textView(in: $0) }.first
     }
 }
+private final class HoverPointerWindow: NSWindow {
+    let pointer = NSPoint(x: 50, y: 50)
+    var active = true
+    override var isKeyWindow: Bool { active }
+    override var mouseLocationOutsideOfEventStream: NSPoint { pointer }
+}
+
 #endif

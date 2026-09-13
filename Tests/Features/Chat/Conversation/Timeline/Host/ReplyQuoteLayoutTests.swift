@@ -17,7 +17,9 @@ final class ReplyQuoteLayoutTests: XCTestCase {
                 quotedText: longLine + "\n" + String(repeating: "Additional quoted line\n", count: 12),
                 environment: environment)
             let engine = TimelineLayoutEngine()
-            let singleQuote = try XCTUnwrap(engine.layout(singleLine, environment: environment).frames[.reply])
+            let singleLayout = engine.layout(singleLine, environment: environment)
+            let singleQuote = try XCTUnwrap(singleLayout.frames[.reply])
+            XCTAssertEqual(try XCTUnwrap(singleLayout.frames[.bubble]).width, environment.centralWidth)
             let multilineQuote = try XCTUnwrap(engine.layout(multiline, environment: environment).frames[.reply])
             let singleRenderedHeight = try bannerHeight(presentation: singleLine, width: singleQuote.width)
             let multilineRenderedHeight = try bannerHeight(presentation: multiline, width: multilineQuote.width)
@@ -83,6 +85,36 @@ final class ReplyQuoteLayoutTests: XCTestCase {
         XCTAssertEqual(quote.maxX, title.maxX, accuracy: 0.5)
     }
 
+    func testQuoteExpandsShortReplyToFitEitherAuthorOrPreview() throws {
+        let environment = environment(width: 900)
+        for (author, preview) in [
+            ("codetector", "所以我还得\n\ndebug 一下这个问题"),
+            ("A quoted author with a substantially longer display name", "Hi")
+        ] {
+            let presentation = try presentation(author: author, quotedText: preview, environment: environment)
+            let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+            let bubble = try XCTUnwrap(layout.frames[.bubble])
+            XCTAssertLessThan(bubble.width, environment.centralWidth)
+            _ = try bannerHeight(presentation: presentation, width: try XCTUnwrap(layout.frames[.reply]).width,
+                                 fitsFullContent: true)
+        }
+    }
+
+    func testLongQuoteWidensStickerBubbleWithoutEnlargingSticker() throws {
+        let environment = environment(width: 900)
+        let presentation = try presentation(author: "Quoted author",
+            quotedText: "A quoted message long enough to need more width than the sticker",
+            outgoing: true, messageType: "sticker", environment: environment)
+        let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+        let bubble = try XCTUnwrap(layout.frames[.bubble])
+        let sticker = try XCTUnwrap(layout.frames[.media])
+        XCTAssertGreaterThan(bubble.width, 200)
+        XCTAssertEqual(sticker.width, 200)
+        XCTAssertEqual(sticker.maxX, bubble.maxX)
+        _ = try bannerHeight(presentation: presentation, width: try XCTUnwrap(layout.frames[.reply]).width,
+                             fitsFullContent: true)
+    }
+
     private func environment(width: CGFloat, captionSize: CGFloat? = nil) -> TimelineLayoutEnvironment {
         .current(
             timelineWidth: width, displayScale: 2,
@@ -92,11 +124,13 @@ final class ReplyQuoteLayoutTests: XCTestCase {
     }
 
     private func presentation(
-        author: String, quotedText: String, outgoing: Bool = false, showsSenderName: Bool = false, environment: TimelineLayoutEnvironment
+        author: String, quotedText: String, outgoing: Bool = false, showsSenderName: Bool = false,
+        messageType: String = "text", environment: TimelineLayoutEnvironment
     ) throws -> TimelineRowPresentation {
         let message = try TimelineTestFixtures.message(
             id: "reply-layout", senderID: outgoing ? 1 : 2, at: 0, text: "Reply body",
             fields: [
+                "messageType": messageType,
                 "replyToMessage": [
                     "id": "quoted-message", "clientGeneratedId": "quoted-client",
                     "createdAt": "2026-09-01T00:00:00Z",
@@ -112,13 +146,33 @@ final class ReplyQuoteLayoutTests: XCTestCase {
     }
 
 
-    private func bannerHeight(presentation: TimelineRowPresentation, width: CGFloat) throws -> CGFloat {
-        let preview = try XCTUnwrap(presentation.reply)
-        let host = NSHostingController(rootView: MessageReplyBanner(
-            preview: preview, isOutgoing: false, hasFilledBackground: true,
-            fontSize: presentation.environment.captionSize))
-        // Offer generous vertical space without imposing the cached height: the leaf is the independent oracle.
-        return host.sizeThatFits(in: CGSize(width: width, height: 10_000)).height
+    private func bannerHeight(presentation: TimelineRowPresentation, width: CGFloat, fitsFullContent: Bool = false) throws -> CGFloat {
+        let layout = TimelineLayoutEngine().layout(presentation, environment: presentation.environment)
+        let native = TimelineBubbleContentView(frame: CGRect(origin: .zero, size: try XCTUnwrap(layout.frames[.bubble]).size))
+        native.bind(.init(presentation: presentation, layout: layout, context: .init(), actions: .init(), mediaContext: nil))
+        native.layoutSubtreeIfNeeded()
+        func labels(in view: NSView) -> [NSTextField] {
+            if let button = view as? NSButton {
+                let labels = button.subviews.compactMap { $0 as? NSTextField }
+                if labels.count == 2 { return labels }
+            }
+            return view.subviews.flatMap { labels(in: $0) }
+        }
+        let renderedLabels = labels(in: native)
+        XCTAssertEqual(renderedLabels.count, 2)
+        return try renderedLabels.reduce(CGFloat(10)) { result, label in
+            let font = try XCTUnwrap(label.font)
+            if fitsFullContent {
+                let naturalWidth = NSAttributedString(string: label.stringValue, attributes: [.font: font]).size().width
+                XCTAssertGreaterThanOrEqual(label.bounds.width, naturalWidth,
+                                            "A quote must widen a short reply rather than truncate before the column limit.")
+            }
+            let height = NSAttributedString(string: label.stringValue, attributes: [.font: font])
+                .boundingRect(with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                              options: [.usesFontLeading]).height
+            XCTAssertGreaterThanOrEqual(label.bounds.height, height - 0.5, "The native quote must not clip its single visible line.")
+            return result + height
+        }
     }
 }
 #endif

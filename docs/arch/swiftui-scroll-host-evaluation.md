@@ -93,11 +93,21 @@ Keep the existing separation:
 - Stable message identity, row construction, and SwiftUI bubble rendering remain shared.
 - `TimelineCollectionViewController` owns the iOS scroll/layout integration.
 - `TimelineTableViewController` owns the macOS scroll/layout integration.
-- `TimelineRowMeasurer` and `TimelineChange` support explicit native measurement and row updates.
+- `TimelineLayoutEngine` and `TimelineLayoutCache` prepare exact row/section geometry; `TimelineChange` drives native row updates.
 
 The native hosts require platform-specific code and careful measurement lifecycle management. They are not automatically bug-free. However, they give us direct control of row updates, layout, content offsets, and native input callbacks at the layer responsible for those operations. That is a better fit for exact anchoring and interruption-safe navigation.
 
 At rollback, the app returned to iOS 16.6/macOS 13.5 and the test-target floors stayed at 26.5. The subsequent composer redesign raised the app and ChahuaAPI baselines to iOS 17/macOS 14; it did not change this scroll-host decision. Raising the app's minimum OS solely to access newer scrolling APIs did not resolve the architectural mismatch.
+
+### Row hosting and profiling
+
+A native scroll host alone does not eliminate SwiftUI layout work inside its cells. Cached absolute-placement layouts provide explicit alignment answers rather than invoking SwiftUI's default descendant alignment measurement. The timeline viewport fills its enclosing proposal instead of exposing message intrinsic sizes to the containing window.
+
+On macOS, scrolling a row offscreen preserves the native table's reusable SwiftUI graph. AppKit's row-removal callback clears bindings for retired rows; every native cell assignment binds the current presentation before display. Detached cells remain subject to AppKit's reuse-pool lifetime, with no additional strong cell cache. Whole-row identities are not reset during AppKit reuse; the text content retains its message identity so selection cannot transfer to another message. Hover state resets on disappearance. UIKit's existing whole-row identity behavior is unchanged.
+
+For optimized, network-independent measurements, build the existing mixed-content fixture with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=TIMELINE_PROFILING` in Release, then launch the built executable directly with `CHAHUA_PERFORMANCE_ROWS=400` and `-bubble-timeline`. The “Run scroll sweep (1,200 frames)” control drives native wheel input once per display tick, with two up/down passes and no per-tick SwiftUI state publication. Record the exact process PID with Instruments' Animation Hitches template. Keep the display, window dimensions, row count, content, and driver identical between runs; do not compare older sleep-paced captures with display-linked captures. Ordinary Release builds do not expose this fixture.
+
+Telegram's macOS implementation similarly uses [native table reuse and prepared row heights](https://github.com/overtake/TelegramSwift/blob/579cebbf0c01fd41b712eff3647fa7f69db9665d/packages/TGUIKit/Sources/TableView.swift#L2820-L2888), but its [message views place native text views directly](https://github.com/overtake/TelegramSwift/blob/579cebbf0c01fd41b712eff3647fa7f69db9665d/Telegram-Mac/ChatMessageView.swift#L201-L237). That avoids the per-row SwiftUI proposal graph; it is an architectural comparison, not a measured performance comparison against Telegram.
 
 ## Conditions for revisiting this decision
 

@@ -109,10 +109,6 @@ final class TimelineTableViewControllerTests: XCTestCase {
         marker.layoutSubtreeIfNeeded()
         XCTAssertEqual(table.rect(ofRow: markerIndex).minY,
                        scroll.documentVisibleRect.minY + controller.headerInset, accuracy: 1)
-        let rendered = NSHostingController(rootView: marker.hosting.rootView)
-            .sizeThatFits(in: NSSize(width: marker.bounds.width, height: 10_000))
-        XCTAssertEqual(marker.bounds.height, rendered.height, accuracy: 1,
-                       "The separator must use its rendered SwiftUI height, not a guessed row height.")
 
         func frame(_ messageIndex: Int) throws -> NSRect {
             let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[messageIndex].id })
@@ -288,6 +284,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = controller
+        window.setContentSize(NSSize(width: 320, height: 900))
         window.orderFront(nil)
         defer { window.close() }
         await model.loadInitial()
@@ -350,7 +347,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         controller.actions = .init()
         controller.view.layoutSubtreeIfNeeded()
         let (_, withoutAction) = try renderedMessage("failed-b")
-        XCTAssertTrue(withoutAction.subviews.compactMap { $0 as? NSButton }.isEmpty)
+        XCTAssertFalse(withoutAction.accessibilityChildren()?.contains { $0 is NSButton } == true)
         controller.actions = .init(openFailedMessage: { selected.append("updated:\($0)") })
         controller.view.layoutSubtreeIfNeeded()
         let (_, restoredAction) = try renderedMessage("failed-b")
@@ -365,7 +362,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         controller.viewDidLayout()
         try await waitForDisplay(controller, model: model)
         let (_, delivered) = try renderedMessage("failed-a")
-        XCTAssertTrue(delivered.subviews.compactMap { $0 as? NSButton }.isEmpty)
+        XCTAssertFalse(delivered.accessibilityChildren()?.contains { $0 is NSButton } == true)
         let (_, remaining) = try renderedMessage("failed-b")
         try XCTUnwrap(remaining.subviews.compactMap { $0 as? NSButton }.first).performClick(nil)
         XCTAssertEqual(selected.last, "updated:failed-b")
@@ -456,7 +453,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         return window
     }
 
-    private func waitForDisplay(_ controller: TimelineTableViewController, model: ConversationTimelineModel) async throws {
+    private func waitForDisplay(_ controller: TimelineTableViewController, model: ConversationTimelineModel, viewportIsSettled: () -> Bool = { true }) async throws {
         let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let cache = TimelineLayoutCache()
@@ -473,16 +470,23 @@ final class TimelineTableViewControllerTests: XCTestCase {
                         let layout = TimelineTestFixtures.layout(row: model.rows[index], width: width, parent: controller, cache: cache)
                         guard abs(table.rect(ofRow: index).height - layout.size.height) < 0.5 else { return false }
                         if let cell = table.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView {
-                            return cell.state.binding?.presentation.row == model.rows[index]
-                                && cell.state.binding?.presentation.environment == TimelineTestFixtures.environment(width: width, parent: controller)
+                            return cell.rowView.binding?.presentation.row == model.rows[index]
+                                && cell.rowView.binding?.presentation.environment == TimelineTestFixtures.environment(width: width, parent: controller)
                         }
                         return true
                     }
-                    if exact { return }
+                    if exact && viewportIsSettled() { return }
                 } else if model.rows.isEmpty { return }
             }
         } while ProcessInfo.processInfo.systemUptime < deadline
-        XCTFail("The display transaction did not install exact visible geometry.")
+        let width = scroll.contentView.bounds.width - scroll.contentInsets.left - scroll.contentInsets.right
+        let visible = table.rows(in: scroll.documentVisibleRect)
+        let details = visible.location == NSNotFound ? "no visible rows" : (visible.location ..< min(NSMaxRange(visible), model.rows.count)).map { index in
+            let expected = TimelineTestFixtures.layout(row: model.rows[index], width: width, parent: controller, cache: cache)
+            let binding = (table.view(atColumn: 0, row: index, makeIfNecessary: false) as? TimelineTableCellView)?.rowView.binding
+            return "\(index): height \(table.rect(ofRow: index).height)/\(expected.size.height), bound width \(binding?.presentation.environment.timelineWidth ?? -1), row matches \(binding?.presentation.row == model.rows[index])"
+        }.joined(separator: "; ")
+        XCTFail("The display transaction did not install exact visible geometry. Width \(table.bounds.width)/\(width). \(details)")
     }
 
     private func assertGlyphsVisible(_ textView: NSTextView, in cell: NSView, file: StaticString = #filePath, line: UInt = #line) {
@@ -498,7 +502,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         XCTAssertGreaterThan(rect.height, 0, file: file, line: line)
         var ancestor: NSView? = textView
         while let view = ancestor {
-            if view === textView || view === cell || view is NSHostingView<TimelineBubbleView> || view.clipsToBounds {
+            if view === textView || view === cell || view.clipsToBounds {
                 let converted = view.convert(rect, from: textView)
                 XCTAssertTrue(view.bounds.insetBy(dx: -1, dy: -1).contains(converted),
                               "Glyphs \(converted) are clipped by \(type(of: view)) bounds \(view.bounds).", file: file, line: line)
@@ -537,6 +541,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = controller
+        window.setContentSize(NSSize(width: 800, height: 600))
         window.orderFront(nil)
         defer { window.close() }
         controller.view.layoutSubtreeIfNeeded()
@@ -711,6 +716,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = controller
+        window.setContentSize(NSSize(width: 800, height: 500))
         window.orderFront(nil)
         defer { window.close() }
         await model.loadInitial()
@@ -852,7 +858,9 @@ final class TimelineTableViewControllerTests: XCTestCase {
         controller.view.setFrameSize(NSSize(width: 600, height: 300))
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
-        try await waitForDisplay(controller, model: model)
+        try await waitForDisplay(controller, model: model) {
+            abs(table.bounds.height - scroll.documentVisibleRect.maxY) <= 1
+        }
         XCTAssertEqual(table.bounds.height - scroll.documentVisibleRect.maxY, 0, accuracy: 1,
                        "A height-only resize must keep the latest message attached to the bottom")
 

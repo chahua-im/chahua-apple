@@ -52,12 +52,19 @@ public enum MessagePreviewRenderer {
                   !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return prefix }
 
-            let renderedMessage = expandingMentions(in: message, mentions: preview.mentions)
+            let renderedMessage = singleLine(expandingMentions(in: message, mentions: preview.mentions))
             return prefix.isEmpty ? renderedMessage : "\(prefix) \(renderedMessage)"
         }
     }
 
     private static let mentionPattern = try! NSRegularExpression(pattern: #"@\[uid:(\d+)\]"#)
+    private static let newlinePattern = try! NSRegularExpression(pattern: #"\R+"#)
+
+    private static func singleLine(_ text: String) -> String {
+        guard text.rangeOfCharacter(from: .newlines) != nil else { return text }
+        return newlinePattern.stringByReplacingMatches(
+            in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " ")
+    }
 
     private static func label(for kind: String, labels: Labels) -> String {
         let mimeType = kind.split(separator: ";", maxSplits: 1)[0]

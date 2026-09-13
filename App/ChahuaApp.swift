@@ -12,7 +12,7 @@ struct ChahuaApp: App {
     init() {
         // Hosted tests and SwiftUI previews must not start production services or
         // contend with the running app for its exclusive media-cache lock.
-        #if DEBUG
+        #if DEBUG || TIMELINE_PROFILING
         if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
             || ProcessInfo.processInfo.arguments.contains("-fixture-gallery")
             || ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
@@ -47,7 +47,7 @@ struct ChahuaApp: App {
 
     @ViewBuilder
     private var appRoot: some View {
-        #if DEBUG
+        #if DEBUG || TIMELINE_PROFILING
         if ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
             TimelineBubbleFixtureView()
         } else {

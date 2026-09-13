@@ -60,10 +60,98 @@ struct ChatDetailView: View {
     }
 
     var body: some View {
-        MessageInteractionHost(model: model, context: interactionContext, actions: bubbleActions) {
-            interactiveActions in
+        conversationDropSurface
+        .navigationTitle(navigationTitle ?? chat.chatDisplayName)
+        .onAppear {
+            store.registerTimeline(model)
+            model.setReadTrackingActive(scenePhase == .active)
+        }
+        .task { await model.open(position: initialPosition) }
+        .task { await loadInteractionPermissions() }
+        .onChange(of: scenePhase) { _, phase in
+            model.setReadTrackingActive(phase == .active)
+        }
+        .alert(
+            "Message actions",
+            isPresented: Binding(
+                get: { reactions.error != nil },
+                set: { if !$0 { reactions.error = nil } }
+            )
+        ) {
+            if !hasLoadedInteractionPermissions {
+                Button("Retry") { Task { await loadInteractionPermissions() } }
+            }
+            Button("OK") { reactions.error = nil }
+        } message: {
+            Text(reactions.error ?? "")
+        }
+        .confirmationDialog("Message not sent", isPresented: $showsRetryOptions, titleVisibility: .visible) {
+            Button("Resend this message") { retry(.message) }
+            Button("Retry this and subsequent messages") { retry(.messageAndSubsequent) }
+            Button("Cancel", role: .cancel) { failedMessageID = nil }
+        }
+        .alert(
+            "Couldn’t edit message",
+            isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })
+        ) {
+            Button("OK") { editError = nil }
+        } message: {
+            Text(editError ?? "")
+        }
+        .alert("Couldn’t update outbox", isPresented: Binding(get: { outboxError != nil }, set: { if !$0 { outboxError = nil } })) {
+            Button("OK") { outboxError = nil }
+        } message: {
+            Text(outboxError ?? "")
+        }
+        .onReceive(store.outgoingQueue.events) { _ in
+            guard let failedMessageID else { return }
+            if !store.outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID).contains(where: {
+                $0.clientGeneratedID == failedMessageID && $0.state == .failed
+            }) {
+                showsRetryOptions = false
+                self.failedMessageID = nil
+            }
+        }
+        .onDisappear {
+            model.setReadTrackingActive(false)
+            store.unregisterTimeline(model)
+            model.close()
+            Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
+        }
+    }
+
+    private var conversationDropSurface: some View {
+        Group {
+            #if os(macOS)
+            conversationBody(actions: bubbleActions)
+            #else
+            MessageInteractionHost(model: model, context: interactionContext, actions: bubbleActions) { actions in
+                conversationBody(actions: actions)
+            }
+            #endif
+        }
+        .contentShape(Rectangle())
+        .onDrop(of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted) { providers in
+            guard interactionContext.canWrite, editingMessage == nil,
+                outgoingQueue.storageState == .ready,
+                !drafts.committingDrafts.contains(conversationKey)
+            else { return false }
+            return composerAttachments.acceptDrop(providers)
+        }
+        .overlay {
+            if isMediaDropTargeted, interactionContext.canWrite, editingMessage == nil,
+                !composerAttachments.isAcquiring {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func conversationBody(actions interactiveActions: TimelineBubbleActions) -> some View {
             GeometryReader { geometry in
-                ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: interactiveActions)
+                timelineSurface(actions: interactiveActions)
                     .modifier(
                         ChatComposerOverlay {
                             VStack(spacing: 0) {
@@ -130,81 +218,15 @@ struct ChatDetailView: View {
                             }
                         })
             }
-        }
-        .contentShape(Rectangle())
-        .onDrop(of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted) { providers in
-            guard interactionContext.canWrite, editingMessage == nil,
-                outgoingQueue.storageState == .ready,
-                !drafts.committingDrafts.contains(conversationKey)
-            else { return false }
-            return composerAttachments.acceptDrop(providers)
-        }
-        .overlay {
-            if isMediaDropTargeted, interactionContext.canWrite, editingMessage == nil,
-                !composerAttachments.isAcquiring {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
-                    .padding(6)
-                    .allowsHitTesting(false)
-            }
-        }
-        .navigationTitle(navigationTitle ?? chat.chatDisplayName)
-        .onAppear {
-            store.registerTimeline(model)
-            model.setReadTrackingActive(scenePhase == .active)
-        }
-        .task { await model.open(position: initialPosition) }
-        .task { await loadInteractionPermissions() }
-        .onChange(of: scenePhase) { _, phase in
-            model.setReadTrackingActive(phase == .active)
-        }
-        .alert(
-            "Message actions",
-            isPresented: Binding(
-                get: { reactions.error != nil },
-                set: { if !$0 { reactions.error = nil } }
-            )
-        ) {
-            if !hasLoadedInteractionPermissions {
-                Button("Retry") { Task { await loadInteractionPermissions() } }
-            }
-            Button("OK") { reactions.error = nil }
-        } message: {
-            Text(reactions.error ?? "")
-        }
-        .confirmationDialog("Message not sent", isPresented: $showsRetryOptions, titleVisibility: .visible) {
-            Button("Resend this message") { retry(.message) }
-            Button("Retry this and subsequent messages") { retry(.messageAndSubsequent) }
-            Button("Cancel", role: .cancel) { failedMessageID = nil }
-        }
-        .alert(
-            "Couldn’t edit message",
-            isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })
-        ) {
-            Button("OK") { editError = nil }
-        } message: {
-            Text(editError ?? "")
-        }
-        .alert("Couldn’t update outbox", isPresented: Binding(get: { outboxError != nil }, set: { if !$0 { outboxError = nil } })) {
-            Button("OK") { outboxError = nil }
-        } message: {
-            Text(outboxError ?? "")
-        }
-        .onReceive(store.outgoingQueue.events) { _ in
-            guard let failedMessageID else { return }
-            if !store.outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID).contains(where: {
-                $0.clientGeneratedID == failedMessageID && $0.state == .failed
-            }) {
-                showsRetryOptions = false
-                self.failedMessageID = nil
-            }
-        }
-        .onDisappear {
-            model.setReadTrackingActive(false)
-            store.unregisterTimeline(model)
-            model.close()
-            Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
-        }
+    }
+
+    @ViewBuilder
+    private func timelineSurface(actions: TimelineBubbleActions) -> some View {
+        #if os(macOS)
+        ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: actions, interactionContext: interactionContext)
+        #else
+        ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: actions)
+        #endif
     }
 
     private func loadInteractionPermissions() async {
