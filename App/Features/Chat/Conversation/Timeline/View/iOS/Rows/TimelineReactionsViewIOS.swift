@@ -202,10 +202,10 @@ private final class TimelineReactionButton: UIControl {
 
     private func updatePaint() {
         let dark = traitCollection.userInterfaceStyle == .dark
-        let foreground = outgoing || isSelected ? UIColor.white
+        let foreground = isSelected ? UIColor.white
             : UIColor(ChahuaTheme.ChatBubble.incomingForeground(for: dark ? .dark : .light))
         if outgoing && isSelected { backgroundColor = UIColor(red: 38 / 255, green: 107 / 255, blue: 180 / 255, alpha: 1) }
-        else if outgoing || isSelected { backgroundColor = UIColor(red: 64 / 255, green: 135 / 255, blue: 210 / 255, alpha: 1) }
+        else if isSelected { backgroundColor = UIColor(red: 64 / 255, green: 135 / 255, blue: 210 / 255, alpha: 1) }
         else if dark { backgroundColor = UIColor(red: 30 / 255, green: 32 / 255, blue: 35 / 255, alpha: 1) }
         else { backgroundColor = UIColor(red: 215 / 255, green: 216 / 255, blue: 218 / 255, alpha: 1) }
         emojiLabel.textColor = foreground

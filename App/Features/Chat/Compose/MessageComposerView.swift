@@ -161,6 +161,13 @@ struct MessageComposerView: View {
         .buttonStyle(.plain)
         .padding(12)
         }
+        #if os(iOS)
+        .background {
+            ComposerOutsideTapObserver(isFocused: isInputFocused) {
+                isInputFocused = false
+            }
+        }
+        #endif
         .sheet(isPresented: $showsAttachmentDialog, onDismiss: {
             input.receiveExternalText(text)
             if isEnabled { isInputFocused = true }

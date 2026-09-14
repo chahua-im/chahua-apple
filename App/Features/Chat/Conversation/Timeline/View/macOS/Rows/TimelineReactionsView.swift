@@ -168,10 +168,10 @@ private final class TimelineReactionButton: NSButton {
     private func updatePaint() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let foreground = outgoing || selected ? NSColor.white : NSColor(ChahuaTheme.ChatBubble.incomingForeground(for: dark ? .dark : .light))
+            let foreground = selected ? NSColor.white : NSColor(ChahuaTheme.ChatBubble.incomingForeground(for: dark ? .dark : .light))
             let background: NSColor
             if outgoing && selected { background = NSColor(srgbRed: 38 / 255, green: 107 / 255, blue: 180 / 255, alpha: 1) }
-            else if outgoing || selected { background = NSColor(srgbRed: 64 / 255, green: 135 / 255, blue: 210 / 255, alpha: 1) }
+            else if selected { background = NSColor(srgbRed: 64 / 255, green: 135 / 255, blue: 210 / 255, alpha: 1) }
             else if dark { background = NSColor(srgbRed: 30 / 255, green: 32 / 255, blue: 35 / 255, alpha: 1) }
             else { background = NSColor(srgbRed: 215 / 255, green: 216 / 255, blue: 218 / 255, alpha: 1) }
             layer?.backgroundColor = background.cgColor

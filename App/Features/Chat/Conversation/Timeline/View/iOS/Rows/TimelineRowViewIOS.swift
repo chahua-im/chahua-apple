@@ -163,6 +163,9 @@ final class TimelineRowView: UIView {
     }
     private func openMenu(_ rect: CGRect) {
         guard let binding, !binding.context.isInteractionPreview, case .message(let row) = binding.presentation.row else { return }
+        // End editing only after the row recognizer has awarded the hold to the
+        // menu. Doing this on touch-down can relayout/cancel the pending hold.
+        window?.endEditing(false)
         binding.actions.openContextMenu?(row, rect)
     }
     private func swipe(_ displacement: CGFloat) {

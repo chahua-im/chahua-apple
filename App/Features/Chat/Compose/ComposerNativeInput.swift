@@ -542,3 +542,55 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         }
     #endif
 }
+
+#if os(iOS)
+/// A window observer includes navigation and empty timeline space. SwiftUI's
+/// ancestor tap gestures cannot exclude the composer's bounds without competing
+/// with native row gestures, so this recognizer observes without preventing them.
+struct ComposerOutsideTapObserver: UIViewRepresentable {
+    var isFocused: Bool
+    var dismiss: () -> Void
+
+    func makeUIView(context: Context) -> ComposerOutsideTapView { ComposerOutsideTapView() }
+    func updateUIView(_ view: ComposerOutsideTapView, context: Context) {
+        view.isComposerFocused = isFocused
+        view.dismiss = dismiss
+    }
+    static func dismantleUIView(_ view: ComposerOutsideTapView, coordinator: ()) {
+        view.detach()
+    }
+}
+
+final class ComposerOutsideTapView: UIView, UIGestureRecognizerDelegate {
+    var isComposerFocused = false
+    var dismiss: (() -> Void)?
+    private lazy var tap: UITapGestureRecognizer = {
+        let tap = ComposerOutsideTapRecognizer(target: self, action: #selector(tapped))
+        tap.cancelsTouchesInView = false
+        tap.delaysTouchesBegan = false
+        tap.delaysTouchesEnded = false
+        tap.delegate = self
+        return tap
+    }()
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+    override func willMove(toWindow newWindow: UIWindow?) {
+        detach()
+        super.willMove(toWindow: newWindow)
+        newWindow?.addGestureRecognizer(tap)
+    }
+    func detach() { tap.view?.removeGestureRecognizer(tap) }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        isComposerFocused && !bounds.contains(touch.location(in: self))
+    }
+    @objc private func tapped() {
+        guard isComposerFocused else { return }
+        dismiss?()
+    }
+}
+
+private final class ComposerOutsideTapRecognizer: UITapGestureRecognizer {
+    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+}
+#endif
