@@ -7,9 +7,9 @@ import AppKit
 /// Shared geometry for the adaptive chat shell and its macOS window minimum.
 enum ChatSplitMetrics {
     static let splitThreshold: CGFloat = 768
-    static let initialSidebarWidth: CGFloat = 320
-    static let minimumSidebarWidth: CGFloat = 280
-    static let maximumSidebarWidth: CGFloat = 400
+    static let initialSidebarWidth: CGFloat = 380
+    static let minimumSidebarWidth: CGFloat = 380
+    static let maximumSidebarWidth: CGFloat = 500
     static let minimumDetailWidth: CGFloat = 440
     static let dividerWidth: CGFloat = 1
     static let outerInset: CGFloat = 12

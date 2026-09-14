@@ -8,6 +8,8 @@ final class AppCompositionRoot {
     let chatStore: ChatStore
     let mediaContext: AppMediaContext
     let realtimeCoordinator: RealtimeCoordinator
+    let notifications: PushNotificationCoordinator
+    private var chatObservation: AnyCancellable?
     private var sessionObservation: AnyCancellable?
 
     convenience init(apiConfiguration: ChahuaConfiguration) {
@@ -49,15 +51,27 @@ final class AppCompositionRoot {
         chatStore = ChatStore(apiClient: apiClient, outgoingQueue: outgoingQueue, onInvalidToken: invalidToken)
         mediaContext = AppMediaContext(namespace: mediaNamespace)
         realtimeCoordinator = RealtimeCoordinator(provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
+        notifications = PushNotificationCoordinator(api: apiClient as? any PushSubscriptionProviding, namespace: mediaNamespace)
+        sessionModel.prepareForSignOut = { [weak notifications] in
+            try await notifications?.prepareForSignOut()
+        }
+        chatStore.onNotificationRead = { [weak notifications] conversation, messageID in
+            notifications?.didRead(conversation: conversation, through: messageID)
+        }
+        chatObservation = chatStore.$state.sink { [weak notifications] state in
+            notifications?.synchronizeReadState(state)
+        }
         sessionObservation = sessionModel.$state.sink { [weak self] state in
             guard let self else { return }
             self.mediaContext.clearMemoryCache()
             if case .authenticated(let me) = state {
                 self.chatStore.currentUserProfile = me
                 self.realtimeCoordinator.setSession(uid: me.uid)
+                self.notifications.setSession(uid: me.uid)
             } else {
                 self.chatStore.currentUserProfile = nil
                 self.realtimeCoordinator.setSession(uid: nil)
+                if case .signedOut = state { self.notifications.setSession(uid: nil) }
             }
         }
         sessionModel.bootstrap()

@@ -13,6 +13,7 @@ final class AuthSessionModel: ObservableObject {
     }
     @Published private(set) var validationMessage: LocalizedStringKey?
     @Published private(set) var isSubmitting = false
+    var prepareForSignOut: (() async throws -> Void)?
 
     private let apiClient: any ChahuaAPIClient
     private let credentialLoginClient: any CredentialLoginProviding
@@ -108,6 +109,7 @@ final class AuthSessionModel: ObservableObject {
         isSubmitting = true
         defer { isSubmitting = false }
         do {
+            try await prepareForSignOut?()
             try await tokenStorage.deleteToken()
             state = .signedOut(.loggedOut)
         } catch {

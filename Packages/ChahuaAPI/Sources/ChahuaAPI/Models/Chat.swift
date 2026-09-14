@@ -116,6 +116,8 @@ public enum GroupRole: String, Codable, Hashable, Sendable {
 /// Membership and peer fields from `GET /group/{chatID}`.
 public struct GroupInfoResponse: Codable, Hashable, Sendable {
     public let id: String
+    public let name: String?
+    public let avatar: String?
     public let myRole: GroupRole?
     public let kind: ChatKind
     public let peer: MemberSummary?
@@ -123,6 +125,8 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
         myRole = try container.decodeIfPresent(GroupRole.self, forKey: .myRole)
         kind = try container.decodeIfPresent(ChatKind.self, forKey: .kind) ?? .group
         peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)

@@ -7,6 +7,11 @@ import SwiftUI
 
 @main
 struct ChahuaApp: App {
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+    #else
+    @NSApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+    #endif
     private let compositionRoot: AppCompositionRoot?
 
     init() {
@@ -25,6 +30,7 @@ struct ChahuaApp: App {
         } else {
             compositionRoot = AppCompositionRoot(apiConfiguration: AppConfiguration.apiConfiguration)
         }
+        pushDelegate.coordinator = compositionRoot?.notifications
     }
 
     var body: some Scene {
@@ -65,7 +71,8 @@ struct ChahuaApp: App {
                 model: compositionRoot.sessionModel,
                 chatStore: compositionRoot.chatStore,
                 mediaContext: compositionRoot.mediaContext,
-                realtimeCoordinator: compositionRoot.realtimeCoordinator
+                realtimeCoordinator: compositionRoot.realtimeCoordinator,
+                notifications: compositionRoot.notifications
             )
                 #if os(macOS)
                 .frame(minWidth: ChatSplitMetrics.splitThreshold)

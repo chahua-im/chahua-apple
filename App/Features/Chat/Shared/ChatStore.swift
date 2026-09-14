@@ -28,6 +28,7 @@ final class ChatStore: ObservableObject {
     let outgoingQueue: OutgoingMessageQueue
     let reactions: MessageReactionController
     let drafts: ChatDraftStore
+    var onNotificationRead: ((ConversationKey, String) -> Void)?
     private var outgoingObservation: AnyCancellable?
     private var storageObservation: AnyCancellable?
     private var outgoingRevisions: [ConversationKey: Int64] = [:]
@@ -282,6 +283,41 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// Payload identifiers are only navigation hints; authorize the message and
+    /// resolve its parent independently of the active (unarchived) list.
+    func chatForNotification(_ route: PushNotificationRoute) async throws -> ChatListItem {
+        try Task.checkCancellation()
+        let requestGeneration = generation
+        do {
+            async let infoRequest = apiClient.groupInfo(chatID: route.chatID)
+            async let messageRequest = apiClient.getMessage(chatID: route.chatID, messageID: route.messageID)
+            let (info, message) = try await (infoRequest, messageRequest)
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            guard info.id == route.chatID,
+                  message.chatId == route.chatID,
+                  message.id == route.messageID,
+                  message.replyRootId == route.threadID else {
+                Self.logger.error("Notification navigation failed: server returned a different conversation or message")
+                throw APIError.unexpectedResponse
+            }
+            let cached = state.chats.first { $0.id == info.id }
+            return ChatListItem(
+                id: info.id, name: info.name, avatar: info.avatar,
+                lastMessageAt: cached?.lastMessageAt,
+                unreadCount: cached?.unreadCount ?? 0,
+                lastReadMessageId: cached?.lastReadMessageId,
+                lastMessage: cached?.lastMessage,
+                mutedUntil: cached?.mutedUntil,
+                archived: cached?.archived ?? false,
+                kind: info.kind, peer: info.peer)
+        } catch {
+            guard generation == requestGeneration else { throw CancellationError() }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            throw error
+        }
+    }
+
     private func invalidateChatList() {
         if refreshTask != nil { refreshDirty = true }
         if threadRefreshTask != nil { threadRefreshDirty = true }
@@ -452,6 +488,9 @@ final class ChatStore: ObservableObject {
                     unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
                     lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil, archived: chat.archived,
                     kind: chat.kind, peer: chat.peer)
+            }
+            if let lastReadMessageID = response.lastReadMessageId {
+                onNotificationRead?(.init(chatID: chatID, threadID: threadID), lastReadMessageID)
             }
         } catch {
             guard generation == requestGeneration else { throw CancellationError() }

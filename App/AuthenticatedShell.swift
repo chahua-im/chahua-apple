@@ -10,12 +10,29 @@ import UIKit
 /// This view owns signed-in navigation state; feature stores own server data.
 struct AuthenticatedShell: View {
     @ObservedObject var chatStore: ChatStore
+    @ObservedObject var notifications: PushNotificationCoordinator
+    let notificationSceneID: UUID
     let me: MeResponse
     let isSigningOut: Bool
     let onSignOut: () -> Void
 
     @State private var selectedScope: ConversationListScope = .messages
     @State private var selectedConversationID: ConversationKey?
+    @State private var showsSettings = false
+    @State private var isVisible = false
+    @State private var notificationNavigation: NotificationNavigation?
+    @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    private struct NotificationNavigation {
+        let route: PushNotificationRoute
+        let userID: Int32
+        var requestID = UUID()
+        var chat: ChatListItem?
+        var failed = false
+    }
 
     var body: some View {
         Group {
@@ -26,11 +43,47 @@ struct AuthenticatedShell: View {
             }
         }
         .onChange(of: chatStore.state) { state in
-            guard let selectedConversationID else { return }
+            guard let selectedConversationID, notificationNavigation == nil else { return }
             let loaded = selectedConversationID.threadID == nil
                 ? state.chatListLoadPhase == .loaded : state.threadListLoadPhase == .loaded
             if loaded && selectedConversation == nil { self.selectedConversationID = nil }
         }
+        .task(id: notifications.pendingNavigation?.id) { claimNotification() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { claimNotification() }
+        }
+        .task(id: notificationNavigation?.requestID) { await resolveNotification() }
+        .onChange(of: me.uid) { _, _ in
+            selectConversation(nil)
+            showsSettings = false
+        }
+        .onChange(of: isSigningOut) { _, signingOut in
+            if signingOut { selectConversation(nil) }
+        }
+        .onAppear {
+            isVisible = true
+            reportVisibleConversation()
+        }
+        .onChange(of: visibleConversation) { _, _ in reportVisibleConversation() }
+        .onDisappear {
+            isVisible = false
+            notifications.setVisibleConversation(sceneID: notificationSceneID, conversation: nil)
+        }
+        .sheet(isPresented: Binding(
+            get: { showsSettings && !usesFullScreenSettings },
+            set: { showsSettings = $0 }
+        )) {
+            settings
+                .frame(minWidth: 360, idealWidth: 460, minHeight: 420, idealHeight: 540)
+        }
+        #if os(iOS)
+        .fullScreenCover(isPresented: Binding(
+            get: { showsSettings && usesFullScreenSettings },
+            set: { showsSettings = $0 }
+        )) {
+            settings
+        }
+        #endif
     }
 
     private var adaptiveLayout: some View {
@@ -39,13 +92,12 @@ struct AuthenticatedShell: View {
         } detail: { isSplit in
             detailContent
                 .modifier(ChatHeaderOverlay {
-                    if let conversation = selectedConversation {
+                    if selectedConversationID != nil {
                         ChatFloatingHeader(
-                            title: conversation.title,
-                            onBack: isSplit ? nil : { selectedConversationID = nil }
+                            title: selectedTitle,
+                            onBack: isSplit ? nil : { selectConversation(nil) }
                         ) {
-                            ConversationAvatarView(
-                                item: conversation, store: chatStore, currentUserID: me.uid, diameter: 32)
+                            selectedAvatar
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, isSplit ? 0 : 12)
@@ -64,11 +116,8 @@ struct AuthenticatedShell: View {
                 .navigationDestination(for: ConversationKey.self) { _ in
                     detailContent
                         #if os(iOS)
-                        .modifier(ChatPhoneDetailHeader(title: selectedConversation?.title ?? "") {
-                            if let conversation = selectedConversation {
-                                ConversationAvatarView(
-                                    item: conversation, store: chatStore, currentUserID: me.uid, diameter: 32)
-                            }
+                        .modifier(ChatPhoneDetailHeader(title: selectedTitle) {
+                            selectedAvatar
                         })
                         #endif
                 }
@@ -78,7 +127,10 @@ struct AuthenticatedShell: View {
     private var phonePath: Binding<[ConversationKey]> {
         Binding(
             get: { selectedConversationID.map { [$0] } ?? [] },
-            set: { selectedConversationID = $0.last }
+            set: {
+                guard $0.last != selectedConversationID else { return }
+                selectConversation($0.last)
+            }
         )
     }
 
@@ -89,31 +141,49 @@ struct AuthenticatedShell: View {
             currentUserID: me.uid,
             scope: selectedScope,
             selectedConversationID: selectedConversationID,
-            onSelectConversation: { selectedConversationID = $0.id }
+            onSelectConversation: { selectConversation($0.id) }
         )
         #if os(iOS)
         if #available(iOS 26, *) {
             list
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    ConversationListHeader(selection: $selectedScope) { accountMenu }
+                    ConversationListHeader(selection: $selectedScope) { accountButton }
                 }
                 .scrollEdgeEffectStyle(.soft, for: .top)
         } else {
             list.safeAreaInset(edge: .top, spacing: 0) {
-                ConversationListHeader(selection: $selectedScope) { accountMenu }
+                ConversationListHeader(selection: $selectedScope) { accountButton }
                     .background(.regularMaterial)
             }
         }
         #else
         VStack(spacing: 0) {
-            ConversationListHeader(selection: $selectedScope) { accountMenu }
+            ConversationListHeader(selection: $selectedScope) { accountButton }
             list
         }
         #endif
     }
 
     @ViewBuilder private var detailContent: some View {
-        if let conversation = selectedConversation {
+        if let navigation = notificationNavigation,
+           navigation.route.conversation == selectedConversationID {
+            if let chat = navigation.chat {
+                ChatDetailView(
+                    chat: chat, currentUserID: me.uid, store: chatStore,
+                    navigationTitle: selectedTitle,
+                    threadID: navigation.route.threadID,
+                    initialPosition: .message(navigation.route.messageID))
+                    .id(navigation.route.id)
+            } else if navigation.failed {
+                ChahuaRecoverableErrorView(
+                    title: "Couldn’t open notification",
+                    message: "Check your connection and try again.",
+                    retryTitle: "Try again",
+                    onRetry: retryNotification)
+            } else {
+                ChahuaLoadingView(title: "Loading conversation")
+            }
+        } else if let conversation = selectedConversation {
             detailView(conversation)
         } else {
             ChahuaEmptyStateView(
@@ -137,17 +207,9 @@ struct AuthenticatedShell: View {
     }
 
 
-    private var accountMenu: some View {
-        Menu {
-            Text(me.username)
-            Button {
-                Task { await chatStore.refreshActiveConversations() }
-            } label: {
-                Label("Refresh chats", systemImage: "arrow.clockwise")
-            }
-            .disabled(chatStore.state.isRefreshingChats || chatStore.state.isRefreshingThreads)
-            Button("Sign out", role: .destructive, action: onSignOut)
-                .disabled(isSigningOut)
+    private var accountButton: some View {
+        Button {
+            showsSettings = true
         } label: {
             AvatarView(
                 url: me.avatarUrl.flatMap(URL.init(string:)),
@@ -155,6 +217,92 @@ struct AuthenticatedShell: View {
                 diameter: accountAvatarDiameter
             )
             .accessibilityLabel("Account")
+        }
+    }
+
+    private var settings: some View {
+        NotificationSettingsView(
+            notifications: notifications, chatStore: chatStore,
+            username: me.username, isSigningOut: isSigningOut,
+            onSignOut: onSignOut)
+    }
+
+    private var usesFullScreenSettings: Bool {
+        #if os(iOS)
+        horizontalSizeClass == .compact
+        #else
+        false
+        #endif
+    }
+
+    private var selectedTitle: String {
+        if let navigation = notificationNavigation {
+            if navigation.route.threadID != nil {
+                return selectedConversation?.title ?? String(localized: "Thread")
+            }
+            return navigation.chat?.chatDisplayName ?? String(localized: "Loading conversation")
+        }
+        return selectedConversation?.title ?? ""
+    }
+
+    @ViewBuilder private var selectedAvatar: some View {
+        if let conversation = selectedConversation {
+            ConversationAvatarView(
+                item: conversation, store: chatStore, currentUserID: me.uid, diameter: 32)
+        } else if let chat = notificationNavigation?.chat {
+            AvatarView(url: chat.chatAvatarURL, displayName: chat.chatDisplayName, diameter: 32)
+        }
+    }
+
+    private var visibleConversation: ConversationKey? {
+        guard isVisible, scenePhase == .active, !showsSettings, !isSigningOut else { return nil }
+        if let navigation = notificationNavigation {
+            return navigation.chat == nil ? nil : navigation.route.conversation
+        }
+        return selectedConversation?.id
+    }
+
+    private func reportVisibleConversation() {
+        notifications.setVisibleConversation(
+            sceneID: notificationSceneID, conversation: visibleConversation)
+    }
+
+    private func claimNotification() {
+        guard scenePhase == .active, !isSigningOut,
+              let route = notifications.takeNavigation() else { return }
+        // Taking is synchronous across windows; keep the route while the
+        // separate metadata task runs, including across cancellation/retry.
+        notificationNavigation = NotificationNavigation(route: route, userID: me.uid)
+        showsSettings = false
+        selectedConversationID = route.conversation
+    }
+
+    private func selectConversation(_ conversation: ConversationKey?) {
+        notificationNavigation = nil
+        selectedConversationID = conversation
+    }
+
+    private func retryNotification() {
+        guard notificationNavigation?.userID == me.uid, !isSigningOut else { return }
+        notificationNavigation?.failed = false
+        notificationNavigation?.requestID = UUID()
+    }
+
+    private func resolveNotification() async {
+        guard let navigation = notificationNavigation,
+              navigation.userID == me.uid, !isSigningOut,
+              navigation.chat == nil else { return }
+        do {
+            let chat = try await chatStore.chatForNotification(navigation.route)
+            try Task.checkCancellation()
+            guard notificationNavigation?.requestID == navigation.requestID else { return }
+            notificationNavigation?.chat = chat
+        } catch is CancellationError {
+            // Keep the claimed route so a reappearing shell can resume loading.
+        } catch {
+            guard !Task.isCancelled,
+                  notificationNavigation?.requestID == navigation.requestID else { return }
+            notificationNavigation?.failed = true
         }
     }
 
