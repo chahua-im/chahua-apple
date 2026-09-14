@@ -66,7 +66,8 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         return devSessionToken
     }
 
-    /// Opens with the current HTTP session JWT; only the first pong establishes readiness.
+    /// Opens with the current HTTP session JWT and sends only the authentication frame.
+    /// The lifecycle owner publishes its latest app state after opening completes.
     /// An existing refresh is shared, but opening a socket never starts a refresh.
     public func openRealtimeConnection() async throws -> any RealtimeConnection {
         let generation = sessionGeneration
@@ -103,8 +104,6 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             connection = opened
             socket.resume()
             try await opened.authenticate(ticket: token)
-            try checkSession(generation)
-            try await opened.sendPing(state: .active)
             try checkSession(generation)
             return opened
         } catch {

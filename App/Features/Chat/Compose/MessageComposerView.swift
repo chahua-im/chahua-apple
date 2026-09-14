@@ -125,7 +125,8 @@ struct MessageComposerView: View {
                             ComposerInputBridge(
                                 input: input, draft: $text, isFocused: isInputFocused,
                                 isEnabled: isEnabled && !isAcquiring && !showsAttachmentDialog,
-                                onCompositionChanged: onCompositionChanged, onSubmit: submit
+                                onCompositionChanged: onCompositionChanged, onSubmit: submit,
+                                focusOnEntry: true
                             )
                             .accessibilityHidden(true)
                         )

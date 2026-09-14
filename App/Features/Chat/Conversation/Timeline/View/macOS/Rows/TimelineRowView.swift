@@ -11,7 +11,6 @@ final class TimelineRowView: NSView {
     private var bubbleView: TimelineBubbleContentView?
     private var avatarView: TimelineAvatarView?
     private var reactionsView: TimelineReactionsView?
-    private var threadView: TimelineThreadButton?
     private var standaloneView: TimelineStandaloneView?
     private var replyButton: TimelineHoverReplyButton?
     private let highlightLayer = CALayer()
@@ -60,7 +59,6 @@ final class TimelineRowView: NSView {
         bubbleView?.clear(); bubbleView?.isHidden = true
         avatarView?.clear(); avatarView?.isHidden = true
         reactionsView?.clear(); reactionsView?.isHidden = true
-        threadView?.clear(); threadView?.isHidden = true
         standaloneView?.clear(); standaloneView?.isHidden = true
         replyButton?.isHidden = true
         highlightLayer.removeAllAnimations(); highlightLayer.opacity = 0
@@ -90,7 +88,6 @@ final class TimelineRowView: NSView {
         bubbleView?.frame = frames[.bubble] ?? .zero
         avatarView?.frame = frames[.avatar] ?? .zero
         reactionsView?.frame = frames[.reactions] ?? .zero
-        threadView?.frame = frames[.thread] ?? .zero
         standaloneView?.frame = frames[.standalone] ?? .zero
         if let bubble = frames[.bubble], case .message(let row) = binding.presentation.row {
             replyButton?.frame = CGRect(x: row.isOutgoing ? bubble.minX - 36 : bubble.maxX + 8,
@@ -115,7 +112,6 @@ final class TimelineRowView: NSView {
         bubbleView?.clear(); bubbleView?.isHidden = true
         avatarView?.clear(); avatarView?.isHidden = true
         reactionsView?.clear(); reactionsView?.isHidden = true
-        threadView?.clear(); threadView?.isHidden = true
         let view: TimelineStandaloneView
         if let standaloneView { view = standaloneView }
         else { view = TimelineStandaloneView(frame: .zero); addSubview(view); standaloneView = view }
@@ -150,24 +146,6 @@ final class TimelineRowView: NSView {
             else { view = TimelineReactionsView(frame: .zero); addSubview(view); reactionsView = view }
             view.isHidden = false; view.bind(binding); view.setVisible(visible)
         } else { reactionsView?.clear(); reactionsView?.isHidden = true }
-        if !preview, binding.layout.frames[.thread] != nil, let label = binding.presentation.threadLabel {
-            let view: TimelineThreadButton
-            if let threadView { view = threadView }
-            else {
-                view = TimelineThreadButton(frame: .zero)
-                view.onActivate = { [weak self] in
-                    guard let binding = self?.binding, !binding.context.isInteractionPreview,
-                          binding.presentation.threadLabel != nil, case .message(let row) = binding.presentation.row,
-                          let message = row.entry.remoteMessage, !message.isDeleted else { return }
-                    binding.actions.openThread?(message.id)
-                }
-                addSubview(view); threadView = view
-            }
-            view.isHidden = false
-            view.configure(label: label, fontSize: binding.presentation.environment.captionSize,
-                           symbolSize: binding.layout.threadSymbolSize, gap: binding.layout.threadLabelGap,
-                           enabled: row.entry.remoteMessage != nil && binding.actions.openThread != nil)
-        } else { threadView?.clear(); threadView?.isHidden = true }
     }
 
     private var canReply: Bool {
@@ -234,64 +212,6 @@ final class TimelineRowView: NSView {
     }
 }
 
-private final class RowLabelCell: NSTextFieldCell {
-    override func drawingRect(forBounds rect: NSRect) -> NSRect { rect }
-    override func titleRect(forBounds rect: NSRect) -> NSRect { rect }
-}
-private final class RowLabel: NSTextField {
-    init() {
-        super.init(frame: .zero); cell = RowLabelCell(textCell: "")
-        isEditable = false; isSelectable = false; isBordered = false; drawsBackground = false
-        maximumNumberOfLines = 1; lineBreakMode = .byTruncatingTail; cell?.wraps = false; cell?.isScrollable = false
-        setAccessibilityElement(false)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-@MainActor
-private final class TimelineThreadButton: NSButton {
-    var onActivate: (() -> Void)?
-    private let label = RowLabel()
-    private var symbol: NSImage?
-    private var symbolSize: CGSize = .zero
-    private var gap: CGFloat = 0
-    private var fontSize: CGFloat = 12
-    override var isFlipped: Bool { true }
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
-        target = self; action = #selector(activate); addSubview(label)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    func configure(label: String, fontSize: CGFloat, symbolSize: CGSize, gap: CGFloat, enabled: Bool) {
-        self.label.stringValue = label; self.fontSize = fontSize; self.symbolSize = symbolSize; self.gap = gap
-        self.label.font = .systemFont(ofSize: fontSize, weight: .semibold)
-        isEnabled = enabled; setAccessibilityLabel(label); updatePaint(); needsLayout = true
-    }
-    func clear() { label.stringValue = ""; symbol = nil; isEnabled = false; setAccessibilityLabel(nil) }
-    override func layout() {
-        super.layout()
-        let x = symbolSize.width + gap
-        label.frame = CGRect(x: x, y: 0, width: max(0, bounds.width - x), height: bounds.height)
-    }
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        symbol?.draw(in: CGRect(x: 0, y: (bounds.height - symbolSize.height) / 2, width: symbolSize.width, height: symbolSize.height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-    }
-    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: .pointingHand) } }
-    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updatePaint() }
-    private func updatePaint() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            let color = NSColor(ChahuaTheme.ChatBubble.incomingForeground(for: dark ? .dark : .light))
-            label.textColor = color
-            symbol = NSImage(systemSymbolName: "bubble.left.and.bubble.right.fill", accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: fontSize, weight: .semibold).applying(.init(paletteColors: [color])))
-        }
-        needsDisplay = true
-    }
-    @objc private func activate() { if isEnabled { onActivate?() } }
-}
 
 @MainActor
 private final class TimelineHoverReplyButton: NSButton {

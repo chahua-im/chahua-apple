@@ -16,8 +16,8 @@ struct TimelineRowLayout {
     var replyContentFrames: [CGRect] = []
     var standaloneSymbolSize: CGSize = .zero
     var standaloneLabelGap: CGFloat = 0
-    var threadSymbolSize: CGSize = .zero
-    var threadLabelGap: CGFloat = 0
+    /// Footer-local icon, reply label and trailing chevron rectangles.
+    var threadContentFrames: [CGRect] = []
 
     static let empty = TimelineRowLayout(size: .zero, frames: [:], textGeometry: nil, mediaFrames: [], reactionFrames: [])
 

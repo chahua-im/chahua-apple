@@ -80,7 +80,9 @@ struct ComposerAttachmentDialog: View {
         .interactiveDismissDisabled(isSubmitting)
         .onAppear {
             input.receiveExternalText(text)
-            isCaptionFocused = true
+            #if !os(macOS)
+                isCaptionFocused = true
+            #endif
         }
         .onChange(of: text) { _, value in input.receiveExternalText(value) }
         .onDisappear { input.settleNativeInput() }
@@ -131,26 +133,10 @@ struct ComposerAttachmentDialog: View {
 
     private var captionBar: some View {
         HStack(alignment: .bottom, spacing: 12) {
-            TextField("Add a caption…", text: editorText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...6)
+            captionEditor
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
                 .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 24))
-                .disabled(!isEnabled || isSubmitting)
-                .focused($isCaptionFocused)
-                #if !os(macOS)
-                .onSubmit(submit)
-                #endif
-                .background(
-                    ComposerInputBridge(
-                        input: input, draft: $text, isFocused: isCaptionFocused,
-                        isEnabled: isEnabled && !isSubmitting,
-                        onCompositionChanged: onCompositionChanged, onSubmit: submit
-                    )
-                    .accessibilityHidden(true)
-                )
-                .accessibilityLabel("Caption")
             Button(action: submit) {
                 Image(systemName: "paperplane.fill")
                     .font(.system(size: 23, weight: .semibold))
@@ -163,6 +149,40 @@ struct ComposerAttachmentDialog: View {
             .modifier(ComposerSendFocus())
         }
         .padding(12)
+    }
+
+    @ViewBuilder
+    private var captionEditor: some View {
+        #if os(macOS)
+            ComposerCaptionInput(
+                input: input, draft: $text, isEnabled: isEnabled && !isSubmitting,
+                onCompositionChanged: onCompositionChanged, onSubmit: submit
+            )
+            .overlay(alignment: .topLeading) {
+                if (input.editorText ?? text).isEmpty {
+                    Text("Add a caption…")
+                        .foregroundStyle(.tertiary)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+        #else
+            TextField("Add a caption…", text: editorText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...6)
+                .disabled(!isEnabled || isSubmitting)
+                .focused($isCaptionFocused)
+                .onSubmit(submit)
+                .background(
+                    ComposerInputBridge(
+                        input: input, draft: $text, isFocused: isCaptionFocused,
+                        isEnabled: isEnabled && !isSubmitting,
+                        onCompositionChanged: onCompositionChanged, onSubmit: submit
+                    )
+                    .accessibilityHidden(true)
+                )
+                .accessibilityLabel("Caption")
+        #endif
     }
 
     private func changeAttachments(_ operation: () -> Void) {

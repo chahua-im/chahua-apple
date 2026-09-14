@@ -14,6 +14,8 @@ final class RealtimeConnectionTests: XCTestCase {
                 userAgent: "RealtimeTests"
             ), token: "installed")
             let connection = try await client.openRealtimeConnection()
+            try await connection.sendAppState(.inactive)
+            try await connection.sendPing(state: .inactive)
             guard case .pong = try await connection.receive() else { return XCTFail("Expected first pong") }
             let requests = await server.requests
             XCTAssertEqual(requests.map(\.path), ["/api/ws"])
@@ -21,6 +23,43 @@ final class RealtimeConnectionTests: XCTestCase {
             XCTAssertNil(requests.first?.headers["authorization"])
             let frames = await server.authentications
             XCTAssertEqual(frames, ["installed"])
+            let wireFrames = await server.clientFrames
+            XCTAssertEqual(wireFrames, [
+                .init(type: "auth", ticket: "installed", state: nil),
+                .init(type: "appState", ticket: nil, state: "inactive"),
+                .init(type: "ping", ticket: nil, state: "inactive")
+            ])
+            await connection.close()
+            await server.stop()
+        } catch {
+            await server.stop()
+            throw error
+        }
+    }
+
+    func testPresenceTransitionsAndHeartbeatsRetainAuthenticatedSocket() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        do {
+            let client = ChahuaClient(configuration: ChahuaConfiguration(baseURL: await server.baseURL), token: "installed")
+            let connection = try await client.openRealtimeConnection()
+            let states: [RealtimeAppState] = [.active, .inactive, .active]
+            for state in states {
+                try await connection.sendAppState(state)
+                try await connection.sendPing(state: state)
+                guard case .pong = try await connection.receive() else { return XCTFail("Expected heartbeat pong") }
+            }
+            let frames = await server.clientFrames
+            XCTAssertEqual(frames, [
+                .init(type: "auth", ticket: "installed", state: nil),
+                .init(type: "appState", ticket: nil, state: "active"),
+                .init(type: "ping", ticket: nil, state: "active"),
+                .init(type: "appState", ticket: nil, state: "inactive"),
+                .init(type: "ping", ticket: nil, state: "inactive"),
+                .init(type: "appState", ticket: nil, state: "active"),
+                .init(type: "ping", ticket: nil, state: "active")
+            ])
+            let requests = await server.requests
+            XCTAssertEqual(requests.map(\.path), ["/ws"])
             await connection.close()
             await server.stop()
         } catch {
@@ -35,9 +74,13 @@ final class RealtimeConnectionTests: XCTestCase {
             let client = ChahuaClient(configuration: ChahuaConfiguration(baseURL: await server.baseURL), token: "expired")
             _ = try await client.me()
             let first = try await client.openRealtimeConnection()
+            try await first.sendAppState(.active)
+            try await first.sendPing(state: .active)
             guard case .pong = try await first.receive() else { return XCTFail("Expected pong") }
             await first.close()
             let second = try await client.openRealtimeConnection()
+            try await second.sendAppState(.inactive)
+            try await second.sendPing(state: .inactive)
             guard case .pong = try await second.receive() else { return XCTFail("Expected pong") }
             await second.close()
             let requests = await server.requests
@@ -67,6 +110,8 @@ final class RealtimeConnectionTests: XCTestCase {
             } catch is CancellationError { }
             _ = try await client.me()
             let connection = try await client.openRealtimeConnection()
+            try await connection.sendAppState(.active)
+            try await connection.sendPing(state: .active)
             guard case .pong = try await connection.receive() else { return XCTFail("Expected pong") }
             let requests = await server.requests
             XCTAssertEqual(requests.filter { $0.path == "/auth/refresh" }.count, 1)
@@ -92,6 +137,8 @@ final class RealtimeConnectionTests: XCTestCase {
             ])
             let client = ChahuaClient(configuration: ChahuaConfiguration(baseURL: await server.baseURL), token: "installed")
             let connection = try await client.openRealtimeConnection()
+            try await connection.sendAppState(.active)
+            try await connection.sendPing(state: .active)
             guard case .pong = try await connection.receive() else { return XCTFail("Expected pong") }
             guard case let .friendshipRemoved(payload) = try await connection.receive() else { return XCTFail("Expected typed no-op") }
             XCTAssertEqual(payload.actorUid, 8)
@@ -120,6 +167,8 @@ final class RealtimeConnectionTests: XCTestCase {
             await server.setFrames([.data(Data([0xff, 0xfe]))])
             let client = ChahuaClient(configuration: ChahuaConfiguration(baseURL: await server.baseURL), token: "installed")
             let connection = try await client.openRealtimeConnection()
+            try await connection.sendAppState(.active)
+            try await connection.sendPing(state: .active)
             guard case .pong = try await connection.receive() else { return XCTFail("Expected pong") }
             do {
                 _ = try await connection.receive()
@@ -137,6 +186,8 @@ final class RealtimeConnectionTests: XCTestCase {
         do {
             let client = ChahuaClient(configuration: ChahuaConfiguration(baseURL: await server.baseURL), token: "installed")
             let connection = try await client.openRealtimeConnection()
+            try await connection.sendAppState(.active)
+            try await connection.sendPing(state: .active)
             guard case .pong = try await connection.receive() else { return XCTFail("Expected pong") }
             let pending = Task { try await connection.receive() }
             pending.cancel()
@@ -170,6 +221,7 @@ private actor RealtimeLoopbackServer {
     private var connections: [NWConnection] = []
     private(set) var requests: [Request] = []
     private(set) var authentications: [String] = []
+    private(set) var clientFrames: [ClientFrame] = []
     private var frames: [URLSessionWebSocketTask.Message] = []
     private var holdsRefresh = false
     private var heldRefresh: CheckedContinuation<Void, Never>?
@@ -239,20 +291,27 @@ private actor RealtimeLoopbackServer {
                 let auth = try JSONDecoder().decode(ClientFrame.self, from: authData)
                 guard authOpcode == 1, auth.type == "auth", let ticket = auth.ticket else { throw APIError.unexpectedResponse }
                 authentications.append(ticket)
-                let (pingOpcode, pingData) = try await wire.readFrame()
-                let ping = try JSONDecoder().decode(ClientFrame.self, from: pingData)
-                guard pingOpcode == 1, ping.type == "ping", ping.state == "active" else { throw APIError.unexpectedResponse }
-                try await wire.sendFrame(opcode: 1, data: Data(#"{"type":"pong"}"#.utf8))
-                for frame in frames {
-                    switch frame {
-                    case let .string(text): try await wire.sendFrame(opcode: 1, data: Data(text.utf8))
-                    case let .data(data): try await wire.sendFrame(opcode: 2, data: data)
-                    @unknown default: throw APIError.unexpectedResponse
-                    }
-                }
+                clientFrames.append(auth)
+                var sentEvents = false
                 while true {
-                    let (opcode, _) = try await wire.readFrame()
+                    let (opcode, data) = try await wire.readFrame()
                     if opcode == 8 { break }
+                    let frame = try JSONDecoder().decode(ClientFrame.self, from: data)
+                    guard opcode == 1, frame.state == "active" || frame.state == "inactive",
+                          frame.type == "appState" || frame.type == "ping" else { throw APIError.unexpectedResponse }
+                    clientFrames.append(frame)
+                    guard frame.type == "ping" else { continue }
+                    try await wire.sendFrame(opcode: 1, data: Data(#"{"type":"pong"}"#.utf8))
+                    if !sentEvents {
+                        sentEvents = true
+                        for event in frames {
+                            switch event {
+                            case let .string(text): try await wire.sendFrame(opcode: 1, data: Data(text.utf8))
+                            case let .data(data): try await wire.sendFrame(opcode: 2, data: data)
+                            @unknown default: throw APIError.unexpectedResponse
+                            }
+                        }
+                    }
                 }
             } else if request.path == "/auth/refresh" {
                 if holdsRefresh {
@@ -278,7 +337,7 @@ private actor RealtimeLoopbackServer {
         connection.cancel()
     }
 
-    private struct ClientFrame: Decodable {
+    struct ClientFrame: Decodable, Equatable, Sendable {
         let type: String
         let ticket: String?
         let state: String?

@@ -12,10 +12,13 @@ public protocol RealtimeConnection: Sendable {
 }
 
 public protocol RealtimeConnectionProviding: Sendable {
+    /// Opens and sends authentication only. The caller must publish its current
+    /// app state after this returns, then schedule stateful application pings.
     func openRealtimeConnection() async throws -> any RealtimeConnection
 }
 
 /// A single consumer receives frames; sends may run alongside a suspended receive.
+/// Callers serialize presence frames to retain their lifecycle ordering.
 actor URLSessionRealtimeConnection: RealtimeConnection {
     private let socket: URLSessionWebSocketTask
     private var isClosed = false

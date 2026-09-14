@@ -466,6 +466,9 @@ private final class TimelineMenuButton: NSButton {
     private var coloredSymbol: NSImage?
     private var destructive = false
     private let captionFont = NSFont.preferredFont(forTextStyle: .caption2)
+    private var actionLabel: NSAttributedString?
+    private var actionLabelWidth: CGFloat = -1
+    private var actionLabelHeight: CGFloat = 0
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { isEnabled }
@@ -552,10 +555,22 @@ private final class TimelineMenuButton: NSButton {
                 drawSymbol(in: CGRect(x: 12, y: (bounds.height - 18) / 2, width: 18, height: 18))
                 drawLabel(label, in: CGRect(x: 38, y: (bounds.height - 20) / 2, width: max(0, bounds.width - 44), height: 20), font: .preferredFont(forTextStyle: .body), color: color, alignment: .left)
             } else {
-                let labelHeight = ceil(captionFont.ascender - captionFont.descender + captionFont.leading) * 2
-                let top = max(2, (bounds.height - 22 - 4 - labelHeight) / 2)
+                let labelWidth = max(0, bounds.width - 6)
+                if actionLabelWidth != labelWidth {
+                    actionLabelWidth = labelWidth
+                    let maximumHeight = ceil(captionFont.ascender - captionFont.descender + captionFont.leading) * 2
+                    actionLabelHeight = min(maximumHeight, ceil(actionLabel?.boundingRect(
+                        with: CGSize(width: labelWidth, height: .greatestFiniteMagnitude),
+                        options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
+                    ).height ?? 0))
+                }
+                // Center the visible icon/label stack, not an always-two-line label box.
+                let top = max(2, (bounds.height - 22 - 4 - actionLabelHeight) / 2)
                 drawSymbol(in: CGRect(x: (bounds.width - 22) / 2, y: top, width: 22, height: 22))
-                drawLabel(label, in: CGRect(x: 3, y: top + 26, width: max(0, bounds.width - 6), height: labelHeight), font: captionFont, color: color, multiline: true)
+                actionLabel?.draw(
+                    with: CGRect(x: 3, y: top + 26, width: labelWidth, height: actionLabelHeight),
+                    options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]
+                )
             }
         }
         if window?.firstResponder === self {
@@ -586,6 +601,18 @@ private final class TimelineMenuButton: NSButton {
             color = destructive ? .systemRed : .labelColor
         }
         coloredSymbol = symbol?.withSymbolConfiguration(.init(paletteColors: [color])) ?? symbol
+        if case .action(let label, false) = content {
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            paragraph.lineBreakMode = .byWordWrapping
+            actionLabel = NSAttributedString(
+                string: label,
+                attributes: [.font: captionFont, .foregroundColor: color, .paragraphStyle: paragraph]
+            )
+        } else {
+            actionLabel = nil
+        }
+        actionLabelWidth = -1
     }
 
     override func resetCursorRects() {

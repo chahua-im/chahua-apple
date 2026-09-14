@@ -127,6 +127,99 @@ final class ComposerFocusTests: XCTestCase {
     }
 
     #if os(macOS)
+        func testChatEntryFocusAppendsWithoutSelectingRestoredDraft() async throws {
+            let h = try await mount(text: "saved draft")
+            try h.insertIntoFocusedEditor("!")
+            try await pause()
+            XCTAssertEqual(h.state.text, "saved draft!")
+
+            let editor = try h.focusedEditor()
+            editor.setSelectedRange(NSRange(location: 1, length: 4))
+            h.state.canSend = false
+            try await pause()
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 1, length: 4))
+            h.blur()
+            h.state.canSend = true
+            try await pause()
+            XCTAssertFalse(h.window.firstResponder === editor, "An ordinary update must not reacquire entry focus.")
+        }
+
+        func testChatEntryWaitsForPermissionsWithoutRefocusingOnLaterPermissionChanges() async throws {
+            let h = try await mount(text: "saved draft", enabled: false)
+            h.state.enabled = true
+            try await pause()
+            try h.insertIntoFocusedEditor("!")
+            try await pause()
+            XCTAssertEqual(h.state.text, "saved draft!")
+            let editor = try h.focusedEditor()
+
+            h.blur()
+            h.state.enabled = false
+            try await pause()
+            h.state.enabled = true
+            try await pause()
+            XCTAssertFalse(h.window.firstResponder === editor)
+        }
+
+        func testUserInteractionCancelsDelayedEntryFocus() async throws {
+            let h = try await mount(text: "saved draft", enabled: false)
+            h.pressBackground()
+            h.state.enabled = true
+            try await pause()
+            XCTAssertFalse(h.window.firstResponder is NSTextView, "Permission loading must not undo the user's navigation click.")
+            XCTAssertEqual(h.state.text, "saved draft")
+        }
+
+        func testLongCaptionKeepsCaretAndScrollsInsideSixLineViewport() async throws {
+            let caption = (1...30).map { "Caption line \($0)" }.joined(separator: "\n")
+            let h = try await mount(text: caption, caption: true)
+            let editor = try h.focusedEditor()
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: caption.utf16.count, length: 0))
+            try h.insertIntoFocusedEditor("!")
+            try await pause()
+            XCTAssertEqual(h.state.text, caption + "!")
+
+            let scroll = try XCTUnwrap(editor.enclosingScrollView)
+            let font = try XCTUnwrap(editor.font)
+            let layout = try XCTUnwrap(editor.layoutManager)
+            let viewportHeight = scroll.contentView.bounds.height
+            XCTAssertLessThanOrEqual(viewportHeight, ceil(layout.defaultLineHeight(for: font) * 6) + 1)
+            XCTAssertGreaterThan(editor.bounds.height, viewportHeight)
+            editor.scrollRangeToVisible(NSRange(location: 0, length: 0))
+            XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 1)
+            editor.scrollRangeToVisible(NSRange(location: editor.string.utf16.count, length: 0))
+            XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0)
+            XCTAssertEqual(scroll.contentView.bounds.height, viewportHeight)
+        }
+
+        func testCaptionNativeSelectionUndoAndMarkedTextSurviveUpdates() async throws {
+            let h = try await mount(text: "abcd", caption: true)
+            let editor = try h.focusedEditor()
+            editor.setSelectedRange(NSRange(location: 1, length: 2))
+            h.pressReturn(shift: true)
+            try await pause()
+            XCTAssertEqual(h.state.text, "a\nd")
+            editor.undoManager?.undo()
+            try await pause()
+            XCTAssertEqual(h.state.text, "abcd")
+
+            try h.selectEnd()
+            try h.mark("ni")
+            try await pause()
+            XCTAssertEqual(h.state.text, "abcd")
+            XCTAssertTrue(h.state.composing)
+            let selectedRange = editor.selectedRange()
+            h.state.canSend = false
+            try await pause()
+            XCTAssertTrue(editor.hasMarkedText())
+            XCTAssertEqual(editor.selectedRange(), selectedRange)
+            try h.insertIntoFocusedEditor("你")
+            try await pause()
+            XCTAssertEqual(h.state.text, "abcd你")
+            XCTAssertFalse(h.state.composing)
+            XCTAssertEqual(h.state.submits, 0)
+        }
+
         func testReturnPreservesSelectionAndEditingSessionBeforeCommit() async throws {
             let h = try await mount(text: "send this")
             let editor = try h.focusedEditor()
@@ -170,12 +263,14 @@ final class ComposerFocusTests: XCTestCase {
 
     private func pause() async throws { try await Task.sleep(for: .milliseconds(200)) }
 
-    private func mount(text: String) async throws -> FocusComposerHarness {
-        let harness = try FocusComposerHarness(text: text)
+    private func mount(text: String, enabled: Bool = true, caption: Bool = false) async throws -> FocusComposerHarness {
+        let harness = try FocusComposerHarness(text: text, enabled: enabled, caption: caption)
         addTeardownBlock { @MainActor in harness.close() }
         try await pause()
-        try harness.focus()
-        try await pause()
+        #if !os(macOS)
+            try harness.focus()
+            try await pause()
+        #endif
         return harness
     }
 }
@@ -185,11 +280,17 @@ private final class FocusComposerState: ObservableObject {
     let attachments = ComposerAttachmentState()
     @Published var text: String
     @Published var enabled = true
+    @Published var canSend = true
+    let caption: Bool
     @Published var showsComposer = true
     var composing = false
     var submits = 0
     var editingEnded = false
-    init(text: String) { self.text = text }
+    init(text: String, enabled: Bool, caption: Bool) {
+        self.text = text
+        self.enabled = enabled
+        self.caption = caption
+    }
 }
 
 private struct FocusComposerRoot: View {
@@ -197,10 +298,19 @@ private struct FocusComposerRoot: View {
     var body: some View {
         VStack {
             Spacer()
-            if state.showsComposer {
+            if state.caption {
+                ComposerAttachmentDialog(
+                    text: $state.text, attachments: [], progress: [:],
+                    compressionEnabled: true, isEnabled: state.enabled, canSend: state.canSend,
+                    isAcquiring: false, attachmentError: nil,
+                    onCompositionChanged: { state.composing = $0 },
+                    onRemove: { _ in }, onRetry: { _ in }, onCompressionChanged: { _ in },
+                    onReorder: { _ in }, onImportProviders: { _ in },
+                    onSubmit: { state.submits += 1; return true }, onCancel: {})
+            } else if state.showsComposer {
                 MessageComposerView(
                     text: $state.text, attachmentState: state.attachments,
-                    maxHeight: 160, isEnabled: state.enabled, canSend: true,
+                    maxHeight: 160, isEnabled: state.enabled, canSend: state.canSend,
                     onSubmit: {
                         state.submits += 1
                         state.enabled = false
@@ -227,18 +337,19 @@ private final class FocusComposerHarness {
         private var restoreAccessibility: (() -> Void)?
     #endif
 
-    init(text: String) throws {
-        state = FocusComposerState(text: text)
+    init(text: String, enabled: Bool, caption: Bool) throws {
+        state = FocusComposerState(text: text, enabled: enabled, caption: caption)
         #if os(macOS)
             host = NSHostingController(rootView: FocusComposerRoot(state: state))
             host.sizingOptions = []
+            let height: CGFloat = caption ? 620 : 220
             window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 800, height: 220), styleMask: [.titled], backing: .buffered,
+                contentRect: NSRect(x: 0, y: 0, width: 800, height: height), styleMask: [.titled], backing: .buffered,
                 defer: false)
             window.isReleasedWhenClosed = false
             window.contentViewController = host
-            window.setContentSize(NSSize(width: 800, height: 220))
-            host.view.frame = NSRect(x: 0, y: 0, width: 800, height: 220)
+            window.setContentSize(NSSize(width: 800, height: height))
+            host.view.frame = NSRect(x: 0, y: 0, width: 800, height: height)
             window.makeKeyAndOrderFront(nil)
         #else
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
@@ -349,6 +460,18 @@ private final class FocusComposerHarness {
     }
 
     #if os(macOS)
+        func pressBackground() {
+            let point = host.view.convert(
+                NSPoint(x: 10, y: host.view.isFlipped ? 10 : host.view.bounds.height - 10), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+                NSApp.sendEvent(event)
+            }
+        }
+
         func pressSendButton() {
             let point = host.view.convert(
                 NSPoint(

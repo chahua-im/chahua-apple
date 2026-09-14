@@ -32,7 +32,7 @@ Each `LocalOutgoingAttachment` has a stable ID, generation, position, source/pre
 
 **Allocation and PUT are one retryable client operation, not a server transaction.** Each attempt allocates a fresh ID and immediately uploads the prepared file. Allocation instructions exist only within that attempt; the slot resolves only after successful PUT and durable checkpointing. A failed or interrupted attempt leaves the slot unresolved, and retry allocates again. Existing stored allocation fields are ignored when decoding older slots; prepared files and completed upload IDs remain recoverable. Local previews remain available after success.
 
-For slots `[A, B, C]`, completion order `C, A, B` still produces message IDs `[idA, idB, idC]`. Dispatch requires every slot to be uploaded and error-free; partial attachment messages are never constructed.
+For slots `[A, B, C]`, completion order `C, A, B` still produces message IDs `[idA, idB, idC]`. Reordering those slots to `[C, A, B]` instead submits `[idC, idA, idB]` without uploading any unchanged content again. Dispatch requires every slot to be uploaded and error-free; partial attachment messages are never constructed.
 
 ## Composition, release and revocation
 
@@ -42,7 +42,7 @@ For slots `[A, B, C]`, completion order `C, A, B` still produces message IDs `[i
 - Send waits only for local acquisition/import durability, not compression or upload. Temporary Photos/picker/provider URLs are not durable input. The composer disables submission while acquisition is in progress. A failed release leaves composition intact.
 - `blockTail` transfers an undispatched released tail back to the composer. `revokeTail` discards an eligible tail. Both require item identity and expected edit revision and serialize against dispatch claims in SQLite.
 - A non-tail item cannot be moved into composition or revoked. Once claimed, even a failed request cannot be unsealed; these commands return `dispatchAlreadyClaimed`.
-- Slot removal, reordering and compression changes invalidate affected generations. Late workers cannot replace newer content or resurrect a revoked item.
+- Source and compression changes invalidate affected content generations; removal retires the slot. Reordering changes only durable positions, preserving prepared files, completed upload IDs, in-flight preparation/PUTs and progress. A worker checkpoint merges into the latest position by slot ID and content generation, so late completion cannot restore an old order, replace newer content or resurrect a removed/revoked item.
 
 Before release only the composer shows the item; afterward only the pending timeline shows it. Navigation does not revoke composition. Message editing remains a separate server mutation and does not acquire new outbox attachments.
 
@@ -89,7 +89,7 @@ Recovery resumes from durable boundaries:
 - Claimed sends restore conservatively for exact replay, never editable composition.
 - Account changes cancel workers, advance generations and activate the destination account's own repository and files.
 
-## Verified backend protocol and limits
+## Backend protocol and deployment limits
 
 1. `GET /attachments/config` returns `maxFileSizeBytes`, checked against the prepared file.
 2. `POST /attachments/upload-url` sends filename, contentType, size, purpose `media`, order, width and height.
@@ -99,15 +99,19 @@ Recovery resumes from durable boundaries:
 
 Every unresolved upload retry allocates a new ID, including after HTTP 403 or restart. There are no allocation expiry checks or persisted upload URLs. A lost PUT response or local success checkpoint can therefore cause the bytes to be uploaded again under another ID. This deliberately trades extra remote orphans for simpler recovery: the backend has no client allocation idempotency key or explicit renew/delete-unattached endpoint. Completed slots are reused, and claimed message requests never replace their attachment IDs.
 
-Attachment metadata is sorted by allocation-time `order` and ID on the backend. Reordering therefore invalidates moved slots and reallocates them; changing the final message array alone is insufficient. The composer supports up to 20 attachments.
+The final message `attachmentIds` sequence is authoritative. Chat/thread creation and message PATCH persist its ordinals into attachment `order` while associating the existing IDs; metadata is then sorted by stored `order` and ID. Allocation-time `order` is only an initial hint and may become stale during preparation or PUT. The composer supports up to 20 attachments.
 
-Message replay uses the backend's client-generated-ID conflict handling, which checks chat, sender, text, type, reply and attachment set. The client retains the exact sealed request across uncertain delivery. This is not an exactly-once attachment-allocation guarantee, nor a guarantee of remote orphan cleanup or indefinite unattached retention.
+**Coordinated backend and Apple deployment is required for reorder reuse.** Deploy the backend's authoritative association-order handling before enabling this Apple behavior. Older servers retain allocation-time order and cannot honor reordered existing IDs through another endpoint; an Apple-only deployment would silently deliver the wrong order. No new endpoint or schema migration is needed. The PWA's existing removal/reuse behavior does not establish reorder support: its composer has no reorder operation.
+
+Message replay uses the backend's client-generated-ID conflict handling, which checks chat, sender, text, type, reply and the ordered attachment IDs. The client retains the exact sealed request across uncertain delivery; replaying the same ID with another attachment order conflicts rather than changing the delivered message. This is not an exactly-once attachment-allocation guarantee, nor a guarantee of remote orphan cleanup or indefinite unattached retention.
 
 ## Presentation and verification
 
 The shared SwiftUI composer accepts photos and videos through Photos, Files, clipboard acquisition and drag/drop. Attaching media opens `ComposerAttachmentDialog`: a fixed count/close/options header, large scrollable previews and a fixed caption/send row. Per-item menus provide retry, removal and reordering; the header menu contains one image-compression option for the entire selection. Videos are sent unchanged. macOS also installs `onPasteCommand`; iOS uses `PasteButton` in the attachment menu.
 
 The caption edits the existing conversation draft. Closing the dialog preserves caption edits and attachments for later review; successful durable release clears the draft and dismisses the dialog, while failure retains both. The inline composer offers a review button for retained attachments rather than a second attachment tray.
+
+On macOS, the caption uses a native scrolling text view that grows from one to six lines and confines longer text to its own viewport. The sheet and gallery do not scroll with the caption. The main composer and caption request keyboard focus once on enabled entry, placing the caret at the restored draft's end instead of selecting all text. Delayed permission loading cannot reclaim focus after intervening user input; ordinary updates do not reset selection or marked text.
 
 The full chat detail pane and caption dialog accept additional media drops. `ComposerAttachmentState` shares acquisition/error state and hands pane drops to the existing composer import transaction, preventing duplicate batches while a drop or import is pending. Gallery drags use an own-process slot type rather than image/file URLs, so moving a tile never imports it again. Hover shows an insertion edge and can scroll the gallery; only a validated drop commits a complete new order. Gallery/session/membership checks reject stale or foreign payloads, and cancelled/no-op drags do not change the queue.
 

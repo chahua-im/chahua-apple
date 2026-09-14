@@ -598,6 +598,8 @@ final class OutgoingMessageQueue: ObservableObject {
                 throw AttachmentWorkError.tooLarge(config.maxFileSizeBytes)
             }
             // Allocation belongs only to this attempt; only a successful PUT is durable.
+            // Allocation order is an initial hint; the final message's attachmentIds
+            // sequence is authoritative, so a reorder must not restart this PUT.
             let allocation = try await apiClient.requestAttachmentUpload(
                 fileName: attachment.fileName, contentType: attachment.mimeType, size: attachment.byteCount,
                 width: attachment.width, height: attachment.height, order: attachment.position)

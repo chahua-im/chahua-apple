@@ -523,6 +523,36 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await h.close()
     }
 
+    func testReorderingCompletedAttachmentsDispatchesExistingIDsInLatestOrder() async throws {
+        let h = try await openHarness(foreground: false)
+        let store = try await h.openStore(uid: 1)
+        let begun = try await store.beginComposition(chatID: "chat", senderID: 1)
+        let item = try XCTUnwrap(begun.composingItem)
+        let slots = try (0..<2).map { index in
+            let file = store.directory.appendingPathComponent("slot-\(index).png")
+            try Data([1, 2, 3]).write(to: file, options: .atomic)
+            return LocalOutgoingAttachment(
+                id: "slot-\(index)", generation: UUID().uuidString, position: index,
+                sourcePath: file.path, preparedPath: file.path, previewPath: file.path,
+                fileName: file.lastPathComponent, mimeType: "image/png",
+                width: 10, height: 10, byteCount: 3, attachmentID: "remote-\(index)")
+        }
+        _ = try await store.setCompositionAttachments(
+            chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision,
+            attachments: slots, compressionEnabled: true)
+        await h.queue.retryStorage()
+
+        try await h.queue.reorderAttachments(ids: ["slot-1", "slot-0"], chatID: "chat")
+        let revision = try XCTUnwrap(h.queue.snapshots[ConversationKey(chatID: "chat", threadID: nil)]?.draft.editRevision)
+        try await h.queue.enqueueText(chatID: "chat", text: "", clearedDraftRevision: revision + 1)
+        await h.queue.setForegroundActive(true)
+        // This API cannot allocate uploads: dispatch proves neither completed slot was restarted.
+        try await eventually { await h.api.requests().count == 1 }
+        let request = try await firstRequest(h.api)
+        XCTAssertEqual(request.body.attachmentIds, ["remote-1", "remote-0"])
+        XCTAssertEqual(request.body.clientGeneratedId, item.clientGeneratedID)
+    }
+
     private func enqueueABC(_ h: Harness) async throws -> [LocalOutgoingMessage] {
         try await h.queue.enqueueText(chatID: "chat", text: "A", clearedDraftRevision: 1)
         try await eventually { await h.api.requests().count == 1 }

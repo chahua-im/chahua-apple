@@ -26,31 +26,44 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertEqual(me.uid, 2)
     }
 
-    func testTwoScenesShareSocketAndLastSceneStopsRetries() async {
+    func testSceneTransitionsKeepSocketAndHeartbeatsPublishCurrentPresence() async {
         let clock = RealtimeTestClock()
         let socket = RealtimeTestSocket()
         let provider = RealtimeTestProvider(sockets: [socket])
         let store = ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {})
         let coordinator = RealtimeCoordinator(provider: provider, store: store, onInvalidToken: {}, sleep: { try await clock.sleep($0) }, jitter: { 0 })
         let first = UUID(), second = UUID()
-        coordinator.setSession(uid: 1)
         coordinator.setSceneActive(id: first, active: true)
         coordinator.setSceneActive(id: second, active: true)
-        await eventually { await provider.opens == 1 }
-        await socket.emit(.pong)
+        coordinator.setSession(uid: 1)
+        await eventually { await socket.frames == [.appState(.active)] }
         coordinator.removeScene(id: first)
-        for _ in 0..<20 { await Task.yield() }
-        let closedWhileSecondActive = await socket.closed
-        XCTAssertFalse(closedWhileSecondActive)
         coordinator.removeScene(id: second)
-        await eventually { await socket.closed }
-        await clock.advance(seconds: 100)
-        for _ in 0..<20 { await Task.yield() }
+        await eventually { await socket.frames == [.appState(.active), .appState(.inactive)] }
+        await eventually { await clock.hasSleep(seconds: 10) }
+        await clock.advance(seconds: 10)
+        await eventually { await socket.frames.last == .ping(.inactive) }
+        await eventually { await clock.sleepCount(seconds: 10) == 2 }
+        await socket.emit(.pong)
+        await eventually { await clock.sleepCount(seconds: 10) == 1 }
+        coordinator.setSceneActive(id: first, active: true)
+        await eventually { await socket.frames.last == .appState(.active) }
+        await clock.advance(seconds: 10)
+        await eventually { await socket.frames.last == .ping(.active) }
+        let frames = await socket.frames
+        XCTAssertEqual(frames, [
+            .appState(.active), .appState(.inactive), .ping(.inactive),
+            .appState(.active), .ping(.active)
+        ])
+        let closed = await socket.closed
         let opens = await provider.opens
+        XCTAssertFalse(closed)
         XCTAssertEqual(opens, 1)
+        coordinator.setSession(uid: nil)
+        await eventually { await socket.closed }
     }
 
-    func testMissingFirstPongClosesAndReconnects() async {
+    func testMissingPongReconnectsWhileInactiveWithoutAdvertisingActive() async {
         let clock = RealtimeTestClock()
         let first = RealtimeTestSocket(), second = RealtimeTestSocket()
         let provider = RealtimeTestProvider(sockets: [first, second])
@@ -58,17 +71,23 @@ final class RealtimeCoordinatorTests: XCTestCase {
             provider: provider, store: ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
             onInvalidToken: {}, sleep: { try await clock.sleep($0) }, jitter: { 0 }
         )
-        let scene = UUID()
         coordinator.setSession(uid: 1)
-        coordinator.setSceneActive(id: scene, active: true)
+        await eventually { await first.frames == [.appState(.inactive)] }
         await eventually { await clock.hasSleep(seconds: 10) }
+        await clock.advance(seconds: 10)
+        await eventually { await first.frames == [.appState(.inactive), .ping(.inactive)] }
+        await eventually { await clock.sleepCount(seconds: 10) == 2 }
         await clock.advance(seconds: 10)
         await eventually { await first.closed }
         await eventually { await clock.hasSleep(seconds: 1) }
         await clock.advance(seconds: 1)
-        await eventually { await provider.opens == 2 }
-        await second.emit(.pong)
-        coordinator.removeScene(id: scene)
+        await eventually { await second.frames == [.appState(.inactive)] }
+        await eventually { await clock.hasSleep(seconds: 10) }
+        await clock.advance(seconds: 10)
+        await eventually { await second.frames == [.appState(.inactive), .ping(.inactive)] }
+        let opens = await provider.opens
+        XCTAssertEqual(opens, 2)
+        coordinator.setSession(uid: nil)
     }
 
     func testSignOutDiscardsLateSocketOpening() async {
@@ -86,6 +105,93 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await provider.releaseOpen()
         await eventually { await socket.closed }
         XCTAssertFalse(expired)
+    }
+
+    func testFocusLossDuringOpeningUsesInactiveInitialState() async {
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [socket], holdOpen: true)
+        let coordinator = RealtimeCoordinator(
+            provider: provider,
+            store: ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
+            onInvalidToken: {}
+        )
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await provider.opens == 1 }
+        coordinator.setSceneActive(id: scene, active: false)
+        await provider.releaseOpen()
+        await eventually { await socket.frames == [.appState(.inactive)] }
+        let closed = await socket.closed
+        XCTAssertFalse(closed)
+        coordinator.setSession(uid: nil)
+    }
+
+    func testFocusRestoredDuringInactiveSendRetainsSocketAndFrameOrder() async {
+        let socket = RealtimeTestSocket()
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]),
+            store: ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
+            onInvalidToken: {}
+        )
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await socket.frames == [.appState(.active)] }
+        await socket.holdNextAppState()
+        coordinator.setSceneActive(id: scene, active: false)
+        await eventually { await socket.isHoldingAppState }
+        coordinator.setSceneActive(id: scene, active: true)
+        await socket.releaseAppState()
+        await eventually { await socket.frames == [.appState(.active), .appState(.inactive), .appState(.active)] }
+        let closed = await socket.closed
+        XCTAssertFalse(closed)
+        coordinator.setSession(uid: nil)
+    }
+
+    func testAccountReplacementClosesOnlyOldSocketAndPreservesScenePresence() async {
+        let first = RealtimeTestSocket(), second = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [first, second])
+        let coordinator = RealtimeCoordinator(
+            provider: provider,
+            store: ChatStore(apiClient: RealtimeTestHTTP(), outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
+            onInvalidToken: {}
+        )
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await first.frames == [.appState(.active)] }
+        coordinator.setSession(uid: 2)
+        await eventually { await first.closed }
+        await eventually { await second.frames == [.appState(.active)] }
+        coordinator.setSceneActive(id: scene, active: false)
+        await eventually { await second.frames == [.appState(.active), .appState(.inactive)] }
+        let oldFrames = await first.frames
+        let replacementClosed = await second.closed
+        XCTAssertEqual(oldFrames, [.appState(.active)])
+        XCTAssertFalse(replacementClosed)
+        coordinator.setSession(uid: nil)
+    }
+
+    func testInactiveOpenDefersBulkRecoveryUntilActivationWithoutReconnecting() async {
+        let api = RealtimeTestHTTP()
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [socket])
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}),
+            onInvalidToken: {}
+        )
+        coordinator.setSession(uid: 1)
+        await eventually { await socket.frames == [.appState(.inactive)] }
+        await socket.emit(.pong)
+        for _ in 0..<20 { await Task.yield() }
+        let refreshedWhileInactive = await api.chatRequestStarted
+        XCTAssertFalse(refreshedWhileInactive)
+        coordinator.setSceneActive(id: UUID(), active: true)
+        await eventually { await api.chatRequestStarted }
+        let opens = await provider.opens
+        XCTAssertEqual(opens, 1)
+        coordinator.setSession(uid: nil)
     }
 
     func testRecoveryDoesNotBlockLaterEventDelivery() async throws {
@@ -142,6 +248,7 @@ private actor RealtimeTestClock {
     }
 
     func hasSleep(seconds: Double) -> Bool { waiters.values.contains { $0.duration == seconds } }
+    func sleepCount(seconds: Double) -> Int { waiters.values.filter { $0.duration == seconds }.count }
     func advance(seconds: Double) {
         now += seconds
         let due = waiters.filter { $0.value.deadline <= now }
@@ -151,18 +258,39 @@ private actor RealtimeTestClock {
 }
 
 private actor RealtimeTestSocket: RealtimeConnection {
+    enum Frame: Equatable, Sendable {
+        case appState(RealtimeAppState)
+        case ping(RealtimeAppState)
+    }
+    private(set) var frames: [Frame] = []
     private var events: [RealtimeServerEvent] = []
     private var receiver: CheckedContinuation<RealtimeServerEvent, Error>?
+    private var holdsNextAppState = false
+    private var heldAppState: CheckedContinuation<Void, Never>?
+    var isHoldingAppState: Bool { heldAppState != nil }
+    func holdNextAppState() { holdsNextAppState = true }
+    func releaseAppState() { heldAppState?.resume(); heldAppState = nil }
     private(set) var closed = false
     func receive() async throws -> RealtimeServerEvent {
         if closed { throw CancellationError() }
         if !events.isEmpty { return events.removeFirst() }
         return try await withCheckedThrowingContinuation { receiver = $0 }
     }
-    func sendPing(state: RealtimeAppState) async throws {}
-    func sendAppState(_ state: RealtimeAppState) async throws {}
+    func sendPing(state: RealtimeAppState) async throws {
+        guard !closed else { throw CancellationError() }
+        frames.append(.ping(state))
+    }
+    func sendAppState(_ state: RealtimeAppState) async throws {
+        if holdsNextAppState {
+            holdsNextAppState = false
+            await withCheckedContinuation { heldAppState = $0 }
+        }
+        guard !closed else { throw CancellationError() }
+        frames.append(.appState(state))
+    }
     func close() {
         closed = true
+        releaseAppState()
         receiver?.resume(throwing: CancellationError())
         receiver = nil
     }

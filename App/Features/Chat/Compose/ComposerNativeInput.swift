@@ -40,6 +40,7 @@ struct ComposerSendFocus: ViewModifier {
         let isEnabled: Bool
         let onCompositionChanged: ((Bool) -> Void)?
         var onSubmit: (() -> Void)? = nil
+        var focusOnEntry = false
 
         func makeNSView(context: Context) -> ComposerInputMarker {
             let marker = ComposerInputMarker()
@@ -50,10 +51,137 @@ struct ComposerSendFocus: ViewModifier {
         func updateNSView(_ marker: ComposerInputMarker, context: Context) {
             marker.connect(
                 input: input, draft: draft, isFocused: isFocused, isEnabled: isEnabled,
-                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit,
+                focusOnEntry: focusOnEntry)
         }
 
         static func dismantleNSView(_ marker: ComposerInputMarker, coordinator: ()) { marker.disconnect() }
+    }
+
+    // A multiline SwiftUI TextField bounds its height but does not provide a
+    // scrolling caption viewport on macOS. Keep a native scrolling text view
+    // here, with the same committed-draft/IME bridge as the main composer. The
+    // dialog and gallery do not scroll in response to caption wheel gestures.
+    struct ComposerCaptionInput: NSViewRepresentable {
+        let input: ComposerInputState
+        let draft: Binding<String>
+        let isEnabled: Bool
+        let onCompositionChanged: ((Bool) -> Void)?
+        let onSubmit: () -> Void
+
+        func makeNSView(context: Context) -> ComposerCaptionScrollView {
+            let view = ComposerCaptionScrollView()
+            updateNSView(view, context: context)
+            return view
+        }
+
+        func updateNSView(_ view: ComposerCaptionScrollView, context: Context) {
+            view.configure(
+                input: input, draft: draft, isEnabled: isEnabled,
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
+        }
+
+        func sizeThatFits(_ proposal: ProposedViewSize, nsView: ComposerCaptionScrollView, context: Context) -> CGSize? {
+            guard let width = proposal.width, width.isFinite else { return nil }
+            return CGSize(width: width, height: nsView.captionHeight(for: width))
+        }
+
+        static func dismantleNSView(_ view: ComposerCaptionScrollView, coordinator: ()) { view.disconnect() }
+    }
+
+    final class ComposerCaptionScrollView: NSScrollView, NSTextViewDelegate {
+        private let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 20))
+        private let marker = ComposerInputMarker()
+        private weak var input: ComposerInputState?
+
+        init() {
+            super.init(frame: .zero)
+            drawsBackground = false
+            borderType = .noBorder
+            hasVerticalScroller = true
+            hasHorizontalScroller = false
+            autohidesScrollers = true
+            scrollerStyle = .overlay
+            editor.drawsBackground = false
+            editor.isRichText = false
+            editor.importsGraphics = false
+            editor.allowsUndo = true
+            editor.font = .preferredFont(forTextStyle: .body)
+            editor.textColor = .labelColor
+            editor.insertionPointColor = .labelColor
+            editor.textContainerInset = .zero
+            editor.textContainer?.lineFragmentPadding = 0
+            editor.textContainer?.widthTracksTextView = true
+            editor.textContainer?.heightTracksTextView = false
+            editor.textContainer?.containerSize = NSSize(width: 300, height: CGFloat.greatestFiniteMagnitude)
+            editor.isHorizontallyResizable = false
+            editor.isVerticallyResizable = true
+            editor.minSize = .zero
+            editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            editor.autoresizingMask = [.width]
+            editor.delegate = self
+            editor.setAccessibilityLabel("Caption")
+            documentView = editor
+            addSubview(marker)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        func configure(
+            input: ComposerInputState, draft: Binding<String>, isEnabled: Bool,
+            onCompositionChanged: ((Bool) -> Void)?, onSubmit: @escaping () -> Void
+        ) {
+            self.input = input
+            let text = input.editorText ?? draft.wrappedValue
+            if editor.string != text, !editor.hasMarkedText() {
+                let selection = editor.selectedRange()
+                editor.string = text
+                let length = (text as NSString).length
+                let start = min(selection.location, length)
+                editor.setSelectedRange(NSRange(location: start, length: min(selection.length, length - start)))
+                invalidateIntrinsicContentSize()
+            }
+            editor.isEditable = isEnabled
+            marker.connect(
+                input: input, draft: draft, isFocused: true, isEnabled: isEnabled,
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit, focusOnEntry: true)
+        }
+
+        func captionHeight(for width: CGFloat) -> CGFloat {
+            guard let container = editor.textContainer, let layout = editor.layoutManager, let font = editor.font else { return 20 }
+            let width = max(1, width)
+            if editor.frame.width != width {
+                editor.setFrameSize(NSSize(width: width, height: editor.frame.height))
+            }
+            layout.ensureLayout(for: container)
+            let lineHeight = layout.defaultLineHeight(for: font)
+            let textHeight = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+            let documentHeight = ceil(max(lineHeight, max(textHeight, contentSize.height)))
+            if editor.frame.height != documentHeight {
+                editor.setFrameSize(NSSize(width: width, height: documentHeight))
+            }
+            return ceil(min(lineHeight * 6, max(lineHeight, textHeight)))
+        }
+
+        override var intrinsicContentSize: NSSize {
+            NSSize(width: NSView.noIntrinsicMetric, height: captionHeight(for: max(1, contentSize.width)))
+        }
+
+        override func layout() {
+            super.layout()
+            marker.frame = bounds
+        }
+
+        func textDidChange(_ notification: Notification) {
+            input?.receiveEditorText(editor.string)
+            invalidateIntrinsicContentSize()
+        }
+
+        func disconnect() {
+            marker.disconnect()
+            editor.delegate = nil
+            input = nil
+        }
     }
 
     typealias ComposerMarkerView = NSView
@@ -65,6 +193,8 @@ struct ComposerSendFocus: ViewModifier {
         let isEnabled: Bool
         let onCompositionChanged: ((Bool) -> Void)?
         var onSubmit: (() -> Void)? = nil
+        // Desktop entry focus must not raise the software keyboard on iOS.
+        var focusOnEntry = false
 
         func makeUIView(context: Context) -> ComposerInputMarker {
             let marker = ComposerInputMarker()
@@ -93,13 +223,17 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         private weak var editor: NSTextView?
         private weak var editorOwner: AnyObject?
         private var keyMonitor: Any?
+        private var entryFocusRequested = false
+        private var entryFocusPending = false
+        private var entryFocusScheduled = false
     #else
         private weak var editor: UIView?
     #endif
 
     func connect(
         input: ComposerInputState, draft: Binding<String>, isFocused: Bool, isEnabled: Bool,
-        onCompositionChanged: ((Bool) -> Void)?, onSubmit: (() -> Void)? = nil
+        onCompositionChanged: ((Bool) -> Void)?, onSubmit: (() -> Void)? = nil,
+        focusOnEntry: Bool = false
     ) {
         self.input = input
         self.isComposerFocused = isFocused
@@ -107,11 +241,21 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         self.onSubmit = onSubmit
         input.configure(draft: draft, onCompositionChanged: onCompositionChanged)
         input.nativeInput = self
+        #if os(macOS)
+            if focusOnEntry, !entryFocusRequested {
+                entryFocusRequested = true
+                entryFocusPending = true
+            }
+            scheduleEntryFocus()
+        #endif
     }
 
     func disconnect() {
         input?.detachAfterViewUpdate(finalSnapshot: snapshot())
         stopMonitoring()
+        #if os(macOS)
+            entryFocusPending = false
+        #endif
         input?.nativeInput = nil
         input = nil
         onSubmit = nil
@@ -123,6 +267,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         #if os(macOS)
             editorOwner = nil
             if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            entryFocusScheduled = false
             keyMonitor = nil
         #endif
     }
@@ -145,9 +290,69 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
     #if os(macOS)
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+        override func layout() {
+            super.layout()
+            scheduleEntryFocus()
+        }
+
+        // SwiftUI's initial field-editor focus selects the entire restored draft.
+        // Acquire focus once, when mounted and permitted, and put the caret at its
+        // end in that same native transaction. Later updates never change a user's
+        // selection, undo stack, or marked range.
+        private func scheduleEntryFocus() {
+            guard entryFocusPending, !entryFocusScheduled, isComposerEnabled, window != nil else { return }
+            entryFocusScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.entryFocusScheduled = false
+                guard self.entryFocusPending, self.isComposerEnabled,
+                    let window = self.window, window.attachedSheet == nil,
+                    let control = self.entryControl()
+                else { return }
+                self.entryFocusPending = false
+                if let current = window.firstResponder as? NSTextView,
+                    self.scopes(current), current.hasMarkedText() { return }
+                // Set this window's editing target without activating the window
+                // or application; a later activation must not replay entry focus.
+                guard window.makeFirstResponder(control),
+                    let editor = window.firstResponder as? NSTextView, self.scopes(editor)
+                else { return }
+                self.isComposerFocused = true
+                self.editor = editor
+                self.editorOwner = editor.delegate as AnyObject?
+                guard !editor.hasMarkedText() else { return }
+                let end = NSRange(location: (editor.string as NSString).length, length: 0)
+                editor.setSelectedRange(end)
+                editor.scrollRangeToVisible(end)
+            }
+        }
+
+        private func entryControl() -> NSView? {
+            guard bounds.width > 0, bounds.height > 0 else { return nil }
+            let surface = convert(bounds, to: nil)
+            func editableControl(in view: NSView) -> NSView? {
+                guard !view.isHidden else { return nil }
+                if let field = view as? NSTextField, field.isEditable, field.isEnabled,
+                    surface.intersects(field.convert(field.bounds, to: nil)) { return field }
+                if let text = view as? NSTextView, text.isEditable,
+                    surface.intersects(text.convert(text.bounds, to: nil)) { return text }
+                for child in view.subviews {
+                    if let control = editableControl(in: child) { return control }
+                }
+                return nil
+            }
+            var ancestor = superview
+            while let view = ancestor {
+                if let control = editableControl(in: view) { return control }
+                ancestor = view.superview
+            }
+            return nil
+        }
+
         override func viewWillMove(toWindow newWindow: NSWindow?) {
             if window != nil, newWindow !== window {
                 input?.detachAfterViewUpdate(finalSnapshot: snapshot())
+                entryFocusPending = false
                 stopMonitoring()
             }
             super.viewWillMove(toWindow: newWindow)
@@ -161,6 +366,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 return
             }
             observeUndo()
+            scheduleEntryFocus()
             for name in [
                 NSText.didBeginEditingNotification, NSText.didChangeNotification,
                 NSText.didEndEditingNotification, NSTextView.didChangeSelectionNotification,
@@ -172,8 +378,12 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             // ordinary Return here instead, preserving the editing session and
             // selection. Shift-Return uses native insertion outside SwiftUI's
             // update so selection replacement and undo remain native.
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, self.isComposerFocused, self.isComposerEnabled,
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+                guard let self else { return event }
+                // A user action after entry supersedes delayed permission focus.
+                // Do not take focus back from navigation, a dialog, or a selection.
+                if event.window === self.window { self.entryFocusPending = false }
+                guard event.type == .keyDown, self.isComposerFocused, self.isComposerEnabled,
                     event.window === self.window,
                     event.keyCode == 36 || event.keyCode == 76,
                     let editor = self.resolveEditor(), self.window?.firstResponder === editor

@@ -197,33 +197,43 @@ final class TimelineRowView: UIView {
 private final class TimelineThreadButton: UIButton {
     private let text = UILabel()
     private let symbol = UIImageView()
+    private let chevron = UIImageView()
     private let marker = MessageRowGestureMarker()
-    private var symbolSize: CGSize = .zero
-    private var gap: CGFloat = 0
+    private var contentFrames: [CGRect] = []
     private var action: (() -> Void)?
     init() {
         super.init(frame: .zero)
-        addSubview(text); addSubview(symbol); addSubview(marker)
+        addSubview(text); addSubview(symbol); addSubview(chevron); addSubview(marker)
         text.isAccessibilityElement = false
         addAction(UIAction { [weak self] _ in self?.action?() }, for: .primaryActionTriggered)
     }
     required init?(coder: NSCoder) { nil }
     func configure(label: String, binding: TimelineRowBinding, action: @escaping () -> Void) {
         self.action = action; text.text = label
-        text.font = .systemFont(ofSize: binding.presentation.environment.captionSize, weight: .semibold)
-        symbol.image = UIImage(systemName: "bubble.left.and.bubble.right.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: binding.presentation.environment.captionSize, weight: .semibold))
-        text.textColor = .label; symbol.tintColor = .label
-        symbolSize = binding.layout.threadSymbolSize; gap = binding.layout.threadLabelGap
+        let fontSize = binding.presentation.environment.captionSize
+        let isOutgoing: Bool
+        if case .message(let row) = binding.presentation.row { isOutgoing = row.isOutgoing } else { isOutgoing = false }
+        let color = UIColor(isOutgoing ? ChahuaTheme.ChatBubble.outgoingForeground : ChahuaTheme.accent)
+        text.font = .systemFont(ofSize: fontSize, weight: .semibold)
+        text.textColor = color
+        let configuration = UIImage.SymbolConfiguration(pointSize: fontSize, weight: .semibold)
+        symbol.image = UIImage(systemName: "bubble.left.and.bubble.right.fill", withConfiguration: configuration)
+        chevron.image = UIImage(systemName: "chevron.right", withConfiguration: configuration)
+        symbol.tintColor = color; chevron.tintColor = color
+        contentFrames = binding.layout.threadContentFrames
         isEnabled = binding.actions.openThread != nil
         accessibilityLabel = label
         marker.configure(.tap(isEnabled ? action : nil)); setNeedsLayout()
     }
-    func clear() { action = nil; text.text = nil; marker.stop(); accessibilityLabel = nil; isEnabled = false }
+    func clear() {
+        action = nil; text.text = nil; symbol.image = nil; chevron.image = nil
+        contentFrames.removeAll(keepingCapacity: true); marker.stop(); accessibilityLabel = nil; isEnabled = false
+    }
     override func layoutSubviews() {
         super.layoutSubviews()
-        symbol.frame = CGRect(x: 0, y: (bounds.height - symbolSize.height) / 2, width: symbolSize.width, height: symbolSize.height)
-        let x = symbolSize.width + gap
-        text.frame = CGRect(x: x, y: 0, width: max(0, bounds.width - x), height: bounds.height)
+        symbol.frame = contentFrames.indices.contains(0) ? contentFrames[0] : .zero
+        text.frame = contentFrames.indices.contains(1) ? contentFrames[1] : .zero
+        chevron.frame = contentFrames.indices.contains(2) ? contentFrames[2] : .zero
         marker.frame = bounds
     }
 }

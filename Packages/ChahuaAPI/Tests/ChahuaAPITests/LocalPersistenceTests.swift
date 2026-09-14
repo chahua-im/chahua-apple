@@ -234,7 +234,7 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(late.outgoing.first?.body, claimed.message?.body)
     }
 
-    func testReorderRemovalAndOptionsInvalidateOnlyAffectedWork() async throws {
+    func testReorderRetainsUploadsAndMergesInFlightCheckpointsIntoLatestOrder() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try ChahuaLocalStore(directory: directory)
@@ -244,29 +244,104 @@ final class LocalPersistenceTests: XCTestCase {
         let attached = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision, attachments: slots, compressionEnabled: true)
         var completed = slots[0]
         completed.preparedPath = completed.sourcePath
-        completed.attachmentID = "uploaded"
+        completed.attachmentID = "remote-0"
         _ = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: completed)
-        // The editing snapshot predates the upload. An unrelated removal must retain it.
-        let removed = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: attached.draft.editRevision, attachments: Array(slots.prefix(2)), compressionEnabled: true)
-        XCTAssertEqual(removed.draft.attachments[0].attachmentID, "uploaded")
-        let lateRemoved = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: slots[2])
-        XCTAssertEqual(lateRemoved.draft.attachments.map(\.id), ["slot-0", "slot-1"])
-        let reordered = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: removed.draft.editRevision, attachments: Array(removed.draft.attachments.reversed()), compressionEnabled: true)
-        XCTAssertEqual(reordered.draft.attachments.map(\.id), ["slot-1", "slot-0"])
-        XCTAssertEqual(reordered.draft.attachments.map(\.position), [0, 1])
-        XCTAssertNil(reordered.draft.attachments[1].attachmentID)
+
+        // Reordering from an editing snapshot that predates the PUT must retain its result.
+        let reordered = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: attached.draft.editRevision, attachments: [slots[2], slots[0], slots[1]], compressionEnabled: true)
+        XCTAssertEqual(reordered.draft.attachments.map(\.id), ["slot-2", "slot-0", "slot-1"])
+        XCTAssertEqual(reordered.draft.attachments.map(\.generation), [slots[2].generation, slots[0].generation, slots[1].generation])
+        XCTAssertEqual(reordered.draft.attachments[1].attachmentID, "remote-0")
         XCTAssertEqual(reordered.draft.attachments[1].preparedPath, completed.preparedPath)
-        XCTAssertNotEqual(reordered.draft.attachments[1].generation, completed.generation)
-        let lateReordered = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: completed)
-        XCTAssertEqual(lateReordered.draft.attachments, reordered.draft.attachments)
-        let changedOptions = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: reordered.draft.editRevision, attachments: reordered.draft.attachments, compressionEnabled: false)
-        XCTAssertNil(changedOptions.draft.attachments[1].preparedPath)
-        XCTAssertNotEqual(changedOptions.draft.attachments[1].generation, reordered.draft.attachments[1].generation)
-        let staleText = try await store.saveDraft(chatID: "chat", text: "late text", editRevision: removed.draft.editRevision, updatedAt: Date())
+
+        // Preparation began at position 1; its completion belongs at the new position 2.
+        var prepared = slots[1]
+        prepared.preparedPath = prepared.sourcePath
+        let preparation = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: prepared)
+        XCTAssertEqual(preparation.draft.attachments.map(\.position), [0, 1, 2])
+        XCTAssertEqual(preparation.draft.attachments[2].preparedPath, prepared.preparedPath)
+        XCTAssertEqual(preparation.draft.editRevision, reordered.draft.editRevision)
+        var uploading = preparation.draft.attachments[2]
+
+        // Remove another slot and reorder again while the prepared attachment's PUT is in flight.
+        let removed = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: preparation.draft.editRevision, attachments: [preparation.draft.attachments[2], preparation.draft.attachments[1]], compressionEnabled: true)
+        var removedCompletion = slots[2]
+        removedCompletion.attachmentID = "orphan"
+        let lateRemoved = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: removedCompletion)
+        XCTAssertEqual(lateRemoved, removed)
+        uploading.attachmentID = "remote-1"
+        let uploaded = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: uploading)
+        XCTAssertEqual(uploaded.draft.attachments.map(\.id), ["slot-1", "slot-0"])
+        XCTAssertEqual(uploaded.draft.attachments.map(\.position), [0, 1])
+        XCTAssertEqual(uploaded.draft.attachments.map(\.attachmentID), ["remote-1", "remote-0"])
+        XCTAssertEqual(uploaded.draft.editRevision, removed.draft.editRevision)
+
+        // An old-position duplicate is a no-op, and late preparation cannot undo a successful PUT.
+        let duplicate = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: completed)
+        XCTAssertEqual(duplicate, uploaded)
+        let latePreparation = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: prepared)
+        XCTAssertEqual(latePreparation, uploaded)
+        _ = try await store.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "ignored", text: "", enqueuedAt: Date(), clearedDraftRevision: uploaded.draft.editRevision + 1)
+        let claim = try await store.claimNext(chatID: "chat")
+        XCTAssertEqual(claim.message?.body.attachmentIds, ["remote-1", "remote-0"])
+    }
+
+    func testSourceAndCompressionChangesRejectStaleAttachmentWork() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        let begun = try await store.beginComposition(chatID: "chat", senderID: 1)
+        let item = try XCTUnwrap(begun.composingItem)
+        let slots = try (0..<2).map { try attachment(directory: directory, id: "slot-\($0)", position: $0) }
+        var snapshot = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision, attachments: slots, compressionEnabled: true)
+        for var slot in slots {
+            slot.preparedPath = slot.sourcePath
+            slot.attachmentID = "remote-\(slot.id)"
+            snapshot = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: slot)
+        }
+        var replacement = try attachment(directory: directory, id: "replacement", position: 0)
+        replacement.id = slots[0].id
+        replacement.generation = slots[0].generation
+        let changedSource = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: snapshot.draft.editRevision, attachments: [replacement, snapshot.draft.attachments[1]], compressionEnabled: true)
+        XCTAssertNil(changedSource.draft.attachments[0].preparedPath)
+        XCTAssertNil(changedSource.draft.attachments[0].attachmentID)
+        XCTAssertNotEqual(changedSource.draft.attachments[0].generation, slots[0].generation)
+        XCTAssertEqual(changedSource.draft.attachments[1], snapshot.draft.attachments[1])
+        let lateSource = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: snapshot.draft.attachments[0])
+        XCTAssertEqual(lateSource, changedSource)
+
+        // Even a matching generation cannot checkpoint different source/preview ownership.
+        var wrongSource = snapshot.draft.attachments[0]
+        wrongSource.generation = changedSource.draft.attachments[0].generation
+        let rejectedSource = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: wrongSource)
+        XCTAssertEqual(rejectedSource, changedSource)
+        var wrongPreview = changedSource.draft.attachments[0]
+        wrongPreview.previewPath = slots[1].previewPath
+        wrongPreview.attachmentID = "wrong-preview"
+        let rejectedPreview = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: wrongPreview)
+        XCTAssertEqual(rejectedPreview, changedSource)
+
+        var completedReplacement = changedSource.draft.attachments[0]
+        completedReplacement.preparedPath = completedReplacement.sourcePath
+        completedReplacement.attachmentID = "replacement-upload"
+        let completed = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: completedReplacement)
+        let changedOptions = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: completed.draft.editRevision, attachments: completed.draft.attachments, compressionEnabled: false)
+        for index in changedOptions.draft.attachments.indices {
+            XCTAssertNil(changedOptions.draft.attachments[index].preparedPath)
+            XCTAssertNil(changedOptions.draft.attachments[index].attachmentID)
+            XCTAssertNotEqual(changedOptions.draft.attachments[index].generation, completed.draft.attachments[index].generation)
+            let lateOptions = try await store.checkpointAttachment(chatID: "chat", itemID: item.clientGeneratedID, attachment: completed.draft.attachments[index])
+            XCTAssertEqual(lateOptions, changedOptions)
+        }
+        do {
+            _ = try await store.setCompositionAttachments(chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: changedOptions.draft.editRevision, attachments: completed.draft.attachments, compressionEnabled: false)
+            XCTFail("An old content generation must not overwrite the edited composition")
+        } catch LocalStorageError.staleDraft { }
+        let staleText = try await store.saveDraft(chatID: "chat", text: "late text", editRevision: changedSource.draft.editRevision, updatedAt: Date())
         XCTAssertEqual(staleText.draft.text, "")
         XCTAssertEqual(staleText.draft.attachments, changedOptions.draft.attachments)
         do {
-            _ = try await store.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "stale", text: "", enqueuedAt: Date(), clearedDraftRevision: reordered.draft.editRevision)
+            _ = try await store.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "stale", text: "", enqueuedAt: Date(), clearedDraftRevision: completed.draft.editRevision)
             XCTFail("An old composer must not release a newly edited composition")
         } catch LocalStorageError.staleDraft { }
     }

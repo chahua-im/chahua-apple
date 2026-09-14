@@ -106,11 +106,12 @@ public final class ChahuaLocalStore: Sendable {
                     // A caller's snapshot can predate a completed worker checkpoint.
                     if !sourceChanged { slot = old }
                 }
-                if position != (old?.position ?? proposed.position) || sourceChanged || optionsChanged {
+                // Position is composition state, not part of the uploaded content generation.
+                if sourceChanged || optionsChanged {
                     slot.generation = UUID().uuidString
                     slot.attachmentID = nil
                     slot.error = nil
-                    if sourceChanged || optionsChanged { slot.preparedPath = nil }
+                    slot.preparedPath = nil
                 }
                 slot.position = position
                 return slot
@@ -138,12 +139,16 @@ public final class ChahuaLocalStore: Sendable {
                   !item.dispatchClaimed,
                   let index = item.attachments.firstIndex(where: { $0.id == attachment.id && $0.generation == attachment.generation }) else { return before }
             let old = item.attachments[index]
-            guard old.position == attachment.position, old.sourcePath == attachment.sourcePath, old.previewPath == attachment.previewPath else { return before }
+            guard old.sourcePath == attachment.sourcePath, old.previewPath == attachment.previewPath else { return before }
             // A late preparation completion cannot roll back a successful PUT.
             guard old.attachmentID == nil || old.attachmentID == attachment.attachmentID else { return before }
-            guard attachment != old else { return before }
+            // Workers may finish after a reorder. Merge their content checkpoint into
+            // the latest durable position rather than restoring their captured order.
+            var updated = attachment
+            updated.position = old.position
+            guard updated != old else { return before }
             var slots = item.attachments
-            slots[index] = attachment
+            slots[index] = updated
             try Self.validateAttachments(slots, directory: self.directory, requireSource: false)
             try db.execute(sql: "UPDATE outgoing_message SET attachments = ? WHERE client_generated_id = ?", arguments: [try Self.encodeAttachments(slots, directory: self.directory), itemID])
             try Self.bump(db, key)

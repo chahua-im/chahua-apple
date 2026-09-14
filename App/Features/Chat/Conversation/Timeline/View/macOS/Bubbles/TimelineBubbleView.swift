@@ -18,6 +18,7 @@ final class TimelineBubbleContentView: NSView {
     private var textView: AppKitMessageTextView?
     private var metadataView: TimelineMetadataView?
     private var standaloneView: BubbleStandaloneView?
+    private var threadView: TimelineThreadFooterButton?
     private var visible = false
     private struct SurfaceGeometry: Equatable {
         let bounds: CGRect
@@ -104,6 +105,16 @@ final class TimelineBubbleContentView: NSView {
                            outgoing: row.isOutgoing && isFilled, fontSize: e.bodySize,
                            symbolSize: binding.layout.standaloneSymbolSize, gap: binding.layout.standaloneLabelGap)
         } else { standaloneView?.clear(); standaloneView?.isHidden = true }
+        if localFrames[.thread] != nil, let label = p.threadLabel {
+            let view = threadView ?? makeThread()
+            view.isHidden = false
+            view.target = self
+            view.action = #selector(openThread)
+            view.configure(label: label, outgoing: row.isOutgoing, fontSize: e.bodySize,
+                           displayScale: e.displayScale, frames: binding.layout.threadContentFrames,
+                           enabled: !binding.context.isInteractionPreview && row.entry.remoteMessage != nil
+                               && row.entry.remoteMessage?.isDeleted != true && binding.actions.openThread != nil)
+        } else { threadView?.clear(); threadView?.isHidden = true }
         updateSurface()
         needsLayout = true
     }
@@ -118,6 +129,7 @@ final class TimelineBubbleContentView: NSView {
         textView?.clear(); textView?.isHidden = true
         metadataView?.clear(); metadataView?.isHidden = true
         standaloneView?.clear(); standaloneView?.isHidden = true
+        threadView?.clear(); threadView?.isHidden = true
         surface.path = nil
         surfaceGeometry = nil
     }
@@ -141,6 +153,7 @@ final class TimelineBubbleContentView: NSView {
         textView?.frame = localFrames[.text] ?? .zero
         metadataView?.frame = localFrames[.metadata] ?? .zero
         standaloneView?.frame = localFrames[.standalone] ?? .zero
+        threadView?.frame = localFrames[.thread] ?? .zero
         updateSurface()
     }
 
@@ -165,6 +178,15 @@ final class TimelineBubbleContentView: NSView {
                   row.isOutgoing, case .pending(let pending) = row.entry, pending.state == .failed else { return }
             binding.actions.openFailedMessage?(pending.clientGeneratedID)
         }
+    }
+
+    @objc private func openThread() {
+        guard let binding, !binding.context.isInteractionPreview,
+              localFrames[.thread] != nil, binding.presentation.threadLabel != nil,
+              case .message(let row) = binding.presentation.row,
+              let message = row.entry.remoteMessage, !message.isDeleted,
+              let openThread = binding.actions.openThread else { return }
+        openThread(message.id)
     }
 
     private func updateSurface() {
@@ -208,6 +230,9 @@ final class TimelineBubbleContentView: NSView {
     }
     private func makeStandalone() -> BubbleStandaloneView {
         let view = BubbleStandaloneView(frame: .zero); sections.addSubview(view); standaloneView = view; return view
+    }
+    private func makeThread() -> TimelineThreadFooterButton {
+        let view = TimelineThreadFooterButton(frame: .zero); sections.addSubview(view); threadView = view; return view
     }
 }
 
@@ -356,6 +381,102 @@ private final class TimelineReplyView: NSButton {
             layer?.backgroundColor = (outgoing && filled ? NSColor.black : color).withAlphaComponent(0.1).cgColor
             stripe.backgroundColor = color.withAlphaComponent(outgoing ? 0.5 : 1).cgColor
         }
+    }
+}
+
+@MainActor
+private final class TimelineThreadFooterButton: NSButton {
+    private let label = BubbleLabel()
+    private var symbol: NSImage?
+    private var chevron: NSImage?
+    private var contentFrames: [CGRect] = []
+    private var outgoing = false
+    private var fontSize: CGFloat = 14
+    private var dividerHeight: CGFloat = 1
+    private var backgroundColor = NSColor.clear
+    private var dividerColor = NSColor.clear
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        addSubview(label)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(label: String, outgoing: Bool, fontSize: CGFloat, displayScale: CGFloat,
+                   frames: [CGRect], enabled: Bool) {
+        self.label.stringValue = label
+        self.label.font = .systemFont(ofSize: fontSize)
+        self.outgoing = outgoing
+        self.fontSize = fontSize
+        dividerHeight = 1 / max(1, displayScale)
+        contentFrames = frames
+        isEnabled = enabled
+        setAccessibilityLabel(label)
+        updatePaint()
+        needsLayout = true
+    }
+
+    func clear() {
+        label.stringValue = ""
+        symbol = nil
+        chevron = nil
+        contentFrames.removeAll(keepingCapacity: true)
+        isEnabled = false
+        target = nil
+        action = nil
+        setAccessibilityLabel(nil)
+        needsDisplay = true
+    }
+
+    override func layout() {
+        super.layout()
+        label.frame = contentFrames.count > 1 ? contentFrames[1] : .zero
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Only the footer is filled for sticker/media-only bubbles; the shared
+        // bubble clip rounds its bottom without filling the transparent content.
+        backgroundColor.setFill()
+        bounds.fill()
+        dividerColor.setFill()
+        CGRect(x: 0, y: 0, width: bounds.width, height: dividerHeight).fill()
+        if let frame = contentFrames.first {
+            symbol?.draw(in: frame, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        if contentFrames.count > 2 {
+            chevron?.draw(in: contentFrames[2], from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+    }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updatePaint()
+    }
+
+    private func updatePaint() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let color = NSColor(outgoing ? ChahuaTheme.ChatBubble.outgoingForeground : ChahuaTheme.accent)
+            label.textColor = color
+            backgroundColor = NSColor(outgoing ? ChahuaTheme.ChatBubble.outgoingBackground
+                                      : ChahuaTheme.ChatBubble.incomingBackground(for: dark ? .dark : .light))
+            dividerColor = outgoing ? color.withAlphaComponent(0.2) : .separatorColor
+            let configuration = NSImage.SymbolConfiguration(pointSize: fontSize, weight: .regular)
+                .applying(.init(paletteColors: [color]))
+            symbol = NSImage(systemSymbolName: "bubble.left.and.bubble.right.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(configuration)
+            chevron = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)?
+                .withSymbolConfiguration(configuration)
+        }
+        needsDisplay = true
     }
 }
 

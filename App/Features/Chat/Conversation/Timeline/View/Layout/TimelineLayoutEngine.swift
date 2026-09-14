@@ -69,8 +69,19 @@ struct TimelineLayoutEngine {
         }
         // Include the quote's stripe/text insets and the bubble's side padding.
         let preferredReply = replySizes.map { max($0.author.width, $0.preview.width) + 19 + 24 } ?? 0
+        let threadContent: (symbol: CGSize, label: CGSize, chevron: CGSize)? = p.threadLabel.map { label in
+            (
+                symbol: MessageNativeSymbol.size("bubble.left.and.bubble.right.fill", fontSize: e.bodySize, semibold: false),
+                label: singleLineSize(label, size: e.bodySize),
+                chevron: MessageNativeSymbol.size("chevron.right", fontSize: e.bodySize, semibold: false)
+            )
+        }
+        let preferredThread: CGFloat = threadContent.map { content in
+            let itemsWidth = content.symbol.width + content.label.width + content.chevron.width
+            return itemsWidth + (6 + 12 + 24)
+        } ?? 0
         let preferred = max(preferredMedia?.width ?? 0, preferredText, metadata.map { $0.size.width + 24 } ?? 0, preferredTitle)
-        let b = min(c, pixel(max(sticker ? 200 : preferred, preferredReply), e))
+        let b = min(c, pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
         let bubbleX = centralX + (row.isOutgoing ? c - b : 0)
         let innerWidth = min(b, max(1, b - 24))
         let inset = max(0, (b - innerWidth) / 2)
@@ -159,6 +170,26 @@ struct TimelineLayoutEngine {
                 height += size.height + 8
             }
         }
+        var threadContentFrames: [CGRect] = []
+        if let threadContent {
+            let padding = min(12, b / 2)
+            let available = max(0, b - 2 * padding)
+            let symbol = scaled(threadContent.symbol, width: available)
+            let gap = min(6, max(0, available - symbol.width))
+            let chevron = scaled(threadContent.chevron, width: max(0, available - symbol.width - gap))
+            let trailingGap = min(12, max(0, available - symbol.width - gap - chevron.width))
+            let labelWidth: CGFloat = max(0, available - symbol.width - gap - chevron.width - trailingGap)
+            let footerHeight = pixel(max(40, max(symbol.height, threadContent.label.height, chevron.height) + 20), e)
+            threadContentFrames = [
+                CGRect(x: padding, y: (footerHeight - symbol.height) / 2, width: symbol.width, height: symbol.height),
+                CGRect(x: padding + symbol.width + gap, y: (footerHeight - threadContent.label.height) / 2,
+                       width: labelWidth, height: threadContent.label.height),
+                CGRect(x: b - padding - chevron.width, y: (footerHeight - chevron.height) / 2,
+                       width: chevron.width, height: chevron.height)
+            ].map { rounded($0, e) }
+            frames[.thread] = CGRect(x: bubbleX, y: bubbleY + height, width: b, height: footerHeight)
+            height += footerHeight
+        }
         frames[.bubble] = CGRect(x: bubbleX, y: bubbleY, width: b, height: height)
         let mainBottom = max(4 + e.avatarSize, bubbleY + height)
         if row.groupPosition == .single || row.groupPosition == .last {
@@ -175,19 +206,7 @@ struct TimelineLayoutEngine {
             reactionContentFrames = result.contentFrames
             y += result.size.height + 8
         }
-        var threadSymbolSize: CGSize = .zero
-        var threadGap: CGFloat = 0
-        if let label = p.threadLabel {
-            let symbol = scaled(MessageNativeSymbol.size("bubble.left.and.bubble.right.fill", fontSize: e.captionSize, semibold: true), width: c)
-            threadSymbolSize = symbol
-            threadGap = min(4, max(0, c - symbol.width))
-            let text = nativeSize(label, size: e.captionSize, weight: .semibold)
-            let size = CGSize(width: min(c, pixel(symbol.width + threadGap + text.width, e)), height: pixel(max(symbol.height, text.height), e))
-            y += 4
-            frames[.thread] = CGRect(x: centralX + (row.isOutgoing ? c - size.width : 0), y: y, width: size.width, height: size.height)
-            y += size.height + 8
-        }
-        return .init(size: CGSize(width: e.timelineWidth, height: pixel(y + 4, e)), frames: frames.mapValues { rounded($0, e) }, textGeometry: geometry, mediaFrames: mediaFrames, reactionFrames: reactionFrames, reactionContentFrames: reactionContentFrames, titleFrames: titleFrames, replyContentFrames: replyContentFrames, standaloneSymbolSize: displayedSymbolSize, standaloneLabelGap: standaloneGap, threadSymbolSize: threadSymbolSize, threadLabelGap: threadGap)
+        return .init(size: CGSize(width: e.timelineWidth, height: pixel(y + 4, e)), frames: frames.mapValues { rounded($0, e) }, textGeometry: geometry, mediaFrames: mediaFrames, reactionFrames: reactionFrames, reactionContentFrames: reactionContentFrames, titleFrames: titleFrames, replyContentFrames: replyContentFrames, standaloneSymbolSize: displayedSymbolSize, standaloneLabelGap: standaloneGap, threadContentFrames: threadContentFrames)
     }
 
     private func titleGeometry(_ title: TitleContent, width: CGFloat, environment e: TimelineLayoutEnvironment, fillsWidth: Bool = false) -> (size: CGSize, frames: [CGRect]) {

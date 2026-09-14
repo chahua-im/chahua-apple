@@ -29,8 +29,12 @@ final class MessageRowLayoutTests: XCTestCase {
                 let thread = try XCTUnwrap(layout.frames[.thread])
                 XCTAssertEqual(avatar.maxY, bubble.maxY, accuracy: 0.5)
                 XCTAssertGreaterThanOrEqual(reactions.minY, max(avatar.maxY, bubble.maxY) + 8)
-                XCTAssertGreaterThanOrEqual(thread.minY, reactions.maxY + 4)
-                XCTAssertGreaterThanOrEqual(layout.size.height - thread.maxY, 8)
+                XCTAssertTrue(bubble.contains(thread))
+                XCTAssertEqual(thread.minX, bubble.minX, accuracy: 0.5)
+                XCTAssertEqual(thread.maxX, bubble.maxX, accuracy: 0.5)
+                XCTAssertEqual(thread.maxY, bubble.maxY, accuracy: 0.5)
+                XCTAssertGreaterThanOrEqual(thread.minY, try XCTUnwrap(layout.frames[.text]).maxY)
+                XCTAssertGreaterThanOrEqual(layout.size.height - reactions.maxY, 8)
                 XCTAssertLessThanOrEqual(bubble.width, environment.centralWidth)
                 let host = NSViewController()
                 let nativeRow = TimelineRowView()
@@ -55,6 +59,74 @@ final class MessageRowLayoutTests: XCTestCase {
                 XCTAssertTrue(text.bounds.insetBy(dx: -0.5, dy: -0.5).contains(glyphs), "The last caption glyph must fit its native text frame.")
             }
         }
+    }
+
+
+    func testThreadFooterReservesTheCompleteLabelAndDisappearsInThreadTimeline() throws {
+        let message = try TimelineTestFixtures.message(id: "thread-footer", senderID: 2, at: 0,
+            fields: ["message": "Hi", "threadInfo": ["replyCount": 14]])
+        for outgoing in [false, true] {
+            let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: outgoing,
+                groupPosition: .single, showsSenderName: false))
+            for fontSize: CGFloat in [13, 26] {
+                let environment = TimelineLayoutEnvironment.current(timelineWidth: 600, bodySize: fontSize)
+                let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil,
+                    currentUserID: 1, isThreadTimeline: false, environment: environment)
+                let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+                let footer = try XCTUnwrap(layout.frames[.thread])
+                let items = layout.threadContentFrames
+                XCTAssertEqual(items.count, 3)
+                let label = try XCTUnwrap(presentation.threadLabel)
+                let measured = NSAttributedString(string: label, attributes: [.font: NSFont.systemFont(ofSize: fontSize)]).size()
+                XCTAssertGreaterThanOrEqual(items[1].width + 0.5, measured.width)
+                XCTAssertGreaterThanOrEqual(items[1].height + 0.5, measured.height)
+                for item in items {
+                    XCTAssertTrue(CGRect(origin: .zero, size: footer.size).insetBy(dx: -0.5, dy: -0.5).contains(item))
+                }
+                XCTAssertLessThanOrEqual(items[0].maxX, items[1].minX)
+                XCTAssertLessThanOrEqual(items[1].maxX, items[2].minX)
+
+                let threadPresentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil,
+                    currentUserID: 1, isThreadTimeline: true, environment: environment)
+                let threadLayout = TimelineLayoutEngine().layout(threadPresentation, environment: environment)
+                XCTAssertNil(threadLayout.frames[.thread])
+            }
+        }
+    }
+
+    func testThreadFooterUsesCurrentMessageAndIsReadOnlyInPreview() throws {
+        var opened: [String] = []
+        func binding(id: String, preview: Bool = false, hasThread: Bool = true) throws -> TimelineRowBinding {
+            var fields: [String: Any] = ["message": "Thread root"]
+            if hasThread { fields["threadInfo"] = ["replyCount": 14] }
+            let message = try TimelineTestFixtures.message(id: id, senderID: 2, at: 0, fields: fields)
+            let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false, groupPosition: .single, showsSenderName: false))
+            let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
+            let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil,
+                currentUserID: 1, isThreadTimeline: false, environment: environment)
+            var actions = TimelineBubbleActions()
+            actions.openThread = { opened.append($0) }
+            return .init(presentation: presentation, layout: TimelineLayoutEngine().layout(presentation, environment: environment),
+                context: .init(currentUserID: 1, isInteractionPreview: preview), actions: actions, mediaContext: nil)
+        }
+        func buttons(in view: NSView) -> [NSButton] {
+            (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
+        }
+        let first = try binding(id: "first")
+        let native = TimelineBubbleContentView(frame: CGRect(origin: .zero, size: try XCTUnwrap(first.layout.frames[.bubble]).size))
+        native.bind(first)
+        native.layoutSubtreeIfNeeded()
+        let button = try XCTUnwrap(buttons(in: native).first { $0.accessibilityLabel() == first.presentation.threadLabel })
+        button.performClick(nil)
+        native.bind(try binding(id: "second"))
+        button.performClick(nil)
+        XCTAssertEqual(opened, ["first", "second"])
+        native.bind(try binding(id: "preview", preview: true))
+        XCTAssertFalse(button.isHidden)
+        button.performClick(nil)
+        native.bind(try binding(id: "no-thread", hasThread: false))
+        button.performClick(nil)
+        XCTAssertEqual(opened, ["first", "second"])
     }
 
     func testReusedRowPreservesSameMessageSelectionButResetsForAnotherMessage() async throws {
