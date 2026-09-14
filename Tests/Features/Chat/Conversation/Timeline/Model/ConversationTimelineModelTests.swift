@@ -691,6 +691,35 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(model).map(\.id), ["3"])
     }
 
+    func testUnreadEntryAtSettledLiveBottomResumesFollowingWithoutUserScroll() async throws {
+        let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1 ... 3))])
+        await model.open(position: .unread(after: "2"))
+        let request = try XCTUnwrap(model.updates.value.pendingScroll)
+        let viewport = TimelineViewport(firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1,
+                                        distanceToTop: 0, distanceToBottom: 0, height: 600)
+        model.viewportDidChange(viewport, reason: .layout, revision: model.updates.value.revision)
+        XCTAssertFalse(model.state.live.followsLatest, "An unfinished reveal still owns navigation.")
+        model.scrollRequestDidFinish(id: request.id)
+        model.viewportDidChange(viewport, reason: .programmatic, revision: model.updates.value.revision)
+        XCTAssertTrue(model.state.live.isPinnedToBottom)
+        XCTAssertTrue(model.state.live.followsLatest)
+        source.store.apply(.message(try TimelineTestFixtures.message(id: "4", senderID: 2, at: 4)))
+        XCTAssertEqual(model.state.live.unseenCount, 0)
+        XCTAssertTrue(model.updates.value.animateFollowing)
+    }
+
+    func testUnreadEntryAtHistoricalWindowBottomDoesNotFollowLatest() async throws {
+        let (model, _, _) = try makeModel(pages: [.success(try historyPage(ids: 1 ... 3, newerCursor: "newer"))])
+        await model.open(position: .unread(after: "2"))
+        model.scrollRequestDidFinish(id: try XCTUnwrap(model.updates.value.pendingScroll).id)
+        model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1,
+                                      distanceToTop: 0, distanceToBottom: 0, height: 600),
+                                reason: .programmatic, revision: model.updates.value.revision)
+        XCTAssertTrue(model.state.live.isPinnedToBottom)
+        XCTAssertFalse(model.state.live.followsLatest)
+        XCTAssertFalse(model.isAtLiveEdge)
+    }
+
     func testUnreadEntryRevealsFrozenBoundaryAndPreservesOlderPagination() async throws {
         let read = try TimelineTestFixtures.message(id: "zz-read", at: 2)
         let unread = try TimelineTestFixtures.message(id: "aa-unread", at: 3)

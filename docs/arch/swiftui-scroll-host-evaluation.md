@@ -2,7 +2,7 @@
 
 - **Decision date:** 2026-09-07
 - **Status:** Rejected; the SwiftUI scroll-host migration was reverted.
-- **Decision:** Keep native UIKit/AppKit scrolling hosts, with shared SwiftUI bubbles and shared timeline state.
+- **Decision:** Keep native UIKit/AppKit scrolling hosts and row renderers, with shared timeline state, presentation, and measured geometry.
 
 For Chahua's requirements, SwiftUI's current public scrolling APIs are not a sufficiently reliable foundation for a fully SwiftUI conversation timeline. This is an architectural decision about a complex, bidirectionally paginated scroll host—not a claim that SwiftUI cannot render chat messages or implement simpler scrolling interfaces.
 
@@ -90,7 +90,7 @@ Tests that mount an empty host and then load messages also do not fully represen
 Keep the existing separation:
 
 - `ConversationTimelineModel` owns loading, pagination, follow-latest policy, and revisioned navigation requests.
-- Stable message identity, row construction, and SwiftUI bubble rendering remain shared.
+- Stable message identity, row construction, presentation, and geometry remain shared. UIKit and AppKit render native row sections directly.
 - `TimelineCollectionViewController` owns the iOS scroll/layout integration.
 - `TimelineTableViewController` owns the macOS scroll/layout integration.
 - `TimelineLayoutEngine` and `TimelineLayoutCache` prepare exact row/section geometry; `TimelineChange` drives native row updates.
@@ -101,9 +101,13 @@ At rollback, the app returned to iOS 16.6/macOS 13.5 and the test-target floors 
 
 ### Row hosting and profiling
 
-A native scroll host alone does not eliminate SwiftUI layout work inside its cells. Cached absolute-placement layouts provide explicit alignment answers rather than invoking SwiftUI's default descendant alignment measurement. The timeline viewport fills its enclosing proposal instead of exposing message intrinsic sizes to the containing window.
+A native scroll host alone does not eliminate SwiftUI layout work inside its cells. Both platforms now mount native `TimelineRowView` instances directly in reusable cells. Bubbles, selectable TextKit text, reply banners, metadata, media, avatars, reactions, and thread controls consume the rectangles prepared by `TimelineLayoutEngine`; no message row owns a SwiftUI hosting controller or observation graph.
 
-On macOS, scrolling a row offscreen preserves the native table's reusable SwiftUI graph. AppKit's row-removal callback clears bindings for retired rows; every native cell assignment binds the current presentation before display. Detached cells remain subject to AppKit's reuse-pool lifetime, with no additional strong cell cache. Whole-row identities are not reset during AppKit reuse; the text content retains its message identity so selection cannot transfer to another message. Hover state resets on disappearance. UIKit's existing whole-row identity behavior is unchanged.
+On iOS, a row-height change invalidates the complete collection flow layout, not just the changed item. Partial item invalidation can retain subsequent messages' old positions even after the changed cell grows, causing reaction strips to overlap the next message. Rebuilding flow positions still consumes cached prepared row sizes and preserves the host's existing anchor restoration. The native collection regression covers reaction expansion, following-message displacement, containment, and collapse after the last reaction is removed.
+
+Reuse and retirement clear message bindings, text selection, gesture ownership, and media work. Native image views share the account cache, cancel stale decoding, and suspend animation when not visible. iOS also refreshes media visibility on settled scroll callbacks so images inside a tall, partially visible row can enter the viewport without rebinding the row. The gallery and single iOS action preview use a `TimelineRowRepresentable` boundary around the native renderer; the surrounding screen, composer, and iOS action-menu shell remain SwiftUI.
+
+The UIKit cutover was checked with iOS and macOS Debug builds and the existing mixed-content simulator fixture in light and dark modes. Native WebP/backdrop, text-selection/link callback replacement, retry metadata, and reply/media viewport geometry checks pass. Three existing collection-host checks (prepend/resize anchoring, Dynamic Type geometry, and read tracking across overlays) also fail on the unchanged pre-cutover baseline. They are not new UIKit row-rendering regressions; do not interpret the focused suite as fully green. Device performance and finger/pointer/VoiceOver interaction verification remain required before release.
 
 For optimized, network-independent measurements, build the existing mixed-content fixture with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=TIMELINE_PROFILING` in Release, then launch the built executable directly with `CHAHUA_PERFORMANCE_ROWS=400` and `-bubble-timeline`. The “Run scroll sweep (1,200 frames)” control drives native wheel input once per display tick, with two up/down passes and no per-tick SwiftUI state publication. Record the exact process PID with Instruments' Animation Hitches template. Keep the display, window dimensions, row count, content, and driver identical between runs; do not compare older sleep-paced captures with display-linked captures. Ordinary Release builds do not expose this fixture.
 
@@ -119,7 +123,7 @@ Do not retry the production cutover simply because a newer SDK compiles the same
 
 Before replacing the native hosts, validate an app-shaped prototype with preloaded-model mounting, sustained scrolling through lazily measured rows, delayed prepends, heterogeneous message heights, repeated resizing, inset changes, and interruptions at different points in navigation. Exercise real input on both platforms and preserve the one-point/no-late-snap acceptance checks unless the product contract is deliberately changed.
 
-SwiftUI remains appropriate for Chahua's screens and message presentation. **For this complex scroll host today, keep scrolling and layout coordination native.**
+SwiftUI remains appropriate for Chahua's surrounding screens and controls. **For this complex timeline today, keep scrolling, row rendering, and layout coordination native.**
 
 ## API references
 

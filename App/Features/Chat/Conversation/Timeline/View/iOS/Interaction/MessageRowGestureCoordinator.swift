@@ -1,11 +1,10 @@
 #if os(iOS)
-import SwiftUI
+import Foundation
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 
-/// SwiftUI's independent button, hold and drag gestures cannot irrevocably share
-/// touch ownership or distinguish a finger from a pointer. One recognizer on the
-/// row host does both; the SwiftUI markers below only supply geometry and actions.
+/// One native row recognizer arbitrates finger/pointer taps, holds and swipes
+/// before controls activate. Non-hit-testing markers supply native target geometry.
 @MainActor
 final class MessageRowGestureCoordinator {
     private weak var view: UIView?
@@ -19,8 +18,7 @@ final class MessageRowGestureCoordinator {
         view.addGestureRecognizer(recognizer)
     }
 
-    /// The cell also calls this before reuse, replacement or detachment, since a
-    /// hosting controller can outlive the message represented by its root view.
+    /// Cancel before message replacement, reuse, or detachment.
     func cancel() {
         recognizer.cancelSession()
     }
@@ -145,40 +143,9 @@ final class MessageRowGestureCoordinator {
     }
 }
 
-struct MessageRowGestureSource: UIViewRepresentable {
-    let isEnabled: Bool
-    let onChange: (CGFloat) -> Void
-    let onFinish: () -> Void
-    let onReply: () -> Void
-
-    func makeUIView(context: Context) -> MessageRowGestureMarker { MessageRowGestureMarker() }
-
-    func updateUIView(_ view: MessageRowGestureMarker, context: Context) {
-        view.configure(.row(.init(isEnabled: isEnabled, onChange: onChange, onFinish: onFinish, onReply: onReply)))
-    }
-
-    static func dismantleUIView(_ view: MessageRowGestureMarker, coordinator: ()) { view.stop() }
-}
-
-struct MessageBubbleHoldSource: UIViewRepresentable {
-    let open: (CGRect) -> Void
-
-    func makeUIView(context: Context) -> MessageRowGestureMarker { MessageRowGestureMarker() }
-    func updateUIView(_ view: MessageRowGestureMarker, context: Context) { view.configure(.bubble(open)) }
-    static func dismantleUIView(_ view: MessageRowGestureMarker, coordinator: ()) { view.stop() }
-}
-
-struct MessageRowTapSource: UIViewRepresentable {
-    let action: () -> Void
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeUIView(context: Context) -> MessageRowGestureMarker { MessageRowGestureMarker() }
-    func updateUIView(_ view: MessageRowGestureMarker, context: Context) { view.configure(.tap(isEnabled ? action : nil)) }
-    static func dismantleUIView(_ view: MessageRowGestureMarker, coordinator: ()) { view.stop() }
-}
 
 final class MessageRowGestureMarker: UIView {
-    fileprivate enum Role {
+    enum Role {
         case row(MessageRowSwipeConfiguration)
         case bubble((CGRect) -> Void)
         case tap((() -> Void)?)
@@ -212,7 +179,7 @@ final class MessageRowGestureMarker: UIView {
         refreshRegistration()
     }
 
-    fileprivate func configure(_ role: Role) {
+    func configure(_ role: Role) {
         let previous = self.role
         self.role = role
         refreshRegistration()
@@ -226,7 +193,7 @@ final class MessageRowGestureMarker: UIView {
         }
     }
 
-    fileprivate func stop() {
+    func stop() {
         role = nil
         detach()
     }
@@ -249,9 +216,9 @@ final class MessageRowGestureMarker: UIView {
             return
         }
         var responder: UIResponder? = self
-        var owner: TimelineBubbleHostingController?
+        var owner: TimelineRowView?
         while let current = responder {
-            if let host = current as? TimelineBubbleHostingController {
+            if let host = current as? TimelineRowView {
                 owner = host
                 break
             }
@@ -271,7 +238,7 @@ final class MessageRowGestureMarker: UIView {
     }
 }
 
-fileprivate struct MessageRowSwipeConfiguration {
+struct MessageRowSwipeConfiguration {
     let isEnabled: Bool
     let onChange: (CGFloat) -> Void
     let onFinish: () -> Void

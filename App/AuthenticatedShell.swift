@@ -35,10 +35,7 @@ struct AuthenticatedShell: View {
 
     private var adaptiveLayout: some View {
         ChatSplitLayout(hasSelection: selectedConversationID != nil) { _ in
-            VStack(spacing: 0) {
-                ConversationListHeader(selection: $selectedScope) { accountMenu }
-                chatList()
-            }
+            chatList()
         } detail: { isSplit in
             detailContent
                 .modifier(ChatHeaderOverlay {
@@ -61,15 +58,19 @@ struct AuthenticatedShell: View {
     private var phoneNavigation: some View {
         NavigationStack(path: phonePath) {
             chatList()
-                .safeAreaInset(edge: .top, spacing: 0) {
-                    ConversationScopePicker(selection: $selectedScope)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                }
-                .navigationTitle("Chats")
-                .toolbar { accountToolbar }
+                #if os(iOS)
+                .toolbar(.hidden, for: .navigationBar)
+                #endif
                 .navigationDestination(for: ConversationKey.self) { _ in
                     detailContent
+                        #if os(iOS)
+                        .modifier(ChatPhoneDetailHeader(title: selectedConversation?.title ?? "") {
+                            if let conversation = selectedConversation {
+                                ConversationAvatarView(
+                                    item: conversation, store: chatStore, currentUserID: me.uid, diameter: 32)
+                            }
+                        })
+                        #endif
                 }
         }
     }
@@ -81,8 +82,8 @@ struct AuthenticatedShell: View {
         )
     }
 
-    private func chatList() -> some View {
-        ChatListView(
+    @ViewBuilder private func chatList() -> some View {
+        let list = ChatListView(
             store: chatStore,
             drafts: chatStore.drafts,
             currentUserID: me.uid,
@@ -90,6 +91,25 @@ struct AuthenticatedShell: View {
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectedConversationID = $0.id }
         )
+        #if os(iOS)
+        if #available(iOS 26, *) {
+            list
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    ConversationListHeader(selection: $selectedScope) { accountMenu }
+                }
+                .scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            list.safeAreaInset(edge: .top, spacing: 0) {
+                ConversationListHeader(selection: $selectedScope) { accountMenu }
+                    .background(.regularMaterial)
+            }
+        }
+        #else
+        VStack(spacing: 0) {
+            ConversationListHeader(selection: $selectedScope) { accountMenu }
+            list
+        }
+        #endif
     }
 
     @ViewBuilder private var detailContent: some View {
@@ -116,11 +136,6 @@ struct AuthenticatedShell: View {
         }
     }
 
-    @ToolbarContentBuilder private var accountToolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            accountMenu
-        }
-    }
 
     private var accountMenu: some View {
         Menu {
@@ -134,13 +149,21 @@ struct AuthenticatedShell: View {
             Button("Sign out", role: .destructive, action: onSignOut)
                 .disabled(isSigningOut)
         } label: {
-            if usesAdaptiveSplitLayout {
-                AvatarView(url: me.avatarUrl.flatMap(URL.init(string:)), displayName: me.username, diameter: 26)
-                    .accessibilityLabel("Account")
-            } else {
-                Label("Account", systemImage: "person.crop.circle")
-            }
+            AvatarView(
+                url: me.avatarUrl.flatMap(URL.init(string:)),
+                displayName: me.username,
+                diameter: accountAvatarDiameter
+            )
+            .accessibilityLabel("Account")
         }
+    }
+
+    private var accountAvatarDiameter: CGFloat {
+        #if os(iOS)
+        32
+        #else
+        26
+        #endif
     }
 
     private var selectedConversation: ConversationListItem? {

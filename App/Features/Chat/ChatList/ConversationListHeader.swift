@@ -5,6 +5,25 @@ struct ConversationListHeader<Account: View>: View {
     @ViewBuilder let account: () -> Account
 
     var body: some View {
+        #if os(iOS)
+        HStack(spacing: 8) {
+            account()
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .font(.system(size: 22))
+                .frame(width: 44, height: 44)
+                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                .accessibilityLabel("Account")
+            // The native segmented picker owns its glass and touch handling.
+            // An outer interactive glass surface competes with its segments.
+            ConversationScopePicker(selection: $selection)
+                .frame(minHeight: 44)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Chats")
+        #else
         VStack(spacing: 12) {
             HStack(spacing: 10) {
                 account()
@@ -39,5 +58,6 @@ struct ConversationListHeader<Account: View>: View {
         .padding(.top, 12)
         #endif
         .overlay(alignment: .bottom) { Divider() }
+        #endif
     }
 }

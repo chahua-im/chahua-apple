@@ -70,7 +70,7 @@ struct ConversationListRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, ChatSplitMetrics.outerInset)
         .frame(height: 60)
         .foregroundStyle(isSelected ? Color.white : Color.primary)
     }

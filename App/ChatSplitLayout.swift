@@ -185,6 +185,33 @@ struct ChatFloatingHeader<Avatar: View>: View {
     @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
+        #if os(iOS)
+        HStack(spacing: 8) {
+            if let onBack {
+                Button(action: onBack) {
+                    Label("Chats", systemImage: "chevron.backward")
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+            }
+            HStack(spacing: 8) {
+                avatar()
+                    .fixedSize()
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            .padding(.leading, 6)
+            .padding(.trailing, 14)
+            .frame(minHeight: 44)
+            .modifier(ChatGlassSurface(cornerRadius: 24))
+        }
+        #else
         HStack(spacing: 12) {
             if let onBack {
                 Button(action: onBack) {
@@ -203,8 +230,34 @@ struct ChatFloatingHeader<Avatar: View>: View {
         .padding(.horizontal, 8)
         .frame(minHeight: 42)
         .modifier(ChatGlassSurface(cornerRadius: 24))
+        #endif
     }
 }
+
+#if os(iOS)
+/// Keep native back navigation, but let messages scroll beneath the glass controls.
+/// The title bar's safe area becomes scroll breathing room, not an opaque layout band.
+struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
+    let title: String
+    @ViewBuilder var avatar: () -> Avatar
+
+    func body(content: Content) -> some View {
+        GeometryReader { geometry in
+            content
+                .environment(\.chatHeaderInset, geometry.safeAreaInsets.top + 12)
+                .ignoresSafeArea(.container, edges: .top)
+        }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    ChatFloatingHeader(title: title, avatar: avatar)
+                }
+            }
+    }
+}
+#endif
 
 struct ChatGlassSurface: ViewModifier {
     let cornerRadius: CGFloat
@@ -216,6 +269,8 @@ struct ChatGlassSurface: ViewModifier {
         if #available(macOS 26, iOS 26, *) {
             content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
         } else {
+            // TODO: Design dedicated title-bar/tab chrome for iOS versions without
+            // Liquid Glass. Retain this functional material fallback until then.
             content
                 .background(.regularMaterial, in: shape)
                 .overlay { shape.strokeBorder(.primary.opacity(0.08)) }

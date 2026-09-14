@@ -89,18 +89,11 @@ final class CachedAvatarPresentationTests: XCTestCase {
         image.setVisible(true)
         let host = AvatarPresentationHost(view: image, size: size)
         #else
-        let root = MessageRowActionButton {} label: {
-            RemoteImageView(
-                url: fixture.url,
-                contentMode: .fit,
-                animates: true,
-                showsBlurredBackdrop: true,
-                thumbnailPixelSize: CGSize(width: size.width * 2, height: size.height * 2)
-            )
-            .modifier(BubbleMediaTileSurface(size: size, gallery: false, isVideo: false, overflowCount: 0))
-        }
-        .environment(\.mediaContext, context)
-        let host = try AvatarPresentationHost(root: AnyView(root), size: size)
+        let image = TimelineImageView(frame: CGRect(origin: .zero, size: size))
+        image.configure(url: fixture.url, contentMode: .fit, animates: true, showsBlurredBackdrop: true,
+                        thumbnailPixelSize: CGSize(width: size.width * 2, height: size.height * 2), mediaContext: context)
+        image.setVisible(true)
+        let host = try AvatarPresentationHost(view: image, size: size)
         #endif
         host.mount()
         defer { host.close() }
@@ -270,7 +263,7 @@ private final class AvatarPresentationHost {
     private let controller: NSViewController
     private let window: NSWindow
     #else
-    private let controller: UIHostingController<AnyView>
+    private let controller: UIViewController
     private let window: UIWindow
     #endif
 
@@ -302,6 +295,15 @@ private final class AvatarPresentationHost {
         controller.view = view
         window = NSWindow(contentRect: bounds, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+    }
+    #else
+    init(view: UIView, size: CGSize = CGSize(width: 96, height: 96)) throws {
+        bounds = CGRect(origin: .zero, size: size)
+        controller = UIViewController()
+        controller.view = view
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        window = UIWindow(windowScene: scene)
+        window.frame = bounds
     }
     #endif
 

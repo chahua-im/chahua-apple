@@ -1,37 +1,6 @@
 #if os(iOS)
-import SwiftUI
 import UIKit
 
-extension MessageTextContent: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIKitMessageTextView {
-        let view = UIKitMessageTextView(geometry: geometry)
-        view.delegate = context.coordinator
-        return view
-    }
-
-    func updateUIView(_ view: UIKitMessageTextView, context: Context) {
-        let selection = view.selectedRange
-        let geometryChanged = update(view.contentLayout, coordinator: context.coordinator)
-        if selection.location != NSNotFound {
-            let length = view.textStorage.length
-            let location = min(selection.location, length)
-            let clampedSelection = NSRange(location: location, length: min(selection.length, length - location))
-            if view.selectedRange != clampedSelection {
-                view.selectedRange = clampedSelection
-            }
-        }
-        view.failureAction = failureAction
-        if geometryChanged {
-            view.setNeedsLayout()
-            view.invalidateIntrinsicContentSize()
-        }
-        view.setNeedsDisplay()
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIKitMessageTextView, context: Context) -> CGSize? {
-        uiView.contentLayout.assignedSize
-    }
-}
 
 extension MessageTextContent.Coordinator: UITextViewDelegate {
     func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
@@ -56,12 +25,19 @@ extension MessageTextContent.Coordinator: UITextViewDelegate {
     }
 }
 
+/// UIKit is required for native text selection and link interaction using the
+/// engine's TextKit geometry. A SwiftUI text subtree would remeasure the row and
+/// cannot retain this layout manager and selection across collection-cell binds.
 final class UIKitMessageTextView: UITextView {
+    private let coordinator = MessageTextContent.Coordinator()
     let contentLayout: MessageTextLayout
     var failureAction: (() -> Void)? {
         didSet { updateFailureButton() }
     }
-    private var failureButton: BubbleFailureButton?
+    var rowAccessibilityActions: [UIAccessibilityCustomAction]? {
+        didSet { updateAccessibilityActions() }
+    }
+    private var failureButton: TimelineFailureButton?
 
     init(geometry: MessageTextGeometry) {
         let layout = MessageTextLayout()
@@ -84,6 +60,7 @@ final class UIKitMessageTextView: UITextView {
         delaysContentTouches = false
         dataDetectorTypes = []
         linkTextAttributes = [:]
+        delegate = coordinator
         layout.textContainer.widthTracksTextView = false
         layout.textContainer.heightTracksTextView = false
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -99,11 +76,48 @@ final class UIKitMessageTextView: UITextView {
         contentLayout.assignedSize
     }
 
+    func apply(_ content: MessageTextContent, resetSelection: Bool) {
+        let selection = selectedRange
+        let geometryChanged = content.update(contentLayout, coordinator: coordinator)
+        let length = contentLayout.storage.length
+        if resetSelection {
+            resignFirstResponder()
+            selectedRange = NSRange(location: 0, length: 0)
+        } else if selection.location != NSNotFound {
+            let location = min(selection.location, length)
+            let clamped = NSRange(location: location, length: min(selection.length, length - location))
+            if selectedRange != clamped { selectedRange = clamped }
+        }
+        failureAction = content.failureAction
+        if geometryChanged {
+            setNeedsLayout()
+            invalidateIntrinsicContentSize()
+        }
+        setNeedsDisplay()
+    }
+
+    func clear() {
+        coordinator.openLink = nil
+        coordinator.openMention = nil
+        coordinator.textInput = nil
+        failureAction = nil
+        rowAccessibilityActions = nil
+        resignFirstResponder()
+        contentLayout.update(attributedText: NSAttributedString(string: ""), metadata: nil)
+        selectedRange = NSRange(location: 0, length: 0)
+        setNeedsDisplay()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        setNeedsDisplay()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         guard let geometry = contentLayout.assignedGeometry else { return }
         if let failureButton, let metadata = contentLayout.metadata {
-            failureButton.frame = metadata.symbolFrame(in: geometry.metadataFrame)
+            failureButton.setSymbolFrame(metadata.symbolFrame(in: geometry.metadataFrame))
             bringSubviewToFront(failureButton)
         }
     }
@@ -111,7 +125,7 @@ final class UIKitMessageTextView: UITextView {
     override func draw(_ rect: CGRect) {
         super.draw(rect)
         guard let geometry = contentLayout.assignedGeometry else { return }
-        contentLayout.metadata?.draw(in: geometry.metadataFrame, drawsSymbol: failureButton == nil)
+        contentLayout.metadata?.draw(in: geometry.metadataFrame, drawsSymbol: failureButton?.isHidden != false)
     }
 
     override var accessibilityValue: String? {
@@ -124,30 +138,37 @@ final class UIKitMessageTextView: UITextView {
 
     private func updateFailureButton() {
         guard failureAction != nil, let metadata = contentLayout.metadata, metadata.state == .failed else {
-            failureButton?.removeFromSuperview()
-            failureButton = nil
-            accessibilityCustomActions = nil
+            failureButton?.clear()
+            failureButton?.isHidden = true
+            updateAccessibilityActions()
             return
         }
-        let button: BubbleFailureButton
+        let button: TimelineFailureButton
         if let failureButton {
             button = failureButton
         } else {
-            button = BubbleFailureButton(frame: .zero)
-            button.imageView?.contentMode = .scaleAspectFit
-            button.addTarget(self, action: #selector(openFailureOptions), for: .touchUpInside)
-            button.accessibilityLabel = String(localized: "Failed to send. Retry options")
+            button = TimelineFailureButton(frame: .zero)
+            button.onActivate = { [weak self] in self?.openFailureOptions() }
             addSubview(button)
             failureButton = button
-            // Keep UITextView's native selectable-text accessibility element and
-            // expose retry on it, without replacing it with a custom container.
-            accessibilityCustomActions = [UIAccessibilityCustomAction(
+        }
+        updateAccessibilityActions()
+        button.configure(symbol: metadata.symbol)
+        button.isHidden = false
+        setNeedsLayout()
+    }
+
+    private func updateAccessibilityActions() {
+        // Keep native selectable text accessible, adding row and retry actions
+        // without replacing its link/mention accessibility elements.
+        var actions = rowAccessibilityActions ?? []
+        if failureAction != nil, contentLayout.metadata?.state == .failed {
+            actions.append(UIAccessibilityCustomAction(
                 name: String(localized: "Failed to send. Retry options"),
                 target: self, selector: #selector(performAccessibleFailureAction)
-            )]
+            ))
         }
-        button.setImage(metadata.symbol, for: .normal)
-        setNeedsLayout()
+        accessibilityCustomActions = actions.isEmpty ? nil : actions
     }
 
     @objc private func openFailureOptions() {
@@ -162,10 +183,58 @@ final class UIKitMessageTextView: UITextView {
     }
 }
 
-private final class BubbleFailureButton: UIButton {
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: -max(0, (44 - bounds.width) / 2), dy: -max(0, (44 - bounds.height) / 2)).contains(point)
+/// Shared inline/standalone retry target: layout keeps the measured symbol frame,
+/// while hit testing and the gesture marker retain the existing 44-point region.
+final class TimelineFailureButton: UIButton {
+    var onActivate: (() -> Void)?
+    private let marker = MessageRowGestureMarker(frame: .zero)
+    private var symbolSize: CGSize = .zero
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        imageView?.contentMode = .scaleAspectFit
+        addTarget(self, action: #selector(activate), for: .touchUpInside)
+        accessibilityLabel = String(localized: "Failed to send. Retry options")
+        marker.frame = bounds
+        addSubview(marker)
     }
+
+    required init?(coder: NSCoder) { nil }
+
+    func setSymbolFrame(_ symbolFrame: CGRect) {
+        symbolSize = symbolFrame.size
+        setNeedsLayout()
+        frame = symbolFrame
+    }
+
+    override func imageRect(forContentRect contentRect: CGRect) -> CGRect {
+        CGRect(x: contentRect.midX - symbolSize.width / 2, y: contentRect.midY - symbolSize.height / 2,
+               width: symbolSize.width, height: symbolSize.height)
+    }
+
+    private var hitBounds: CGRect {
+        bounds.insetBy(dx: -max(0, (44 - bounds.width) / 2), dy: -max(0, (44 - bounds.height) / 2))
+    }
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { hitBounds.contains(point) }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        marker.frame = hitBounds
+    }
+
+    func configure(symbol: UIImage?) {
+        setImage(symbol, for: .normal)
+        marker.configure(.tap { [weak self] in self?.activate() })
+    }
+
+    func clear() {
+        setImage(nil, for: .normal)
+        marker.stop()
+    }
+
+    @objc private func activate() { onActivate?() }
+
 }
 
 

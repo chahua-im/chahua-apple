@@ -344,7 +344,9 @@ final class ConversationTimelineModel: ObservableObject {
         let pinned = viewport.distanceToBottom <= Self.pinnedToBottomTolerance
         var nextLive = state.live
         nextLive.isPinnedToBottom = pinned
-        if reason == .user, pinned, isAtLiveEdge { nextLive.followsLatest = true }
+        // A settled unread/reply reveal can reach the live bottom without a gesture.
+        // Do not resume following while a pending navigation still owns the viewport.
+        if pinned, isAtLiveEdge, pendingScroll == nil { nextLive.followsLatest = true }
         if pinned && isAtLiveEdge { unseenKeys.removeAll() }
         nextLive.unseenCount = unseenKeys.count
         if nextLive != state.live { state.live = nextLive }

@@ -88,7 +88,7 @@ Reaction WS payloads contain up to five reactors and omit `reactedByMe`. Presenc
 
 ### Message interaction mutations
 
-`MessageActionPolicy` determines applicable and enabled actions. `MessageActionMenu` renders the quick reaction bar and shared action controls; its full-picker entry is disabled. `MessageContextSource` adapts AppKit right-click/Control-click and UIKit long-press/secondary-click. `MessageInteractionHost` owns anchoring, dismissal, and a stable message target resolved against current timeline rows. Previews reuse the production bubble renderer without recursive interaction hooks.
+`MessageActionPolicy` determines applicable and enabled actions. On iOS, `MessageActionMenu` renders the quick reaction bar and shared action controls; its full-picker entry is disabled. The native row's `MessageRowGestureCoordinator` arbitrates finger/pointer taps, holds, swipe-to-reply, scrolling, and text selection through non-hit-testing UIKit target markers. `MessageInteractionHost` owns anchoring, dismissal, and a stable message target resolved against current timeline rows. AppKit uses `TimelineContextSource` and `TimelineInteractionController`. Previews reuse the production native bubble renderer without recursive interaction hooks.
 
 `MessageReactionController` owns permissions, mutation serialization, errors, and session cancellation. Group membership/role and DM friendship permission come from HTTP, not a permissive UI default. Copy, Reply, and reactions are enabled; unfinished actions remain disabled.
 
@@ -160,6 +160,8 @@ Parent chats use `POST /chats/{chatID}/read`; threads use `POST /chats/{chatID}/
 
 The entry separator stays fixed as read progress advances. A nil or unavailable entry cursor seeks the oldest accessible page using opaque older cursors, retaining one page while seeking because the API has no oldest-position query. Native scroll bounds still apply near the end of a short conversation.
 
+Native scroll completion saves the reached message anchor before acknowledging the request, since acknowledgement can synchronously change header/composer geometry. Subsequent layout must restore that reached position, not the pre-navigation anchor. Once navigation has finished, a settled viewport at the actual live bottom resumes following latest even without a user gesture; the end of a historical page is not the live bottom.
+
 ## Protocol boundaries
 
 ChahuaAPI models the complete backend event protocol, independently of which features the app currently handles. `RealtimeServerEvent` has explicit typed cases for `message`, `messageUpdated`, `messageDeleted`, `messagesBulkDeleted`, `reactionUpdated`, `presenceUpdate`, `threadUpdate`, `threadMembershipChanged`, `chatArchiveStateChanged`, `pinAdded`, `threadPinAdded`, `pinRemoved`, `threadPinRemoved`, `stickerPackOrderUpdated`, `friendRequestReceived`, `friendRequestResolved`, and `friendshipRemoved`, plus the separate `pong` frame. Reuse existing message/reaction/sticker-order DTOs and RFC3339 coding; IDs remain strings.
@@ -173,6 +175,14 @@ The realtime layer handles existing conversation lists and timelines. It does no
 ## Conversation scopes
 
 The shared segmented picker controls list membership, not selection identity. Messages combines active group chats, DMs, and subscribed active threads; Groups and DMs filter the active chats by kind; Threads shows subscribed active threads. Lists sort by the later of server activity and local draft activity. Changing scope does not discard the selected conversation.
+
+On iOS, `ConversationListHeader` combines the scope picker and account menu in one compact top row, replacing the large navigation title and separate scope strip. Phone detail screens retain NavigationStack's native back button and use `ChatPhoneDetailHeader` for a separate avatar/title glass capsule; adaptive iPad headers use the same identity capsule with a separate circular back control when needed. macOS header layout is unchanged. iOS 26 uses Liquid Glass; earlier versions retain the material fallback.
+
+The scope picker uses the native segmented control's own appearance and interaction, including iOS 26's glass selection treatment. Do not wrap it in an additional interactive glass surface; only the separate account control receives a custom glass surface. On iOS, the signed-in user's avatar appears before the picker and uses the same profile URL and initials fallback as the split view. The list header is registered with `safeAreaBar` and a soft top scroll-edge effect on iOS 26 so list content blurs beneath the controls. Earlier iOS versions use a regular-material safe-area inset; macOS retains its existing stacked header.
+
+Phone detail content extends through the navigation bar's top safe area so messages scroll behind the separate glass controls, rather than stopping below a full-width band. `ChatPhoneDetailHeader` supplies that safe-area height as explicit timeline scroll clearance. The native collection disables automatic inset adjustment to avoid counting navigation clearance twice; composer clearance remains explicit as well.
+
+- TODO: Design dedicated list/detail title-bar chrome for iOS versions without Liquid Glass. The current material fallback preserves functionality but is not the final legacy design.
 
 The selected scope presents one unlabeled loading animation for all of its initial requests, not separate chat/thread loading rows. Preserve available rows throughout. Failures remain in diagnostic logs only; the list has no error message or Retry action. Pull-to-refresh uses only the native refresh indicator, suppressing duplicate in-list loading UI. Background refreshes do not add loading animations to an already loaded list.
 

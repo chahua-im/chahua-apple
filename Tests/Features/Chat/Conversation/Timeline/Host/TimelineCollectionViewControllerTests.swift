@@ -87,6 +87,47 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         XCTAssertFalse(model.state.live.followsLatest)
     }
 
+    func testUnreadEntrySurvivesHeaderGeometryChangeAtScrollCompletion() async throws {
+        let messages = try (0 ..< 50).map {
+            try TimelineTestFixtures.message(id: "\($0)", senderID: 2, at: $0, text: "Unread entry message \($0)")
+        }
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: BubbleSource(page: try TimelineTestFixtures.page(messages)), messageStore: ConversationMessageStore()
+        )
+        let parent = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = parent
+        window.makeKeyAndVisible()
+        defer { model.close(); window.isHidden = true }
+        let controller = TimelineCollectionViewController(model: model, actions: .init())
+        controller.headerInset = 64
+        controller.composerInset = 80
+        parent.addChild(controller)
+        parent.view.addSubview(controller.view)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 500)
+        controller.didMove(toParent: parent)
+        parent.view.layoutIfNeeded()
+        var adjustedHeader = false
+        let observation = model.updates.sink { snapshot in
+            guard model.state.content == .ready, snapshot.pendingScroll == nil, !adjustedHeader else { return }
+            adjustedHeader = true
+            controller.headerInset = 100
+        }
+        defer { observation.cancel() }
+        await model.open(position: .unread(after: messages[30].id))
+        try await Task.sleep(for: .milliseconds(200))
+        controller.view.layoutIfNeeded()
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let index = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        let frame = try XCTUnwrap(collection.layoutAttributesForItem(at: .init(item: index, section: 0))).frame
+        XCTAssertTrue(adjustedHeader)
+        XCTAssertEqual(frame.minY, collection.contentOffset.y + controller.headerInset, accuracy: 1,
+                       "Settling the floating header must preserve the unread target, not the pre-jump position.")
+        XCTAssertFalse(model.state.live.followsLatest)
+    }
+
     func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
         let messages = try (0 ..< 16).map {
             try TimelineTestFixtures.message(id: "opaque-\(100 - $0)", senderID: 2, at: $0, text: "Visible message \($0)")
@@ -362,6 +403,79 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         XCTAssertEqual(heights[0], heights[2], accuracy: 0.5)
     }
 
+    func testReactionExpansionAndRemovalReflowFollowingMessages() async throws {
+        let messages = try (0..<4).map {
+            try TimelineTestFixtures.message(id: "reaction-\($0)", senderID: 2, at: $0, text: "Message \($0)")
+        }
+        let store = ConversationMessageStore()
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: BubbleSource(page: try TimelineTestFixtures.page(messages)), messageStore: store
+        )
+        let parent = UIViewController()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = parent
+        window.makeKeyAndVisible()
+        defer { model.close(); window.isHidden = true }
+        let controller = TimelineCollectionViewController(model: model, actions: .init())
+        parent.addChild(controller)
+        parent.view.addSubview(controller.view)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 700)
+        controller.didMove(toParent: parent)
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.contentInsetAdjustmentBehavior = .never
+        parent.view.layoutIfNeeded()
+        await model.loadInitial()
+        try await Task.sleep(for: .milliseconds(200))
+        collection.layoutIfNeeded()
+
+        func frames() throws -> [CGRect] {
+            try messages.map { message in
+                let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == message.id })
+                return try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))).frame
+            }
+        }
+        let initial = try frames()
+        let reacted = try TimelineTestFixtures.message(id: messages[1].id, senderID: 2, at: 1, fields: [
+            "reactions": ["👍", "❤️", "🎉", "👀", "😂", "🔥", "👏", "💯"].map {
+                ["emoji": $0, "count": 12, "reactedByMe": false] as [String: Any]
+            }
+        ])
+        store.apply(.reactionUpdated(.init(messageId: reacted.id, chatId: "chat", reactions: reacted.reactions)))
+        try await Task.sleep(for: .milliseconds(200))
+        collection.layoutIfNeeded()
+        let expanded = try frames()
+        let growth = expanded[1].height - initial[1].height
+        XCTAssertGreaterThan(growth, 0, "Reactions must increase the message's allocated height.")
+        XCTAssertEqual(expanded[0], initial[0], "Messages before the changed row must not move.")
+        for index in 2..<messages.count {
+            XCTAssertEqual(expanded[index].minY - initial[index].minY, growth, accuracy: 0.5)
+            XCTAssertGreaterThanOrEqual(expanded[index].minY, expanded[index - 1].maxY - 0.5,
+                                        "Following messages must not cover the expanded row.")
+        }
+        let rowIndex = try XCTUnwrap(model.rows.firstIndex { $0.messageID == reacted.id })
+        let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: rowIndex, section: 0)) as? TimelineCollectionViewCell)
+        func reactionView(in view: UIView) -> UIView? {
+            if view is TimelineReactionsView { return view }
+            return view.subviews.lazy.compactMap { reactionView(in: $0) }.first
+        }
+        let reactions = try XCTUnwrap(reactionView(in: cell))
+        let reactionFrame = cell.convert(reactions.bounds, from: reactions)
+        XCTAssertTrue(cell.bounds.insetBy(dx: -0.5, dy: -0.5).contains(reactionFrame),
+                      "The reaction strip must fit inside the allocated cell.")
+
+        store.apply(.reactionUpdated(.init(messageId: reacted.id, chatId: "chat", reactions: [])))
+        try await Task.sleep(for: .milliseconds(200))
+        collection.layoutIfNeeded()
+        let collapsed = try frames()
+        for index in messages.indices {
+            XCTAssertEqual(collapsed[index].minY, initial[index].minY, accuracy: 0.5)
+            XCTAssertEqual(collapsed[index].height, initial[index].height, accuracy: 0.5,
+                           "Removing the final reaction must reclaim the extra row height.")
+        }
+    }
+
     private func assertTextContained(in cell: UICollectionViewCell, file: StaticString = #filePath, line: UInt = #line) throws {
         func textViews(in view: UIView) -> [UIKitMessageTextView] {
             if let text = view as? UIKitMessageTextView { return [text] }
@@ -369,14 +483,17 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         }
         let text = try XCTUnwrap(textViews(in: cell).first, file: file, line: line)
         let rendered = cell.convert(text.bounds, from: text)
-        XCTAssertTrue(cell.bounds.insetBy(dx: -0.5, dy: -0.5).contains(rendered), file: file, line: line)
+        XCTAssertTrue(cell.bounds.insetBy(dx: -0.5, dy: -0.5).contains(rendered), "Text frame \(rendered) must fit row \(cell.bounds).", file: file, line: line)
         XCTAssertGreaterThanOrEqual(cell.bounds.maxY - rendered.maxY, 8, "The last text line must not consume the row's bottom padding.", file: file, line: line)
         let glyphs = text.contentLayout.layoutManager.usedRect(for: text.contentLayout.textContainer)
             .offsetBy(dx: text.textContainerInset.left, dy: text.textContainerInset.top)
         XCTAssertTrue(text.bounds.insetBy(dx: -0.5, dy: -0.5).contains(glyphs), "All glyphs must fit the prepared native text frame.", file: file, line: line)
-        for button in text.subviews.compactMap({ $0 as? UIButton }) {
-            XCTAssertTrue(text.bounds.contains(button.frame), file: file, line: line)
-            XCTAssertTrue(cell.bounds.contains(cell.convert(button.bounds, from: button)), file: file, line: line)
+        for button in text.subviews.compactMap({ $0 as? UIButton }) where !button.isHidden {
+            let symbol = button.imageRect(forContentRect: button.bounds)
+            let inText = text.convert(symbol, from: button)
+            let inRow = cell.convert(symbol, from: button)
+            XCTAssertTrue(text.bounds.insetBy(dx: -0.5, dy: -0.5).contains(inText), "Visible retry symbol \(inText) must fit text frame \(text.bounds).", file: file, line: line)
+            XCTAssertTrue(cell.bounds.insetBy(dx: -0.5, dy: -0.5).contains(inRow), "Visible retry symbol \(inRow) must fit row \(cell.bounds).", file: file, line: line)
         }
     }
 

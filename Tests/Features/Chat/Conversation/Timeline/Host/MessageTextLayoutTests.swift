@@ -105,7 +105,11 @@ final class MessageTextLayoutTests: XCTestCase {
                 metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
             )
         }
-        let host = UIHostingController(rootView: content("first:"))
+        let host = UIViewController()
+        let text = UIKitMessageTextView(geometry: prepared.geometry)
+        text.apply(content("first:"), resetSelection: true)
+        host.view.addSubview(text)
+        text.frame = CGRect(origin: .zero, size: prepared.geometry.size)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene)
         window.rootViewController = host
@@ -118,11 +122,6 @@ final class MessageTextLayoutTests: XCTestCase {
             host.view.layoutIfNeeded()
         }
         try await settle()
-        func textView(in view: UIView) -> UIKitMessageTextView? {
-            if let text = view as? UIKitMessageTextView { return text }
-            return view.subviews.lazy.compactMap { textView(in: $0) }.first
-        }
-        let text = try XCTUnwrap(textView(in: host.view))
         let link = try XCTUnwrap(URL(string: "https://example.com"))
         let mention = try XCTUnwrap(URL(string: "chahua-mention://2"))
         let linkRange = (text.text as NSString).range(of: link.absoluteString)
@@ -136,7 +135,7 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: mention, in: mentionRange, interaction: .invokeDefaultAction), false)
         XCTAssertEqual(opened, ["first:https://example.com", "first:mention:2"])
 
-        host.rootView = content("replacement:")
+        text.apply(content("replacement:"), resetSelection: false)
         try await settle()
         XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
         XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction), false)
@@ -144,7 +143,7 @@ final class MessageTextLayoutTests: XCTestCase {
         let expectedActions = ["first:https://example.com", "first:mention:2", "replacement:https://example.com", "replacement:mention:2"]
         XCTAssertEqual(opened, expectedActions)
 
-        host.rootView = content(nil)
+        text.apply(content(nil), resetSelection: false)
         try await settle()
         XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction), false)
         XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: mention, in: mentionRange, interaction: .invokeDefaultAction), false)

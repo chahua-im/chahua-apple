@@ -132,6 +132,9 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
+        // SwiftUI supplies the header/composer clearance explicitly, including the
+        // system top inset when drawing under navigation chrome. Do not add it twice.
+        collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.contentInset.top = headerInset
         collectionView.verticalScrollIndicatorInsets.top = headerInset
         collectionView.contentInset.bottom = composerInset
@@ -202,15 +205,14 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "timeline", for: indexPath) as! TimelineCollectionViewCell
         let row = rows[indexPath.item]
-        cell.attach(to: self)
         bind(cell, row: row)
         return cell
     }
 
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         guard let cell = cell as? TimelineCollectionViewCell else { return }
-        cell.attach(to: self)
         bind(cell, row: rows[indexPath.item])
+        cell.rowView.setVisible(true)
         guard !applying, !heightChanges.isEmpty else { return }
         let previousPosition = capturePosition()
         applying = true
@@ -225,7 +227,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     }
 
     func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        (cell as? TimelineCollectionViewCell)?.detach()
+        (cell as? TimelineCollectionViewCell)?.rowView.clear()
     }
 
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
@@ -280,7 +282,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
             requestDisplayUpdate()
         }
         guard let presentation = presentations[row.id] else { return }
-        cell.state.bind(.init(presentation: presentation, layout: layout, context: rowContext(for: row), actions: rowActions, mediaContext: mediaContext))
+        cell.rowView.bind(.init(presentation: presentation, layout: layout, context: rowContext(for: row), actions: rowActions, mediaContext: mediaContext))
     }
 
     private func refreshVisibleRoots() {
@@ -296,11 +298,11 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
 
     private func invalidateChangedHeights() {
         guard !heightChanges.isEmpty else { return }
-        let context = UICollectionViewFlowLayoutInvalidationContext()
-        context.invalidateFlowLayoutDelegateMetrics = true
-        context.invalidateItems(at: heightChanges.map { .init(item: $0, section: 0) })
+        // FlowLayout's item invalidation can update a cell's height while retaining
+        // following item positions. Rebuild the layout so the whole suffix reflows;
+        // delegate sizes still come from our prepared row-layout cache.
         heightChanges.removeAll()
-        collectionView.collectionViewLayout.invalidateLayout(with: context)
+        collectionView.collectionViewLayout.invalidateLayout()
     }
 
     private func requestDisplayUpdate() {
@@ -416,6 +418,11 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !applying, geometry == currentGeometry else { return }
+        // A tall row can stay installed while individual images enter/leave the
+        // viewport. Refresh native media visibility without rebinding its content.
+        for case let cell as TimelineCollectionViewCell in collectionView.visibleCells {
+            cell.rowView.setVisible(true)
+        }
         position = capturePosition()
         // Geometry is settled even while the reader is moving. Prefetch during the
         if !unsettledRows.isEmpty { requestDisplayUpdate() }
@@ -755,6 +762,10 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     private func finishRequest(id: Int) {
         guard activeRequest?.id == id, installedRevision == model.updates.value.revision,
               model.updates.value.pendingScroll?.id == id else { return }
+        // Acknowledgement can synchronously change SwiftUI's header/composer geometry.
+        // Save the reached target before publishing so that relayout cannot restore
+        // the position from before this navigation.
+        position = capturePosition()
         activeRequest = nil
         model.scrollRequestDidFinish(id: id)
     }

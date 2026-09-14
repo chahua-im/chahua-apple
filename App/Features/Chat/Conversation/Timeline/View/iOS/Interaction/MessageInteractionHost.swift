@@ -196,7 +196,7 @@ private struct MessageInteractionOverlay: View {
             locale: locale, timeZone: timeZone, layoutDirection: layoutDirection)
         let presentation = TimelineRowPresentation.make(row: .message(row), currentUserProfile: actions.currentUserProfile, currentUserID: currentUserID, isThreadTimeline: context.isThreadView, environment: environment)
         let layout = previewCache.layout(for: presentation, environment: environment)
-        return TimelineBubbleView(
+        return TimelineRowRepresentable(
             presentation: presentation, layout: layout,
             context: .init(currentUserID: currentUserID, isThreadTimeline: context.isThreadView, isInteractionPreview: true),
             actions: actions, mediaContext: mediaContext)
