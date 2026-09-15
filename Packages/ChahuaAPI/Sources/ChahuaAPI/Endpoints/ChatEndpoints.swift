@@ -42,6 +42,13 @@ private struct MuteBody: Encodable {
 }
 
 public extension ChahuaClient {
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse {
+        try await send(
+            HTTPRequestSpec(method: .post, path: ["chats", chatID, "unread"]),
+            decoding: ReadStateResponse.self
+        )
+    }
+
     func archiveChat(chatID: String) async throws {
         try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "archive"]))
     }

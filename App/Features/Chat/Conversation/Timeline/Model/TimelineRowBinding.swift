@@ -15,6 +15,9 @@ struct MessageInteractionSource {
     let rect: CGRect
     let presentation: TimelineRowPresentation
     let layout: TimelineRowLayout
+    #if os(iOS)
+    var pressFeedback: MessageBubblePressFeedback? = nil
+    #endif
 }
 
 struct TimelineBubbleActions {
@@ -25,6 +28,7 @@ struct TimelineBubbleActions {
     var togglePin: ((MessageResponse) -> Void)?
     var pinnedMessageIDs: Set<String> = []
     var pendingPinMessageIDs: Set<String> = []
+    var deleteMessage: ((MessageResponse) -> Void)?
     var openThread: ((String) -> Void)?
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?
@@ -65,6 +69,7 @@ extension TimelineBubbleActions {
             && (togglePin == nil) == (other.togglePin == nil)
             && pinnedMessageIDs == other.pinnedMessageIDs
             && pendingPinMessageIDs == other.pendingPinMessageIDs
+            && (deleteMessage == nil) == (other.deleteMessage == nil)
             && (openThread == nil) == (other.openThread == nil)
             && (openLink == nil) == (other.openLink == nil)
             && (openMention == nil) == (other.openMention == nil)

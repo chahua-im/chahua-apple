@@ -22,6 +22,11 @@ final class ConversationTimelineModel: ObservableObject {
     @Published private(set) var rows: [TimelineRow] = []
     @Published private(set) var bottomVisibleMessageDate: Date?
     var isAtLiveEdge: Bool { window.isAtLiveEdge }
+    var jumpUnreadCount: Int64 { state.live.unreadCount }
+    var showsJumpToLatest: Bool {
+        state.content == .ready && (jumpUnreadCount > 0 || state.live.pendingLiveCount > 0
+            || (state.live.scrollsTowardNewer && !(isAtLiveEdge && state.live.isPinnedToBottom)))
+    }
     let updates = CurrentValueSubject<TimelineHostSnapshot, Never>(.init(revision: 0, windowRevision: 0, rows: [], animateFollowing: false, pendingScroll: nil))
 
     private let source: any TimelineMessageSource
@@ -32,7 +37,6 @@ final class ConversationTimelineModel: ObservableObject {
     private var observation: AnyCancellable?
     private var deferredCreates: [ConversationMessageStableKey: MessageResponse] = [:]
     private var preHistoryAcknowledgementKeys: Set<ConversationMessageStableKey> = []
-    private var unseenKeys: Set<ConversationMessageStableKey> = []
     private var deletedIDs: Set<String> = []
     private var snapshotTokens: Set<UUID> = []
     private var generation = 0
@@ -53,8 +57,10 @@ final class ConversationTimelineModel: ObservableObject {
     private var canReuseLatestWindowAfterPendingChange = false
     // The entry boundary is frozen until the next open, independent of read receipts.
     private var unreadBeforeMessageID: String?
+    private var lastReadMessageID: String?
     private var readWatermark: (id: String, createdAt: Date)?
     private var readTrackingActive = false
+    private var hasSentEntryRead = false
     private var readCandidateID: String?
     private var readCandidateMature = false
     private var readDwellTask: Task<Void, Never>?
@@ -179,6 +185,18 @@ final class ConversationTimelineModel: ObservableObject {
             : .reveal(.unreadSeparator, animated: false, highlight: false), reset: true)
     }
 
+    /// Supply the current chat or thread's authoritative metadata, never the entry snapshot.
+    /// Pending live arrivals affect availability, but are already included in this badge count.
+    func updateReadState(unreadCount: Int64, lastReadMessageID: String?) {
+        self.lastReadMessageID = lastReadMessageID
+        let count = max(0, unreadCount)
+        if state.live.unreadCount != count { state.live.unreadCount = count }
+        if let lastReadMessageID, let index = window.index(ofServerID: lastReadMessageID) {
+            advanceReadWatermark(to: window.messages[index])
+        }
+        updateReadCandidate()
+    }
+
     func setReadTrackingActive(_ active: Bool) {
         guard readTrackingActive != active else { return }
         readTrackingActive = active
@@ -211,9 +229,26 @@ final class ConversationTimelineModel: ObservableObject {
         for index in (first ... last).reversed() {
             guard case .message(let row) = rows[index], let message = row.entry.remoteMessage,
                   message.id == candidateID else { continue }
+            // Every entry refreshes server read state from an actual visible row,
+            // including historical entries. The endpoint and local watermark never regress.
+            if !hasSentEntryRead { return message }
+            guard isBeyondCurrentReadState(message) else { return nil }
             return isLaterThanWatermark(message) ? message : nil
         }
         return nil
+    }
+
+    private func isBeyondCurrentReadState(_ message: MessageResponse) -> Bool {
+        guard let lastReadMessageID else { return true }
+        guard message.id != lastReadMessageID else { return false }
+        if let boundary = window.index(ofServerID: lastReadMessageID),
+           let candidate = window.index(ofServerID: message.id) { return candidate > boundary }
+        // Server snowflake IDs can establish order across disjoint windows. Opaque IDs
+        // still use the loaded chronology/watermark, never lexicographic comparison.
+        if let boundary = UInt64(lastReadMessageID), let candidate = UInt64(message.id) {
+            return candidate > boundary
+        }
+        return true
     }
 
     private func isLaterThanWatermark(_ message: MessageResponse) -> Bool {
@@ -236,6 +271,11 @@ final class ConversationTimelineModel: ObservableObject {
         guard readCandidateID != candidate.id else { return }
         cancelReadCandidate()
         readCandidateID = candidate.id
+        if !hasSentEntryRead {
+            readCandidateMature = true
+            sendMatureReadCandidate()
+            return
+        }
         let requestGeneration = generation
         readDwellTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
@@ -257,14 +297,15 @@ final class ConversationTimelineModel: ObservableObject {
                 guard self?.generation == requestGeneration,
                       self?.readCandidateID == candidate.id,
                       self?.visibleReadCandidate?.id == candidate.id else { throw CancellationError() }
+                self?.hasSentEntryRead = true
                 try await markRead(candidate.id)
-                self?.advanceReadWatermark(to: candidate)
+                if self?.generation == requestGeneration { self?.advanceReadWatermark(to: candidate) }
             } catch {
                 // A later viewport can retry; failures must not spin a write loop.
             }
             guard let self else { return }
             readSendTask = nil
-            if readCandidateID == candidate.id { cancelReadCandidate() }
+            if !Task.isCancelled, generation == requestGeneration, readCandidateID == candidate.id { cancelReadCandidate() }
             sendMatureReadCandidate()
         }
     }
@@ -333,6 +374,7 @@ final class ConversationTimelineModel: ObservableObject {
         if revision == snapshotRevision, !viewport.isValid(forRowCount: rows.count) { cancelReadCandidate() }
         guard revision == snapshotRevision, viewport.isValid(forRowCount: rows.count) else { return }
         canReuseLatestWindowAfterPendingChange = false
+        let previousAnchorID = visibleAnchorID
         lastViewport = viewport
         viewportRevision = revision
         visibleAnchorID = nil
@@ -355,11 +397,14 @@ final class ConversationTimelineModel: ObservableObject {
         let pinned = viewport.distanceToBottom <= Self.pinnedToBottomTolerance
         var nextLive = state.live
         nextLive.isPinnedToBottom = pinned
+        if reason == .user, let previousAnchorID, let visibleAnchorID,
+           let previous = window.index(ofServerID: previousAnchorID),
+           let current = window.index(ofServerID: visibleAnchorID), previous != current {
+            nextLive.scrollsTowardNewer = current > previous
+        }
         // A settled unread/reply reveal can reach the live bottom without a gesture.
         // Do not resume following while a pending navigation still owns the viewport.
         if pinned, isAtLiveEdge, pendingScroll == nil { nextLive.followsLatest = true }
-        if pinned && isAtLiveEdge { unseenKeys.removeAll() }
-        nextLive.unseenCount = unseenKeys.count
         if nextLive != state.live { state.live = nextLive }
         updateReadCandidate()
         guard reason == .user, state.content == .ready, recoveryTask == nil else { return }
@@ -372,6 +417,28 @@ final class ConversationTimelineModel: ObservableObject {
         guard pendingScroll?.id == id else { return }
         pendingScroll = nil
         updates.send(.init(revision: snapshotRevision, windowRevision: windowRevision, rows: rows, animateFollowing: false, pendingScroll: nil))
+    }
+
+    /// The unread divider is frozen at entry; this navigation uses the live read cursor.
+    func jumpTowardLatest() async {
+        guard state.content == .ready else { return }
+        if threadID == nil, jumpUnreadCount > 0, let lastReadMessageID, !isAtOrBeyondReadBoundary {
+            await jumpToMessage(lastReadMessageID, atReadBoundary: true)
+        } else {
+            await jumpToLiveEdge()
+        }
+    }
+
+    private var isAtOrBeyondReadBoundary: Bool {
+        guard let lastReadMessageID, let visibleID = lastViewport.fullyVisibleMessageIDs.last else { return false }
+        if visibleID == lastReadMessageID { return true }
+        if let visible = window.index(ofServerID: visibleID),
+           let boundary = window.index(ofServerID: lastReadMessageID) { return visible >= boundary }
+        if let visible = UInt64(visibleID), let boundary = UInt64(lastReadMessageID) { return visible >= boundary }
+        if let visible = window.index(ofServerID: visibleID), let readWatermark, readWatermark.id == lastReadMessageID {
+            return window.messages[visible].createdAt > readWatermark.createdAt
+        }
+        return false
     }
 
     func jumpToLiveEdge() async {
@@ -400,7 +467,7 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    func jumpToMessage(_ id: String) async {
+    func jumpToMessage(_ id: String, atReadBoundary: Bool = false) async {
         switch state.content {
         case .ready, .repositioning: break
         default: return
@@ -410,7 +477,7 @@ final class ConversationTimelineModel: ObservableObject {
         state.content = .ready
         if let rowID = rowID(forServerID: id) {
             state.live.followsLatest = false
-            requestScroll(.reveal(rowID, animated: true, highlight: true))
+            requestScroll(atReadBoundary ? .readBoundary(rowID, animated: true) : .reveal(rowID, animated: true, highlight: true))
             return
         }
         state.content = .repositioning(.message(id))
@@ -420,7 +487,7 @@ final class ConversationTimelineModel: ObservableObject {
                 state.content = .ready
                 state.live.followsLatest = false
                 if let rowID = rowID(forServerID: id) {
-                    publish(position: .reveal(rowID, animated: false, highlight: true), reset: true)
+                    publish(position: atReadBoundary ? .readBoundary(rowID, animated: false) : .reveal(rowID, animated: false, highlight: true), reset: true)
                 } else {
                     state.repositionFailure = .message(id)
                     publish(position: .bottom(animated: false), reset: true)
@@ -431,7 +498,8 @@ final class ConversationTimelineModel: ObservableObject {
         } catch {
             if generation == requestGeneration {
                 state.content = .ready
-                state.repositionFailure = .message(id)
+                if atReadBoundary { await jumpToLiveEdge() }
+                else { state.repositionFailure = .message(id) }
             }
         }
     }
@@ -526,6 +594,9 @@ final class ConversationTimelineModel: ObservableObject {
         preHistoryAcknowledgementKeys.removeAll()
         for event in events { reduce(event, replay: true) }
         absorbDeferredCreates()
+        if let lastReadMessageID, let index = window.index(ofServerID: lastReadMessageID) {
+            advanceReadWatermark(to: window.messages[index])
+        }
         commit()
     }
 
@@ -581,11 +652,6 @@ final class ConversationTimelineModel: ObservableObject {
             if isBeforeInitialHistory && !replay { outcome = .deferred }
             else { outcome = window.insertLive(message) }
             if outcome == .deferred { deferredCreates[message.timelineStableKey] = message }
-            if !replay, !isBeforeInitialHistory, outcome != .duplicate,
-               outcome == .deferred || !state.live.followsLatest {
-                unseenKeys.insert(message.timelineStableKey)
-                state.live.unseenCount = unseenKeys.count
-            }
             return outcome == .appended
         case .messageUpdated(let message):
             guard accepts(message) else { return false }
@@ -661,15 +727,17 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func clearWindow() {
+        let unreadCount = state.live.unreadCount
         window = TimelineWindow()
         windowRevision &+= 1
         unreadBeforeMessageID = nil
+        hasSentEntryRead = false
         deferredCreates.removeAll()
         preHistoryAcknowledgementKeys.removeAll()
         canReuseLatestWindowAfterPendingChange = false
-        unseenKeys.removeAll()
         deletedIDs.removeAll()
         state = ConversationTimelineState()
+        state.live.unreadCount = unreadCount
         pendingScroll = nil
         lastViewport = .empty
         bottomVisibleMessageDate = nil
@@ -699,6 +767,7 @@ final class ConversationTimelineModel: ObservableObject {
     private func rowID(forServerID id: String) -> TimelineRowID? { window.index(ofServerID: id).map { .message(window.messages[$0].timelineStableKey) } }
 
     private func publish(animateFollowing: Bool = false, position: TimelineScrollIntent? = nil, reset: Bool = false) {
+        if state.live.pendingLiveCount != deferredCreates.count { state.live.pendingLiveCount = deferredCreates.count }
         var remoteMessages = window.messages
         if isBeforeInitialHistory {
             for (key, message) in deferredCreates where preHistoryAcknowledgementKeys.contains(key) {

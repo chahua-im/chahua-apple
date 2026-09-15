@@ -1,4 +1,5 @@
 import ChahuaAPI
+import CoreText
 import SwiftUI
 
 #if os(macOS)
@@ -11,7 +12,8 @@ struct MessageMetadata {
     let time: String
     let state: ConversationMessageDisplayState?
     let size: CGSize
-    private let attributedTime: NSAttributedString
+    private let timeLine: CTLine
+    private let textBounds: CGRect
     let textSize: CGSize
     let fontSize: CGFloat
     let symbol: BubbleNativeImage?
@@ -26,10 +28,21 @@ struct MessageMetadata {
         foreground = isOutgoing || isOverlay ? .white : bubbleLabelColor
         let text = NSAttributedString(string: time, attributes: [
             .font: BubbleNativeFont.systemFont(ofSize: fontSize),
-            .foregroundColor: foreground
+            NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true
         ])
-        attributedTime = text
-        textSize = text.size()
+        let line = CTLineCreateWithAttributedString(text)
+        timeLine = line
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        var leading: CGFloat = 0
+        let advance = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
+        // Measure and draw the same native line. Attributed-string size()/draw(at:)
+        // do not provide a shared baseline or preserve glyph overhangs; a separate
+        // metadata row has no following line to absorb pixels outside that estimate.
+        let typographicBounds = CGRect(x: 0, y: -descent, width: advance,
+                                       height: ascent + descent + max(0, leading))
+        textBounds = typographicBounds.union(CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)).integral
+        textSize = textBounds.size
         size = CGSize(width: ceil(textSize.width) + (state == nil ? 0 : 4 + fontSize), height: ceil(max(textSize.height, fontSize)))
         if let state {
             let name: String
@@ -96,7 +109,14 @@ struct MessageMetadata {
         let scale = min(1, frame.width / size.width)
         context.scaleBy(x: scale, y: scale)
         context.setAlpha(textOpacity)
-        attributedTime.draw(at: CGPoint(x: 0, y: (size.height - textSize.height) / 2))
+        // Resolve semantic colors in the displaying view's appearance, not when
+        // the cached line is created. Core Text uses an upward-positive baseline.
+        context.setFillColor(foreground.cgColor)
+        context.translateBy(x: -textBounds.minX, y: (size.height - textSize.height) / 2 + textBounds.maxY)
+        context.scaleBy(x: 1, y: -1)
+        context.textMatrix = .identity
+        context.textPosition = .zero
+        CTLineDraw(timeLine, context)
         context.restoreGState()
         if drawsSymbol {
             #if os(macOS)

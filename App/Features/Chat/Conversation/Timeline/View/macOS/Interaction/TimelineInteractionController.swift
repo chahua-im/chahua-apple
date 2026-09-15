@@ -11,13 +11,12 @@ final class TimelineInteractionController: NSObject {
 
     private struct Target {
         let key: ConversationMessageStableKey
-        let source: MessageInteractionSource
+        let sourceRect: CGRect
     }
 
     private let model: ConversationTimelineModel
     private var actions = TimelineBubbleActions()
     private var context = MessageInteractionContext()
-    private var mediaContext: AppMediaContext?
     private var target: Target?
     private var overlay: TimelineActionOverlayView?
     private var dismissingOverlay: TimelineActionOverlayView?
@@ -42,10 +41,9 @@ final class TimelineInteractionController: NSObject {
         notifications.addObserver(self, selector: #selector(applicationBecameInactive), name: NSApplication.didResignActiveNotification, object: nil)
     }
 
-    func configure(actions: TimelineBubbleActions, context: MessageInteractionContext, mediaContext: AppMediaContext?) {
+    func configure(actions: TimelineBubbleActions, context: MessageInteractionContext) {
         self.actions = actions
         self.context = context
-        self.mediaContext = mediaContext
         refresh()
         onRoutedActionsChanged?()
     }
@@ -70,7 +68,7 @@ final class TimelineInteractionController: NSObject {
         else { return }
         finishDismissal()
         self.timelineView = timelineView
-        target = Target(key: live.entry.stableKey, source: source)
+        target = Target(key: live.entry.stableKey, sourceRect: source.rect)
         previousFirstResponder = window.firstResponder
         if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
            let owner = editor.delegate as? NSResponder {
@@ -102,7 +100,7 @@ final class TimelineInteractionController: NSObject {
                       event.window === window else { return false }
                 // AppKit routes native title-bar mouse events separately from
                 // frame-view children. Covered window controls must not receive
-                // the click, even when the preview opened in an inactive window.
+                // the click, even when the menu opened in an inactive window.
                 if event.type != .keyDown, !window.contentLayoutRect.contains(event.locationInWindow) {
                     self.dismiss()
                     return true
@@ -141,15 +139,13 @@ final class TimelineInteractionController: NSObject {
         if overlayHost.subviews.last !== overlay {
             overlayHost.addSubview(overlay, positioned: .above, relativeTo: nil)
         }
-        let rect = target.source.rect
+        let rect = target.sourceRect
         let sourceInContent = content.isFlipped ? rect : CGRect(
             x: rect.minX, y: content.bounds.maxY - rect.maxY,
             width: rect.width, height: rect.height)
         let localSource = overlay.convert(sourceInContent, from: content)
         overlay.configure(
-            row: row, currentUserID: model.currentUserID, context: actions.pinContext(for: row, base: context),
-            actions: actions, mediaContext: mediaContext,
-            source: target.source, sourceRect: localSource)
+            row: row, context: context, actions: actions, sourceRect: localSource)
     }
 
     func dismiss(animated: Bool = true) {
@@ -258,6 +254,14 @@ final class TimelineInteractionController: NSObject {
             guard let message = row.entry.remoteMessage, let togglePin = actions.togglePin else { return }
             dismiss()
             togglePin(message)
+        case .delete:
+            guard let message = row.entry.remoteMessage, let delete = actions.deleteMessage else { return }
+            dismiss()
+            delete(message)
+        case .thread:
+            guard let message = row.entry.remoteMessage, let openThread = actions.openThread else { return }
+            dismiss()
+            openThread(message.id)
         default:
             break // Policy keeps unsupported actions visible but disabled.
         }

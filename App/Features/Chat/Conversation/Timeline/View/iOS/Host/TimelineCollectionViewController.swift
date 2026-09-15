@@ -393,6 +393,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
             openReply: actions.openReply == nil ? nil : { [weak self] in self?.actions.openReply?($0) },
             replyToMessage: actions.replyToMessage == nil ? nil : { [weak self] in self?.actions.replyToMessage?($0) },
             editMessage: actions.editMessage == nil ? nil : { [weak self] in self?.actions.editMessage?($0) },
+            deleteMessage: actions.deleteMessage == nil ? nil : { [weak self] in self?.actions.deleteMessage?($0) },
             openThread: actions.openThread == nil ? nil : { [weak self] in self?.actions.openThread?($0) },
             openLink: actions.openLink == nil ? nil : { [weak self] in self?.actions.openLink?($0) },
             openMention: actions.openMention == nil ? nil : { [weak self] in self?.actions.openMention?($0) },
@@ -706,7 +707,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         case .bottom(let animated):
             if let index = rows.indices.last { prepareScrollTarget(index) }
             scroll(to: bottomOffset, animated: animated, requestID: request.id)
-        case .reveal(let id, let animated, _):
+        case .reveal(let id, let animated, _), .readBoundary(let id, let animated):
             guard let index = rows.firstIndex(where: { $0.id == id }) else {
                 finishRequest(id: request.id)
                 return
@@ -718,7 +719,12 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
             }
             let insets = collectionView.adjustedContentInset
             let height = max(0, collectionView.bounds.height - insets.top - insets.bottom)
-            let target = id == .unreadSeparator ? frame.minY - insets.top : frame.midY - height / 2 - insets.top
+            let target: CGFloat
+            if case .readBoundary = request.intent {
+                target = frame.maxY - collectionView.bounds.height + insets.bottom
+            } else {
+                target = id == .unreadSeparator ? frame.minY - insets.top : frame.midY - height / 2 - insets.top
+            }
             scroll(to: target, animated: animated, requestID: request.id)
         }
     }

@@ -8,14 +8,14 @@ import XCTest
 final class MessageActionPolicyTests: XCTestCase {
     private let writable = MessageInteractionContext(canWrite: true)
 
-    func testCopyIsEnabledWhileRelevantUnimplementedActionsStayDisabled() {
+    func testTextMessagesEnableCopyReplyAndThreadButNotUnimplementedActions() {
         let policy = MessageActionPolicy(messageType: .text, text: "Hello", context: writable)
         XCTAssertEqual(policy.availability(of: .copy), .enabled)
         XCTAssertEqual(policy.availability(of: .reply), .enabled)
-        XCTAssertEqual(policy.availability(of: .thread), .unimplemented)
+        XCTAssertEqual(policy.availability(of: .thread), .enabled)
         XCTAssertEqual(policy.availability(of: .delete), .hidden)
         XCTAssertEqual(policy.availability(of: .edit), .hidden)
-        XCTAssertEqual(policy.actions.filter { policy.availability(of: $0) == .enabled }, [.reply, .copy])
+        XCTAssertEqual(policy.actions.filter { policy.availability(of: $0) == .enabled }, [.reply, .thread, .copy])
     }
 
     func testWhitespaceAndNonTextMediaCannotBeCopied() {
@@ -27,14 +27,14 @@ final class MessageActionPolicyTests: XCTestCase {
     func testOwnershipAndAdminHaveDifferentEditAndDeletePermissions() {
         let owner = MessageActionPolicy(messageType: .text, text: "Mine", isOwn: true, context: writable)
         XCTAssertEqual(owner.availability(of: .edit), .enabled)
-        XCTAssertEqual(owner.availability(of: .delete), .unimplemented)
+        XCTAssertEqual(owner.availability(of: .delete), .enabled)
         XCTAssertEqual(owner.availability(of: .pin), .hidden)
 
         let admin = MessageActionPolicy(
             messageType: .text,
             context: .init(canWrite: true, isAdmin: true, isPinned: true))
         XCTAssertEqual(admin.availability(of: .edit), .hidden)
-        XCTAssertEqual(admin.availability(of: .delete), .unimplemented)
+        XCTAssertEqual(admin.availability(of: .delete), .enabled)
         XCTAssertEqual(admin.availability(of: .pin), .hidden)
         XCTAssertEqual(admin.availability(of: .unpin), .enabled)
         XCTAssertEqual(
@@ -65,6 +65,9 @@ final class MessageActionPolicyTests: XCTestCase {
         XCTAssertEqual(
             MessageActionPolicy(messageType: .audio, context: writable)
                 .availability(of: .thread), .hidden)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .file, context: writable)
+                .availability(of: .thread), .hidden)
     }
 
     func testStickerAndInviteUseTheirRestrictedActionSets() {
@@ -73,11 +76,13 @@ final class MessageActionPolicyTests: XCTestCase {
             messageType: .sticker, text: "Sticker", isOwn: true,
             hasReactions: true, context: context)
         XCTAssertEqual(sticker.actions, [.reply, .favorite, .copyLink, .delete])
+        XCTAssertEqual(sticker.availability(of: .delete), .enabled)
         XCTAssertFalse(sticker.canReact)
         let invite = MessageActionPolicy(
             messageType: .invite, text: "Invite", isOwn: true,
             hasReactions: true, context: context)
         XCTAssertEqual(invite.actions, [.reply, .pin, .delete])
+        XCTAssertEqual(invite.availability(of: .delete), .enabled)
         XCTAssertFalse(invite.canReact)
     }
 

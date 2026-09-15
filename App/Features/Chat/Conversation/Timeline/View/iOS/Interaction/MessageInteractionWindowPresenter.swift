@@ -6,7 +6,8 @@ import UIKit
 @MainActor
 final class MessageInteractionAnimation: ObservableObject {
     @Published var isPresented = false
-    @Published var isLifted = false
+    @Published var previewScale: CGFloat = 1
+    @Published var previewOpacity: CGFloat = 1
     @Published var safeAreaInsets: UIEdgeInsets = .zero
 }
 
@@ -17,6 +18,7 @@ final class MessageInteractionAnimation: ObservableObject {
 struct MessageInteractionWindowPresenter: UIViewRepresentable {
     let isPresented: Bool
     let reduceMotion: Bool
+    let pressFeedback: MessageBubblePressFeedback?
     let onClose: () -> Void
     let overlay: (MessageInteractionAnimation) -> AnyView
 
@@ -35,6 +37,7 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.isPresented = isPresented
         coordinator.reduceMotion = reduceMotion
+        coordinator.pressFeedback = pressFeedback
         coordinator.onClose = onClose
         coordinator.overlay = overlay
         coordinator.attach(to: view.window)
@@ -49,6 +52,7 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
     final class Coordinator {
         var isPresented = false
         var reduceMotion = false
+        var pressFeedback: MessageBubblePressFeedback?
         var onClose: (() -> Void)?
         var overlay: ((MessageInteractionAnimation) -> AnyView)?
         private weak var window: UIWindow?
@@ -56,13 +60,14 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
         private var animation = MessageInteractionAnimation()
         private var dismissal: Task<Void, Never>?
         private var lift: Task<Void, Never>?
+        private var activePressFeedback: MessageBubblePressFeedback?
 
         func attach(to window: UIWindow?) {
             guard let window else {
                 remove()
                 return
             }
-            if self.window !== window { remove() }
+            if self.window != nil, self.window !== window { remove() }
             self.window = window
             guard isPresented else {
                 dismiss()
@@ -76,6 +81,9 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
                 return
             }
             animation = MessageInteractionAnimation()
+            activePressFeedback = pressFeedback
+            animation.previewScale = reduceMotion ? 1 : pressFeedback?.scale ?? 1
+            animation.previewOpacity = pressFeedback?.opacity ?? (reduceMotion ? 0 : 1)
             animation.safeAreaInsets = window.safeAreaInsets
             let controller = MessageInteractionHostingController(rootView: overlay(animation))
             controller.onClose = onClose
@@ -95,9 +103,10 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
             controller.endAppearanceTransition()
             self.controller = controller
             controller.view.layoutIfNeeded()
+            activePressFeedback?.handOff()
             controller.becomeFirstResponder()
-            // Commit the source-sized first frame before the spring. The brief
-            // overshoot is a lift, not a new layout proposal or text reflow.
+            // Mount at the source's frozen press scale before hiding that bubble.
+            // Only this preview lifts; the source never pops or resets on screen.
             lift = Task { @MainActor [weak self, weak controller] in
                 await Task.yield()
                 guard let self, let controller, self.controller === controller,
@@ -106,14 +115,15 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
                     ? .easeOut(duration: 0.16) : .spring(response: 0.38, dampingFraction: 0.82)
                 withAnimation(entry) {
                     self.animation.isPresented = true
-                    self.animation.isLifted = !self.reduceMotion
+                    self.animation.previewScale = self.reduceMotion ? 1 : 1.035
+                    self.animation.previewOpacity = 1
                 }
                 UIAccessibility.post(notification: .screenChanged, argument: controller.view)
                 if !self.reduceMotion {
                     try? await Task.sleep(for: .milliseconds(120))
                     guard !Task.isCancelled, self.controller === controller else { return }
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        self.animation.isLifted = false
+                        self.animation.previewScale = 1
                     }
                 }
             }
@@ -124,7 +134,8 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
             lift?.cancel()
             withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.92)) {
                 animation.isPresented = false
-                animation.isLifted = false
+                animation.previewScale = 1
+                animation.previewOpacity = reduceMotion ? 0 : 1
             }
             dismissal = Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -144,6 +155,10 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
             controller?.view.removeFromSuperview()
             controller?.endAppearanceTransition()
             controller = nil
+            activePressFeedback?.restore()
+            activePressFeedback = nil
+            pressFeedback?.restore()
+            pressFeedback = nil
             window = nil
         }
     }

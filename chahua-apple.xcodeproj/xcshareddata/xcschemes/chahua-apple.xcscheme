@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "C0985FCD303BCC22003200C0"
-               BuildableName = "chahua-apple.app"
+               BuildableName = "Chahua.app"
                BlueprintName = "chahua-apple"
                ReferencedContainer = "container:chahua-apple.xcodeproj">
             </BuildableReference>
@@ -59,7 +59,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C0985FCD303BCC22003200C0"
-            BuildableName = "chahua-apple.app"
+            BuildableName = "Chahua.app"
             BlueprintName = "chahua-apple"
             ReferencedContainer = "container:chahua-apple.xcodeproj">
          </BuildableReference>
@@ -82,7 +82,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "C0985FCD303BCC22003200C0"
-            BuildableName = "chahua-apple.app"
+            BuildableName = "Chahua.app"
             BlueprintName = "chahua-apple"
             ReferencedContainer = "container:chahua-apple.xcodeproj">
          </BuildableReference>

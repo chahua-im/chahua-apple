@@ -26,6 +26,7 @@ final class ChatStore: ObservableObject {
     @Published var currentUserProfile: MeResponse?
     @Published private(set) var pendingListActions = Set<ConversationKey>()
     @Published var listActionError: String?
+    @Published private(set) var deletingMessageIDs = Set<String>()
     let conversationMessages = ConversationMessageStore()
     let outgoingQueue: OutgoingMessageQueue
     let reactions: MessageReactionController
@@ -177,6 +178,7 @@ final class ChatStore: ObservableObject {
                 return
             }
             state.chats = chats
+            updateTimelineReadStates()
             state.chatListLoadPhase = .loaded
             state.chatListRefreshFailed = false
         } catch {
@@ -241,6 +243,7 @@ final class ChatStore: ObservableObject {
                         continue
                     }
                     self.state.threads = threads
+                    self.updateTimelineReadStates()
                     self.state.threadListLoadPhase = .loaded
                     self.state.threadListRefreshFailed = false
                 } catch {
@@ -326,6 +329,11 @@ final class ChatStore: ObservableObject {
                 guard item.unreadCount > 0, let messageID = item.readThroughMessageID else { return }
                 try await markRead(chatID: conversation.chatID, threadID: conversation.threadID, messageID: messageID)
                 guard generation == requestGeneration else { return }
+            case .markUnread:
+                guard case .chat(let chat) = item, chat.unreadCount == 0, chat.lastMessage != nil else { return }
+                let response = try await apiClient.markChatUnread(chatID: conversation.chatID)
+                guard generation == requestGeneration else { return }
+                applyReadState(response, chatID: conversation.chatID, threadID: nil)
             }
             invalidateChatList()
         } catch {
@@ -485,12 +493,47 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func deleteMessage(_ message: MessageResponse) async -> Bool {
+        guard !message.isDeleted, message.messageType != .system,
+              deletingMessageIDs.insert(message.id).inserted else { return false }
+        let requestGeneration = generation
+        defer { if generation == requestGeneration { deletingMessageIDs.remove(message.id) } }
+        do {
+            try await apiClient.deleteMessage(chatID: message.chatId, messageID: message.id)
+            guard generation == requestGeneration else { return false }
+            // Commit redaction only after server acceptance: deleted IDs are
+            // tombstoned throughout the shared cache and cannot safely roll back.
+            drafts.redactReplyTargets([message.id], chatID: message.chatId)
+            conversationMessages.apply(.messageDeleted(message.redactedForDeletion()))
+            invalidateChatList()
+            return true
+        } catch {
+            guard generation == requestGeneration else { return false }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            return false
+        }
+    }
+
     func registerTimeline(_ model: ConversationTimelineModel) {
         timelines[ObjectIdentifier(model)] = WeakTimeline(value: model)
+        updateReadState(for: model)
     }
 
     func unregisterTimeline(_ model: ConversationTimelineModel) {
         timelines.removeValue(forKey: ObjectIdentifier(model))
+    }
+
+    private func updateReadState(for model: ConversationTimelineModel) {
+        if let threadID = model.threadID,
+           let thread = state.threads.first(where: { $0.chatId == model.chatID && $0.threadRootMessage.id == threadID }) {
+            model.updateReadState(unreadCount: thread.unreadCount, lastReadMessageID: thread.lastReadMessageId)
+        } else if model.threadID == nil, let chat = state.chats.first(where: { $0.id == model.chatID }) {
+            model.updateReadState(unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
+        }
+    }
+
+    private func updateTimelineReadStates() {
+        for model in visibleTimelines() { updateReadState(for: model) }
     }
 
     func reconcileVisibleTimelines() async {
@@ -559,24 +602,7 @@ final class ChatStore: ObservableObject {
                 response = try await apiClient.markChatRead(chatID: chatID, messageID: messageID)
             }
             guard generation == requestGeneration else { throw CancellationError() }
-            listStateRevision += 1
-            if let threadID,
-               let index = state.threads.firstIndex(where: { $0.chatId == chatID && $0.threadRootMessage.id == threadID }) {
-                let thread = state.threads[index]
-                state.threads[index] = ThreadListItem(
-                    chatId: thread.chatId, chatName: thread.chatName, chatAvatar: thread.chatAvatar,
-                    threadRootMessage: thread.threadRootMessage, participants: thread.participants,
-                    lastReply: thread.lastReply, replyCount: thread.replyCount, lastReplyAt: thread.lastReplyAt,
-                    unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
-                    subscribedAt: thread.subscribedAt, archived: thread.archived)
-            } else if threadID == nil, let index = state.chats.firstIndex(where: { $0.id == chatID }) {
-                let chat = state.chats[index]
-                state.chats[index] = ChatListItem(
-                    id: chat.id, name: chat.name, avatar: chat.avatar, lastMessageAt: chat.lastMessageAt,
-                    unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
-                    lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil, archived: chat.archived,
-                    kind: chat.kind, peer: chat.peer)
-            }
+            applyReadState(response, chatID: chatID, threadID: threadID)
             if let lastReadMessageID = response.lastReadMessageId {
                 onNotificationRead?(.init(chatID: chatID, threadID: threadID), lastReadMessageID)
             }
@@ -584,6 +610,31 @@ final class ChatStore: ObservableObject {
             guard generation == requestGeneration else { throw CancellationError() }
             if case APIError.invalidToken = error { await onInvalidToken() }
             throw error
+        }
+    }
+
+    private func applyReadState(_ response: ReadStateResponse, chatID: String, threadID: String?) {
+        listStateRevision += 1
+        if let threadID,
+           let index = state.threads.firstIndex(where: { $0.chatId == chatID && $0.threadRootMessage.id == threadID }) {
+            let thread = state.threads[index]
+            state.threads[index] = ThreadListItem(
+                chatId: thread.chatId, chatName: thread.chatName, chatAvatar: thread.chatAvatar,
+                threadRootMessage: thread.threadRootMessage, participants: thread.participants,
+                lastReply: thread.lastReply, replyCount: thread.replyCount, lastReplyAt: thread.lastReplyAt,
+                unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
+                subscribedAt: thread.subscribedAt, archived: thread.archived)
+        } else if threadID == nil, let index = state.chats.firstIndex(where: { $0.id == chatID }) {
+            let chat = state.chats[index]
+            state.chats[index] = ChatListItem(
+                id: chat.id, name: chat.name, avatar: chat.avatar, lastMessageAt: chat.lastMessageAt,
+                unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
+                lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil, archived: chat.archived,
+                kind: chat.kind, peer: chat.peer)
+        }
+        // A notification or new thread can be open without an active-list row.
+        for model in visibleTimelines() where model.chatID == chatID && model.threadID == threadID {
+            model.updateReadState(unreadCount: response.unreadCount, lastReadMessageID: response.lastReadMessageId)
         }
     }
 
@@ -611,6 +662,7 @@ final class ChatStore: ObservableObject {
     func reset() {
         generation += 1
         pendingListActions.removeAll()
+        deletingMessageIDs.removeAll()
         listActionError = nil
         drafts.reset()
         outgoingRevisions.removeAll()

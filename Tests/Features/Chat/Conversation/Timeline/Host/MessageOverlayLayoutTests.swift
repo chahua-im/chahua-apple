@@ -7,7 +7,7 @@
 
     @MainActor
     final class MessageOverlayLayoutTests: XCTestCase {
-        func testPreviewPreservesSourceWidthAcrossAppearanceAndSendingSide() async throws {
+        func testMenuKeepsMessageInPlaceAndDismissesOnOutsideClick() async throws {
             for (outgoing, dark, width) in [(false, false, 900.0), (true, true, 900.0), (false, false, 360.0)] {
                 let message = try TimelineTestFixtures.message(
                     id: "overlay-size", senderID: outgoing ? 1 : 2, at: 0,
@@ -42,22 +42,23 @@
                     try await Task.sleep(for: .milliseconds(20))
                 }
                 let original = try XCTUnwrap(textViews(in: host.view).first)
-                let originalWidth = original.bounds.width
+                let frameView = try XCTUnwrap(window.contentView?.superview)
+                let originalFrame = original.convert(original.bounds, to: frameView)
                 var ancestor: NSView? = original
                 while ancestor != nil, !(ancestor is TimelineRowView) { ancestor = ancestor?.superview }
                 let row = try XCTUnwrap(ancestor as? TimelineRowView)
                 let action = try XCTUnwrap(row.accessibilityCustomActions()?.first)
                 XCTAssertTrue(try XCTUnwrap(action.handler)())
                 try await Task.sleep(for: .milliseconds(600))
-                let frameView = try XCTUnwrap(window.contentView?.superview)
                 frameView.layoutSubtreeIfNeeded()
                 let visibleText = textViews(in: frameView)
-                XCTAssertEqual(visibleText.count, 2, "Opening the menu should add one read-only message preview.")
-                for text in visibleText {
-                    XCTAssertEqual(
-                        text.bounds.width, originalWidth, accuracy: 1,
-                        "The action menu must not force the preview into its narrower width.")
-                }
+                XCTAssertEqual(visibleText.count, 1, "Desktop menus must not duplicate the message.")
+                XCTAssertEqual(original.convert(original.bounds, to: frameView), originalFrame,
+                               "Opening the menu must not move or resize the message.")
+                let copyButton = try XCTUnwrap(buttons(in: frameView).first {
+                    $0.accessibilityLabel() == MessageMenuAction.copy.label(hasAttachments: false)
+                })
+                XCTAssertTrue(copyButton.isEnabled)
                 let bitmap = try XCTUnwrap(frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds))
                 frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
                 let image = NSImage(size: frameView.bounds.size)
@@ -68,8 +69,8 @@
                 attachment.lifetime = .keepAlways
                 add(attachment)
 
-                // A click over native title-bar chrome must dismiss the preview,
-                // not activate the obscured close button or close its window.
+                // A click over native title-bar chrome dismisses the menu,
+                // without also activating the close button.
                 let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
                 let titleBarPoint = closeButton.convert(
                     CGPoint(x: closeButton.bounds.midX, y: closeButton.bounds.midY), to: nil)
@@ -82,17 +83,21 @@
                     NSApp.postEvent(click, atStart: false)
                 }
                 let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-                while textViews(in: frameView).count > 1, ContinuousClock.now < deadline {
+                while copyButton.window != nil, ContinuousClock.now < deadline {
                     try await Task.sleep(for: .milliseconds(20))
                 }
-                XCTAssertTrue(window.isVisible, "The preview must intercept clicks on covered title-bar controls.")
-                XCTAssertEqual(textViews(in: frameView).count, 1, "Clicking covered title-bar chrome must dismiss the preview.")
+                XCTAssertTrue(window.isVisible, "The outside click must not activate the window control.")
+                XCTAssertNil(copyButton.window, "Clicking title-bar chrome must dismiss the menu.")
             }
         }
 
         private func textViews(in view: NSView) -> [AppKitMessageTextView] {
             if let text = view as? AppKitMessageTextView, text.string.contains("The original message") { return [text] }
             return view.subviews.flatMap { textViews(in: $0) }
+        }
+
+        private func buttons(in view: NSView) -> [NSButton] {
+            (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
         }
     }
 

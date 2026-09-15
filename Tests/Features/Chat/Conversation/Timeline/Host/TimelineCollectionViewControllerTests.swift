@@ -100,9 +100,11 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         controller.view.frame.size.height = 350
         parent.view.layoutIfNeeded()
         controller.viewDidLayoutSubviews()
+        try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height, 0, accuracy: 1)
         collection.contentInset.bottom = 80
         controller.viewDidLayoutSubviews()
+        try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(collection.contentSize.height + collection.adjustedContentInset.bottom
                        - collection.contentOffset.y - collection.bounds.height, 0, accuracy: 1,
                        "Bottom attachment must account for a changing composer inset")
@@ -118,7 +120,8 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         }
         let offset = try messageOffset()
         for _ in 0 ..< 50 {
-            if model.rows.contains(where: { $0.messageID == "0" }) { break }
+            if model.rows.contains(where: { $0.messageID == "0" }),
+               collection.numberOfItems(inSection: 0) == model.rows.count { break }
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(model.rows.compactMap(\.messageID), messages.map(\.id))
@@ -137,6 +140,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         controller.view.frame.size = CGSize(width: 300, height: 450)
         parent.view.layoutIfNeeded()
         controller.viewDidLayoutSubviews()
+        try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(try messageOffset(), resizeOffset, accuracy: 1)
         XCTAssertFalse(model.state.live.followsLatest)
     }
@@ -227,16 +231,31 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         let markerLayout = TimelineTestFixtures.layout(row: .unreadSeparator, width: 400, parent: controller, cache: TimelineLayoutCache())
         XCTAssertEqual(marker.bounds.height, markerLayout.size.height, accuracy: 0.5)
 
+        model.updateReadState(unreadCount: 5, lastReadMessageID: messages[10].id)
+        await model.jumpTowardLatest()
+        try await Task.sleep(for: .milliseconds(650))
+        let readBoundary = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[10].id })
+        let boundaryFrame = try XCTUnwrap(collection.layoutAttributesForItem(at: .init(item: readBoundary, section: 0))).frame
+        XCTAssertEqual(boundaryFrame.maxY,
+                       collection.contentOffset.y + collection.bounds.height - controller.composerInset, accuracy: 1,
+                       "The first jump must bottom-align the read boundary above the composer.")
+        await model.jumpTowardLatest()
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(collection.contentSize.height,
+                       collection.contentOffset.y + collection.bounds.height - controller.composerInset, accuracy: 1,
+                       "A second jump must reach the actual bottom.")
+
         func frame(_ messageIndex: Int) throws -> CGRect {
             let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[messageIndex].id })
             return try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))).frame
         }
-        func show(top: CGFloat, bottom: CGFloat) {
+        func show(top: CGFloat, bottom: CGFloat) async throws {
             model.setReadTrackingActive(false)
-            controller.scrollViewWillBeginDragging(collection)
             controller.view.frame.size.height = bottom - top + controller.headerInset + controller.composerInset
             parent.view.layoutIfNeeded()
             controller.viewDidLayoutSubviews()
+            try await Task.sleep(for: .milliseconds(100))
+            controller.scrollViewWillBeginDragging(collection)
             collection.setContentOffset(CGPoint(x: 0, y: top - controller.headerInset), animated: false)
             collection.layoutIfNeeded()
             controller.scrollViewDidScroll(collection)
@@ -245,16 +264,16 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         }
 
         let partial = try frame(6)
-        show(top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
+        try await show(top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(reads, [], "A row clipped by both overlays must never be marked read.")
 
-        show(top: try frame(5).midY, bottom: try frame(8).midY)
+        try await show(top: try frame(5).midY, bottom: try frame(8).midY)
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(reads, [messages[7].id],
                        "Choose the last fully visible row, not the partially visible row under the composer.")
 
-        show(top: try frame(14).midY, bottom: collection.contentSize.height)
+        try await show(top: try frame(14).midY, bottom: collection.contentSize.height)
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(reads, [messages[7].id, messages[15].id],
                        "Pending rows cannot advance read progress; opaque IDs remain in timeline order.")
@@ -316,8 +335,9 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         collection.scrollToItem(at: path, at: .top, animated: false)
         let before = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.height
         setCategory(.accessibilityExtraExtraExtraLarge, on: controller, parent: parent)
-        try await Task.sleep(for: .milliseconds(200))
         parent.view.layoutIfNeeded()
+        controller.viewDidLayoutSubviews()
+        try await Task.sleep(for: .milliseconds(200))
         collection.layoutIfNeeded()
         let after = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.height
         XCTAssertGreaterThan(after, before)

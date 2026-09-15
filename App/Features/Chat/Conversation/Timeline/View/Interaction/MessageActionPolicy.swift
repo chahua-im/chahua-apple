@@ -109,7 +109,8 @@ struct MessageActionPolicy {
         case .reply:
             return context.canWrite ? .enabled : .hidden
         case .thread:
-            applicable = context.canWrite && messageType == .text && !context.isThreadView && !hasThreadInfo
+            return context.canWrite && messageType == .text && !context.isThreadView && !hasThreadInfo
+                ? .enabled : .hidden
         case .pin:
             return context.canWrite && context.isAdmin && !context.isThreadView && !context.isPinned && !context.isUpdatingPin ? .enabled : .hidden
         case .unpin:
@@ -117,7 +118,7 @@ struct MessageActionPolicy {
         case .edit:
             return context.canWrite && isOwn && messageType == .text && hasCopyableText ? .enabled : .hidden
         case .delete:
-            applicable = context.canWrite && (isOwn || context.isAdmin)
+            return context.canWrite && (isOwn || context.isAdmin) ? .enabled : .hidden
         case .favorite:
             applicable = messageType == .sticker
         case .save:

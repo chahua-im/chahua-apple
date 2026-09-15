@@ -32,6 +32,8 @@ struct ChatDetailView: View {
     @State private var isMediaDropTargeted = false
     @State private var showsPinnedMessages = false
     @State private var pinToUnpin: PinResponse?
+    @State private var messageToDelete: MessageResponse?
+    @State private var deleteError = false
 
     init(
         chat: ChatListItem,
@@ -68,9 +70,12 @@ struct ChatDetailView: View {
     }
 
     var body: some View {
-        conversationDropSurface
+        deletionSurface
         .navigationTitle(navigationTitle ?? chat.chatDisplayName)
         .onAppear {
+            if threadID == nil {
+                model.updateReadState(unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
+            }
             store.registerTimeline(model)
             model.setReadTrackingActive(scenePhase == .active)
         }
@@ -154,6 +159,37 @@ struct ChatDetailView: View {
             store.unregisterTimeline(model)
             model.close()
             Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
+        }
+    }
+
+    private var deletionSurface: some View {
+        conversationDropSurface
+        .confirmationDialog(
+            String(localized: "Delete Message"),
+            isPresented: Binding(get: { messageToDelete != nil }, set: { if !$0 { messageToDelete = nil } }),
+            titleVisibility: .visible,
+            presenting: messageToDelete
+        ) { message in
+            Button("Delete", role: .destructive) {
+                Task {
+                    let deleted = await store.deleteMessage(message)
+                    if deleted {
+                        if editingMessage?.id == message.id { cancelEditing() }
+                    } else {
+                        deleteError = true
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { message in
+            if message.sender.uid == model.currentUserID {
+                Text("Are you sure you want to delete this message?")
+            } else {
+                Text("Are you sure you want to delete this message from \(message.sender.name ?? String(localized: "this user"))?")
+            }
+        }
+        .alert("Failed to delete message", isPresented: $deleteError) {
+            Button("OK") {}
         }
     }
 
@@ -312,6 +348,15 @@ struct ChatDetailView: View {
                 replyFocusRequest &+= 1
             }
             actions.editMessage = startEditing
+            actions.deleteMessage = { message in
+                guard !store.deletingMessageIDs.contains(message.id),
+                      MessageActionPolicy(
+                        messageType: message.messageType, isDeleted: message.isDeleted,
+                        isOwn: message.sender.uid == model.currentUserID,
+                        context: interactionContext
+                      ).availability(of: .delete) == .enabled else { return }
+                messageToDelete = message
+            }
             actions.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage, !message.isDeleted else { return }
                 Task { await reactions.toggle(message: message, emoji: emoji, currentUserID: model.currentUserID) }

@@ -24,7 +24,9 @@ struct ConversationTimelineState: Equatable {
     struct Live: Equatable {
         var isPinnedToBottom = false
         var followsLatest = true
-        var unseenCount = 0
+        var pendingLiveCount = 0
+        var unreadCount: Int64 = 0
+        var scrollsTowardNewer = false
     }
 
     var content: Content = .idle

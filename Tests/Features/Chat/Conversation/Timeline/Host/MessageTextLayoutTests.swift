@@ -183,6 +183,75 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertLessThan(wide.size.height, narrow.size.height)
         XCTAssertLessThanOrEqual(wide.metadataFrame.maxX, wide.size.width)
     }
+
+    func testSeparateMetadataInkFitsItsAllocatedRowAtFractionalAndDynamicSizes() throws {
+        for (fontSize, displayScale) in [(CGFloat(12), CGFloat(2)), (12.5, 1.5), (28, 3)] {
+            let metadata = MessageMetadata(time: "00:17 (Edited)", state: .failed,
+                                           isOutgoing: true, fontSize: fontSize)
+            let layout = MessageTextLayout(
+                attributedText: MessageTextContent.attributedText(
+                    text: "A crowded final line", mentions: [], currentUserID: 1,
+                    isOutgoing: true, font: .systemFont(ofSize: fontSize * 17 / 12)),
+                metadata: metadata)
+            let geometry = layout.geometry(for: metadata.size.width)
+            XCTAssertFalse(geometry.metadataIsInline)
+            XCTAssertLessThanOrEqual(geometry.metadataFrame.maxY, geometry.size.height)
+
+            // Leave room outside the allocation: any escaped ink would be clipped
+            // when this same drawing is hosted at the native text view's bottom.
+            let frame = geometry.metadataFrame.offsetBy(dx: 8.25, dy: 8.25)
+            let width = Int(ceil((frame.maxX + 8) * displayScale))
+            let height = Int(ceil((frame.maxY + 8) * displayScale))
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.clear(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+            context.translateBy(x: 0, y: CGFloat(height))
+            context.scaleBy(x: displayScale, y: -displayScale)
+            #if os(macOS)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+            metadata.draw(in: frame)
+            NSGraphicsContext.restoreGraphicsState()
+            #else
+            UIGraphicsPushContext(context)
+            metadata.draw(in: frame)
+            UIGraphicsPopContext()
+            #endif
+            let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+            let allocation = CGRect(x: frame.minX * displayScale, y: frame.minY * displayScale,
+                                    width: frame.width * displayScale, height: frame.height * displayScale).integral
+            var drawnPixels = 0
+            var escapedPixels = 0
+            for y in 0 ..< height {
+                for x in 0 ..< width where pixels[y * context.bytesPerRow + x * 4 + 3] > 0 {
+                    drawnPixels += 1
+                    if !allocation.contains(CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)) {
+                        escapedPixels += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(drawnPixels, 0)
+            XCTAssertEqual(escapedPixels, 0, "Timestamp and delivery ink must fit the measured row at \(fontSize) pt, \(displayScale)x.")
+        }
+    }
+
+    func testStandaloneMetadataKeepsItsDrawingHeightWhenSectionEdgesSnapToPixels() throws {
+        let message = try TimelineTestFixtures.message(id: "metadata-only", senderID: 2, at: 0,
+                                                       hour: 0, minute: 17, fields: ["message": ""])
+        let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false,
+                                           groupPosition: .single, showsSenderName: false))
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 320, displayScale: 1.1)
+        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1,
+                                                       isThreadTimeline: false, environment: environment)
+        let metadata = try XCTUnwrap(presentation.metadata)
+        let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+        let frame = try XCTUnwrap(layout.frames[.metadata])
+        let drawnHeight = metadata.size.height * min(1, frame.width / metadata.size.width)
+        XCTAssertGreaterThanOrEqual(frame.height + 0.0001, drawnHeight,
+                                   "Pixel alignment must not shorten the native timestamp drawing surface.")
+    }
     #if os(macOS)
     func testMetadataAdoptsDarkAppearanceRatherThanItsCreationAppearance() throws {
         var metadata: MessageMetadata?

@@ -52,7 +52,9 @@ final class TimelineRowView: UIView {
             rowMarker.configure(.row(.init(isEnabled: canReply, onChange: { [weak self] in self?.swipe($0) },
                 onFinish: { [weak self] in self?.resetSwipe(animated: true) }, onReply: { [weak self] in self?.reply() })))
             if bubble?.isHidden == false, binding.actions.openContextMenu != nil {
-                holdMarker.configure(.bubble { [weak self] rect in self?.openMenu(rect) })
+                holdMarker.configure(.bubble(.init(view: bubble, open: { [weak self] rect, feedback in
+                    self?.openMenu(rect, pressFeedback: feedback)
+                })))
             } else { holdMarker.stop() }
         }
         if !canReply { resetSwipe(animated: false) }
@@ -99,8 +101,12 @@ final class TimelineRowView: UIView {
         arrow.frame = CGRect(x: bounds.maxX - 52, y: bounds.midY - 18, width: 36, height: 36)
         guard let binding else { return }
         let frames = binding.layout.frames
-        bubble?.frame = binding.context.isInteractionPreview ? bounds : frames[.bubble] ?? .zero
-        holdMarker.frame = bubble?.frame ?? .zero
+        let bubbleFrame = binding.context.isInteractionPreview ? bounds : frames[.bubble] ?? .zero
+        // A pending press transforms only the bubble. Assign its untransformed
+        // bounds/center, never UIView.frame while that transform is active.
+        bubble?.bounds = CGRect(origin: .zero, size: bubbleFrame.size)
+        bubble?.center = CGPoint(x: bubbleFrame.midX, y: bubbleFrame.midY)
+        holdMarker.frame = bubbleFrame
         avatar?.frame = frames[.avatar] ?? .zero
         reactions?.frame = frames[.reactions] ?? .zero
         thread?.frame = frames[.thread] ?? .zero
@@ -161,13 +167,17 @@ final class TimelineRowView: UIView {
         guard canReply, let binding, case .message(let row) = binding.presentation.row, let message = row.entry.remoteMessage else { return }
         binding.actions.replyToMessage?(message)
     }
-    private func openMenu(_ rect: CGRect) {
-        guard let binding, !binding.context.isInteractionPreview, case .message(let row) = binding.presentation.row else { return }
+    private func openMenu(_ rect: CGRect, pressFeedback: MessageBubblePressFeedback? = nil) {
+        guard let binding, !binding.context.isInteractionPreview, case .message(let row) = binding.presentation.row,
+            let open = binding.actions.openContextMenu
+        else {
+            pressFeedback?.restore()
+            return
+        }
         // End editing only after the row recognizer has awarded the hold to the
         // menu. Doing this on touch-down can relayout/cancel the pending hold.
         window?.endEditing(false)
-        binding.actions.openContextMenu?(
-            row, .init(rect: rect, presentation: binding.presentation, layout: binding.layout))
+        open(row, .init(rect: rect, presentation: binding.presentation, layout: binding.layout, pressFeedback: pressFeedback))
     }
     private func swipe(_ displacement: CGFloat) {
         content.layer.removeAllAnimations()

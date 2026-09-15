@@ -332,7 +332,9 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
+    func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }
     func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func archiveChat(chatID: String) async throws { throw APIError.unavailable }
     func archiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
     func muteChat(chatID: String) async throws -> MuteResponse { throw APIError.unavailable }

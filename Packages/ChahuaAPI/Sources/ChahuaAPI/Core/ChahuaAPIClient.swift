@@ -70,6 +70,9 @@ public protocol ChahuaAPIClient: Sendable {
     /// Replaces the text of an existing message with `PATCH /chats/{chatID}/messages/{messageID}`.
     func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws -> MessageResponse
 
+    /// Recalls a published message for all participants with `DELETE /chats/{chatID}/messages/{messageID}`.
+    func deleteMessage(chatID: String, messageID: String) async throws
+
     /// Idempotent reaction mutation at `/chats/{chatID}/messages/{messageID}/reactions/{emoji}`.
     func putReaction(chatID: String, messageID: String, emoji: String) async throws
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws
@@ -93,6 +96,9 @@ public protocol ChahuaAPIClient: Sendable {
 
     /// Advances the current member's read cursor with `POST /chats/{chatID}/read`.
     func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse
+
+    /// Rewinds a chat's read cursor with `POST /chats/{chatID}/unread`.
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse
 
     /// Advances a subscribed thread's read cursor without marking its parent chat read.
     func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse

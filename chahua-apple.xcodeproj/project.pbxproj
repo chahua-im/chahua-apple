@@ -25,7 +25,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		C0985FCE303BCC22003200C0 /* chahua-apple.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "chahua-apple.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0985FCE303BCC22003200C0 /* Chahua.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Chahua.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C098607530428240003200C0 /* Info-Local.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-Local.plist"; sourceTree = "<group>"; };
 		C09860FE3044841E003200C0 /* chahua-appleTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "chahua-appleTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C098620430463901003200C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -85,7 +85,7 @@
 		C0985FCF303BCC22003200C0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C0985FCE303BCC22003200C0 /* chahua-apple.app */,
+				C0985FCE303BCC22003200C0 /* Chahua.app */,
 				C09860FE3044841E003200C0 /* chahua-appleTests.xctest */,
 			);
 			name = Products;
@@ -130,7 +130,7 @@
 				C0CC0005303BCC2200320001 /* Kingfisher */,
 			);
 			productName = "chahua-ios";
-			productReference = C0985FCE303BCC22003200C0 /* chahua-apple.app */;
+			productReference = C0985FCE303BCC22003200C0 /* Chahua.app */;
 			productType = "com.apple.product-type.application";
 		};
 		C09860FD3044841E003200C0 /* chahua-appleTests */ = {
@@ -410,7 +410,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = chahua_apple;
+				PRODUCT_NAME = Chahua;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "match Development app.chahua.chat";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "match Development app.chahua.chat macos";
@@ -475,7 +476,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = chahua_apple;
+				PRODUCT_NAME = Chahua;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "match Development app.chahua.chat";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "match Development app.chahua.chat macos";
@@ -521,7 +523,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-apple.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-apple";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Chahua.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Chahua";
 				XROS_DEPLOYMENT_TARGET = 26.5;
 			};
 			name = Debug;
@@ -547,7 +549,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-apple.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-apple";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Chahua.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Chahua";
 				XROS_DEPLOYMENT_TARGET = 26.5;
 			};
 			name = Local;
@@ -573,7 +575,7 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2,7";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/chahua-apple.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/chahua-apple";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Chahua.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Chahua";
 				XROS_DEPLOYMENT_TARGET = 26.5;
 			};
 			name = Release;
@@ -634,7 +636,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = chahua_apple;
+				PRODUCT_NAME = Chahua;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "match Development app.chahua.chat";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "match Development app.chahua.chat macos";

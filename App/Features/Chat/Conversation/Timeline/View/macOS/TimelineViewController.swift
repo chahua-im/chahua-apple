@@ -80,7 +80,7 @@ final class TimelineViewController: NSViewController {
         // neither this controller nor its representable adds another safe area.
         tableController.headerInset = headerInset
         tableController.composerInset = composerInset
-        interactionController.configure(actions: actions, context: interactionContext, mediaContext: mediaContext)
+        interactionController.configure(actions: actions, context: interactionContext)
         tableController.actions = interactionController.routedActions
         if isViewLoaded {
             if appearanceChanged { applyAppearance() }

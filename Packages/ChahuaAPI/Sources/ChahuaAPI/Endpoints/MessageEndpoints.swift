@@ -111,6 +111,11 @@ public extension ChahuaClient {
         )
     }
 
+    /// Recalls a message. Successful deletion returns an empty 204 response.
+    func deleteMessage(chatID: String, messageID: String) async throws {
+        try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "messages", messageID]))
+    }
+
 
     /// Adds the current user's reaction. The server returns an empty 204 response.
     func putReaction(chatID: String, messageID: String, emoji: String) async throws {

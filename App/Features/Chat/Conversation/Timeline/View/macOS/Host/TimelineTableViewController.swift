@@ -585,17 +585,22 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
         case .bottom(let animated):
             if let index = rows.indices.last { prepareScrollTarget(index) }
             scroll(to: bottomOrigin, animated: animated, requestID: request.id)
-        case .reveal(let id, let animated, let highlight):
+        case .reveal(let id, let animated, _), .readBoundary(let id, let animated):
             guard let index = rows.firstIndex(where: { $0.id == id }) else {
                 finishRequest(id: request.id)
                 return
             }
             prepareScrollTarget(index)
-            if highlight && beginHighlight { highlightRow(id) }
+            if case .reveal(_, _, true) = request.intent, beginHighlight { highlightRow(id) }
             let frame = tableView.rect(ofRow: index)
-            let target = constrainedOrigin(y: id == .unreadSeparator
-                ? frame.minY - scrollView.contentInsets.top
-                : frame.midY - scrollView.contentView.bounds.height / 2)
+            let target: NSPoint
+            if case .readBoundary = request.intent {
+                target = constrainedOrigin(y: frame.maxY - scrollView.contentView.bounds.height + scrollView.contentInsets.bottom)
+            } else {
+                target = constrainedOrigin(y: id == .unreadSeparator
+                    ? frame.minY - scrollView.contentInsets.top
+                    : frame.midY - scrollView.contentView.bounds.height / 2)
+            }
             scroll(to: target, animated: animated, requestID: request.id)
         }
     }
@@ -785,6 +790,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
             openReply: actions.openReply == nil ? nil : { [weak self] in self?.actions.openReply?($0) },
             replyToMessage: actions.replyToMessage == nil ? nil : { [weak self] in self?.actions.replyToMessage?($0) },
             editMessage: actions.editMessage == nil ? nil : { [weak self] in self?.actions.editMessage?($0) },
+            deleteMessage: actions.deleteMessage == nil ? nil : { [weak self] in self?.actions.deleteMessage?($0) },
             openThread: actions.openThread == nil ? nil : { [weak self] in self?.actions.openThread?($0) },
             openLink: actions.openLink == nil ? nil : { [weak self] in self?.actions.openLink?($0) },
             openMention: actions.openMention == nil ? nil : { [weak self] in self?.actions.openMention?($0) },

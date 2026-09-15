@@ -297,6 +297,8 @@ private actor HeldReactionAPI: ChahuaAPIClient {
         mutations.removeValue(forKey: index)?.resume(with: result)
     }
 
+    func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }
+
     // Deliberately completes even after cancellation to exercise session fencing.
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
         let index = recorded.count
@@ -337,6 +339,7 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
     func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse {
         throw APIError.unavailable

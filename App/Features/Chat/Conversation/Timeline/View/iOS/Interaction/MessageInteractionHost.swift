@@ -51,6 +51,7 @@ struct MessageInteractionHost<Content: View>: View {
                 MessageInteractionWindowPresenter(
                     isPresented: target != nil && selectedRow != nil,
                     reduceMotion: reduceMotion,
+                    pressFeedback: target?.source.pressFeedback,
                     onClose: { target = nil },
                     overlay: { animation in
                         AnyView(
@@ -110,6 +111,14 @@ struct MessageInteractionHost<Content: View>: View {
                         let message = liveRow.entry.remoteMessage, let togglePin = actions.togglePin {
                         self.target = nil
                         togglePin(message)
+                    } else if action == .delete, let message = liveRow.entry.remoteMessage,
+                        let delete = actions.deleteMessage {
+                        self.target = nil
+                        delete(message)
+                    } else if action == .thread, let message = liveRow.entry.remoteMessage,
+                        let openThread = actions.openThread {
+                        self.target = nil
+                        openThread(message.id)
                     } else if action == .copy, let text = liveRow.entry.text {
                         UIPasteboard.general.string = text
                         self.target = nil
@@ -182,11 +191,15 @@ private struct MessageInteractionOverlay: View {
                            alignment: row.isOutgoing ? .topTrailing : .topLeading)
                     .clipShape(Rectangle().inset(by: -8))
                     .shadow(color: .black.opacity(animation.isPresented ? 0.24 : 0), radius: 18, y: 10)
-                    .scaleEffect(reduceMotion ? 1 : animation.isLifted ? 1.035 : 1)
-                    .opacity(reduceMotion && !animation.isPresented ? 0 : 1)
+                    .scaleEffect(reduceMotion ? 1 : animation.previewScale)
+                    .opacity(Double(animation.previewOpacity))
                     .position(
-                        x: reduceMotion || animation.isPresented ? previewFrame.midX : source.rect.midX,
-                        y: reduceMotion || animation.isPresented ? previewFrame.midY : source.rect.minY + previewFrame.height / 2)
+                        x: reduceMotion || animation.isPresented ? previewFrame.midX
+                            : source.rect.midX + (row.isOutgoing ? 1 : -1)
+                                * (bubbleSize.width - previewFrame.width) * animation.previewScale / 2,
+                        y: reduceMotion || animation.isPresented ? previewFrame.midY
+                            : source.rect.minY + previewFrame.height / 2
+                                + (bubbleSize.height - previewFrame.height) * (1 - animation.previewScale) / 2)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
                 if policy.canReact {

@@ -8,7 +8,7 @@ final class TimelineChromeView: NSView {
     private struct Presentation: Equatable {
         let state: ConversationTimelineState
         let hasRows: Bool
-        let isAtLiveEdge: Bool
+        let showsJumpToLatest: Bool
         let headerInset: CGFloat
         let composerInset: CGFloat
     }
@@ -52,7 +52,7 @@ final class TimelineChromeView: NSView {
             self.model = model
             presentation = nil
         }
-        let next = Presentation(state: model.state, hasRows: !model.rows.isEmpty, isAtLiveEdge: model.isAtLiveEdge, headerInset: headerInset, composerInset: composerInset)
+        let next = Presentation(state: model.state, hasRows: !model.rows.isEmpty, showsJumpToLatest: model.showsJumpToLatest, headerInset: headerInset, composerInset: composerInset)
         guard presentation != next else { return }
         presentation = next
         let state = next.state
@@ -86,8 +86,8 @@ final class TimelineChromeView: NSView {
         } else {
             reconciliationFailure.hide()
         }
-        jumpControl.isHidden = state.content != .ready || (next.isAtLiveEdge && state.live.followsLatest)
-        jumpControl.setCount(state.live.unseenCount)
+        jumpControl.isHidden = !next.showsJumpToLatest
+        jumpControl.setCount(model.jumpUnreadCount)
         needsLayout = true
     }
 
@@ -139,7 +139,7 @@ final class TimelineChromeView: NSView {
             switch operation {
             case .initial: await model.retryInitial()
             case .reconcile: await model.reconcileAfterReconnect()
-            case .jump: await model.jumpToLiveEdge()
+            case .jump: await model.jumpTowardLatest()
             }
             self?.tasks[operation] = nil
         }
@@ -421,12 +421,12 @@ private final class TimelineJumpControl: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func setCount(_ count: Int) {
+    func setCount(_ count: Int64) {
         let title = String(localized: "Jump to latest messages")
         badge.stringValue = String(max(0, count))
         badge.isHidden = count <= 0
         button.setAccessibilityLabel(title)
-        button.setAccessibilityValue(count > 0 ? String(localized: "\(count) unseen messages") : nil)
+        button.setAccessibilityValue(count > 0 ? String(localized: "\(count) unread messages") : nil)
         needsLayout = true
     }
 

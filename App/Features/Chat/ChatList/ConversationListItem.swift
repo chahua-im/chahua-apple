@@ -11,7 +11,7 @@ enum ConversationListScope: String, CaseIterable, Identifiable {
 }
 
 enum ConversationListAction: Equatable {
-    case archive, mute, unmute, markRead
+    case archive, mute, unmute, markRead, markUnread
 }
 
 enum ConversationListItem: Hashable, Identifiable {

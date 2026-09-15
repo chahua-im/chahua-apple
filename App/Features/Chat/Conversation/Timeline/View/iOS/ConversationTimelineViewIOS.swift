@@ -18,17 +18,18 @@ struct ConversationTimelineView: View {
             ZStack(alignment: .bottomTrailing) {
                 content
                     .clipped()
-                if canJumpToLiveEdge {
-                    Button { Task { await model.jumpToLiveEdge() } } label: {
+                if model.showsJumpToLatest {
+                    Button { Task { await model.jumpTowardLatest() } } label: {
                         jumpToLatestSymbol
                             .overlay(alignment: .topTrailing) {
-                                if model.state.live.unseenCount > 0 {
-                                    Text("\(model.state.live.unseenCount)").font(.caption2.bold()).padding(5).foregroundStyle(.white).background(ChahuaTheme.accent, in: Capsule()).offset(x: 8, y: -8)
+                                if model.jumpUnreadCount > 0 {
+                                    Text("\(model.jumpUnreadCount)").font(.caption2.bold()).padding(5).foregroundStyle(.white).background(ChahuaTheme.accent, in: Capsule()).offset(x: 8, y: -8)
                                 }
                             }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Jump to latest messages")
+                    .accessibilityValue(model.jumpUnreadCount > 0 ? String(localized: "\(model.jumpUnreadCount) unread messages") : "")
                     .padding(ChahuaTheme.Spacing.large)
                     .padding(.bottom, chatComposerInset)
                 }
@@ -149,9 +150,6 @@ struct ConversationTimelineView: View {
         .font(.caption).padding(ChahuaTheme.Spacing.small).background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)).padding()
     }
 
-    private var canJumpToLiveEdge: Bool {
-        model.state.content == .ready && !(model.isAtLiveEdge && model.state.live.followsLatest)
-    }
 }
 
 

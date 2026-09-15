@@ -11,6 +11,7 @@ final class MessageRowGestureCoordinator {
     private var markers: [ObjectIdentifier: Registration] = [:]
     private var nextOrder = 0
     private let recognizer = MessageRowTouchRecognizer(target: nil, action: nil)
+    private var pressFeedback: MessageBubblePressFeedback?
 
     init(view: UIView) {
         self.view = view
@@ -20,7 +21,17 @@ final class MessageRowGestureCoordinator {
 
     /// Cancel before message replacement, reuse, or detachment.
     func cancel() {
+        pressFeedback?.restore()
+        pressFeedback = nil
         recognizer.cancelSession()
+    }
+
+    fileprivate func beginPress(for session: MessageRowTouchSession) {
+        guard let bubbleView = session.bubbleView else { return }
+        pressFeedback?.restore()
+        let feedback = MessageBubblePressFeedback(view: bubbleView)
+        pressFeedback = feedback
+        session.pressFeedback = feedback
     }
 
     fileprivate func register(_ marker: MessageRowGestureMarker) {
@@ -34,11 +45,11 @@ final class MessageRowGestureCoordinator {
     fileprivate func unregister(_ marker: MessageRowGestureMarker) {
         let id = ObjectIdentifier(marker)
         markers.removeValue(forKey: id)
-        if recognizer.session?.references(id) == true { cancel() }
+        if recognizer.session?.references(id) == true { recognizer.cancelSession() }
     }
 
     fileprivate func disabled(_ marker: MessageRowGestureMarker) {
-        if recognizer.session?.references(ObjectIdentifier(marker)) == true { cancel() }
+        if recognizer.session?.references(ObjectIdentifier(marker)) == true { recognizer.cancelSession() }
     }
 
     fileprivate func capture(touch: UITouch, event: UIEvent) -> MessageRowTouchSession? {
@@ -61,7 +72,7 @@ final class MessageRowGestureCoordinator {
 
         let point = touch.location(in: view)
         var row: (id: ObjectIdentifier, configuration: MessageRowSwipeConfiguration, order: Int)?
-        var bubble: (id: ObjectIdentifier, rect: CGRect, open: (CGRect) -> Void, order: Int)?
+        var bubble: (id: ObjectIdentifier, rect: CGRect, configuration: MessageRowBubbleConfiguration, order: Int)?
         var tap: (id: ObjectIdentifier, rect: CGRect, action: () -> Void, order: Int)?
         for (id, registration) in markers {
             guard let marker = registration.marker, let rect = marker.region(containing: point, in: view) else { continue }
@@ -70,9 +81,9 @@ final class MessageRowGestureCoordinator {
                 if row == nil || registration.order > row!.order {
                     row = (id, configuration, registration.order)
                 }
-            case .bubble(let open):
+            case .bubble(let configuration):
                 if bubble == nil || prefers(rect, order: registration.order, over: bubble!.rect, order: bubble!.order) {
-                    bubble = (id, rect, open, registration.order)
+                    bubble = (id, rect, configuration, registration.order)
                 }
             case .tap(let action):
                 if let action, tap == nil || prefers(rect, order: registration.order, over: tap!.rect, order: tap!.order) {
@@ -95,7 +106,7 @@ final class MessageRowGestureCoordinator {
         }
         return MessageRowTouchSession(
             touch: touch, input: input, origin: point, rowID: row.id, swipe: row.configuration,
-            bubbleID: bubble?.id, bubbleRect: bubble?.rect, open: bubble?.open,
+            bubbleID: bubble?.id, bubbleRect: bubble?.rect, bubbleView: bubble?.configuration.view, open: bubble?.configuration.open,
             tapID: tap?.id, tapRect: tap?.rect, action: tap?.action
         )
     }
@@ -147,7 +158,7 @@ final class MessageRowGestureCoordinator {
 final class MessageRowGestureMarker: UIView {
     enum Role {
         case row(MessageRowSwipeConfiguration)
-        case bubble((CGRect) -> Void)
+        case bubble(MessageRowBubbleConfiguration)
         case tap((() -> Void)?)
     }
 
@@ -245,6 +256,11 @@ struct MessageRowSwipeConfiguration {
     let onReply: () -> Void
 }
 
+struct MessageRowBubbleConfiguration {
+    weak var view: UIView?
+    let open: (CGRect, MessageBubblePressFeedback?) -> Void
+}
+
 fileprivate final class MessageRowTouchSession {
     enum Input { case finger, primaryPointer, secondaryPointer }
     enum Owner { case undecided, swipe, contextMenu, tap, scroll, native, cancelled }
@@ -256,17 +272,20 @@ fileprivate final class MessageRowTouchSession {
     let swipe: MessageRowSwipeConfiguration
     let bubbleID: ObjectIdentifier?
     let bubbleRect: CGRect?
-    let open: ((CGRect) -> Void)?
+    weak var bubbleView: UIView?
+    let open: ((CGRect, MessageBubblePressFeedback?) -> Void)?
     let tapID: ObjectIdentifier?
     let tapRect: CGRect?
     let action: (() -> Void)?
     var owner = Owner.undecided
     var displacement: CGFloat = 0
     var deliveredContext = false
+    var pressFeedback: MessageBubblePressFeedback?
 
     init(
         touch: UITouch, input: Input, origin: CGPoint, rowID: ObjectIdentifier, swipe: MessageRowSwipeConfiguration,
-        bubbleID: ObjectIdentifier?, bubbleRect: CGRect?, open: ((CGRect) -> Void)?,
+        bubbleID: ObjectIdentifier?, bubbleRect: CGRect?, bubbleView: UIView?,
+        open: ((CGRect, MessageBubblePressFeedback?) -> Void)?,
         tapID: ObjectIdentifier?, tapRect: CGRect?, action: (() -> Void)?
     ) {
         self.touch = touch
@@ -276,6 +295,7 @@ fileprivate final class MessageRowTouchSession {
         self.swipe = swipe
         self.bubbleID = bubbleID
         self.bubbleRect = bubbleRect
+        self.bubbleView = bubbleView
         self.open = open
         self.tapID = tapID
         self.tapRect = tapRect
@@ -289,6 +309,7 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
     weak var coordinator: MessageRowGestureCoordinator?
     private(set) var session: MessageRowTouchSession?
     private var holdTimer: Timer?
+    private var holdFeedback: UIImpactFeedbackGenerator?
 
     override init(target: Any?, action: Selector?) {
         super.init(target: target, action: action)
@@ -313,7 +334,11 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
         }
         session = captured
         guard captured.input == .finger, captured.open != nil else { return }
-        let timer = Timer(timeInterval: 0.45, repeats: false) { [weak self] _ in
+        coordinator?.beginPress(for: captured)
+        let feedback = UIImpactFeedbackGenerator(style: .light)
+        feedback.prepare()
+        holdFeedback = feedback
+        let timer = Timer(timeInterval: MessageBubblePressFeedback.holdDuration, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.holdDeadline() }
         }
         holdTimer = timer
@@ -335,6 +360,7 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
         move(to: point)
         guard session === captured else { return }
         invalidateHold()
+        if captured.owner != .contextMenu { cancelPress(captured) }
         switch captured.owner {
         case .swipe, .contextMenu:
             state = .ended
@@ -404,6 +430,7 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
         let interrupted = session
         session = nil
         invalidateHold()
+        if let interrupted { cancelPress(interrupted) }
         super.reset()
         if interrupted?.owner == .swipe { interrupted?.swipe.onFinish() }
     }
@@ -427,6 +454,7 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
         case .ended:
             session = nil
             invalidateHold()
+            if captured.owner != .contextMenu { cancelPress(captured) }
             switch captured.owner {
             case .swipe:
                 let reply = captured.displacement >= 60 ? captured.swipe.onReply : nil
@@ -448,10 +476,19 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
 
     private func deliverContext(_ captured: MessageRowTouchSession) {
         guard !captured.deliveredContext, let rect = captured.bubbleRect,
+            coordinator?.canContinue(captured) == true,
             let windowRect = coordinator?.windowRect(for: rect)
-        else { return }
+        else {
+            if !captured.deliveredContext { cancelPress(captured) }
+            return
+        }
         captured.deliveredContext = true
-        captured.open?(windowRect)
+        captured.pressFeedback?.commit()
+        if captured.input == .finger {
+            holdFeedback?.impactOccurred(intensity: 0.8)
+        }
+        holdFeedback = nil
+        captured.open?(windowRect, captured.pressFeedback)
     }
 
     private func move(to point: CGPoint) {
@@ -465,6 +502,7 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
             let dy = point.y - captured.origin.y
             guard abs(dx) > 5 || abs(dy) > 5 else { return }
             invalidateHold()
+            cancelPress(captured)
             guard abs(dx) > abs(dy) else {
                 abandon(.scroll)
                 return
@@ -495,7 +533,10 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
         move(to: point)
         guard session === captured, captured.owner == .undecided,
             let rect = captured.bubbleRect, rect.contains(point), captured.open != nil
-        else { return }
+        else {
+            if session === captured, captured.owner == .undecided { abandon(.cancelled) }
+            return
+        }
         captured.owner = .contextMenu
         state = .began
     }
@@ -506,12 +547,18 @@ fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
         interrupted?.owner = owner
         session = nil
         invalidateHold()
+        if let interrupted { cancelPress(interrupted) }
         if state == .began || state == .changed {
             state = .cancelled
         } else if state == .possible {
             state = .failed
         }
         if wasSwiping { interrupted?.swipe.onFinish() }
+    }
+
+    private func cancelPress(_ captured: MessageRowTouchSession) {
+        captured.pressFeedback?.cancelPending(animated: true)
+        holdFeedback = nil
     }
 
     private func invalidateHold() {

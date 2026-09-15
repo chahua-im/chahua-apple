@@ -685,7 +685,9 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
+    func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }
     func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }

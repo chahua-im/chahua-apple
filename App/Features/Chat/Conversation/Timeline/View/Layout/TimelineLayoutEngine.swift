@@ -145,8 +145,12 @@ struct TimelineLayoutEngine {
         if hasBody {
             height += hasMedia ? 4 : p.reply == nil && p.title == nil ? 8 : 0
             geometry = textMeasurer.geometry(for: innerWidth)
-            frames[.text] = CGRect(x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: geometry!.size.height)
-            height += geometry!.size.height
+            // Snap the allocated extent before snapping its origin below. Rounding
+            // both edges independently can shorten the native drawing surface at
+            // fractional display scales while its installed text geometry stays tall.
+            let textHeight = pixel(geometry!.size.height, e)
+            frames[.text] = CGRect(x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: textHeight)
+            height += textHeight
             if !hasMedia { height += 8 }
         } else if let label = p.standaloneText {
             if p.title == nil && p.reply == nil { height += 8 }
@@ -160,14 +164,15 @@ struct TimelineLayoutEngine {
                 let outerInset = min(sticker ? 4 : 6, media.width / 2)
                 let pillPadding = min(6, max(0, (media.width - 2 * outerInset) / 2))
                 let size = scaled(metadata.size, width: max(0, media.width - 2 * (outerInset + pillPadding)))
-                let pillHeight = min(media.height, size.height + 4)
+                let pillHeight = min(media.height, pixel(size.height + 4, e))
                 let pillWidth = min(media.width, size.width + 2 * pillPadding)
                 frames[.metadata] = CGRect(x: media.maxX - outerInset - pillWidth, y: max(media.minY, media.maxY - outerInset - pillHeight), width: pillWidth, height: pillHeight)
             } else if hasMedia || !hasBody {
                 if !hasMedia && p.reply == nil && p.title == nil { height += 8 }
                 let size = scaled(metadata.size, width: innerWidth)
-                frames[.metadata] = CGRect(x: bubbleX + b - inset - size.width, y: bubbleY + height, width: size.width, height: size.height)
-                height += size.height + 8
+                let metadataHeight = pixel(size.height, e)
+                frames[.metadata] = CGRect(x: bubbleX + b - inset - size.width, y: bubbleY + height, width: size.width, height: metadataHeight)
+                height += metadataHeight + 8
             }
         }
         var threadContentFrames: [CGRect] = []

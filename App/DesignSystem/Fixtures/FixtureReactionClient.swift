@@ -22,6 +22,7 @@
         func install(_ messages: [MessageResponse]) {
             self.messages = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
         }
+        func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }
         func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
             guard let message = messages[messageID], message.chatId == chatID else { throw Failure.missingMessage }
             var value = try object(message)
@@ -86,6 +87,7 @@
         func muteChat(chatID: String) async throws -> MuteResponse { throw Failure.unexpectedOperation }
         func unmuteChat(chatID: String) async throws { throw Failure.unexpectedOperation }
         func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
+        func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
         func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
         func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw Failure.unexpectedOperation }
         func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw Failure.unexpectedOperation }

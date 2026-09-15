@@ -163,18 +163,9 @@ struct MessageReactionButton: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 44)
                 .background(selected ? Color.accentColor.opacity(0.18) : .clear, in: Circle())
-                .overlay(alignment: .bottomTrailing) {
-                    if selected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.accentColor)
-                            .background(.background, in: Circle())
-                            .accessibilityHidden(true)
-                    }
-                }
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(MessageReactionButtonStyle())
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.4)
         .accessibilityLabel(
@@ -184,6 +175,13 @@ struct MessageReactionButton: View {
         )
         .accessibilityAddTraits(selected ? .isSelected : [])
         .help(name)
+    }
+}
+
+private struct MessageReactionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.primary.opacity(0.08) : .clear, in: Circle())
     }
 }
 

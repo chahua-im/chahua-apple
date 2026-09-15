@@ -102,6 +102,7 @@ final class TimelineTableViewControllerTests: XCTestCase {
         await model.loadInitial(position: .unread(after: messages[3].id))
         controller.view.layoutSubtreeIfNeeded()
         controller.viewDidLayout()
+        try await waitForDisplay(controller, model: model)
         let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
         let table = try XCTUnwrap(scroll.documentView as? NSTableView)
         let markerIndex = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
@@ -110,16 +111,29 @@ final class TimelineTableViewControllerTests: XCTestCase {
         XCTAssertEqual(table.rect(ofRow: markerIndex).minY,
                        scroll.documentVisibleRect.minY + controller.headerInset, accuracy: 1)
 
+        model.updateReadState(unreadCount: 5, lastReadMessageID: messages[10].id)
+        await model.jumpTowardLatest()
+        try await Task.sleep(for: .milliseconds(650))
+        let readBoundary = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[10].id })
+        XCTAssertEqual(table.rect(ofRow: readBoundary).maxY,
+                       scroll.documentVisibleRect.maxY - controller.composerInset, accuracy: 1,
+                       "The first jump must bottom-align the read boundary above the composer.")
+        await model.jumpTowardLatest()
+        try await Task.sleep(for: .milliseconds(650))
+        XCTAssertEqual(table.bounds.maxY, scroll.documentVisibleRect.maxY - controller.composerInset, accuracy: 1,
+                       "A second jump must reach the actual bottom.")
+
         func frame(_ messageIndex: Int) throws -> NSRect {
             let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[messageIndex].id })
             return table.rect(ofRow: index)
         }
-        func show(top: CGFloat, bottom: CGFloat) {
+        func show(top: CGFloat, bottom: CGFloat) async throws {
             model.setReadTrackingActive(false)
-            NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
             window.setContentSize(NSSize(width: 400, height: bottom - top + controller.headerInset + controller.composerInset))
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
+            try await waitForDisplay(controller, model: model)
+            NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: top - controller.headerInset))
             scroll.reflectScrolledClipView(scroll.contentView)
             NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
@@ -128,16 +142,16 @@ final class TimelineTableViewControllerTests: XCTestCase {
         }
 
         let partial = try frame(6)
-        show(top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
+        try await show(top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(reads, [], "A row clipped by both overlays must never be marked read.")
 
-        show(top: try frame(5).midY, bottom: try frame(8).midY)
+        try await show(top: try frame(5).midY, bottom: try frame(8).midY)
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(reads, [messages[7].id],
                        "Choose the last fully visible row, not the partially visible row under the composer.")
 
-        show(top: try frame(14).midY, bottom: table.bounds.maxY)
+        try await show(top: try frame(14).midY, bottom: table.bounds.maxY)
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(reads, [messages[7].id, messages[15].id],
                        "Pending rows cannot advance read progress; opaque IDs remain in timeline order.")

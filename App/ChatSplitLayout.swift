@@ -185,17 +185,28 @@ struct ChatFloatingHeader<Avatar: View>: View {
     @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
-        #if os(iOS)
         HStack(spacing: 8) {
             if let onBack {
-                Button(action: onBack) {
-                    Label("Chats", systemImage: "chevron.backward")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 20, weight: .semibold))
+                let label = Label("Chats", systemImage: "chevron.backward")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 20, weight: .semibold))
+                #if os(macOS)
+                if #available(macOS 26, *) {
+                    Button(action: onBack) { label }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .buttonSizing(.flexible)
                         .frame(width: 44, height: 44)
+                } else {
+                    Button(action: onBack) { label.frame(width: 44, height: 44) }
+                        .buttonStyle(.plain)
+                        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
                 }
-                .buttonStyle(.plain)
-                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                #else
+                Button(action: onBack) { label.frame(width: 44, height: 44) }
+                    .buttonStyle(.plain)
+                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                #endif
             }
             HStack(spacing: 8) {
                 avatar()
@@ -204,6 +215,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 Text(title)
                     .font(.headline)
                     .lineLimit(1)
+                    #if os(macOS)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    #endif
                     .accessibilityAddTraits(.isHeader)
             }
             .padding(.leading, 6)
@@ -211,26 +225,6 @@ struct ChatFloatingHeader<Avatar: View>: View {
             .frame(minHeight: 44)
             .modifier(ChatGlassSurface(cornerRadius: 24))
         }
-        #else
-        HStack(spacing: 12) {
-            if let onBack {
-                Button(action: onBack) {
-                    Label("Chats", systemImage: "chevron.backward")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.plain)
-            }
-            avatar().accessibilityHidden(true)
-            Text(title)
-                .font(.headline)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityAddTraits(.isHeader)
-        }
-        .padding(.horizontal, 8)
-        .frame(minHeight: 42)
-        .modifier(ChatGlassSurface(cornerRadius: 24))
-        #endif
     }
 }
 

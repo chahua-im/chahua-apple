@@ -3,6 +3,8 @@ import Foundation
 enum TimelineScrollIntent: Equatable {
     case bottom(animated: Bool)
     case reveal(TimelineRowID, animated: Bool, highlight: Bool)
+    /// Places the last-read row immediately above the unobscured viewport's bottom.
+    case readBoundary(TimelineRowID, animated: Bool)
 }
 
 struct TimelineScrollRequest: Equatable {
