@@ -30,7 +30,7 @@
 		C09860FE3044841E003200C0 /* chahua-appleTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "chahua-appleTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C098620430463901003200C0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C098620530463971003200C0 /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
-		C098623230467881003200C0 /* chahua-apple.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "chahua-apple.entitlements"; sourceTree = "<group>"; };
+		C098623230467881003200C0 /* iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iOS.entitlements; sourceTree = "<group>"; };
 		C0BB0001303BCC2200320001 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		C0BB0002303BCC2200320001 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		C0BB0003303BCC2200320001 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
@@ -75,7 +75,6 @@
 		C0985FC5303BCC22003200C0 = {
 			isa = PBXGroup;
 			children = (
-				C098623230467881003200C0 /* chahua-apple.entitlements */,
 				C0985FD0303BCC22003200C0 /* App */,
 				C0BB0006303BCC2200320001 /* Config */,
 				C09860FF3044841E003200C0 /* Tests */,
@@ -95,6 +94,7 @@
 		C0BB0006303BCC2200320001 /* Config */ = {
 			isa = PBXGroup;
 			children = (
+				C098623230467881003200C0 /* iOS.entitlements */,
 				C098620530463971003200C0 /* InfoPlist.xcstrings */,
 				C098620430463901003200C0 /* Info.plist */,
 				C0BB0001303BCC2200320001 /* Debug.xcconfig */,
@@ -380,7 +380,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
-				CODE_SIGN_ENTITLEMENTS = "chahua-apple.entitlements";
+				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Mac Developer";
@@ -445,7 +445,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
-				CODE_SIGN_ENTITLEMENTS = "chahua-apple.entitlements";
+				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Mac Developer";
@@ -603,7 +603,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
-				CODE_SIGN_ENTITLEMENTS = "chahua-apple.entitlements";
+				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Mac Developer";
