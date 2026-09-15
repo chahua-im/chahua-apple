@@ -3,8 +3,10 @@ import SwiftUI
 
 struct TitleContent: Hashable {
     let name: String
-    let groupName: String?
+    let userGroup: UserGroupTagInfo?
     let genderGlyph: String?
+
+    var groupName: String? { userGroup?.name.flatMap { $0.isEmpty ? nil : $0 } }
 }
 
 enum RowSectionKey: Hashable {
@@ -58,9 +60,9 @@ struct TimelineRowPresentation {
                 sections.append(.standalone(standaloneText!, author: remote?.sender.name.flatMap { $0.isEmpty ? nil : $0 }))
             } else {
                 let sender = remote?.sender
-                let fallback = (message.isOutgoing ? currentUserProfile?.username : nil) ?? "User \(message.entry.senderID)"
-                let name = sender?.name.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
-                title = message.showsSenderName && !sticker ? .init(name: name, groupName: sender?.userGroup?.name.flatMap { $0.isEmpty ? nil : $0 }, genderGlyph: sender?.gender == 2 ? "♀" : "♂") : nil
+                let profile = remote == nil && message.isOutgoing && currentUserProfile?.uid == message.entry.senderID ? currentUserProfile : nil
+                let name = sender?.name.flatMap { $0.isEmpty ? nil : $0 } ?? profile?.username ?? "User \(message.entry.senderID)"
+                title = message.showsSenderName && !sticker ? .init(name: name, userGroup: sender?.userGroup ?? profile?.userGroup, genderGlyph: (sender?.gender ?? profile?.gender) == 2 ? "♀" : "♂") : nil
                 sections.append(.grouping(outgoing: message.isOutgoing, position: message.groupPosition, title: title != nil, avatar: message.groupPosition == .single || message.groupPosition == .last))
                 sections.append(.title(title))
                 if !deleted && supported {

@@ -55,13 +55,15 @@ final class TimelineMediaView: NSView {
                 let overflow = index == 5 && count > 6 ? count - 5 : 0
                 if !pending.isEmpty {
                     tile.configurePending(pending[index], gallery: count > 1, overflow: overflow,
-                                          captionSize: environment.captionSize)
+                                          captionSize: environment.captionSize,
+                                          canOpen: !binding.context.isInteractionPreview && binding.actions.openMedia != nil)
                 } else {
                     tile.configureRemote(attachments[index], gallery: count > 1, overflow: overflow,
                                          displayScale: environment.displayScale, captionSize: environment.captionSize,
-                                         mediaContext: binding.mediaContext, canOpen: binding.actions.openMedia != nil)
-                    tile.onOpen = { [weak self] in self?.openAttachment(at: index) }
+                                         mediaContext: binding.mediaContext,
+                                         canOpen: !binding.context.isInteractionPreview && binding.actions.openMedia != nil)
                 }
+                tile.onOpen = { [weak self] in self?.openAttachment(at: index) }
                 tile.setVisible(visible)
             }
             clearTiles(after: itemFrames.count)
@@ -115,14 +117,10 @@ final class TimelineMediaView: NSView {
     }
 
     private func openAttachment(at index: Int) {
-        guard let binding, let action = binding.actions.openMedia,
+        guard let binding, !binding.context.isInteractionPreview, let action = binding.actions.openMedia,
               case .message(let row) = binding.presentation.row,
-              row.entry.messageType == .text,
-              let message = row.entry.remoteMessage, !message.isDeleted,
-              message.attachments.indices.contains(index) else { return }
-        let attachment = message.attachments[index]
-        guard !attachment.kind.hasPrefix("video/") else { return }
-        action(message.id, message.attachments, attachment.id)
+              let gallery = MessageImageGallery(entry: row.entry, attachmentIndex: index) else { return }
+        action(gallery)
     }
 }
 
@@ -226,14 +224,14 @@ private final class TimelineMediaTileView: NSButton {
                                 showsBlurredBackdrop: !gallery,
                                 thumbnailPixelSize: pixelSize(displayScale), mediaContext: mediaContext)
         }
-        isEnabled = canOpen && !video
+        isEnabled = canOpen && attachment.kind.lowercased().hasPrefix("image/")
         setAccessibilityRole(isEnabled ? .button : .image)
         setAccessibilityLabel(video ? String(localized: "Video preview unavailable") : isEnabled ? String(localized: "Open image") : String(localized: "Image"))
         needsLayout = true
         window?.invalidateCursorRects(for: self)
     }
 
-    func configurePending(_ attachment: LocalOutgoingAttachment, gallery: Bool, overflow: Int, captionSize: CGFloat) {
+    func configurePending(_ attachment: LocalOutgoingAttachment, gallery: Bool, overflow: Int, captionSize: CGFloat, canOpen: Bool) {
         let changed = localPath != attachment.previewPath || localAttachmentGeneration != attachment.generation
         let placementChanged = self.gallery != gallery
         self.gallery = gallery
@@ -252,9 +250,8 @@ private final class TimelineMediaTileView: NSButton {
         }
         playBackground.isHidden = !video
         playSymbol.isHidden = !video
-        isEnabled = false
-        onOpen = nil
-        setAccessibilityRole(.image)
+        isEnabled = canOpen && attachment.mimeType.lowercased().hasPrefix("image/")
+        setAccessibilityRole(isEnabled ? .button : .image)
         setAccessibilityLabel(attachment.fileName)
         needsLayout = true
         refreshVisibility()

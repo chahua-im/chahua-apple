@@ -1,236 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Archive" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Archive"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "归档"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "封存"
-          }
-        }
-      }
-    },
-    "Mute" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mute"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "静音"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "靜音"
-          }
-        }
-      }
-    },
-    "Unmute" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unmute"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "取消静音"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "取消靜音"
-          }
-        }
-      }
-    },
-    "Mark as Read" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mark as Read"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "标为已读"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "標為已讀"
-          }
-        }
-      }
-    },
-    "Updating conversation" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Updating conversation"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在更新会话"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在更新對話"
-          }
-        }
-      }
-    },
-    "Conversation actions" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conversation actions"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "会话操作"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "對話操作"
-          }
-        }
-      }
-    },
-    "Couldn’t update conversation. Please try again." : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Couldn’t update conversation. Please try again."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "无法更新会话，请重试。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "無法更新對話，請再試一次。"
-          }
-        }
-      }
-    },
-    "Disable notifications" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disable notifications"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "关闭通知"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "關閉通知"
-          }
-        }
-      }
-    },
-    "Unregistering…" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unregistering…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在取消注册…"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "正在取消註冊…"
-          }
-        }
-      }
-    },
-    "Disabled on this device" : {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disabled on this device"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已在此设备上关闭"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "已在此裝置上關閉"
-          }
-        }
-      }
-    },
     "" : {
 
     },
@@ -470,6 +240,16 @@
       "comment" : "A label showing the number of media items in the composer.",
       "isCommentAutoGenerated" : true
     },
+    "%lld of %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld"
+          }
+        }
+      }
+    },
     "%lld points" : {
       "comment" : "A slider that adjusts the width of the conversation list.",
       "isCommentAutoGenerated" : true
@@ -645,6 +425,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已允許"
+          }
+        }
+      }
+    },
+    "Archive" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存"
           }
         }
       }
@@ -839,6 +642,9 @@
         }
       }
     },
+    "Close image" : {
+
+    },
     "Component gallery" : {
       "localizations" : {
         "en" : {
@@ -872,6 +678,29 @@
     "Content states" : {
       "comment" : "A section of the fixture gallery for content states.",
       "isCommentAutoGenerated" : true
+    },
+    "Conversation actions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation actions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话操作"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "對話操作"
+          }
+        }
+      }
     },
     "Conversation list width" : {
       "comment" : "A label describing the width of the conversation list.",
@@ -1046,6 +875,12 @@
       "comment" : "A button that reloads older messages when pressed.",
       "isCommentAutoGenerated" : true
     },
+    "Couldn’t load pinned messages. Please try again." : {
+
+    },
+    "Couldn’t load pinned messages. Retry" : {
+
+    },
     "Couldn’t open notification" : {
       "localizations" : {
         "en" : {
@@ -1071,6 +906,9 @@
     "Couldn’t open thread" : {
       "comment" : "Title of an error view when a thread can’t be opened.",
       "isCommentAutoGenerated" : true
+    },
+    "Couldn’t pin message. Please try again." : {
+
     },
     "Couldn’t refresh messages." : {
       "comment" : "A message displayed when the user can't refresh the timeline.",
@@ -1128,8 +966,34 @@
       "comment" : "A message displayed when a message can't be sent.",
       "isCommentAutoGenerated" : true
     },
+    "Couldn’t unpin message. Please try again." : {
+
+    },
     "Couldn’t update attachments" : {
 
+    },
+    "Couldn’t update conversation. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t update conversation. Please try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法更新会话，请重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更新對話，請再試一次。"
+          }
+        }
+      }
     },
     "Couldn’t update notification registration. Try again." : {
       "localizations" : {
@@ -1251,6 +1115,52 @@
       "comment" : "A DM chat name, if available. Otherwise, a generic DM name with the chat ID.",
       "isCommentAutoGenerated" : true
     },
+    "Disable notifications" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disable notifications"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭通知"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉通知"
+          }
+        }
+      }
+    },
+    "Disabled on this device" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disabled on this device"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在此设备上关闭"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在此裝置上關閉"
+          }
+        }
+      }
+    },
     "Dismiss" : {
       "comment" : "A button that dismisses a banner that indicates a failure in loading messages.",
       "isCommentAutoGenerated" : true
@@ -1280,6 +1190,9 @@
     "DMs" : {
       "comment" : "A label for a DMs scope.",
       "isCommentAutoGenerated" : true
+    },
+    "Done" : {
+
     },
     "Draft: %@" : {
       "comment" : "A label that shows the user's draft message in a conversation. The argument is the draft message.",
@@ -1412,6 +1325,9 @@
       "comment" : "A button that jumps to the latest messages.",
       "isCommentAutoGenerated" : true
     },
+    "Jump to pinned message" : {
+
+    },
     "Loading" : {
       "comment" : "Loading indicator with the title \"Loading\".",
       "isCommentAutoGenerated" : true
@@ -1469,6 +1385,9 @@
       "comment" : "A label displayed when loading messages.",
       "isCommentAutoGenerated" : true
     },
+    "Loading pinned messages…" : {
+
+    },
     "Loading saved messages…" : {
       "comment" : "A message that appears when the app is loading messages that were saved to a device.",
       "isCommentAutoGenerated" : true
@@ -1476,6 +1395,29 @@
     "Loading thread" : {
       "comment" : "Loading message for a chat thread.",
       "isCommentAutoGenerated" : true
+    },
+    "Mark as Read" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mark as Read"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标为已读"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "標為已讀"
+          }
+        }
+      }
     },
     "Media options" : {
       "comment" : "A button that displays a menu of media options.",
@@ -1552,12 +1494,38 @@
       "comment" : "A button that moves an attachment to a later position in the composer.",
       "isCommentAutoGenerated" : true
     },
+    "Mute" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mute"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "静音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "靜音"
+          }
+        }
+      }
+    },
     "Native bubble timeline" : {
 
     },
     "New message" : {
       "comment" : "A button that opens a new message.",
       "isCommentAutoGenerated" : true
+    },
+    "Next image" : {
+
     },
     "No active chats" : {
       "extractionState" : "stale",
@@ -1591,6 +1559,9 @@
       "isCommentAutoGenerated" : true
     },
     "No conversations" : {
+
+    },
+    "No pinned messages" : {
 
     },
     "Not implemented yet" : {
@@ -1729,6 +1700,9 @@
         }
       }
     },
+    "Open thread" : {
+
+    },
     "Options for %@" : {
       "comment" : "A contextual menu that appears when tapping the overflow icon in the bottom-right corner of an image attachment.",
       "isCommentAutoGenerated" : true
@@ -1780,7 +1754,22 @@
         }
       }
     },
+    "Pinch or double-tap to zoom." : {
+
+    },
+    "Pinned Message" : {
+
+    },
+    "Pinned messages" : {
+
+    },
+    "Pinned Messages" : {
+
+    },
     "Preparing attachments…" : {
+
+    },
+    "Previous image" : {
 
     },
     "Processing" : {
@@ -2765,6 +2754,9 @@
       "comment" : "Title and message for a view that shows a recoverable error.",
       "isCommentAutoGenerated" : true
     },
+    "Unable to load image" : {
+
+    },
     "Unavailable" : {
 
     },
@@ -2786,6 +2778,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未知"
+          }
+        }
+      }
+    },
+    "Unmute" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unmute"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消静音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消靜音"
           }
         }
       }
@@ -2812,9 +2827,58 @@
         }
       }
     },
+    "Unpin Message" : {
+
+    },
+    "Unregistering…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unregistering…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取消注册…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在取消註冊…"
+          }
+        }
+      }
+    },
     "Updating attachments…" : {
       "comment" : "A message that appears when the user is uploading attachments.",
       "isCommentAutoGenerated" : true
+    },
+    "Updating conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Updating conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更新会话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更新對話"
+          }
+        }
+      }
     },
     "Updating reaction" : {
       "localizations" : {
@@ -2895,6 +2959,9 @@
       "comment" : "A description of how videos are sent.",
       "isCommentAutoGenerated" : true
     },
+    "View all pinned messages" : {
+
+    },
     "Voice message (unavailable)" : {
       "comment" : "A label displayed for a voice message button.",
       "isCommentAutoGenerated" : true
@@ -2902,6 +2969,9 @@
     "Waiting to upload" : {
       "comment" : "A label describing a pending upload.",
       "isCommentAutoGenerated" : true
+    },
+    "Would you like to unpin this message?" : {
+
     },
     "You can add up to 5 reactions to a message." : {
       "localizations" : {

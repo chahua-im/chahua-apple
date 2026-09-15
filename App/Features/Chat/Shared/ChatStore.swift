@@ -29,6 +29,7 @@ final class ChatStore: ObservableObject {
     let conversationMessages = ConversationMessageStore()
     let outgoingQueue: OutgoingMessageQueue
     let reactions: MessageReactionController
+    let pins: ChatPinController
     let drafts: ChatDraftStore
     var onNotificationRead: ((ConversationKey, String) -> Void)?
     private var outgoingObservation: AnyCancellable?
@@ -62,6 +63,7 @@ final class ChatStore: ObservableObject {
         reactions = MessageReactionController(
             apiClient: apiClient, messageStore: conversationMessages, onInvalidToken: onInvalidToken
         )
+        pins = ChatPinController(apiClient: apiClient, onInvalidToken: onInvalidToken)
         outgoingObservation = outgoingQueue.events.sink { [weak self] event in
             self?.applyOutgoingEvent(event)
         }
@@ -411,6 +413,7 @@ final class ChatStore: ObservableObject {
     }
 
     func applyRealtimeEvent(_ event: RealtimeServerEvent, currentUserID: Int32) async {
+        pins.applyRealtimeEvent(event)
         switch event {
         case .message(let message):
             let requestGeneration = generation
@@ -464,16 +467,19 @@ final class ChatStore: ObservableObject {
         let requestGeneration = generation
         let optimistic = message.replacingMessageText(text)
         conversationMessages.apply(.messageUpdated(optimistic))
+        pins.applyRealtimeEvent(.messageUpdated(optimistic))
         do {
             let updated = try await apiClient.updateMessage(
                 chatID: message.chatId, messageID: message.id, body: .init(message: text))
             guard generation == requestGeneration else { return false }
             conversationMessages.apply(.messageUpdated(updated))
+            pins.applyRealtimeEvent(.messageUpdated(updated))
             invalidateChatList()
             return true
         } catch {
             guard generation == requestGeneration else { return false }
             conversationMessages.apply(.messageUpdated(message))
+            pins.applyRealtimeEvent(.messageUpdated(message))
             if case APIError.invalidToken = error { await onInvalidToken() }
             return false
         }
@@ -490,6 +496,8 @@ final class ChatStore: ObservableObject {
     func reconcileVisibleTimelines() async {
         let models = visibleTimelines()
         await withTaskGroup(of: Void.self) { group in
+            let activeChatIDs = Set(models.filter { $0.threadID == nil }.map(\.chatID))
+            group.addTask { await self.pins.reconcileAfterReconnect(activeChatIDs: activeChatIDs) }
             for model in models { group.addTask { await model.reconcileAfterReconnect() } }
         }
     }
@@ -580,6 +588,7 @@ final class ChatStore: ObservableObject {
     }
 
     func cancelRealtimeRecovery() {
+        pins.cancelLoads()
         refreshGeneration += 1
         refreshTask?.cancel()
         refreshTask = nil
@@ -607,6 +616,7 @@ final class ChatStore: ObservableObject {
         outgoingRevisions.removeAll()
         cancelRealtimeRecovery()
         reactions.reset()
+        pins.reset()
         conversationMessages.reset()
         state = ChatState()
     }

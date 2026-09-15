@@ -1,3 +1,4 @@
+import ChahuaAPI
 import SwiftUI
 import XCTest
 #if os(macOS)
@@ -81,6 +82,68 @@ final class SenderHeaderLayoutTests: XCTestCase {
     }
 
     #endif
+
+    func testQueuedSenderUsesLiveProfileUntilAcknowledgement() throws {
+        let profile = try JSONDecoder().decode(MeResponse.self, from: Data(#"""
+        {
+          "uid": 1, "username": "Local name", "gender": 2, "stickerPackOrder": [], "permissions": [],
+          "userGroup": {"groupId": 7, "name": "Staff", "chatGroupColor": "#112233", "chatGroupColorDark": "#aabbcc"}
+        }
+        """#.utf8))
+        let pending = PendingOutgoingMessage(
+            chatID: "chat", clientGeneratedID: "queued-sender",
+            body: .init(messageType: .text, clientGeneratedId: "queued-sender", message: "Hi"),
+            enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1, state: .queued
+        )
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
+        func make(_ entry: ConversationTimelineEntry, profile: MeResponse?) -> TimelineRowPresentation {
+            TimelineRowPresentation.make(
+                row: .message(.init(entry: entry, isOutgoing: true, groupPosition: .single, showsSenderName: true)),
+                currentUserProfile: profile, currentUserID: 1, isThreadTimeline: false, environment: environment
+            )
+        }
+
+        XCTAssertEqual(make(.pending(pending), profile: nil).title?.name, "User 1")
+        let queued = try XCTUnwrap(make(.pending(pending), profile: profile).title)
+        XCTAssertEqual(queued.name, "Local name")
+        XCTAssertEqual(queued.genderGlyph, "♀")
+        XCTAssertEqual(queued.groupName, "Staff")
+        XCTAssertEqual(queued.userGroup?.chatGroupColor, "#112233")
+        XCTAssertEqual(queued.userGroup?.chatGroupColorDark, "#aabbcc")
+
+        let acknowledgement = try TimelineTestFixtures.message(
+            id: "confirmed-sender", senderID: 1, at: 0, clientGeneratedID: pending.clientGeneratedID,
+            fields: ["sender": ["uid": 1, "gender": 1, "name": "", "userGroup": NSNull()]]
+        )
+        let confirmed = try XCTUnwrap(make(.remote(acknowledgement), profile: profile).title)
+        XCTAssertEqual(confirmed.name, "User 1", "An empty authoritative name must not resurrect the local profile name.")
+        XCTAssertEqual(confirmed.genderGlyph, "♂")
+        XCTAssertNil(confirmed.groupName)
+        XCTAssertNil(confirmed.userGroup)
+    }
+
+    func testLegacyProfileWithoutGroupDoesNotStyleAnotherSender() throws {
+        let profile = try JSONDecoder().decode(MeResponse.self, from: Data(#"""
+        {"uid": 1, "username": "Local name", "gender": 2, "stickerPackOrder": [], "permissions": []}
+        """#.utf8))
+        XCTAssertNil(profile.userGroup)
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
+        for senderID: Int32 in [1, 2] {
+            let pending = PendingOutgoingMessage(
+                chatID: "chat", clientGeneratedID: "queued-\(senderID)",
+                body: .init(messageType: .text, clientGeneratedId: "queued-\(senderID)", message: "Hi"),
+                enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: senderID, state: .queued
+            )
+            let presentation = TimelineRowPresentation.make(
+                row: .message(.init(entry: .pending(pending), isOutgoing: true, groupPosition: .single, showsSenderName: true)),
+                currentUserProfile: profile, currentUserID: 1, isThreadTimeline: false, environment: environment
+            )
+            let title = try XCTUnwrap(presentation.title)
+            XCTAssertEqual(title.name, senderID == 1 ? "Local name" : "User 2")
+            XCTAssertEqual(title.genderGlyph, senderID == 1 ? "♀" : "♂")
+            XCTAssertNil(title.groupName)
+        }
+    }
 
     func testUnconstrainedHeaderFitsFullNameGroupAndGender() throws {
         // Display rounding must not let the badge and gender borrow the final

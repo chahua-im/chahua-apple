@@ -147,7 +147,7 @@ final class TimelineInteractionController: NSObject {
             width: rect.width, height: rect.height)
         let localSource = overlay.convert(sourceInContent, from: content)
         overlay.configure(
-            row: row, currentUserID: model.currentUserID, context: context,
+            row: row, currentUserID: model.currentUserID, context: actions.pinContext(for: row, base: context),
             actions: actions, mediaContext: mediaContext,
             source: target.source, sourceRect: localSource)
     }
@@ -236,7 +236,7 @@ final class TimelineInteractionController: NSObject {
 
     private func perform(_ action: MessageMenuAction) {
         guard let row = selectedRow else { dismiss(); return }
-        guard MessageActionPolicy(row: row, context: context).availability(of: action) == .enabled else {
+        guard MessageActionPolicy(row: row, context: actions.pinContext(for: row, base: context)).availability(of: action) == .enabled else {
             refresh()
             return
         }
@@ -254,6 +254,10 @@ final class TimelineInteractionController: NSObject {
             guard let message = row.entry.remoteMessage, let edit = actions.editMessage else { return }
             dismiss()
             edit(message)
+        case .pin, .unpin:
+            guard let message = row.entry.remoteMessage, let togglePin = actions.togglePin else { return }
+            dismiss()
+            togglePin(message)
         default:
             break // Policy keeps unsupported actions visible but disabled.
         }

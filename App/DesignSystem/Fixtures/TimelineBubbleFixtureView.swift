@@ -12,6 +12,7 @@
     /// Local-only diagnostic surface. Uses the production timeline and decoder, never production auth.
     struct TimelineBubbleFixtureView: View {
         @StateObject private var fixture = TimelineBubbleFixtureModel()
+        @Environment(\.imageDetailPresenter) private var imageDetailPresenter
         @StateObject private var composerAttachments = ComposerAttachmentState()
         @State private var dark = ProcessInfo.processInfo.arguments.contains("-fixture-dark")
         @State private var handlersEnabled = true
@@ -243,8 +244,9 @@
                 guard let message = row.entry.remoteMessage else { return }
                 Task { await fixture.reactions.toggle(message: message, emoji: emoji, currentUserID: 1) }
             }
-            result.openMedia = { source, attachments, selected in
-                event = "Media: \(source) / \(selected), \(attachments.count) attachments"
+            result.openMedia = { gallery in
+                event = "Media: \(gallery.messageID), \(gallery.items.count) images"
+                imageDetailPresenter?.present(gallery)
             }
             result.replyToMessage = {
                 replyToMessage = $0.replyPreview

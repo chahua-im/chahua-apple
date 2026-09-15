@@ -36,10 +36,23 @@ final class MessageActionPolicyTests: XCTestCase {
         XCTAssertEqual(admin.availability(of: .edit), .hidden)
         XCTAssertEqual(admin.availability(of: .delete), .unimplemented)
         XCTAssertEqual(admin.availability(of: .pin), .hidden)
-        XCTAssertEqual(admin.availability(of: .unpin), .unimplemented)
+        XCTAssertEqual(admin.availability(of: .unpin), .enabled)
         XCTAssertEqual(
             MessageActionPolicy(messageType: .file, isOwn: true, context: writable)
                 .availability(of: .edit), .hidden)
+    }
+
+    func testPinActionsRequireAdminAndParentChatAndNoPendingMutation() {
+        let admin = MessageInteractionContext(canWrite: true, isAdmin: true)
+        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: admin).availability(of: .pin), .enabled)
+        var context = admin
+        context.isThreadView = true
+        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: context).availability(of: .pin), .hidden)
+        context.isThreadView = false
+        context.isUpdatingPin = true
+        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: context).availability(of: .pin), .hidden)
+        context.isPinned = true
+        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: context).availability(of: .unpin), .hidden)
     }
 
     func testExistingThreadsAndThreadViewsCannotCreateNestedThreads() {

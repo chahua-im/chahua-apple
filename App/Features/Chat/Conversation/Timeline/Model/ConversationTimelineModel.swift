@@ -20,6 +20,7 @@ final class ConversationTimelineModel: ObservableObject {
     let currentUserID: Int32
     @Published private(set) var state = ConversationTimelineState()
     @Published private(set) var rows: [TimelineRow] = []
+    @Published private(set) var bottomVisibleMessageDate: Date?
     var isAtLiveEdge: Bool { window.isAtLiveEdge }
     let updates = CurrentValueSubject<TimelineHostSnapshot, Never>(.init(revision: 0, windowRevision: 0, rows: [], animateFollowing: false, pendingScroll: nil))
 
@@ -341,6 +342,16 @@ final class ConversationTimelineModel: ObservableObject {
                 break
             }
         }
+        var bottomDate: Date?
+        if let first = viewport.firstVisibleIndex, let last = viewport.lastVisibleIndex {
+            for index in stride(from: last, through: first, by: -1) {
+                if case .message(let message) = rows[index] {
+                    bottomDate = message.entry.createdAt
+                    break
+                }
+            }
+        }
+        if bottomVisibleMessageDate != bottomDate { bottomVisibleMessageDate = bottomDate }
         let pinned = viewport.distanceToBottom <= Self.pinnedToBottomTolerance
         var nextLive = state.live
         nextLive.isPinnedToBottom = pinned
@@ -500,6 +511,7 @@ final class ConversationTimelineModel: ObservableObject {
             windowRevision &+= 1
             viewportRevision = nil
             lastViewport = .empty
+            bottomVisibleMessageDate = nil
             visibleAnchorID = nil
             pendingScroll = nil
             if latest { reconcileDeferredWithLatest() }
@@ -660,6 +672,7 @@ final class ConversationTimelineModel: ObservableObject {
         state = ConversationTimelineState()
         pendingScroll = nil
         lastViewport = .empty
+        bottomVisibleMessageDate = nil
         visibleAnchorID = nil
         viewportRevision = nil
         publish(reset: true)

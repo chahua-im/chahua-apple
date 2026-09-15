@@ -12,6 +12,7 @@ struct ChatDetailView: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ConversationTimelineModel
     @ObservedObject private var reactions: MessageReactionController
+    @ObservedObject private var pins: ChatPinController
     @ObservedObject private var drafts: ChatDraftStore
     @ObservedObject private var outgoingQueue: OutgoingMessageQueue
     @State private var interactionContext: MessageInteractionContext
@@ -20,6 +21,7 @@ struct ChatDetailView: View {
     @State private var showsRetryOptions = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @Environment(\.imageDetailPresenter) private var imageDetailPresenter
     @State private var replyFocusRequest = 0
     @State private var editingMessage: MessageResponse?
     @State private var editText = ""
@@ -28,6 +30,8 @@ struct ChatDetailView: View {
     @State private var outboxError: String?
     @StateObject private var composerAttachments = ComposerAttachmentState()
     @State private var isMediaDropTargeted = false
+    @State private var showsPinnedMessages = false
+    @State private var pinToUnpin: PinResponse?
 
     init(
         chat: ChatListItem,
@@ -45,6 +49,7 @@ struct ChatDetailView: View {
         self.initialPosition = initialPosition ?? (chat.unreadCount > 0 ? .unread(after: chat.lastReadMessageId) : .liveEdge)
         self.store = store
         self.reactions = store.reactions
+        self.pins = store.pins
         self.drafts = store.drafts
         self.outgoingQueue = store.outgoingQueue
         _interactionContext = State(initialValue: .init(isDM: chat.kind == .dm, isThreadView: threadID != nil))
@@ -71,6 +76,35 @@ struct ChatDetailView: View {
         }
         .task { await model.open(position: initialPosition) }
         .task { await loadInteractionPermissions() }
+        .task {
+            if threadID == nil { await pins.load(chatID: chat.id, force: true) }
+        }
+        .sheet(isPresented: $showsPinnedMessages) {
+            ChatPinnedMessagesSheet(
+                chatID: chat.id, controller: pins, canManage: interactionContext.isAdmin && interactionContext.canWrite,
+                onSelect: jumpToPinnedMessage, onOpenThread: onOpenThread)
+        }
+        .alert("Unpin Message", isPresented: Binding(
+            get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
+        )) {
+            if let pin = pinToUnpin {
+                Button("Unpin", role: .destructive) {
+                    guard interactionContext.isAdmin, interactionContext.canWrite, threadID == nil else { return }
+                    Task { await pins.unpin(pin) }
+                }
+            }
+            Button("Cancel", role: .cancel) { pinToUnpin = nil }
+        } message: {
+            Text("Would you like to unpin this message?")
+        }
+        .alert("Pinned messages", isPresented: Binding(
+            get: { pins.error != nil && !showsPinnedMessages },
+            set: { if !$0 { pins.error = nil } }
+        )) {
+            Button("OK") { pins.error = nil }
+        } message: {
+            Text(pins.error ?? "")
+        }
         .onChange(of: scenePhase) { _, phase in
             model.setReadTrackingActive(phase == .active)
         }
@@ -155,6 +189,9 @@ struct ChatDetailView: View {
     private func conversationBody(actions interactiveActions: TimelineBubbleActions) -> some View {
             GeometryReader { geometry in
                 timelineSurface(actions: interactiveActions)
+                    .modifier(ChatPinnedBarOverlay(isVisible: showsPinBar) {
+                        pinnedMessageBar
+                    })
                     .modifier(
                         ChatComposerOverlay {
                             VStack(spacing: 0) {
@@ -240,8 +277,15 @@ struct ChatDetailView: View {
 
     private var bubbleActions: TimelineBubbleActions {
         var actions = TimelineBubbleActions()
+        if let imageDetailPresenter { actions.openMedia = imageDetailPresenter.present }
         actions.currentUserProfile = store.currentUserProfile
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
+        actions.pinnedMessageIDs = Set(chatPins.map { $0.message.id })
+        actions.pendingPinMessageIDs = pins.pendingMessageIDs
+        if threadID == nil, interactionContext.isAdmin, interactionContext.canWrite,
+           pins.pinsByChatID[chat.id] != nil, !pins.failedChatIDs.contains(chat.id) {
+            actions.togglePin = requestPinChange
+        }
         if let tail = outgoingQueue.snapshots[conversationKey]?.outgoing.last,
            outgoingQueue.snapshots[conversationKey]?.composingItem == nil, !tail.dispatchClaimed {
             actions.modifiablePendingMessageIDs = [tail.clientGeneratedID]
@@ -279,6 +323,54 @@ struct ChatDetailView: View {
             showsRetryOptions = true
         }
         return actions
+    }
+
+    private var chatPins: [PinResponse] { pins.pinsByChatID[chat.id] ?? [] }
+
+    private var activePin: PinResponse? {
+        ChatPinSelection.activePin(in: chatPins, bottomVisibleMessageDate: model.bottomVisibleMessageDate)
+    }
+
+    private var showsPinBar: Bool {
+        threadID == nil && (activePin != nil || pins.failedChatIDs.contains(chat.id))
+    }
+
+    @ViewBuilder private var pinnedMessageBar: some View {
+        if let pin = activePin {
+            ChatPinnedMessageBar(
+                pin: pin, count: chatPins.count,
+                onJump: { jumpToPinnedMessage(pin.message) },
+                onShowAll: { showsPinnedMessages = true },
+                onOpenThread: pin.message.threadInfo != nil && onOpenThread != nil
+                    ? { onOpenThread?(pin.message) } : nil,
+                onUnpin: interactionContext.isAdmin && interactionContext.canWrite && !pins.pendingMessageIDs.contains(pin.message.id)
+                    ? { requestPinChange(pin.message) } : nil)
+        } else if pins.failedChatIDs.contains(chat.id) {
+            Button {
+                Task { await pins.load(chatID: chat.id, force: true) }
+            } label: {
+                Label("Couldn’t load pinned messages. Retry", systemImage: "arrow.clockwise")
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .padding(.horizontal, 12)
+            }
+            .buttonStyle(.plain)
+            .modifier(ChatGlassSurface(cornerRadius: 24))
+        }
+    }
+
+    private func jumpToPinnedMessage(_ message: MessageResponse) {
+        Task { await model.jumpToMessage(message.id) }
+    }
+
+    private func requestPinChange(_ message: MessageResponse) {
+        guard threadID == nil, interactionContext.isAdmin, interactionContext.canWrite, !message.isDeleted,
+              !pins.pendingMessageIDs.contains(message.id) else { return }
+        if let pin = chatPins.first(where: { $0.message.id == message.id }) {
+            pinToUnpin = pin
+        } else {
+            Task { await pins.pin(message) }
+        }
     }
 
     private var composerText: Binding<String> {

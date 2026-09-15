@@ -25,6 +25,7 @@ struct AppRootView: View {
                     isSigningOut: model.isSubmitting,
                     onSignOut: { Task { await model.logout() } }
                 )
+                .modifier(ImageDetailPresentation())
                 .id(me.uid)
                 .environment(\.mediaContext, mediaContext)
             case .networkUnavailable:

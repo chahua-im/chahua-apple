@@ -346,7 +346,7 @@ private final class TimelineHeaderView: UIView {
         name.textColor = row.isOutgoing ? .white : UIColor(bubbleColorForUser(uid: row.entry.senderID, dark: dark)).withAlphaComponent(0.85)
         group.textColor = UIColor.white.withAlphaComponent(0.85)
         var color = UIColor.gray.withAlphaComponent(0.44)
-        if let info = row.entry.remoteMessage?.sender.userGroup {
+        if let info = title.userGroup {
             let darkHex = info.chatGroupColorDark.flatMap { $0.isEmpty ? nil : $0 }
             if let hex = dark ? darkHex ?? info.chatGroupColor : info.chatGroupColor,
                let value = bubbleColor(hex: hex) { color = UIColor(value) }
@@ -461,7 +461,7 @@ private final class TimelineMetadataView: UIView {
         super.init(frame: frame)
         isOpaque = false
         contentMode = .redraw
-        layer.cornerRadius = 10
+        layer.masksToBounds = true
         isAccessibilityElement = true
         accessibilityTraits = .staticText
     }
@@ -522,6 +522,7 @@ private final class TimelineMetadataView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        layer.cornerRadius = overlay ? min(bounds.width, bounds.height) / 2 : 0
         failureButton?.setSymbolFrame(metadata?.symbolFrame(in: drawingFrame) ?? .zero)
     }
 

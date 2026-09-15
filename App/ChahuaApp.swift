@@ -56,6 +56,7 @@ struct ChahuaApp: App {
         #if DEBUG || TIMELINE_PROFILING
         if ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
             TimelineBubbleFixtureView()
+                .modifier(ImageDetailPresentation())
         } else {
             productionRoot
         }

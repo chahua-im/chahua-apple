@@ -76,7 +76,7 @@ struct MessageInteractionHost<Content: View>: View {
     private func overlay(animation: MessageInteractionAnimation) -> some View {
         if let target, let row = selectedRow {
             MessageInteractionOverlay(
-                row: row, context: context, currentUserID: model.currentUserID,
+                row: row, context: actions.pinContext(for: row, base: context), currentUserID: model.currentUserID,
                 source: target.source, reduceMotion: reduceMotion,
                 mediaContext: mediaContext, actions: actions,
                 animation: animation,
@@ -96,7 +96,7 @@ struct MessageInteractionHost<Content: View>: View {
                 },
                 onAction: { action in
                     guard let liveRow = selectedRow,
-                        MessageActionPolicy(row: liveRow, context: context).availability(of: action) == .enabled
+                        MessageActionPolicy(row: liveRow, context: actions.pinContext(for: liveRow, base: context)).availability(of: action) == .enabled
                     else { return }
                     if action == .reply, let message = liveRow.entry.remoteMessage,
                         let reply = actions.replyToMessage {
@@ -106,6 +106,10 @@ struct MessageInteractionHost<Content: View>: View {
                         let edit = actions.editMessage {
                         self.target = nil
                         edit(message)
+                    } else if action == .pin || action == .unpin,
+                        let message = liveRow.entry.remoteMessage, let togglePin = actions.togglePin {
+                        self.target = nil
+                        togglePin(message)
                     } else if action == .copy, let text = liveRow.entry.text {
                         UIPasteboard.general.string = text
                         self.target = nil

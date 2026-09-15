@@ -28,6 +28,7 @@ public struct MeResponse: Codable, Hashable, Sendable {
     public let stickerPackOrder: [StickerPackOrderItem]
     public let permissions: [String]
     public let avatarUrl: String?
+    public let userGroup: UserGroupTagInfo?
 }
 
 public struct StickerPackOrderItem: Codable, Hashable, Sendable {

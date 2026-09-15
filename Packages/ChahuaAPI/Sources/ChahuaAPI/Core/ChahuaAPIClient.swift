@@ -74,6 +74,11 @@ public protocol ChahuaAPIClient: Sendable {
     func putReaction(chatID: String, messageID: String, emoji: String) async throws
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws
 
+    /// Chat-scoped pins; thread pin endpoints are not supported by the server.
+    func listPins(chatID: String) async throws -> ListPinsResponse
+    func createPin(chatID: String, messageID: String) async throws -> PinResponse
+    func deletePin(chatID: String, pinID: String) async throws
+
     /// Sends a message with `POST /chats/{chatID}/messages`.
     ///
     /// `clientGeneratedId` in the body identifies the client-side send attempt;
@@ -95,6 +100,18 @@ public protocol ChahuaAPIClient: Sendable {
 
 public extension ChahuaAPIClient {
     func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws -> MessageResponse {
+        throw APIError.unavailable
+    }
+
+    func listPins(chatID: String) async throws -> ListPinsResponse {
+        throw APIError.unavailable
+    }
+
+    func createPin(chatID: String, messageID: String) async throws -> PinResponse {
+        throw APIError.unavailable
+    }
+
+    func deletePin(chatID: String, pinID: String) async throws {
         throw APIError.unavailable
     }
 }

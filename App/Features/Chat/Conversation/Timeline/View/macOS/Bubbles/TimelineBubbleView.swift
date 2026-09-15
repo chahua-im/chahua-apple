@@ -318,7 +318,7 @@ private final class TimelineHeaderView: NSView {
             name.textColor = row.isOutgoing ? .white : NSColor(bubbleColorForUser(uid: row.entry.senderID, dark: dark)).withAlphaComponent(0.85)
             group.textColor = NSColor.white.withAlphaComponent(0.85)
             var color = NSColor.gray.withAlphaComponent(0.44)
-            if let info = row.entry.remoteMessage?.sender.userGroup {
+            if let info = title.userGroup {
                 let darkHex = info.chatGroupColorDark.flatMap { $0.isEmpty ? nil : $0 }
                 if let hex = dark ? darkHex ?? info.chatGroupColor : info.chatGroupColor,
                    let value = bubbleColor(hex: hex) { color = NSColor(value) }
@@ -489,7 +489,7 @@ private final class TimelineMetadataView: NSView {
     override var isFlipped: Bool { true }
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true; layer?.cornerRadius = 10
+        wantsLayer = true; layer?.masksToBounds = true
         setAccessibilityElement(true); setAccessibilityRole(.staticText)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -522,7 +522,11 @@ private final class TimelineMetadataView: NSView {
         let size = CGSize(width: metadata.size.width * scale, height: metadata.size.height * scale)
         return CGRect(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
     }
-    override func layout() { super.layout(); failureButton?.frame = metadata?.symbolFrame(in: drawingFrame) ?? .zero }
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = overlay ? min(bounds.width, bounds.height) / 2 : 0
+        failureButton?.frame = metadata?.symbolFrame(in: drawingFrame) ?? .zero
+    }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         effectiveAppearance.performAsCurrentDrawingAppearance { metadata?.draw(in: drawingFrame, drawsSymbol: failureButton?.isHidden != false) }

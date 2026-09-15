@@ -18,10 +18,13 @@ struct MessageInteractionSource {
 }
 
 struct TimelineBubbleActions {
-    var openMedia: ((String, [AttachmentResponse], String) -> Void)?
+    var openMedia: ((MessageImageGallery) -> Void)?
     var openReply: ((String) -> Void)?
     var replyToMessage: ((MessageResponse) -> Void)?
     var editMessage: ((MessageResponse) -> Void)?
+    var togglePin: ((MessageResponse) -> Void)?
+    var pinnedMessageIDs: Set<String> = []
+    var pendingPinMessageIDs: Set<String> = []
     var openThread: ((String) -> Void)?
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?
@@ -59,6 +62,9 @@ extension TimelineBubbleActions {
             && (openReply == nil) == (other.openReply == nil)
             && (replyToMessage == nil) == (other.replyToMessage == nil)
             && (editMessage == nil) == (other.editMessage == nil)
+            && (togglePin == nil) == (other.togglePin == nil)
+            && pinnedMessageIDs == other.pinnedMessageIDs
+            && pendingPinMessageIDs == other.pendingPinMessageIDs
             && (openThread == nil) == (other.openThread == nil)
             && (openLink == nil) == (other.openLink == nil)
             && (openMention == nil) == (other.openMention == nil)
@@ -71,5 +77,13 @@ extension TimelineBubbleActions {
             && currentUserProfile == other.currentUserProfile
             && modifiablePendingMessageIDs == other.modifiablePendingMessageIDs
             && interactionContext == other.interactionContext
+    }
+
+    func pinContext(for row: TimelineMessageRow, base: MessageInteractionContext) -> MessageInteractionContext {
+        var result = base
+        let id = row.entry.serverID ?? ""
+        result.isPinned = pinnedMessageIDs.contains(id)
+        result.isUpdatingPin = togglePin == nil || pendingPinMessageIDs.contains(id)
+        return result
     }
 }

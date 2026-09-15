@@ -7,6 +7,7 @@ struct MessageInteractionContext: Equatable {
     var isAdmin = false
     var isThreadView = false
     var isPinned = false
+    var isUpdatingPin = false
 }
 
 enum MessageMenuAction: String, CaseIterable, Identifiable {
@@ -110,9 +111,9 @@ struct MessageActionPolicy {
         case .thread:
             applicable = context.canWrite && messageType == .text && !context.isThreadView && !hasThreadInfo
         case .pin:
-            applicable = context.canWrite && context.isAdmin && !context.isPinned
+            return context.canWrite && context.isAdmin && !context.isThreadView && !context.isPinned && !context.isUpdatingPin ? .enabled : .hidden
         case .unpin:
-            applicable = context.canWrite && context.isAdmin && context.isPinned
+            return context.canWrite && context.isAdmin && !context.isThreadView && context.isPinned && !context.isUpdatingPin ? .enabled : .hidden
         case .edit:
             return context.canWrite && isOwn && messageType == .text && hasCopyableText ? .enabled : .hidden
         case .delete:
