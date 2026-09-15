@@ -140,10 +140,7 @@ struct AuthenticatedShell: View {
 
     private var phoneNavigation: some View {
         NavigationStack(path: phonePath) {
-            chatList()
-                #if os(iOS)
-                .toolbar(.hidden, for: .navigationBar)
-                #endif
+            chatList(usesPhoneNavigation: true)
                 .navigationDestination(for: ConversationKey.self) { key in
                     Group {
                         if openedThread?.key == key {
@@ -175,7 +172,7 @@ struct AuthenticatedShell: View {
         )
     }
 
-    @ViewBuilder private func chatList() -> some View {
+    @ViewBuilder private func chatList(usesPhoneNavigation: Bool = false) -> some View {
         let list = ChatListView(
             store: chatStore,
             drafts: chatStore.drafts,
@@ -185,7 +182,32 @@ struct AuthenticatedShell: View {
             onSelectConversation: { selectConversation($0.id) }
         )
         #if os(iOS)
-        if #available(iOS 26, *) {
+        if usesPhoneNavigation {
+            list
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.visible, for: .navigationBar)
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        accountButton
+                            .labelStyle(.iconOnly)
+                            .accessibilityLabel("Account")
+                    }
+                    // A segmented control must not participate in native title morphing.
+                    if #available(iOS 26, *) {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            ConversationScopePicker(selection: $selectedScope)
+                        }
+                        // The segmented picker already draws its own glass surface.
+                        .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            ConversationScopePicker(selection: $selectedScope)
+                        }
+                    }
+                }
+        } else if #available(iOS 26, *) {
             list
                 .safeAreaBar(edge: .top, spacing: 0) {
                     ConversationListHeader(selection: $selectedScope) { accountButton }

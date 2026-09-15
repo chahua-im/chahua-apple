@@ -114,6 +114,18 @@ one conversation leaves unrelated notification groups intact.
 
 ## Native conversation interactions
 
+- On compact iOS, the account menu and conversation filter use the native inline
+  navigation bar. Keep the bar visible on both the list and detail so pushing a
+  chat does not also change its safe-area height. Verify chat/thread pushes,
+  Back, and interactive swipe-back (including cancellation) on an iPhone;
+  the glass detail title should transition without a vertical jump. The filter
+  belongs in a trailing toolbar item, not `.principal`: it must not be compressed
+  into the native title transition. Check that its labels do not overlap during
+  a partial back swipe and that all four filters work after completing it.
+  On iOS 26+, hide the filter toolbar item's shared background because the
+  segmented picker provides its own glass. The list's top section separator is
+  hidden on iOS so it does not appear as a second bottom edge below the filter;
+  conversation row separators remain enabled.
 - Send a text message while the composer is focused. The editor stays enabled
   and the keyboard stays open throughout the local write; Send blocks duplicate
   submission without interrupting typing. The draft clears only after durable
