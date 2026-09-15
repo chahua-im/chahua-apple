@@ -81,6 +81,10 @@
         func attachmentConfig() async throws -> AttachmentConfigResponse { throw Failure.unexpectedOperation }
         func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw Failure.unexpectedOperation }
         func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw Failure.unexpectedOperation }
+        func archiveChat(chatID: String) async throws { throw Failure.unexpectedOperation }
+        func archiveThread(chatID: String, threadID: String) async throws { throw Failure.unexpectedOperation }
+        func muteChat(chatID: String) async throws -> MuteResponse { throw Failure.unexpectedOperation }
+        func unmuteChat(chatID: String) async throws { throw Failure.unexpectedOperation }
         func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
         func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
         func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw Failure.unexpectedOperation }

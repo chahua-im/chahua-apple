@@ -166,7 +166,8 @@ final class TimelineRowView: UIView {
         // End editing only after the row recognizer has awarded the hold to the
         // menu. Doing this on touch-down can relayout/cancel the pending hold.
         window?.endEditing(false)
-        binding.actions.openContextMenu?(row, rect)
+        binding.actions.openContextMenu?(
+            row, .init(rect: rect, presentation: binding.presentation, layout: binding.layout))
     }
     private func swipe(_ displacement: CGFloat) {
         content.layer.removeAllAnimations()

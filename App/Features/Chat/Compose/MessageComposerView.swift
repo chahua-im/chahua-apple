@@ -32,7 +32,6 @@ struct MessageComposerView: View {
     @StateObject private var input = ComposerInputState()
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
     @FocusState private var isInputFocused: Bool
-    @State private var restoresFocusAfterSend = false
     @State private var showsAttachmentDialog = false
     @State private var isSubmitting = false
 
@@ -235,11 +234,6 @@ struct MessageComposerView: View {
         .onChange(of: replyFocusRequest) { _, _ in
             if isEnabled { isInputFocused = true }
         }
-        .onChange(of: isEnabled) { _, enabled in
-            guard enabled, restoresFocusAfterSend else { return }
-            restoresFocusAfterSend = false
-            isInputFocused = true
-        }
     }
 
     private func performImageOperation(opensDialog: Bool = false, _ operation: @escaping @MainActor () async throws -> Void) {
@@ -368,7 +362,6 @@ struct MessageComposerView: View {
             presentAttachmentDialog()
             return
         }
-        restoresFocusAfterSend = isInputFocused
         isSubmitting = true
         Task {
             _ = await onSubmit()

@@ -25,6 +25,10 @@ public struct ListThreadsQuery: Sendable, Equatable {
 }
 
 public extension ChahuaClient {
+    func archiveThread(chatID: String, threadID: String) async throws {
+        try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "threads", threadID, "archive"]))
+    }
+
     func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse {
         try await send(
             HTTPRequestSpec.json(.post, ["chats", chatID, "threads", threadID, "read"], body: MarkReadBody(messageId: messageID)),

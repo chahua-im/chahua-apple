@@ -24,21 +24,31 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
         super.init()
         UNUserNotificationCenter.current().delegate = self
     }
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        guard let route = PushNotificationRoute(userInfo: notification.request.content.userInfo) else { return [] }
-        return await presentationOptions(for: route)
+    // Use the completion-handler witnesses explicitly: the generated async
+    // Objective-C bridge can finish on a cooperative executor. UIKit's launch
+    // completion updates its snapshot and must run on the main thread.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
+    ) {
+        let route = PushNotificationRoute(userInfo: notification.request.content.userInfo)
+        Task { @MainActor in
+            completionHandler(route.map { coordinator?.presentationOptions(for: $0) ?? [] } ?? [])
+        }
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let route = PushNotificationRoute(userInfo: response.notification.request.content.userInfo) else { return }
-        await receive(route)
-    }
-
-    private func presentationOptions(for route: PushNotificationRoute) -> UNNotificationPresentationOptions {
-        coordinator?.presentationOptions(for: route) ?? []
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
+    ) {
+        let route = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            ? PushNotificationRoute(userInfo: response.notification.request.content.userInfo) : nil
+        Task { @MainActor in
+            if let route { receive(route) }
+            completionHandler()
+        }
     }
 
     private func receive(_ route: PushNotificationRoute) {

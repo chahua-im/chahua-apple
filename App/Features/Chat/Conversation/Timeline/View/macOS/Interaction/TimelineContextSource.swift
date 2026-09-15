@@ -54,7 +54,9 @@ final class TimelineContextSource {
               !rowView.isHiddenOrHasHiddenAncestor,
               rowView.visibleRect.intersects(bubble)
         else { return false }
-        open(row, topOrigin(rowView.convert(bubble, to: content), in: content))
+        open(row, MessageInteractionSource(
+            rect: topOrigin(rowView.convert(bubble, to: content), in: content),
+            presentation: binding.presentation, layout: binding.layout))
         return true
     }
 

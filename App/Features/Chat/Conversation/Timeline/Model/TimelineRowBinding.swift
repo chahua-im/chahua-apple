@@ -8,6 +8,15 @@ struct TimelineRowContext: Equatable {
     var isInteractionPreview = false
 }
 
+/// Captured from the native row before presentation. Its prepared layout and
+/// typography remain authoritative; an overlay must never infer a timeline width
+/// from the already-measured bubble width.
+struct MessageInteractionSource {
+    let rect: CGRect
+    let presentation: TimelineRowPresentation
+    let layout: TimelineRowLayout
+}
+
 struct TimelineBubbleActions {
     var openMedia: ((String, [AttachmentResponse], String) -> Void)?
     var openReply: ((String) -> Void)?
@@ -17,7 +26,7 @@ struct TimelineBubbleActions {
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?
     var openFailedMessage: ((String) -> Void)?
-    var openContextMenu: ((TimelineMessageRow, CGRect) -> Void)?
+    var openContextMenu: ((TimelineMessageRow, MessageInteractionSource) -> Void)?
     var toggleReaction: ((TimelineMessageRow, String) -> Void)?
     var pendingReactionMessageIDs: Set<String> = []
     var currentUserProfile: MeResponse?

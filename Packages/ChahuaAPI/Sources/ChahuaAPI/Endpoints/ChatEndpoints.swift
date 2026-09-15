@@ -28,7 +28,35 @@ public struct ListChatsQuery: Sendable, Equatable {
     }
 }
 
+public struct MuteResponse: Codable, Hashable, Sendable {
+    public let mutedUntil: Date
+
+    public init(mutedUntil: Date) {
+        self.mutedUntil = mutedUntil
+    }
+}
+
+private struct MuteBody: Encodable {
+    // An absent duration requests the server's indefinite mute.
+    let durationSeconds: Int? = nil
+}
+
 public extension ChahuaClient {
+    func archiveChat(chatID: String) async throws {
+        try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "archive"]))
+    }
+
+    func muteChat(chatID: String) async throws -> MuteResponse {
+        try await send(
+            HTTPRequestSpec.json(.put, ["group", chatID, "mute"], body: MuteBody()),
+            decoding: MuteResponse.self
+        )
+    }
+
+    func unmuteChat(chatID: String) async throws {
+        try await send(HTTPRequestSpec(method: .delete, path: ["group", chatID, "mute"]))
+    }
+
     /// Fetches one server-ordered chat page with authenticated `GET /chats`.
     ///
     /// The client sends `limit`, `after`, and `archived` only when the

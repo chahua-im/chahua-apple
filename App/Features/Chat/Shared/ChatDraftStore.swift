@@ -27,7 +27,7 @@ final class ChatDraftStore: ObservableObject {
     func install(_ snapshot: LocalConversationSnapshot) {
         let key = snapshot.conversationKey
         let reply = normalizedReply(snapshot.draft.replyToMessage, chatID: snapshot.chatID)
-        if unsavedDrafts.contains(key), !committingDrafts.contains(key),
+        if unsavedDrafts.contains(key),
            (drafts[key] != snapshot.draft.text || draftReplies[key] != reply) {
             draftRevisions[key] = max(draftRevisions[key, default: 0], snapshot.draft.editRevision + 1)
         } else if snapshot.draft.editRevision >= draftRevisions[key, default: 0] {
@@ -50,7 +50,7 @@ final class ChatDraftStore: ObservableObject {
     func setDraftReply(_ reply: MessagePreview?, chatID: String, threadID: String? = nil) {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let reply = normalizedReply(reply, chatID: chatID)
-        guard !committingDrafts.contains(key), draftReplies[key] != reply else { return }
+        guard draftReplies[key] != reply else { return }
         draftReplies[key] = reply
         if drafts[key] == nil { drafts[key] = "" }
         unsavedDrafts.insert(key)
@@ -76,7 +76,7 @@ final class ChatDraftStore: ObservableObject {
 
     func setDraftText(_ text: String, chatID: String, threadID: String? = nil) {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
-        guard !committingDrafts.contains(key), drafts[key] != text else { return }
+        guard drafts[key] != text else { return }
         drafts[key] = text
         draftUpdatedAt[key] = text.isEmpty && outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty ? nil : Date()
         unsavedDrafts.insert(key)
@@ -165,20 +165,28 @@ final class ChatDraftStore: ObservableObject {
         committingDrafts.insert(key)
         let requestGeneration = generation
         let revision = draftRevisions[key, default: 0] + 1
+        // Reserve the clear revision before suspending. Subsequent edits belong
+        // to a newer draft and must survive the enqueue's cleared snapshot.
+        draftRevisions[key] = revision
+        unsavedDrafts.remove(key)
         defer { if generation == requestGeneration { committingDrafts.remove(key) } }
         do {
             try await outgoingQueue.enqueueText(chatID: chatID, threadID: threadID, text: text, clearedDraftRevision: revision, replyToMessage: draftReplies[key])
             guard generation == requestGeneration else { return false }
-            draftRevisions[key] = revision
-            drafts[key] = ""
-            draftReplies[key] = nil
-            unsavedDrafts.remove(key)
-            draftUpdatedAt[key] = nil
-            deferredDraftFlushes.remove(key)
+            if draftRevisions[key] == revision {
+                drafts[key] = ""
+                draftReplies[key] = nil
+                unsavedDrafts.remove(key)
+                draftUpdatedAt[key] = nil
+                deferredDraftFlushes.remove(key)
+            } else {
+                scheduleDraftSave(key: key)
+            }
             draftSaveFailed = false
             return true
         } catch {
             guard generation == requestGeneration else { return false }
+            unsavedDrafts.insert(key)
             draftSaveFailed = true
             return false
         }

@@ -5,6 +5,67 @@ import UserNotifications
 
 @MainActor
 final class PushNotificationTests: XCTestCase {
+    func testBackgroundNotificationTapCompletesOnMainAndSurvivesColdStart() async throws {
+        let center = UNUserNotificationCenter.current()
+        let previousDelegate = center.delegate
+        defer { center.delegate = previousDelegate }
+        let appDelegate = PushAppDelegate()
+        let delegate: any UNUserNotificationCenterDelegate = appDelegate
+        let notification = try makeNotification(userInfo: ["wettyChat": [
+            "type": "reply", "chatId": "42", "messageId": "101", "threadRootId": "100"
+        ]])
+        let response = try XCTUnwrap(UNNotificationResponse(coder: NotificationDecoder([
+            "notification": notification, "actionIdentifier": UNNotificationDefaultActionIdentifier
+        ])))
+        let completed = expectation(description: "Notification launch completion")
+        completed.assertForOverFulfill = true
+        await Task.detached {
+            delegate.userNotificationCenter?(center, didReceive: response, withCompletionHandler: {
+                XCTAssertTrue(Thread.isMainThread, "UIKit's notification launch completion must run on the main thread.")
+                completed.fulfill()
+            })
+        }.value
+        await fulfillment(of: [completed], timeout: 2)
+
+        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        appDelegate.coordinator = notifications
+        notifications.setSession(uid: 1)
+        let route = try XCTUnwrap(notifications.takeNavigation())
+        XCTAssertEqual(route.conversation, ConversationKey(chatID: "42", threadID: "100"))
+        XCTAssertEqual(route.messageID, "101")
+        XCTAssertNil(notifications.takeNavigation())
+    }
+
+    func testIgnoredNotificationStillCompletesOnMainWithoutNavigation() async throws {
+        let center = UNUserNotificationCenter.current()
+        let previousDelegate = center.delegate
+        defer { center.delegate = previousDelegate }
+        let appDelegate = PushAppDelegate()
+        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        appDelegate.coordinator = notifications
+        let delegate: any UNUserNotificationCenterDelegate = appDelegate
+        let response = try XCTUnwrap(UNNotificationResponse(coder: NotificationDecoder([
+            "notification": try makeNotification(userInfo: [:]),
+            "actionIdentifier": UNNotificationDefaultActionIdentifier
+        ])))
+        let completed = expectation(description: "Ignored notification completion")
+        await Task.detached {
+            delegate.userNotificationCenter?(center, didReceive: response, withCompletionHandler: {
+                XCTAssertTrue(Thread.isMainThread)
+                completed.fulfill()
+            })
+        }.value
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertNil(notifications.pendingNavigation)
+    }
+
+    private func makeNotification(userInfo: [AnyHashable: Any]) throws -> UNNotification {
+        let content = UNMutableNotificationContent()
+        content.userInfo = userInfo
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        return try XCTUnwrap(UNNotification(coder: NotificationDecoder(["request": request, "date": Date()])))
+    }
+
     func testDisablePersistsAcrossRelaunchAndLateTokenCallbacks() async throws {
         let suite = UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -131,4 +192,13 @@ private actor PushSubscriptionStore: PushSubscriptionProviding {
         if failUnsubscribe { throw URLError(.notConnectedToInternet) }
         tokens.remove(deviceToken)
     }
+}
+
+/// Decode the system notification types through their public NSCoding API;
+/// Apple does not expose memberwise initializers for delivered notifications.
+private final class NotificationDecoder: NSCoder {
+    private let values: [String: Any]
+    init(_ values: [String: Any]) { self.values = values }
+    override var allowsKeyedCoding: Bool { true }
+    override func decodeObject(forKey key: String) -> Any? { values[key] }
 }

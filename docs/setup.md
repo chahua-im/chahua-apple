@@ -111,3 +111,27 @@ from a second account while Chahua is inactive. Verify that two messages in one
 chat group together, a different chat and a reply thread remain separate, tapping
 an alert opens the referenced message (including after cold launch), and reading
 one conversation leaves unrelated notification groups intact.
+
+## Native conversation interactions
+
+- Send a text message while the composer is focused. The editor stays enabled
+  and the keyboard stays open throughout the local write; Send blocks duplicate
+  submission without interrupting typing. The draft clears only after durable
+  enqueue, and edits made during that write remain in the draft. Verify this on
+  a physical iPhone as well as with macOS Return and the Send button.
+- Long-press (iOS) or right-click (macOS) a message. The preview covers the
+  title/header and composer, retains the original text wrapping and media size,
+  and lifts into place. Oversized previews clip beneath the action panel rather
+  than reflow; the actions remain scrollable. Reduce Motion uses fades.
+- Click the covered macOS title bar: dismiss the preview without closing or
+  moving the underlying window. Background taps and Escape also dismiss it.
+- Swipe conversation rows from the trailing edge for **Archive** and, on chats,
+  **Mute/Unmute**. Swipe from the leading edge for **Mark as Read** when unread.
+  Threads have separate archive/read actions and no independent mute API.
+  Archiving a chat also mutes it indefinitely, matching the backend contract.
+- Tap/click a message's reply-count indicator to push its thread. Back returns
+  to the parent conversation; reply drafts and read receipts use the thread scope.
+
+The existing `-bubble-timeline -fixture-split` launch mode can exercise preview
+rendering without production authentication. Verify touch/trackpad gestures and
+animation feel manually on both platforms; list mutations require a live session.

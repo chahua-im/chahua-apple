@@ -10,6 +10,10 @@ enum ConversationListScope: String, CaseIterable, Identifiable {
     var includesThreads: Bool { self == .messages || self == .threads }
 }
 
+enum ConversationListAction: Equatable {
+    case archive, mute, unmute, markRead
+}
+
 enum ConversationListItem: Hashable, Identifiable {
     case chat(ChatListItem)
     case thread(ThreadListItem)
@@ -42,6 +46,13 @@ enum ConversationListItem: Hashable, Identifiable {
         switch self {
         case .chat(let chat): chat.unreadCount
         case .thread(let thread): thread.unreadCount
+        }
+    }
+
+    var readThroughMessageID: String? {
+        switch self {
+        case .chat(let chat): chat.lastMessage?.id
+        case .thread(let thread): thread.lastReply?.id
         }
     }
 

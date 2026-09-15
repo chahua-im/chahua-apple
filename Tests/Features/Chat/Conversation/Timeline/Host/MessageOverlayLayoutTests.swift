@@ -18,15 +18,15 @@
                 let model = ConversationTimelineModel(
                     chatID: "chat", currentUserID: 1, isGroupChat: true, source: source,
                     messageStore: ConversationMessageStore())
-                let root = ConversationTimelineView(
-                    model: model, loadsInitialAutomatically: false,
-                    interactionContext: .init(canWrite: true, isAdmin: true)
-                ).preferredColorScheme(dark ? .dark : .light)
-                let host = NSHostingController(rootView: root)
-                host.sizingOptions = []
+                await model.loadInitial()
+                let host = TimelineViewController(model: model)
+                host.configure(
+                    actions: .init(), interactionContext: .init(canWrite: true, isAdmin: true),
+                    mediaContext: nil, colorScheme: dark ? .dark : .light,
+                    headerInset: 0, composerInset: 0, isSplitResizing: false)
                 let size = CGSize(width: width, height: 650)
                 let window = NSWindow(
-                    contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered,
+                    contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled, .closable], backing: .buffered,
                     defer: false)
                 window.isReleasedWhenClosed = false
                 window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -34,37 +34,59 @@
                 window.setContentSize(size)
                 host.view.frame = CGRect(origin: .zero, size: size)
                 window.makeKeyAndOrderFront(nil)
-                defer { window.close() }
-                await model.loadInitial()
-                try await Task.sleep(for: .milliseconds(200))
-                host.view.layoutSubtreeIfNeeded()
+                window.orderFrontRegardless()
+                defer { host.tearDown(); window.close() }
+                let initialDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+                while textViews(in: host.view).isEmpty, ContinuousClock.now < initialDeadline {
+                    host.view.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(20))
+                }
                 let original = try XCTUnwrap(textViews(in: host.view).first)
                 let originalWidth = original.bounds.width
-                let point = original.convert(CGPoint(x: 10, y: 8), to: nil)
-                let event = try XCTUnwrap(
-                    NSEvent.mouseEvent(
-                        with: .rightMouseDown, location: point, modifierFlags: [],
-                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                        context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
-                NSApp.postEvent(event, atStart: false)
-                try await Task.sleep(for: .milliseconds(200))
-                host.view.layoutSubtreeIfNeeded()
-                let visibleText = textViews(in: try XCTUnwrap(window.contentView?.superview))
+                var ancestor: NSView? = original
+                while ancestor != nil, !(ancestor is TimelineRowView) { ancestor = ancestor?.superview }
+                let row = try XCTUnwrap(ancestor as? TimelineRowView)
+                let action = try XCTUnwrap(row.accessibilityCustomActions()?.first)
+                XCTAssertTrue(try XCTUnwrap(action.handler)())
+                try await Task.sleep(for: .milliseconds(600))
+                let frameView = try XCTUnwrap(window.contentView?.superview)
+                frameView.layoutSubtreeIfNeeded()
+                let visibleText = textViews(in: frameView)
                 XCTAssertEqual(visibleText.count, 2, "Opening the menu should add one read-only message preview.")
                 for text in visibleText {
                     XCTAssertEqual(
                         text.bounds.width, originalWidth, accuracy: 1,
                         "The action menu must not force the preview into its narrower width.")
                 }
-                let bitmap = try XCTUnwrap(host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
-                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
-                let image = NSImage(size: size)
+                let bitmap = try XCTUnwrap(frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds))
+                frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
+                let image = NSImage(size: frameView.bounds.size)
                 image.addRepresentation(bitmap)
                 let attachment = XCTAttachment(image: image)
                 attachment.name =
                     "overlay-\(dark ? "dark" : "light")-\(outgoing ? "outgoing" : "incoming")-\(Int(width))"
                 attachment.lifetime = .keepAlways
                 add(attachment)
+
+                // A click over native title-bar chrome must dismiss the preview,
+                // not activate the obscured close button or close its window.
+                let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+                let titleBarPoint = closeButton.convert(
+                    CGPoint(x: closeButton.bounds.midX, y: closeButton.bounds.midY), to: nil)
+                for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                    let click = try XCTUnwrap(
+                        NSEvent.mouseEvent(
+                            with: type, location: titleBarPoint, modifierFlags: [],
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 2, clickCount: 1, pressure: 1))
+                    NSApp.postEvent(click, atStart: false)
+                }
+                let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+                while textViews(in: frameView).count > 1, ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertTrue(window.isVisible, "The preview must intercept clicks on covered title-bar controls.")
+                XCTAssertEqual(textViews(in: frameView).count, 1, "Clicking covered title-bar chrome must dismiss the preview.")
             }
         }
 

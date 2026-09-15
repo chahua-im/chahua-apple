@@ -1,6 +1,7 @@
 #if os(macOS)
 import AppKit
 import ChahuaAPI
+import QuartzCore
 import SwiftUI
 
 /// Window-level native popup. Its preview owns independent text storage, media
@@ -21,6 +22,7 @@ final class TimelineActionOverlayView: NSView {
     private let reactionSurface = TimelineMenuSurface(cornerRadius: 26)
     private let actionSurface = TimelineMenuSurface(cornerRadius: 14)
     private let pendingSurface = TimelineMenuSurface(cornerRadius: 14)
+    private let previewSurface = NSView()
     private let previewClip = TimelinePreviewClipView()
     private let preview = TimelineBubbleContentView()
     private let progress = NSProgressIndicator()
@@ -32,10 +34,8 @@ final class TimelineActionOverlayView: NSView {
     private let previewCache = TimelineLayoutCache()
     private var previewIdentity: ConversationMessageStableKey?
     private var source = CGRect.zero
-    private var hasSource = false
     private var outgoing = false
     private var controlsWidth: CGFloat = 276
-    private var previewWidth: CGFloat = 276
     private var previewSize = CGSize.zero
     private var contentHeight: CGFloat = 0
     private var actionRowHeight: CGFloat = 63
@@ -46,10 +46,12 @@ final class TimelineActionOverlayView: NSView {
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { !isCleared }
+    override var mouseDownCanMoveWindow: Bool { false }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        layer?.masksToBounds = true
         setAccessibilityElement(false)
         setAccessibilityRole(.group)
         setAccessibilityLabel(String(localized: "Message actions"))
@@ -78,10 +80,17 @@ final class TimelineActionOverlayView: NSView {
         scrollView.layer?.shadowOpacity = 1
         scrollView.layer?.shadowRadius = 16
         scrollView.layer?.shadowOffset = CGSize(width: 0, height: -8)
+        previewSurface.wantsLayer = true
+        previewSurface.layer?.shadowColor = NSColor.black.cgColor
+        previewSurface.layer?.shadowOpacity = 0.24
+        previewSurface.layer?.shadowRadius = 14
+        previewSurface.layer?.shadowOffset = CGSize(width: 0, height: -8)
+        addSubview(previewSurface)
+        previewSurface.addSubview(previewClip)
+        // Controls stay above the independently clipped bubble. On short
+        // windows they may overlap it instead of shrinking/reflowing its text.
+        addSubview(reactionSurface)
         addSubview(scrollView)
-
-        documentView.addSubview(reactionSurface)
-        documentView.addSubview(previewClip)
         documentView.addSubview(actionSurface)
         documentView.addSubview(pendingSurface)
         previewClip.addSubview(preview)
@@ -109,24 +118,19 @@ final class TimelineActionOverlayView: NSView {
 
     func configure(
         row: TimelineMessageRow, currentUserID: Int32, context: MessageInteractionContext,
-        actions: TimelineBubbleActions, mediaContext: AppMediaContext?, source: CGRect, hasSource: Bool
+        actions: TimelineBubbleActions, mediaContext: AppMediaContext?,
+        source: MessageInteractionSource, sourceRect: CGRect
     ) {
         isCleared = false
-        self.source = source
-        self.hasSource = hasSource
+        self.source = sourceRect
         outgoing = row.isOutgoing
         let availableWidth = max(1, bounds.width - 32)
         controlsWidth = min(276, availableWidth)
-        previewWidth = min(source.width > 0 ? source.width : controlsWidth, availableWidth)
+        // Source layout is the sizing authority: converting bubble width back
+        // into a timeline width applies media/text constraints a second time.
         let caption2 = NSFont.preferredFont(forTextStyle: .caption2)
         actionRowHeight = 63 * caption2.pointSize / 11
-        let environment = TimelineLayoutEnvironment.current(
-            timelineWidth: previewWidth + 24 + 2 * (36 + 8),
-            displayScale: window?.backingScaleFactor ?? 2,
-            bodySize: NSFont.preferredFont(forTextStyle: .body).pointSize,
-            captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
-            caption2Size: caption2.pointSize, avatarSize: 36,
-            layoutDirection: userInterfaceLayoutDirection == .rightToLeft ? .rightToLeft : .leftToRight)
+        let environment = source.presentation.environment
         let identityChanged = previewIdentity != row.entry.stableKey
         if identityChanged {
             previewCache.removeAll()
@@ -137,7 +141,8 @@ final class TimelineActionOverlayView: NSView {
         let presentation = TimelineRowPresentation.make(
             row: .message(row), currentUserProfile: actions.currentUserProfile,
             currentUserID: currentUserID, isThreadTimeline: context.isThreadView, environment: environment)
-        let layout = previewCache.layout(for: presentation, environment: environment)
+        let layout = presentation.layoutKey == source.presentation.layoutKey
+            ? source.layout : previewCache.layout(for: presentation, environment: environment)
         previewSize = layout.frames[.bubble]?.size ?? .zero
         preview.bind(TimelineRowBinding(
             presentation: presentation, layout: layout,
@@ -246,6 +251,78 @@ final class TimelineActionOverlayView: NSView {
         layoutSubtreeIfNeeded()
     }
 
+    func present() {
+        layoutSubtreeIfNeeded()
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        for view in [backdrop, dimmingView, reactionSurface, scrollView] {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = reduceMotion ? 0.12 : 0.2
+            view.layer?.add(fade, forKey: "previewAppearance")
+        }
+        guard !reduceMotion else { return }
+        // AppKit's spring runs on the preview's compositing layer, never its
+        // measured text/media frames. Source pixels lift without another layout.
+        if !source.isEmpty, let layer = previewSurface.layer {
+            let destination = previewSurface.frame
+            let bubbleOrigin = preview.convert(CGPoint.zero, to: self)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            previewSurface.setFrameOrigin(CGPoint(
+                x: destination.minX + source.minX - bubbleOrigin.x,
+                y: destination.minY + source.minY - bubbleOrigin.y))
+            let initialPosition = layer.position
+            previewSurface.frame = destination
+            let finalPosition = layer.position
+            CATransaction.commit()
+            let lift = CASpringAnimation(keyPath: "position")
+            lift.mass = 1
+            lift.stiffness = 360
+            lift.damping = 30
+            lift.fromValue = NSValue(point: initialPosition)
+            lift.toValue = NSValue(point: finalPosition)
+            lift.duration = lift.settlingDuration
+            layer.add(lift, forKey: "previewLift")
+        }
+        let liftScale = CAKeyframeAnimation(keyPath: "transform.scale")
+        liftScale.values = [1, 1.025, 1]
+        liftScale.keyTimes = [0, 0.4, 1]
+        liftScale.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .easeInEaseOut),
+        ]
+        liftScale.duration = 0.42
+        previewSurface.layer?.add(liftScale, forKey: "previewLiftScale")
+        for view in [reactionSurface, scrollView] {
+            let spring = CASpringAnimation(keyPath: "transform.scale")
+            spring.mass = 1
+            spring.stiffness = 360
+            spring.damping = 28
+            spring.fromValue = 0.94
+            spring.toValue = 1
+            spring.duration = spring.settlingDuration
+            view.layer?.add(spring, forKey: "previewControls")
+        }
+    }
+
+    func dismiss(completion: @escaping @MainActor () -> Void) {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if !reduceMotion, let layer = previewSurface.layer {
+            let settle = CABasicAnimation(keyPath: "transform.scale")
+            settle.fromValue = layer.presentation()?.value(forKeyPath: "transform.scale") ?? 1
+            settle.toValue = 0.98
+            settle.duration = 0.14
+            settle.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            layer.add(settle, forKey: "previewLiftScale")
+        }
+        NSAnimationContext.runAnimationGroup({ animation in
+            animation.duration = reduceMotion ? 0.1 : 0.14
+            self.animator().alphaValue = 0
+        }, completionHandler: {
+            MainActor.assumeIsolated { completion() }
+        })
+    }
+
     override func layout() {
         super.layout()
         guard !isCleared else { return }
@@ -255,59 +332,47 @@ final class TimelineActionOverlayView: NSView {
         backdrop.frame = bounds
         dimmingView.frame = bounds
         dismissButton.frame = bounds
-        let width = max(controlsWidth, previewWidth)
-        let controlsX = 8 + (outgoing ? width - controlsWidth : 0)
-        var y: CGFloat = 0
+        let rowCount = (activeActionCount + 4) / 5
+        let gridHeight = CGFloat(rowCount) * actionRowHeight + CGFloat(max(0, rowCount - 1))
+        contentHeight = gridHeight + (showsPending ? (gridHeight > 0 ? 8 : 0) + 88 : 0)
+        let placement = MessageOverlayLayout(
+            bounds: bounds, source: source, previewSize: previewSize,
+            controlsWidth: controlsWidth, reactionHeight: reactionSurface.isHidden ? 0 : 52,
+            actionsHeight: contentHeight, isOutgoing: outgoing)
+
+        previewSurface.frame = placement.previewFrame.insetBy(dx: -8, dy: -8)
+        previewClip.frame = previewSurface.bounds
+        preview.frame = CGRect(
+            x: 8 + (outgoing ? min(0, placement.previewFrame.width - previewSize.width) : 0),
+            y: 8, width: previewSize.width, height: previewSize.height)
+        reactionSurface.frame = placement.reactionFrame
         if !reactionSurface.isHidden {
-            reactionSurface.frame = CGRect(x: controlsX, y: y, width: controlsWidth, height: 52)
             let gaps = CGFloat(max(0, activeReactionCount - 1)) * 2
             let buttonWidth = max(0, (controlsWidth - 12 - gaps) / CGFloat(max(1, activeReactionCount)))
             for index in 0..<activeReactionCount {
                 reactionButtons[index].frame = CGRect(x: 6 + CGFloat(index) * (buttonWidth + 2), y: 4, width: buttonWidth, height: 44)
             }
             progress.frame = CGRect(x: (controlsWidth - 16) / 2, y: 18, width: 16, height: 16)
-            y += 60
         }
-        let previewHeight = min(previewSize.height, min(220, bounds.height * 0.3))
-        previewClip.frame = CGRect(
-            x: outgoing ? width - previewWidth : 0, y: y,
-            width: previewWidth + 16, height: max(0, previewHeight) + 8)
-        preview.frame = CGRect(
-            x: 8 + (outgoing ? max(0, previewWidth - previewSize.width) : 0), y: 0,
-            width: previewSize.width, height: previewSize.height)
-        y += max(0, previewHeight)
-        if activeActionCount > 0 {
-            y += 8
-            let rowCount = (activeActionCount + 4) / 5
-            let gridHeight = CGFloat(rowCount) * actionRowHeight + CGFloat(max(0, rowCount - 1))
-            actionSurface.frame = CGRect(x: controlsX, y: y, width: controlsWidth, height: gridHeight)
-            for index in 0..<activeActionCount {
-                let row = index / 5
-                actionButtons[index].frame = CGRect(
-                    x: CGFloat(index % 5) * controlsWidth / 5,
-                    y: CGFloat(row) * (actionRowHeight + 1),
-                    width: controlsWidth / 5, height: actionRowHeight)
-            }
-            for index in 0..<max(0, rowCount - 1) {
-                dividers[index].frame = CGRect(x: 0, y: CGFloat(index + 1) * actionRowHeight + CGFloat(index), width: controlsWidth, height: 1)
-            }
-            y += gridHeight
+        scrollView.frame = placement.actionsFrame
+        scrollView.isHidden = contentHeight == 0
+        documentView.frame = CGRect(x: 0, y: 0, width: controlsWidth, height: contentHeight)
+        actionSurface.frame = CGRect(x: 0, y: 0, width: controlsWidth, height: gridHeight)
+        for index in 0..<activeActionCount {
+            let row = index / 5
+            actionButtons[index].frame = CGRect(
+                x: CGFloat(index % 5) * controlsWidth / 5,
+                y: CGFloat(row) * (actionRowHeight + 1),
+                width: controlsWidth / 5, height: actionRowHeight)
+        }
+        for index in 0..<max(0, rowCount - 1) {
+            dividers[index].frame = CGRect(x: 0, y: CGFloat(index + 1) * actionRowHeight + CGFloat(index), width: controlsWidth, height: 1)
         }
         if showsPending {
-            y += 8
-            pendingSurface.frame = CGRect(x: controlsX, y: y, width: controlsWidth, height: 88)
+            pendingSurface.frame = CGRect(x: 0, y: gridHeight + (gridHeight > 0 ? 8 : 0), width: controlsWidth, height: 88)
             blockButton.frame = CGRect(x: 0, y: 0, width: controlsWidth, height: 44)
             revokeButton.frame = CGRect(x: 0, y: 44, width: controlsWidth, height: 44)
-            y += 88
         }
-        contentHeight = max(y, previewClip.frame.maxY)
-        let panelHeight = min(contentHeight, max(1, bounds.height - 24))
-        let proposedX = outgoing ? source.maxX - width : source.minX
-        let x = min(max(16, proposedX), max(16, bounds.width - width - 16))
-        let proposedY = hasSource ? source.minY - 60 : (bounds.height - panelHeight) / 2
-        let panelY = min(max(12, proposedY), max(12, bounds.height - panelHeight - 12))
-        scrollView.frame = CGRect(x: x - 8, y: panelY, width: width + 16, height: panelHeight)
-        documentView.frame = CGRect(x: 0, y: 0, width: width + 16, height: contentHeight)
         let clip = scrollView.contentView
         let boundedY = min(max(0, clip.bounds.minY), max(0, contentHeight - clip.bounds.height))
         if boundedY != clip.bounds.minY { clip.scroll(to: NSPoint(x: 0, y: boundedY)) }
@@ -330,7 +395,7 @@ final class TimelineActionOverlayView: NSView {
         let index = current.map { ($0 + (backward ? controls.count - 1 : 1)) % controls.count }
             ?? (backward ? controls.count - 1 : 0)
         let control = controls[index]
-        if control !== dismissButton {
+        if control.isDescendant(of: documentView) {
             documentView.scrollToVisible(control.convert(control.bounds, to: documentView))
         }
         window.makeFirstResponder(control)
@@ -344,6 +409,7 @@ final class TimelineActionOverlayView: NSView {
 
     // Scrolling outside the panel is modal, not a command to the timeline below.
     override func scrollWheel(with event: NSEvent) {}
+    override func rightMouseDown(with event: NSEvent) { onDismiss?() }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         isCleared ? nil : super.hitTest(point)
@@ -361,6 +427,10 @@ final class TimelineActionOverlayView: NSView {
 
     func clear() {
         deactivate()
+        layer?.removeAllAnimations()
+        for view in [backdrop, dimmingView, previewSurface, reactionSurface, scrollView] {
+            view.layer?.removeAllAnimations()
+        }
         preview.clear()
         previewCache.removeAll()
         previewIdentity = nil
@@ -394,7 +464,7 @@ final class TimelineActionOverlayView: NSView {
 
     private func updatePreviewVisibility() {
         preview.setVisible(!isCleared && window != nil && !isHiddenOrHasHiddenAncestor
-            && previewClip.frame.intersects(documentView.visibleRect))
+            && previewSurface.frame.intersects(visibleRect))
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }

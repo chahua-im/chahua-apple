@@ -3,7 +3,8 @@ import ChahuaAPI
 import SwiftUI
 
 /// Presentation-free content. The timeline owns anchoring, preview, and dismissal.
-struct MessageActionMenu<Preview: View>: View {
+struct MessageActionMenu: View {
+    enum Section { case reactions, actions }
     let row: TimelineMessageRow
     let context: MessageInteractionContext
     let isReacting: Bool
@@ -11,7 +12,7 @@ struct MessageActionMenu<Preview: View>: View {
     let onAction: (MessageMenuAction) -> Void
     let onClose: () -> Void
     var controlsWidth: CGFloat = 276
-    @ViewBuilder let preview: () -> Preview
+    let section: Section
 
     @AppStorage(MessageReactionPreferences.recentStorageKey)
     private var recentStorage = MessageReactionPreferences.defaultRecentStorage
@@ -25,16 +26,14 @@ struct MessageActionMenu<Preview: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: row.isOutgoing ? .trailing : .leading, spacing: 8) {
-            if policy.canReact {
-                reactionStrip
-            }
-            preview()
-            if !policy.actions.isEmpty {
-                actionGrid
+        Group {
+            switch section {
+            case .reactions:
+                if policy.canReact { reactionStrip }
+            case .actions:
+                if !policy.actions.isEmpty { actionGrid }
             }
         }
-        .frame(maxWidth: .infinity, alignment: row.isOutgoing ? .trailing : .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Message actions")
     }

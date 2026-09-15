@@ -34,6 +34,19 @@ struct AuthenticatedShell: View {
         var failed = false
     }
 
+    private struct ThreadNavigation {
+        let chat: ChatListItem
+        let rootMessage: MessageResponse
+        var key: ConversationKey { .init(chatID: chat.id, threadID: rootMessage.id) }
+        var title: String {
+            let preview = messagePreview(rootMessage.replyPreview)
+            return preview.isEmpty ? String(localized: "Thread") : preview
+        }
+    }
+
+    @State private var openedThread: ThreadNavigation?
+    @State private var threadPath: [ConversationKey] = []
+
     var body: some View {
         Group {
             if usesAdaptiveSplitLayout {
@@ -46,7 +59,7 @@ struct AuthenticatedShell: View {
             guard let selectedConversationID, notificationNavigation == nil else { return }
             let loaded = selectedConversationID.threadID == nil
                 ? state.chatListLoadPhase == .loaded : state.threadListLoadPhase == .loaded
-            if loaded && selectedConversation == nil { self.selectedConversationID = nil }
+            if loaded && selectedConversation == nil { selectConversation(nil) }
         }
         .task(id: notifications.pendingNavigation?.id) { claimNotification() }
         .onChange(of: scenePhase) { _, phase in
@@ -90,20 +103,38 @@ struct AuthenticatedShell: View {
         ChatSplitLayout(hasSelection: selectedConversationID != nil) { _ in
             chatList()
         } detail: { isSplit in
-            detailContent
-                .modifier(ChatHeaderOverlay {
-                    if selectedConversationID != nil {
-                        ChatFloatingHeader(
-                            title: selectedTitle,
-                            onBack: isSplit ? nil : { selectConversation(nil) }
-                        ) {
-                            selectedAvatar
+            NavigationStack(path: $threadPath) {
+                detailContent
+                    .modifier(ChatHeaderOverlay {
+                        if selectedConversationID != nil {
+                            ChatFloatingHeader(
+                                title: selectedTitle,
+                                onBack: isSplit ? nil : { selectConversation(nil) }
+                            ) {
+                                selectedAvatar
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, isSplit ? 0 : 12)
+                            .padding(.top, isSplit ? ChatSplitMetrics.outerInset : 0)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, isSplit ? 0 : 12)
-                        .padding(.top, isSplit ? ChatSplitMetrics.outerInset : 0)
+                    })
+                    .navigationDestination(for: ConversationKey.self) { key in
+                        threadDestination(key)
+                            .modifier(ChatHeaderOverlay {
+                                ChatFloatingHeader(title: openedThread?.title ?? String(localized: "Thread"),
+                                                   onBack: popThread) {
+                                    selectedAvatar
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, isSplit ? 0 : 12)
+                                .padding(.top, isSplit ? ChatSplitMetrics.outerInset : 0)
+                            })
                     }
-                })
+                    #if os(iOS)
+                    .toolbar(.hidden, for: .navigationBar)
+                    #endif
+            }
+            .id(selectedConversationID)
         }
     }
 
@@ -113,23 +144,33 @@ struct AuthenticatedShell: View {
                 #if os(iOS)
                 .toolbar(.hidden, for: .navigationBar)
                 #endif
-                .navigationDestination(for: ConversationKey.self) { _ in
-                    detailContent
-                        #if os(iOS)
-                        .modifier(ChatPhoneDetailHeader(title: selectedTitle) {
-                            selectedAvatar
-                        })
-                        #endif
+                .navigationDestination(for: ConversationKey.self) { key in
+                    Group {
+                        if openedThread?.key == key {
+                            threadDestination(key)
+                        } else {
+                            detailContent
+                        }
+                    }
+                    #if os(iOS)
+                    .modifier(ChatPhoneDetailHeader(
+                        title: openedThread?.key == key ? openedThread?.title ?? String(localized: "Thread") : selectedTitle
+                    ) {
+                        selectedAvatar
+                    })
+                    #endif
                 }
         }
     }
 
     private var phonePath: Binding<[ConversationKey]> {
         Binding(
-            get: { selectedConversationID.map { [$0] } ?? [] },
-            set: {
-                guard $0.last != selectedConversationID else { return }
-                selectConversation($0.last)
+            get: { selectedConversationID.map { [$0] + threadPath } ?? [] },
+            set: { path in
+                if path.first != selectedConversationID {
+                    selectConversation(path.first)
+                }
+                threadPath = Array(path.dropFirst())
             }
         )
     }
@@ -172,7 +213,8 @@ struct AuthenticatedShell: View {
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     navigationTitle: selectedTitle,
                     threadID: navigation.route.threadID,
-                    initialPosition: .message(navigation.route.messageID))
+                    initialPosition: .message(navigation.route.messageID),
+                    onOpenThread: { openThread($0, in: chat) })
                     .id(navigation.route.id)
             } else if navigation.failed {
                 ChahuaRecoverableErrorView(
@@ -198,12 +240,34 @@ struct AuthenticatedShell: View {
     @ViewBuilder private func detailView(_ conversation: ConversationListItem) -> some View {
         switch conversation {
         case .chat(let chat):
-            ChatDetailView(chat: chat, currentUserID: me.uid, store: chatStore)
+            ChatDetailView(chat: chat, currentUserID: me.uid, store: chatStore,
+                           onOpenThread: { openThread($0, in: chat) })
                 .id(conversation.id)
         case .thread(let thread):
             ThreadDetailView(thread: thread, currentUserID: me.uid, store: chatStore)
                 .id(conversation.id)
         }
+    }
+
+    @ViewBuilder private func threadDestination(_ key: ConversationKey) -> some View {
+        if let thread = openedThread, thread.key == key {
+            ChatDetailView(
+                chat: thread.chat, currentUserID: me.uid, store: chatStore,
+                navigationTitle: thread.title, threadID: thread.rootMessage.id,
+                initialPosition: .liveEdge)
+                .id(key)
+        }
+    }
+
+    private func openThread(_ message: MessageResponse, in chat: ChatListItem) {
+        guard !isSigningOut, !message.isDeleted, message.chatId == chat.id else { return }
+        let thread = ThreadNavigation(chat: chat, rootMessage: message)
+        openedThread = thread
+        withAnimation { threadPath = [thread.key] }
+    }
+
+    private func popThread() {
+        withAnimation { threadPath.removeAll() }
     }
 
 
@@ -256,6 +320,7 @@ struct AuthenticatedShell: View {
 
     private var visibleConversation: ConversationKey? {
         guard isVisible, scenePhase == .active, !showsSettings, !isSigningOut else { return nil }
+        if let key = threadPath.last { return key }
         if let navigation = notificationNavigation {
             return navigation.chat == nil ? nil : navigation.route.conversation
         }
@@ -272,12 +337,16 @@ struct AuthenticatedShell: View {
               let route = notifications.takeNavigation() else { return }
         // Taking is synchronous across windows; keep the route while the
         // separate metadata task runs, including across cancellation/retry.
+        threadPath.removeAll()
+        openedThread = nil
         notificationNavigation = NotificationNavigation(route: route, userID: me.uid)
         showsSettings = false
         selectedConversationID = route.conversation
     }
 
     private func selectConversation(_ conversation: ConversationKey?) {
+        threadPath.removeAll()
+        openedThread = nil
         notificationNavigation = nil
         selectedConversationID = conversation
     }

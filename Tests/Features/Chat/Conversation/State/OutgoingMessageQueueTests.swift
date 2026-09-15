@@ -676,6 +676,10 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
+    func archiveChat(chatID: String) async throws { throw APIError.unavailable }
+    func archiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
+    func muteChat(chatID: String) async throws -> MuteResponse { throw APIError.unavailable }
+    func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { throw APIError.unavailable }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }

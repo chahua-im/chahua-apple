@@ -3,10 +3,64 @@ import ChahuaAPI
 import Combine
 import UIKit
 import XCTest
+import SwiftUI
 @testable import chahua_apple
 
 @MainActor
 final class TimelineCollectionViewControllerTests: XCTestCase {
+    func testPreviewPreservesImageOnlyAndOversizedBubbleGeometry() async throws {
+        let image = try TimelineTestFixtures.message(id: "image-preview", at: 0, fields: [
+            "message": NSNull(), "hasAttachments": true,
+            "attachments": [["id": "portrait", "url": "file:///missing-fixture.png", "kind": "image/png",
+                             "size": 1, "fileName": "portrait.png", "width": 400, "height": 1600]]
+        ])
+        let long = try TimelineTestFixtures.message(id: "long-preview", at: 0,
+            fields: ["message": String(repeating: "A long message must retain its exact wrapping and width.\n", count: 60)])
+        for message in [image, long] {
+            let source = BubbleSource(page: try TimelineTestFixtures.page([message]))
+            let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: true,
+                                                  source: source, messageStore: ConversationMessageStore())
+            let root = NavigationStack {
+                MessageInteractionHost(model: model, context: .init(canWrite: true), actions: .init()) { actions in
+                    ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: actions)
+                }
+                .navigationTitle("Title bar above the timeline")
+            }
+            let host = UIHostingController(rootView: root)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; model.close() }
+            await model.loadInitial()
+            try await Task.sleep(for: .milliseconds(300))
+            window.layoutIfNeeded()
+            func bubbles(in view: UIView) -> [TimelineBubbleContentView] {
+                if let bubble = view as? TimelineBubbleContentView { return [bubble] }
+                return view.subviews.flatMap { bubbles(in: $0) }
+            }
+            let original = try XCTUnwrap(bubbles(in: window).first)
+            let size = original.bounds.size
+            let action = try XCTUnwrap(original.accessibilityCustomActions?.first)
+            XCTAssertTrue(try XCTUnwrap(action.actionHandler)(action))
+            try await Task.sleep(for: .milliseconds(700))
+            window.layoutIfNeeded()
+            let visible = bubbles(in: window)
+            XCTAssertEqual(visible.count, 2)
+            for bubble in visible {
+                XCTAssertEqual(bubble.bounds.width, size.width, accuracy: 0.5)
+                XCTAssertEqual(bubble.bounds.height, size.height, accuracy: 0.5)
+            }
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = message.id
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     func testSameDayPrependAndViewportChangesPreserveReaderPosition() async throws {
         let messages = try (0 ..< 50).map {
             try TimelineTestFixtures.message(

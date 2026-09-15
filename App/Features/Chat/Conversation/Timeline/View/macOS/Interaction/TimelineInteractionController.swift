@@ -11,7 +11,7 @@ final class TimelineInteractionController: NSObject {
 
     private struct Target {
         let key: ConversationMessageStableKey
-        let source: CGRect
+        let source: MessageInteractionSource
     }
 
     private let model: ConversationTimelineModel
@@ -20,6 +20,7 @@ final class TimelineInteractionController: NSObject {
     private var mediaContext: AppMediaContext?
     private var target: Target?
     private var overlay: TimelineActionOverlayView?
+    private var dismissingOverlay: TimelineActionOverlayView?
     private weak var overlayWindow: NSWindow?
     private weak var previousFirstResponder: NSResponder?
     private var keyMonitor: Any?
@@ -32,10 +33,13 @@ final class TimelineInteractionController: NSObject {
                      NSWindow.didChangeBackingPropertiesNotification] {
             notifications.addObserver(self, selector: #selector(windowGeometryChanged(_:)), name: name, object: nil)
         }
-        for name in [NSWindow.willCloseNotification, NSWindow.didMiniaturizeNotification] {
+        for name in [NSWindow.willCloseNotification, NSWindow.didMiniaturizeNotification,
+                     NSWindow.didResignKeyNotification, NSWindow.willEnterFullScreenNotification,
+                     NSWindow.willExitFullScreenNotification] {
             notifications.addObserver(self, selector: #selector(windowBecameUnavailable(_:)), name: name, object: nil)
         }
         notifications.addObserver(self, selector: #selector(preferencesChanged), name: UserDefaults.didChangeNotification, object: nil)
+        notifications.addObserver(self, selector: #selector(applicationBecameInactive), name: NSApplication.didResignActiveNotification, object: nil)
     }
 
     func configure(actions: TimelineBubbleActions, context: MessageInteractionContext, mediaContext: AppMediaContext?) {
@@ -58,15 +62,22 @@ final class TimelineInteractionController: NSObject {
         return result
     }
 
-    func open(row: TimelineMessageRow, source: CGRect, in timelineView: NSView) {
+    func open(row: TimelineMessageRow, source: MessageInteractionSource, in timelineView: NSView) {
         guard target == nil, row.entry.messageType != .system,
               let window = timelineView.window, let content = window.contentView, let overlayHost = content.superview,
               !timelineView.isHiddenOrHasHiddenAncestor,
               let live = liveRow(for: row.entry.stableKey), live.entry.messageType != .system
         else { return }
+        finishDismissal()
         self.timelineView = timelineView
         target = Target(key: live.entry.stableKey, source: source)
         previousFirstResponder = window.firstResponder
+        if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
+           let owner = editor.delegate as? NSResponder {
+            // AppKit detaches its shared field editor when focus leaves a field.
+            // Restore the owning control rather than the detached text view.
+            previousFirstResponder = owner
+        }
         overlayWindow = window
         let overlay = TimelineActionOverlayView()
         overlay.onDismiss = { [weak self] in self?.dismiss() }
@@ -75,20 +86,29 @@ final class TimelineInteractionController: NSObject {
         overlay.onBlock = { [weak self] in self?.modifyPending(revoke: false) }
         overlay.onRevoke = { [weak self] in self?.modifyPending(revoke: true) }
         self.overlay = overlay
-        overlay.frame = timelineView.convert(timelineView.bounds, to: overlayHost)
-        overlay.alphaValue = 0
-        // SwiftUI owns window.contentView in the app. AppKit forbids adding
-        // children directly to that hosting view; use its native common parent
-        // and constrain the overlay to the converted timeline bounds instead.
-        overlayHost.addSubview(overlay, positioned: .above, relativeTo: content)
+        overlay.frame = overlayHost.bounds
+        overlay.autoresizingMask = [.width, .height]
+        // SwiftUI's content host cannot accept native children, and its bounds
+        // exclude native title-bar controls. The window's common frame view is
+        // the only same-window host above both SwiftUI chrome and the title bar;
+        // no auxiliary key window is created or kept alive after the chat closes.
+        overlayHost.addSubview(overlay, positioned: .above, relativeTo: nil)
         refresh()
         guard self.overlay === overlay else { return }
         window.makeFirstResponder(overlay)
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown]) { [weak self] event in
             let consumed = MainActor.assumeIsolated {
-                guard let self, self.target != nil, event.window === self.overlayWindow,
-                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty
-                else { return false }
+                guard let self, self.target != nil, let window = self.overlayWindow,
+                      event.window === window else { return false }
+                // AppKit routes native title-bar mouse events separately from
+                // frame-view children. Covered window controls must not receive
+                // the click, even when the preview opened in an inactive window.
+                if event.type != .keyDown, !window.contentLayoutRect.contains(event.locationInWindow) {
+                    self.dismiss()
+                    return true
+                }
+                guard event.type == .keyDown,
+                      event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
                 if event.keyCode == 53 {
                     self.dismiss()
                     return true
@@ -101,10 +121,7 @@ final class TimelineInteractionController: NSObject {
             }
             return consumed ? nil : event
         }
-        NSAnimationContext.runAnimationGroup { animation in
-            animation.duration = 0.15
-            overlay.animator().alphaValue = 1
-        }
+        overlay.present()
         onRoutedActionsChanged?()
     }
 
@@ -117,47 +134,62 @@ final class TimelineInteractionController: NSObject {
               let content = window.contentView, let overlayHost = content.superview, let overlay,
               overlay.superview === overlayHost
         else {
-            dismiss()
+            dismiss(animated: false)
             return
         }
-        overlay.frame = timelineView.convert(timelineView.bounds, to: overlayHost)
-        let sourceInContent = content.isFlipped ? target.source : CGRect(
-            x: target.source.minX, y: content.bounds.maxY - target.source.maxY,
-            width: target.source.width, height: target.source.height)
+        overlay.frame = overlayHost.bounds
+        if overlayHost.subviews.last !== overlay {
+            overlayHost.addSubview(overlay, positioned: .above, relativeTo: nil)
+        }
+        let rect = target.source.rect
+        let sourceInContent = content.isFlipped ? rect : CGRect(
+            x: rect.minX, y: content.bounds.maxY - rect.maxY,
+            width: rect.width, height: rect.height)
         let localSource = overlay.convert(sourceInContent, from: content)
         overlay.configure(
             row: row, currentUserID: model.currentUserID, context: context,
             actions: actions, mediaContext: mediaContext,
-            source: localSource, hasSource: target.source != .zero)
+            source: target.source, sourceRect: localSource)
     }
 
-    func dismiss() {
-        guard target != nil || overlay != nil else { return }
+    func dismiss(animated: Bool = true) {
+        guard target != nil || overlay != nil else {
+            if !animated { finishDismissal() }
+            return
+        }
         target = nil
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
+        finishDismissal()
         let dismissedOverlay = overlay
-        overlay = nil
         dismissedOverlay?.deactivate()
         restoreFirstResponder()
+        overlay = nil
         previousFirstResponder = nil
         overlayWindow = nil
-        if let dismissedOverlay {
-            NSAnimationContext.runAnimationGroup({ animation in
-                animation.duration = 0.15
-                dismissedOverlay.animator().alphaValue = 0
-            }, completionHandler: {
-                MainActor.assumeIsolated {
-                    dismissedOverlay.clear()
-                    dismissedOverlay.removeFromSuperview()
-                }
-            })
+        dismissingOverlay = dismissedOverlay
+        if let dismissedOverlay, animated {
+            dismissedOverlay.dismiss { [weak self, weak dismissedOverlay] in
+                guard let self, self.dismissingOverlay === dismissedOverlay else { return }
+                self.finishDismissal()
+            }
+        } else {
+            finishDismissal()
         }
         onRoutedActionsChanged?()
     }
 
+    private func finishDismissal() {
+        dismissingOverlay?.clear()
+        dismissingOverlay?.removeFromSuperview()
+        dismissingOverlay = nil
+    }
+
     private func restoreFirstResponder() {
-        guard let window = overlayWindow else { return }
+        guard let window = overlayWindow, let overlay,
+              window.firstResponder === overlay
+                || (window.firstResponder as? NSView)?.isDescendant(of: overlay) == true
+        else { return }
         var restored = false
         if let view = previousFirstResponder as? NSView, view.window === window {
             restored = window.makeFirstResponder(view)
@@ -238,13 +270,21 @@ final class TimelineInteractionController: NSObject {
     }
 
     @objc private func windowGeometryChanged(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === overlayWindow else { return }
+        guard let window = notification.object as? NSWindow else { return }
+        if dismissingOverlay?.window === window { finishDismissal() }
+        guard window === overlayWindow else { return }
         refresh()
     }
 
     @objc private func windowBecameUnavailable(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, window === overlayWindow else { return }
-        dismiss()
+        guard let window = notification.object as? NSWindow else { return }
+        if dismissingOverlay?.window === window { finishDismissal() }
+        guard window === overlayWindow else { return }
+        dismiss(animated: false)
+    }
+
+    @objc private func applicationBecameInactive() {
+        dismiss(animated: false)
     }
 
     @objc private func preferencesChanged() {
@@ -258,6 +298,8 @@ final class TimelineInteractionController: NSObject {
             restoreFirstResponder()
             overlay?.clear()
             overlay?.removeFromSuperview()
+            dismissingOverlay?.clear()
+            dismissingOverlay?.removeFromSuperview()
         }
     }
 }

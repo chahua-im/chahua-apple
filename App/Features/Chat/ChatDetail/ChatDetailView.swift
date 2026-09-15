@@ -7,6 +7,7 @@ struct ChatDetailView: View {
     let navigationTitle: String?
     let threadID: String?
     let initialPosition: TimelineInitialPosition
+    private let onOpenThread: ((MessageResponse) -> Void)?
     private var conversationKey: ConversationKey { .init(chatID: chat.id, threadID: threadID) }
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ConversationTimelineModel
@@ -34,11 +35,13 @@ struct ChatDetailView: View {
         store: ChatStore,
         navigationTitle: String? = nil,
         threadID: String? = nil,
-        initialPosition: TimelineInitialPosition? = nil
+        initialPosition: TimelineInitialPosition? = nil,
+        onOpenThread: ((MessageResponse) -> Void)? = nil
     ) {
         self.chat = chat
         self.navigationTitle = navigationTitle
         self.threadID = threadID
+        self.onOpenThread = onOpenThread
         self.initialPosition = initialPosition ?? (chat.unreadCount > 0 ? .unread(after: chat.lastReadMessageId) : .liveEdge)
         self.store = store
         self.reactions = store.reactions
@@ -175,9 +178,7 @@ struct ChatDetailView: View {
                                     text: composerText,
                                     attachmentState: composerAttachments,
                                     maxHeight: max(36, geometry.size.height / 3),
-                                    isEnabled: interactionContext.canWrite && (editingMessage != nil
-                                        ? !isUpdatingMessage
-                                        : !drafts.committingDrafts.contains(conversationKey)),
+                                    isEnabled: interactionContext.canWrite,
                                     canSend: canSubmitComposer,
                                     onSubmit: submitComposer,
                                     onCompositionChanged: { composing in
@@ -250,6 +251,16 @@ struct ChatDetailView: View {
         actions.openLink = { url in
             _ = openURL(url)
         }
+        if threadID == nil, onOpenThread != nil {
+            actions.openThread = { id in
+                for case let .message(row) in model.rows {
+                    guard let message = row.entry.remoteMessage,
+                          message.id == id, !message.isDeleted else { continue }
+                    onOpenThread?(message)
+                    return
+                }
+            }
+        }
         if interactionContext.canWrite {
             actions.replyToMessage = { message in
                 guard !drafts.committingDrafts.contains(conversationKey) else { return }
@@ -302,10 +313,16 @@ struct ChatDetailView: View {
         }
         guard !isUpdatingMessage else { return false }
         isUpdatingMessage = true
-        let didUpdate = await store.updateMessage(message, text: editText)
+        let submittedText = editText
+        let didUpdate = await store.updateMessage(message, text: submittedText)
         isUpdatingMessage = false
         if didUpdate {
-            cancelEditing()
+            if editText == submittedText {
+                cancelEditing()
+            } else {
+                editingMessage = message.replacingMessageText(
+                    submittedText.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
         } else {
             editError = String(localized: "Couldn’t edit this message. Please try again.")
         }

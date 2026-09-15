@@ -14,29 +14,41 @@ import XCTest
 
 @MainActor
 final class ComposerFocusTests: XCTestCase {
-    func testSendingRestoresEditorFocusAfterDraftCommit() async throws {
+    func testSendingKeepsEditingSessionThroughDraftCommit() async throws {
         let h = try await mount(text: "send this")
+        let editor = try h.focusedEditor()
+        #if os(macOS)
+            let didEndEditing = NSText.didEndEditingNotification
+        #else
+            let didEndEditing = UITextView.textDidEndEditingNotification
+        #endif
+        let observer = NotificationCenter.default.addObserver(
+            forName: didEndEditing, object: editor, queue: nil
+        ) { _ in MainActor.assumeIsolated { h.state.editingEnded = true } }
+        defer { NotificationCenter.default.removeObserver(observer) }
         h.submit()
         try await pause()
         XCTAssertEqual(h.state.submits, 1)
-        XCTAssertFalse(h.state.enabled)
+        XCTAssertTrue(try h.focusedEditor() === editor)
+        XCTAssertFalse(h.state.editingEnded)
         XCTAssertEqual(h.state.text, "send this", "Do not clear before local enqueue completes.")
         h.state.text = ""
-        h.state.enabled = true
+        h.state.canSend = true
         try await pause()
         try h.insertIntoFocusedEditor("next message")
         try await pause()
         XCTAssertEqual(h.state.text, "next message")
+        XCTAssertTrue(try h.focusedEditor() === editor)
+        XCTAssertFalse(h.state.editingEnded, "Send must not end and restart native editing.")
     }
 
-    func testFailedCommitRetainsDraftAndRestoresFocusForRetry() async throws {
+    func testFailedCommitRetainsDraftAndFocusForRetry() async throws {
         let h = try await mount(text: "send this")
         h.submit()
         try await pause()
         XCTAssertEqual(h.state.submits, 1)
-        XCTAssertFalse(h.state.enabled)
-        // Storage failure reenables editing without changing the draft.
-        h.state.enabled = true
+        _ = try h.focusedEditor()
+        h.state.canSend = true
         try await pause()
         try h.selectEnd()
         try h.insertIntoFocusedEditor(" again")
@@ -51,7 +63,12 @@ final class ComposerFocusTests: XCTestCase {
         try await pause()
         XCTAssertEqual(h.state.submits, 1)
         XCTAssertEqual(h.state.text, "send this")
-        XCTAssertFalse(h.state.enabled)
+        h.pressSendButton()
+        try h.selectEnd()
+        try h.insertIntoFocusedEditor(" again")
+        try await pause()
+        XCTAssertEqual(h.state.submits, 1)
+        XCTAssertEqual(h.state.text, "send this again", "Pending submission must not disable typing.")
     }
 
     func testMarkedTextStaysLocalUntilCommitted() async throws {
@@ -313,7 +330,7 @@ private struct FocusComposerRoot: View {
                     maxHeight: 160, isEnabled: state.enabled, canSend: state.canSend,
                     onSubmit: {
                         state.submits += 1
-                        state.enabled = false
+                        state.canSend = false
                         return true
                     }, onCompositionChanged: { state.composing = $0 })
             }
