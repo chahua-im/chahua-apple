@@ -182,32 +182,11 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
 struct ChatFloatingHeader<Avatar: View>: View {
     let title: String
     var onBack: (() -> Void)?
+    var onClose: (() -> Void)?
     @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let onBack {
-                let label = Label("Chats", systemImage: "chevron.backward")
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: 20, weight: .semibold))
-                #if os(macOS)
-                if #available(macOS 26, *) {
-                    Button(action: onBack) { label }
-                        .buttonStyle(.glass)
-                        .buttonBorderShape(.circle)
-                        .buttonSizing(.flexible)
-                        .frame(width: 44, height: 44)
-                } else {
-                    Button(action: onBack) { label.frame(width: 44, height: 44) }
-                        .buttonStyle(.plain)
-                        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
-                }
-                #else
-                Button(action: onBack) { label.frame(width: 44, height: 44) }
-                    .buttonStyle(.plain)
-                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
-                #endif
-            }
+        ZStack {
             HStack(spacing: 8) {
                 avatar()
                     .fixedSize()
@@ -215,16 +194,54 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 Text(title)
                     .font(.headline)
                     .lineLimit(1)
-                    #if os(macOS)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    #endif
+                    .truncationMode(.tail)
                     .accessibilityAddTraits(.isHeader)
             }
             .padding(.leading, 6)
             .padding(.trailing, 14)
             .frame(minHeight: 44)
             .modifier(ChatGlassSurface(cornerRadius: 24))
+            .padding(.horizontal, onBack != nil || onClose != nil ? 52 : 0)
+
+            if onBack != nil || onClose != nil {
+                HStack {
+                    if let onBack {
+                        headerControl(action: onBack, systemImage: "chevron.backward", accessibilityLabel: "Back")
+                    } else if let onClose {
+                        headerControl(action: onClose, systemImage: "xmark", accessibilityLabel: "Close conversation")
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
         }
+    }
+
+    @ViewBuilder
+    private func headerControl(action: @escaping () -> Void, systemImage: String, accessibilityLabel: String) -> some View {
+        let label = Image(systemName: systemImage)
+            .font(.system(size: 20, weight: .semibold))
+            .frame(width: 44, height: 44)
+            // Plain buttons must hit-test the full control, not just the symbol.
+            .contentShape(Rectangle())
+        #if os(macOS)
+        if #available(macOS 26, *) {
+            Button(action: action) { label }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .buttonSizing(.flexible)
+                .accessibilityLabel(accessibilityLabel)
+        } else {
+            Button(action: action) { label }
+                .buttonStyle(.plain)
+                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                .accessibilityLabel(accessibilityLabel)
+        }
+        #else
+        Button(action: action) { label }
+            .buttonStyle(.plain)
+            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+            .accessibilityLabel(accessibilityLabel)
+        #endif
     }
 }
 
@@ -285,21 +302,43 @@ extension EnvironmentValues {
 
 /// Reserve scrollable breathing room, not layout space: rows travel behind the glass.
 struct ChatHeaderOverlay<Header: View>: ViewModifier {
+    var isVisible = true
     @ViewBuilder let header: () -> Header
     @State private var headerHeight: CGFloat = 0
 
     func body(content: Content) -> some View {
-        content
-            .environment(\.chatHeaderInset, headerHeight + 12)
-            .overlay(alignment: .top) {
-                header()
-                    .background {
-                        GeometryReader { geometry in
-                            Color.clear
-                                .onAppear { headerHeight = geometry.size.height }
-                                .onChange(of: geometry.size.height) { headerHeight = $0 }
-                        }
+        GeometryReader { geometry in
+            content
+                .environment(\.chatHeaderInset, isVisible ? headerHeight + 12 : 0)
+                .overlay(alignment: .top) {
+                    if isVisible {
+                        header()
+                            .frame(maxWidth: .infinity)
+                            .background {
+                                GeometryReader { headerGeometry in
+                                    Color.clear
+                                        .onAppear { headerHeight = headerGeometry.size.height }
+                                        .onChange(of: headerGeometry.size.height) { headerHeight = $0 }
+                                }
+                            }
+                            .background(alignment: .top) {
+                                Rectangle()
+                                    .fill(.regularMaterial)
+                                    .frame(height: headerHeight + geometry.safeAreaInsets.top + 32)
+                                    .mask {
+                                        LinearGradient(
+                                            stops: [
+                                                .init(color: .black, location: 0),
+                                                .init(color: .black, location: 0.45),
+                                                .init(color: .clear, location: 1),
+                                            ],
+                                            startPoint: .top, endPoint: .bottom)
+                                    }
+                                    .offset(y: -geometry.safeAreaInsets.top)
+                                    .allowsHitTesting(false)
+                            }
                     }
-            }
+                }
+        }
     }
 }

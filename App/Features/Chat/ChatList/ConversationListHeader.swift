@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConversationListHeader<Account: View>: View {
     @Binding var selection: ConversationListScope
+    var badges = ConversationTabBadges()
     @ViewBuilder let account: () -> Account
 
     var body: some View {
@@ -14,9 +15,7 @@ struct ConversationListHeader<Account: View>: View {
                 .frame(width: 44, height: 44)
                 .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
                 .accessibilityLabel("Account")
-            // The native segmented picker owns its glass and touch handling.
-            // An outer interactive glass surface competes with its segments.
-            ConversationScopePicker(selection: $selection)
+            ConversationScopePicker(selection: $selection, badges: badges)
                 .frame(minHeight: 44)
         }
         .padding(.horizontal, 12)
@@ -47,7 +46,7 @@ struct ConversationListHeader<Account: View>: View {
                 .help("New message")
                 .disabled(true)
             }
-            ConversationScopePicker(selection: $selection)
+            ConversationScopePicker(selection: $selection, badges: badges)
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.borderless)

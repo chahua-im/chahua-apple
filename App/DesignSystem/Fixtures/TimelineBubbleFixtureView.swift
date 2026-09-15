@@ -23,10 +23,11 @@
         @State private var replyToMessage: MessagePreview?
         @State private var replyFocusRequest = 0
         @State private var scrollExperiment: TimelineDisplayScheduler?
+        @State private var hasSelection = true
 
         var body: some View {
             if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
-                ChatSplitLayout(hasSelection: true) { _ in
+                ChatSplitLayout(hasSelection: hasSelection) { _ in
                     VStack(alignment: .leading, spacing: 0) {
                         ConversationListHeader(selection: $listScope) {
                             Menu {
@@ -38,9 +39,11 @@
                             }
                         }
                         VStack(alignment: .leading, spacing: 16) {
-                            Label(
-                                "Native bubble timeline",
-                                systemImage: "bubble.left.and.bubble.right")
+                            Button {
+                                hasSelection = true
+                            } label: {
+                                Label("Native bubble timeline", systemImage: "bubble.left.and.bubble.right")
+                            }
                             Text("Drag the divider to resize the sidebar.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -51,10 +54,17 @@
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 } detail: { _ in
-                    timelineContent
+                    Group {
+                        if hasSelection {
+                            timelineContent
+                        } else {
+                            Text("Select a conversation")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
                         .modifier(
-                            ChatHeaderOverlay {
-                                ChatFloatingHeader(title: "Native bubble timeline") {
+                            ChatHeaderOverlay(isVisible: hasSelection) {
+                                ChatFloatingHeader(title: "Native bubble timeline", onClose: { hasSelection = false }) {
                                     AvatarView(url: nil, displayName: "Native bubble timeline", diameter: 32)
                                 }
                                     .padding(.horizontal, 12)

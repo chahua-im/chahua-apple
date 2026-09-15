@@ -71,7 +71,7 @@ struct ConversationListRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.horizontal, ChatSplitMetrics.outerInset)
-        .frame(height: 60)
+        .frame(height: 68)
         .foregroundStyle(isSelected ? Color.white : Color.primary)
     }
 
@@ -156,15 +156,14 @@ private struct ConversationListRowPreview: View {
         List {
             ForEach(examples.indices, id: \.self) { index in
                 let example = examples[index]
-                Section(example.label) {
-                    ConversationListRow(
-                        item: example.item, draft: example.draft,
-                        store: store, currentUserID: 1, isSelected: index == 0)
-                        .listRowInsets(EdgeInsets())
-                        .listRowBackground(index == 0 ? ChahuaTheme.ChatList.primary : Color.clear)
-                }
+                ConversationListRow(
+                    item: example.item, draft: example.draft,
+                    store: store, currentUserID: 1, isSelected: index == 0)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(index == 0 ? ChahuaTheme.ChatList.primary : Color.clear)
             }
         }
+        .safeAreaPadding()
         .listStyle(.plain)
         .frame(width: 400, height: 900)
     }

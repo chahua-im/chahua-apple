@@ -1,9 +1,6 @@
 import ChahuaAPI
 import SwiftUI
 
-#if os(iOS)
-import UIKit
-#endif
 
 /// Authenticated navigation boundary.
 ///
@@ -48,12 +45,16 @@ struct AuthenticatedShell: View {
     @State private var threadPath: [ConversationKey] = []
 
     var body: some View {
-        Group {
-            if usesAdaptiveSplitLayout {
+        GeometryReader { geometry in
+            #if os(macOS)
+            adaptiveLayout
+            #else
+            if geometry.size.width >= ChatSplitMetrics.splitThreshold {
                 adaptiveLayout
             } else {
                 phoneNavigation
             }
+            #endif
         }
         .onChange(of: chatStore.state) { state in
             guard let selectedConversationID, notificationNavigation == nil else { return }
@@ -103,38 +104,24 @@ struct AuthenticatedShell: View {
         ChatSplitLayout(hasSelection: selectedConversationID != nil) { _ in
             chatList()
         } detail: { isSplit in
-            NavigationStack(path: $threadPath) {
-                detailContent
-                    .modifier(ChatHeaderOverlay {
-                        if selectedConversationID != nil {
-                            ChatFloatingHeader(
-                                title: selectedTitle,
-                                onBack: isSplit ? nil : { selectConversation(nil) }
-                            ) {
-                                selectedAvatar
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, isSplit ? 0 : 12)
-                            .padding(.top, isSplit ? ChatSplitMetrics.outerInset : 0)
-                        }
-                    })
-                    .navigationDestination(for: ConversationKey.self) { key in
-                        threadDestination(key)
-                            .modifier(ChatHeaderOverlay {
-                                ChatFloatingHeader(title: openedThread?.title ?? String(localized: "Thread"),
-                                                   onBack: popThread) {
-                                    selectedAvatar
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, isSplit ? 0 : 12)
-                                .padding(.top, isSplit ? ChatSplitMetrics.outerInset : 0)
-                            })
-                    }
-                    #if os(iOS)
-                    .toolbar(.hidden, for: .navigationBar)
-                    #endif
+            Group {
+                if let key = threadPath.last {
+                    threadDestination(key)
+                } else {
+                    detailContent
+                }
             }
-            .id(selectedConversationID)
+            .modifier(ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
+                ChatFloatingHeader(
+                    title: threadPath.isEmpty ? selectedTitle : openedThread?.title ?? String(localized: "Thread"),
+                    onBack: !threadPath.isEmpty ? popThread : isSplit ? nil : { selectConversation(nil) },
+                    onClose: isSplit && threadPath.isEmpty ? { selectConversation(nil) } : nil
+                ) {
+                    selectedAvatar
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+            })
         }
     }
 
@@ -173,6 +160,7 @@ struct AuthenticatedShell: View {
     }
 
     @ViewBuilder private func chatList(usesPhoneNavigation: Bool = false) -> some View {
+        let badges = ConversationTabBadges(chats: chatStore.state.chats, threads: chatStore.state.threads)
         let list = ChatListView(
             store: chatStore,
             drafts: chatStore.drafts,
@@ -197,31 +185,31 @@ struct AuthenticatedShell: View {
                     // A segmented control must not participate in native title morphing.
                     if #available(iOS 26, *) {
                         ToolbarItem(placement: .topBarTrailing) {
-                            ConversationScopePicker(selection: $selectedScope)
+                            ConversationScopePicker(selection: $selectedScope, badges: badges)
                         }
-                        // The segmented picker already draws its own glass surface.
+                        // The scope control already draws its own background.
                         .sharedBackgroundVisibility(.hidden)
                     } else {
                         ToolbarItem(placement: .topBarTrailing) {
-                            ConversationScopePicker(selection: $selectedScope)
+                            ConversationScopePicker(selection: $selectedScope, badges: badges)
                         }
                     }
                 }
         } else if #available(iOS 26, *) {
             list
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    ConversationListHeader(selection: $selectedScope) { accountButton }
+                    ConversationListHeader(selection: $selectedScope, badges: badges) { accountButton }
                 }
                 .scrollEdgeEffectStyle(.soft, for: .top)
         } else {
             list.safeAreaInset(edge: .top, spacing: 0) {
-                ConversationListHeader(selection: $selectedScope) { accountButton }
+                ConversationListHeader(selection: $selectedScope, badges: badges) { accountButton }
                     .background(.regularMaterial)
             }
         }
         #else
         VStack(spacing: 0) {
-            ConversationListHeader(selection: $selectedScope) { accountButton }
+            ConversationListHeader(selection: $selectedScope, badges: badges) { accountButton }
             list
         }
         #endif
@@ -415,11 +403,4 @@ struct AuthenticatedShell: View {
         return chatStore.state.chats.first { $0.id == selectedConversationID.chatID }.map(ConversationListItem.chat)
     }
 
-    private var usesAdaptiveSplitLayout: Bool {
-        #if os(macOS)
-        true
-        #else
-        UIDevice.current.userInterfaceIdiom == .pad
-        #endif
-    }
 }

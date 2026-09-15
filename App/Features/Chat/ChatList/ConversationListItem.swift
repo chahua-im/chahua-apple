@@ -10,6 +10,32 @@ enum ConversationListScope: String, CaseIterable, Identifiable {
     var includesThreads: Bool { self == .messages || self == .threads }
 }
 
+struct ConversationTabBadges: Equatable {
+    var groups = 0
+    var dms = 0
+    var threads = 0
+
+    init(chats: [ChatListItem] = [], threads: [ThreadListItem] = [], now: Date = Date()) {
+        for chat in chats where !chat.archived && chat.unreadCount > 0 {
+            guard chat.mutedUntil.map({ $0 > now }) != true else { continue }
+            switch chat.kind {
+            case .group: groups += 1
+            case .dm: dms += 1
+            }
+        }
+        self.threads = threads.reduce(0) { $0 + (!$1.archived && $1.unreadCount > 0 ? 1 : 0) }
+    }
+
+    subscript(scope: ConversationListScope) -> Int {
+        switch scope {
+        case .messages: groups + dms + threads
+        case .groups: groups
+        case .dms: dms
+        case .threads: threads
+        }
+    }
+}
+
 enum ConversationListAction: Equatable {
     case archive, mute, unmute, markRead, markUnread
 }

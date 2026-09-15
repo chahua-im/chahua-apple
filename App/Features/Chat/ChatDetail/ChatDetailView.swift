@@ -84,11 +84,6 @@ struct ChatDetailView: View {
         .task {
             if threadID == nil { await pins.load(chatID: chat.id, force: true) }
         }
-        .sheet(isPresented: $showsPinnedMessages) {
-            ChatPinnedMessagesSheet(
-                chatID: chat.id, controller: pins, canManage: interactionContext.isAdmin && interactionContext.canWrite,
-                onSelect: jumpToPinnedMessage, onOpenThread: onOpenThread)
-        }
         .alert("Unpin Message", isPresented: Binding(
             get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
         )) {
@@ -390,6 +385,12 @@ struct ChatDetailView: View {
                     ? { onOpenThread?(pin.message) } : nil,
                 onUnpin: interactionContext.isAdmin && interactionContext.canWrite && !pins.pendingMessageIDs.contains(pin.message.id)
                     ? { requestPinChange(pin.message) } : nil)
+                .popover(isPresented: $showsPinnedMessages, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+                    ChatPinnedMessagesSheet(
+                        chatID: chat.id, controller: pins, canManage: interactionContext.isAdmin && interactionContext.canWrite,
+                        onSelect: jumpToPinnedMessage, onOpenThread: onOpenThread)
+                        .frame(width: 420, height: 420)
+                }
         } else if pins.failedChatIDs.contains(chat.id) {
             Button {
                 Task { await pins.load(chatID: chat.id, force: true) }
