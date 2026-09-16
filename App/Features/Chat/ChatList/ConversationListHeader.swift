@@ -3,36 +3,48 @@ import SwiftUI
 struct ConversationListHeader<Account: View>: View {
     @Binding var selection: ConversationListScope
     var badges = ConversationTabBadges()
+    var onBack: (() -> Void)?
     @ViewBuilder let account: () -> Account
 
     var body: some View {
         #if os(iOS)
         HStack(spacing: 8) {
-            account()
+            leadingControl
                 .labelStyle(.iconOnly)
                 .buttonStyle(.plain)
                 .font(.system(size: 22))
                 .frame(width: 44, height: 44)
                 .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
-                .accessibilityLabel("Account")
+                .accessibilityLabel(onBack == nil ? Text("Account") : Text("Back to chats"))
             ConversationScopePicker(selection: $selection, badges: badges)
                 .frame(minHeight: 44)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Chats")
+        .accessibilityLabel(onBack == nil ? Text("Chats") : Text("Archived"))
         #else
         VStack(spacing: 12) {
             HStack(spacing: 10) {
-                account()
-                    .dynamicTypeSize(.medium)
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
-                    .frame(width: 26, height: 26)
-                    .clipShape(Circle())
-                Text("Chats")
+                if let onBack {
+                    Button(action: onBack) {
+                        Image(systemName: "chevron.backward")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .help("Back to chats")
+                    .accessibilityLabel("Back to chats")
+                } else {
+                    account()
+                        .dynamicTypeSize(.medium)
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
+                        .frame(width: 26, height: 26)
+                        .clipShape(Circle())
+                }
+                Text(onBack == nil ? "Chats" : "Archived")
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
@@ -58,5 +70,18 @@ struct ConversationListHeader<Account: View>: View {
         #endif
         .overlay(alignment: .bottom) { Divider() }
         #endif
+    }
+
+    @ViewBuilder
+    private var leadingControl: some View {
+        if let onBack {
+            Button(action: onBack) {
+                Image(systemName: "chevron.backward")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+        } else {
+            account()
+        }
     }
 }

@@ -17,6 +17,14 @@ struct ChatState: Equatable {
     var threadListLoadPhase: ChatListLoadPhase = .idle
     var threadListRefreshFailed = false
     var isRefreshingThreads = false
+    var archivedChats: [ChatListItem] = []
+    var archivedChatListLoadPhase: ChatListLoadPhase = .idle
+    var archivedChatListRefreshFailed = false
+    var isRefreshingArchivedChats = false
+    var archivedThreads: [ThreadListItem] = []
+    var archivedThreadListLoadPhase: ChatListLoadPhase = .idle
+    var archivedThreadListRefreshFailed = false
+    var isRefreshingArchivedThreads = false
 }
 
 @MainActor
@@ -41,12 +49,10 @@ final class ChatStore: ObservableObject {
     private let onInvalidToken: @MainActor @Sendable () async -> Void
     private var generation = 0
     private var listStateRevision = 0
-    private var refreshTask: Task<Void, Never>?
+    private var refreshTasks: [ListKind: Task<Void, Never>] = [:]
     private var refreshGeneration = 0
     private var invalidationTask: Task<Void, Never>?
-    private var refreshDirty = false
-    private var threadRefreshTask: Task<Void, Never>?
-    private var threadRefreshDirty = false
+    private var dirtyLists = Set<ListKind>()
     private var recoveryTasks: [String: Task<Void, Never>] = [:]
     private var recoveryDirty = Set<String>()
     private var recoveryGeneration = 0
@@ -54,6 +60,39 @@ final class ChatStore: ObservableObject {
 
     private struct WeakTimeline {
         weak var value: ConversationTimelineModel?
+    }
+
+    private enum ListKind: CaseIterable, Hashable {
+        case chats, threads, archivedChats, archivedThreads
+
+        var archived: Bool { self == .archivedChats || self == .archivedThreads }
+
+        var phase: WritableKeyPath<ChatState, ChatListLoadPhase> {
+            switch self {
+            case .chats: \.chatListLoadPhase
+            case .threads: \.threadListLoadPhase
+            case .archivedChats: \.archivedChatListLoadPhase
+            case .archivedThreads: \.archivedThreadListLoadPhase
+            }
+        }
+
+        var refreshing: WritableKeyPath<ChatState, Bool> {
+            switch self {
+            case .chats: \.isRefreshingChats
+            case .threads: \.isRefreshingThreads
+            case .archivedChats: \.isRefreshingArchivedChats
+            case .archivedThreads: \.isRefreshingArchivedThreads
+            }
+        }
+
+        var refreshFailed: WritableKeyPath<ChatState, Bool> {
+            switch self {
+            case .chats: \.chatListRefreshFailed
+            case .threads: \.threadListRefreshFailed
+            case .archivedChats: \.archivedChatListRefreshFailed
+            case .archivedThreads: \.archivedThreadListRefreshFailed
+            }
+        }
     }
 
     init(apiClient: any ChahuaAPIClient, outgoingQueue: OutgoingMessageQueue, onInvalidToken: @escaping @MainActor @Sendable () async -> Void) {
@@ -126,140 +165,141 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func loadActiveChats() async {
-        guard state.chatListLoadPhase == .idle || state.chatListLoadPhase == .failed else { return }
-        await refreshActiveChats()
+    func loadActiveChats() async { await loadList(.chats) }
+    func loadActiveThreads() async { await loadList(.threads) }
+    func loadArchivedChats() async { await loadList(.archivedChats) }
+    func loadArchivedThreads() async { await loadList(.archivedThreads) }
+
+    func refreshActiveChats() async { await refreshList(.chats) }
+    func refreshActiveThreads() async { await refreshList(.threads) }
+    func refreshArchivedChats() async { await refreshList(.archivedChats) }
+    func refreshArchivedThreads() async { await refreshList(.archivedThreads) }
+
+    private func loadList(_ list: ListKind) async {
+        let phase = state[keyPath: list.phase]
+        guard phase == .idle || phase == .failed else { return }
+        await refreshList(list)
     }
 
-    func refreshActiveChats() async {
-        if let refreshTask {
-            await refreshTask.value
+    private func refreshList(_ list: ListKind) async {
+        if let task = refreshTasks[list] {
+            await task.value
             return
         }
         let requestGeneration = generation
         let currentRefresh = refreshGeneration
         let task = Task { [weak self] in
-            guard let self, self.refreshGeneration == currentRefresh, !Task.isCancelled else { return }
+            guard let self, self.generation == requestGeneration,
+                  self.refreshGeneration == currentRefresh, !Task.isCancelled else { return }
             defer {
                 if self.generation == requestGeneration && self.refreshGeneration == currentRefresh {
-                    self.refreshTask = nil
-                    self.state.isRefreshingChats = false
+                    self.refreshTasks[list] = nil
+                    self.state[keyPath: list.refreshing] = false
                 }
             }
-            self.state.isRefreshingChats = true
+            self.state[keyPath: list.refreshing] = true
             repeat {
-                self.refreshDirty = false
-                await self.refreshSnapshot(generation: requestGeneration, refreshGeneration: currentRefresh)
-            } while self.generation == requestGeneration && self.refreshDirty && !Task.isCancelled
+                self.dirtyLists.remove(list)
+                await self.refreshSnapshot(list, generation: requestGeneration, refreshGeneration: currentRefresh)
+            } while self.generation == requestGeneration && self.refreshGeneration == currentRefresh
+                && self.dirtyLists.contains(list) && !Task.isCancelled
         }
-        refreshTask = task
+        refreshTasks[list] = task
         await task.value
     }
 
-    private func refreshSnapshot(generation requestGeneration: Int, refreshGeneration currentRefresh: Int) async {
-        let initiallyLoaded = state.chatListLoadPhase == .loaded
+    private func refreshSnapshot(_ list: ListKind, generation requestGeneration: Int, refreshGeneration currentRefresh: Int) async {
+        let initiallyLoaded = state[keyPath: list.phase] == .loaded
         let listRevision = listStateRevision
-        if !initiallyLoaded { state.chatListLoadPhase = .loading }
+        if !initiallyLoaded { state[keyPath: list.phase] = .loading }
         do {
-            var chats: [ChatListItem] = []
-            var seenIDs = Set<String>()
-            var cursors = Set<String>()
-            var cursor: String?
-            repeat {
-                let response = try await apiClient.listChats(query: ListChatsQuery(after: cursor, archived: false))
+            switch list {
+            case .chats, .archivedChats:
+                let chats = try await fetchChatList(archived: list.archived, generation: requestGeneration, refreshGeneration: currentRefresh)
                 try Task.checkCancellation()
-                guard generation == requestGeneration else { return }
-                for chat in response.chats where seenIDs.insert(chat.id).inserted { chats.append(chat) }
-                cursor = response.nextCursor
-                if let cursor, !cursors.insert(cursor).inserted { throw APIError.unavailable }
-            } while cursor != nil
-            guard listStateRevision == listRevision else {
-                refreshDirty = true
-                return
+                guard generation == requestGeneration, refreshGeneration == currentRefresh else { return }
+                guard listStateRevision == listRevision else {
+                    dirtyLists.insert(list)
+                    return
+                }
+                let ids = Set(chats.lazy.map(\.id))
+                if list.archived {
+                    state.chats.removeAll { ids.contains($0.id) }
+                    state.archivedChats = chats
+                } else {
+                    state.archivedChats.removeAll { ids.contains($0.id) }
+                    state.chats = chats
+                }
+            case .threads, .archivedThreads:
+                let threads = try await fetchThreadList(archived: list.archived, generation: requestGeneration, refreshGeneration: currentRefresh)
+                try Task.checkCancellation()
+                guard generation == requestGeneration, refreshGeneration == currentRefresh else { return }
+                guard listStateRevision == listRevision else {
+                    dirtyLists.insert(list)
+                    return
+                }
+                let keys = Set(threads.lazy.map { ConversationKey(chatID: $0.chatId, threadID: $0.threadRootMessage.id) })
+                if list.archived {
+                    state.threads.removeAll { keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id)) }
+                    state.archivedThreads = threads
+                } else {
+                    state.archivedThreads.removeAll { keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id)) }
+                    state.threads = threads
+                }
             }
-            state.chats = chats
             updateTimelineReadStates()
-            state.chatListLoadPhase = .loaded
-            state.chatListRefreshFailed = false
+            state[keyPath: list.phase] = .loaded
+            state[keyPath: list.refreshFailed] = false
         } catch {
             guard generation == requestGeneration, refreshGeneration == currentRefresh else { return }
             if error is CancellationError {
-                if !initiallyLoaded { state.chatListLoadPhase = .idle }
+                if !initiallyLoaded { state[keyPath: list.phase] = .idle }
                 return
             }
-            state.chatListRefreshFailed = initiallyLoaded
-            if !initiallyLoaded { state.chatListLoadPhase = .failed }
+            state[keyPath: list.refreshFailed] = initiallyLoaded
+            if !initiallyLoaded { state[keyPath: list.phase] = .failed }
             if case APIError.invalidToken = error { await onInvalidToken() }
         }
     }
 
-    func loadActiveThreads() async {
-        guard state.threadListLoadPhase == .idle || state.threadListLoadPhase == .failed else { return }
-        await refreshActiveThreads()
+    private func fetchChatList(archived: Bool, generation requestGeneration: Int, refreshGeneration currentRefresh: Int) async throws -> [ChatListItem] {
+        var chats: [ChatListItem] = []
+        var seenIDs = Set<String>()
+        var cursors = Set<String>()
+        var cursor: String?
+        repeat {
+            let response = try await apiClient.listChats(query: ListChatsQuery(after: cursor, archived: archived))
+            try Task.checkCancellation()
+            guard generation == requestGeneration, refreshGeneration == currentRefresh else { throw CancellationError() }
+            for chat in response.chats where chat.archived == archived && seenIDs.insert(chat.id).inserted {
+                chats.append(chat)
+            }
+            cursor = response.nextCursor
+            if let cursor, !cursors.insert(cursor).inserted { throw APIError.unavailable }
+        } while cursor != nil
+        return chats
     }
 
-    func refreshActiveThreads() async {
-        if let threadRefreshTask {
-            await threadRefreshTask.value
-            return
-        }
-        let requestGeneration = generation
-        let currentRefresh = refreshGeneration
-        let task = Task { [weak self] in
-            guard let self else { return }
-            defer {
-                if self.generation == requestGeneration && self.refreshGeneration == currentRefresh {
-                    self.threadRefreshTask = nil
-                    self.state.isRefreshingThreads = false
-                }
+    private func fetchThreadList(archived: Bool, generation requestGeneration: Int, refreshGeneration currentRefresh: Int) async throws -> [ThreadListItem] {
+        var threads: [ThreadListItem] = []
+        var seen = Set<ConversationKey>()
+        var cursors = Set<String>()
+        var cursor: String?
+        repeat {
+            let response = try await apiClient.listThreads(query: .init(before: cursor, archived: archived))
+            try Task.checkCancellation()
+            guard generation == requestGeneration, refreshGeneration == currentRefresh else { throw CancellationError() }
+            for thread in response.threads where thread.archived == archived {
+                let key = ConversationKey(chatID: thread.chatId, threadID: thread.threadRootMessage.id)
+                if seen.insert(key).inserted { threads.append(thread) }
             }
-            self.state.isRefreshingThreads = true
-            repeat {
-                self.threadRefreshDirty = false
-                let initiallyLoaded = self.state.threadListLoadPhase == .loaded
-                let listRevision = self.listStateRevision
-                if !initiallyLoaded { self.state.threadListLoadPhase = .loading }
-                do {
-                    var threads: [ThreadListItem] = []
-                    var seen = Set<ConversationKey>()
-                    var cursors = Set<String>()
-                    var cursor: String?
-                    repeat {
-                        let response = try await self.apiClient.listThreads(query: .init(before: cursor, archived: false))
-                        try Task.checkCancellation()
-                        guard self.generation == requestGeneration, self.refreshGeneration == currentRefresh else { return }
-                        for thread in response.threads {
-                            let key = ConversationKey(chatID: thread.chatId, threadID: thread.threadRootMessage.id)
-                            if seen.insert(key).inserted { threads.append(thread) }
-                        }
-                        cursor = response.nextCursor
-                        if let cursor, !cursors.insert(cursor).inserted {
-                            Self.logger.error("Thread list refresh failed: server repeated a pagination cursor")
-                            throw APIError.unavailable
-                        }
-                    } while cursor != nil
-                    guard self.listStateRevision == listRevision else {
-                        self.threadRefreshDirty = true
-                        continue
-                    }
-                    self.state.threads = threads
-                    self.updateTimelineReadStates()
-                    self.state.threadListLoadPhase = .loaded
-                    self.state.threadListRefreshFailed = false
-                } catch {
-                    guard self.generation == requestGeneration, self.refreshGeneration == currentRefresh else { return }
-                    if error is CancellationError {
-                        if !initiallyLoaded { self.state.threadListLoadPhase = .idle }
-                        return
-                    }
-                    self.state.threadListRefreshFailed = initiallyLoaded
-                    if !initiallyLoaded { self.state.threadListLoadPhase = .failed }
-                    if case APIError.invalidToken = error { await self.onInvalidToken() }
-                }
-            } while self.generation == requestGeneration && self.threadRefreshDirty && !Task.isCancelled
-        }
-        threadRefreshTask = task
-        await task.value
+            cursor = response.nextCursor
+            if let cursor, !cursors.insert(cursor).inserted {
+                Self.logger.error("Thread list refresh failed: server repeated a pagination cursor")
+                throw APIError.unavailable
+            }
+        } while cursor != nil
+        return threads
     }
 
     func refreshActiveConversations() async {
@@ -268,16 +308,20 @@ final class ChatStore: ObservableObject {
         _ = await (chats, threads)
     }
 
+    func refreshArchivedConversations() async {
+        async let chats: Void = refreshArchivedChats()
+        async let threads: Void = refreshArchivedThreads()
+        _ = await (chats, threads)
+    }
+
     func performListAction(_ action: ConversationListAction, conversation: ConversationKey) async {
         guard !pendingListActions.contains(conversation) else { return }
         let item: ConversationListItem
         if let threadID = conversation.threadID {
-            guard let thread = state.threads.first(where: {
-                $0.chatId == conversation.chatID && $0.threadRootMessage.id == threadID && !$0.archived
-            }) else { return }
+            guard let thread = thread(chatID: conversation.chatID, threadID: threadID) else { return }
             item = .thread(thread)
         } else {
-            guard let chat = state.chats.first(where: { $0.id == conversation.chatID && !$0.archived }) else { return }
+            guard let chat = chat(id: conversation.chatID) else { return }
             item = .chat(chat)
         }
 
@@ -290,24 +334,38 @@ final class ChatStore: ObservableObject {
         do {
             try Task.checkCancellation()
             switch action {
-            case .archive:
+            case .archive, .unarchive:
+                let archived = action == .archive
                 if let threadID = conversation.threadID {
-                    try await apiClient.archiveThread(chatID: conversation.chatID, threadID: threadID)
-                } else {
+                    if archived {
+                        try await apiClient.archiveThread(chatID: conversation.chatID, threadID: threadID)
+                    } else {
+                        try await apiClient.unarchiveThread(chatID: conversation.chatID, threadID: threadID)
+                    }
+                } else if archived {
                     try await apiClient.archiveChat(chatID: conversation.chatID)
+                } else {
+                    try await apiClient.unarchiveChat(chatID: conversation.chatID)
                 }
                 guard generation == requestGeneration else { return }
-                // Reject snapshots begun before the mutation; otherwise a concurrent
-                // pull refresh can put the archived row straight back into the inbox.
-                listStateRevision += 1
-                if let threadID = conversation.threadID {
-                    state.threads.removeAll { $0.chatId == conversation.chatID && $0.threadRootMessage.id == threadID }
-                } else {
-                    state.chats.removeAll { $0.id == conversation.chatID }
+                // Move only after server acceptance and retain any read/preview updates
+                // received while the mutation was in flight.
+                switch item {
+                case .chat(let original):
+                    let latest = chat(id: original.id) ?? original
+                    applyArchiveState(to: latest, archived: archived, mutedUntil: archived ? .distantFuture : nil)
+                case .thread(let original):
+                    let latest = thread(chatID: original.chatId, threadID: original.threadRootMessage.id) ?? original
+                    install(ThreadListItem(
+                        chatId: latest.chatId, chatName: latest.chatName, chatAvatar: latest.chatAvatar,
+                        threadRootMessage: latest.threadRootMessage, participants: latest.participants,
+                        lastReply: latest.lastReply, replyCount: latest.replyCount, lastReplyAt: latest.lastReplyAt,
+                        unreadCount: latest.unreadCount, lastReadMessageId: latest.lastReadMessageId,
+                        subscribedAt: latest.subscribedAt, archived: archived))
                 }
             case .mute, .unmute:
                 // Threads have no independent mute API. Never mutate their parent.
-                guard case .chat = item else { return }
+                guard case .chat(let original) = item else { return }
                 let mutedUntil: Date?
                 if action == .mute {
                     mutedUntil = try await apiClient.muteChat(chatID: conversation.chatID).mutedUntil
@@ -316,15 +374,9 @@ final class ChatStore: ObservableObject {
                     mutedUntil = nil
                 }
                 guard generation == requestGeneration else { return }
-                listStateRevision += 1
-                if let index = state.chats.firstIndex(where: { $0.id == conversation.chatID && !$0.archived }) {
-                    let chat = state.chats[index]
-                    state.chats[index] = ChatListItem(
-                        id: chat.id, name: chat.name, avatar: chat.avatar, lastMessageAt: chat.lastMessageAt,
-                        unreadCount: chat.unreadCount, lastReadMessageId: chat.lastReadMessageId,
-                        lastMessage: chat.lastMessage, mutedUntil: mutedUntil, archived: chat.archived,
-                        kind: chat.kind, peer: chat.peer)
-                }
+                let latest = chat(id: conversation.chatID) ?? original
+                // DELETE /mute also unarchives the chat.
+                applyArchiveState(to: latest, archived: action == .unmute ? false : latest.archived, mutedUntil: mutedUntil)
             case .markRead:
                 guard item.unreadCount > 0, let messageID = item.readThroughMessageID else { return }
                 try await markRead(chatID: conversation.chatID, threadID: conversation.threadID, messageID: messageID)
@@ -344,9 +396,50 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    private func chat(id: String) -> ChatListItem? {
+        state.chats.first { $0.id == id } ?? state.archivedChats.first { $0.id == id }
+    }
+
+    private func thread(chatID: String, threadID: String) -> ThreadListItem? {
+        state.threads.first { $0.chatId == chatID && $0.threadRootMessage.id == threadID }
+            ?? state.archivedThreads.first { $0.chatId == chatID && $0.threadRootMessage.id == threadID }
+    }
+
+    private func install(_ chat: ChatListItem) {
+        let target: WritableKeyPath<ChatState, [ChatListItem]> = chat.archived ? \.archivedChats : \.chats
+        let other: WritableKeyPath<ChatState, [ChatListItem]> = chat.archived ? \.chats : \.archivedChats
+        state[keyPath: other].removeAll { $0.id == chat.id }
+        if let index = state[keyPath: target].firstIndex(where: { $0.id == chat.id }) {
+            state[keyPath: target][index] = chat
+        } else {
+            state[keyPath: target].insert(chat, at: 0)
+        }
+    }
+
+    private func install(_ thread: ThreadListItem) {
+        let target: WritableKeyPath<ChatState, [ThreadListItem]> = thread.archived ? \.archivedThreads : \.threads
+        let other: WritableKeyPath<ChatState, [ThreadListItem]> = thread.archived ? \.threads : \.archivedThreads
+        state[keyPath: other].removeAll { $0.chatId == thread.chatId && $0.threadRootMessage.id == thread.threadRootMessage.id }
+        if let index = state[keyPath: target].firstIndex(where: {
+            $0.chatId == thread.chatId && $0.threadRootMessage.id == thread.threadRootMessage.id
+        }) {
+            state[keyPath: target][index] = thread
+        } else {
+            state[keyPath: target].insert(thread, at: 0)
+        }
+    }
+
+    private func applyArchiveState(to chat: ChatListItem, archived: Bool, mutedUntil: Date?) {
+        install(ChatListItem(
+            id: chat.id, name: chat.name, avatar: chat.avatar, lastMessageAt: chat.lastMessageAt,
+            unreadCount: chat.unreadCount, lastReadMessageId: chat.lastReadMessageId,
+            lastMessage: chat.lastMessage, mutedUntil: mutedUntil, archived: archived,
+            kind: chat.kind, peer: chat.peer))
+    }
+
     /// Threads may belong to an archived parent absent from the active chat list.
     func chatForThread(_ thread: ThreadListItem) async throws -> ChatListItem {
-        if let chat = state.chats.first(where: { $0.id == thread.chatId }) { return chat }
+        if let chat = chat(id: thread.chatId) { return chat }
         let requestGeneration = generation
         do {
             let info = try await apiClient.groupInfo(chatID: thread.chatId)
@@ -384,7 +477,7 @@ final class ChatStore: ObservableObject {
                 Self.logger.error("Notification navigation failed: server returned a different conversation or message")
                 throw APIError.unexpectedResponse
             }
-            let cached = state.chats.first { $0.id == info.id }
+            let cached = chat(id: info.id)
             return ChatListItem(
                 id: info.id, name: info.name, avatar: info.avatar,
                 lastMessageAt: cached?.lastMessageAt,
@@ -402,20 +495,21 @@ final class ChatStore: ObservableObject {
     }
 
     private func invalidateChatList() {
-        if refreshTask != nil { refreshDirty = true }
-        if threadRefreshTask != nil { threadRefreshDirty = true }
-        let refreshChats = refreshTask == nil
-        let refreshThreads = threadRefreshTask == nil
-        guard refreshChats || refreshThreads else { return }
+        // Every invalidation fences all four snapshots, including membership changes
+        // whose realtime payload carries identifiers but not the new archive state.
+        listStateRevision += 1
+        dirtyLists.formUnion(ListKind.allCases)
         guard invalidationTask == nil else { return }
         let requestGeneration = generation
+        let currentRefresh = refreshGeneration
         invalidationTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            guard let self, self.generation == requestGeneration else { return }
+            guard let self, self.generation == requestGeneration,
+                  self.refreshGeneration == currentRefresh, !Task.isCancelled else { return }
             self.invalidationTask = nil
+            let lists = self.dirtyLists.filter { self.refreshTasks[$0] == nil }
             await withTaskGroup(of: Void.self) { group in
-                if refreshChats { group.addTask { await self.refreshActiveChats() } }
-                if refreshThreads { group.addTask { await self.refreshActiveThreads() } }
+                for list in lists { group.addTask { await self.refreshList(list) } }
             }
         }
     }
@@ -451,11 +545,11 @@ final class ChatStore: ObservableObject {
             conversationMessages.apply(event)
             invalidateChatList()
         case .chatArchiveStateChanged(let payload):
-            listStateRevision += 1
-            if payload.archived { state.chats.removeAll { $0.id == payload.chatId } }
+            if let chat = chat(id: payload.chatId) {
+                applyArchiveState(to: chat, archived: payload.archived, mutedUntil: payload.mutedUntil)
+            }
             invalidateChatList()
         case .threadMembershipChanged:
-            listStateRevision += 1
             invalidateChatList()
         case .friendRequestResolved, .friendshipRemoved:
             invalidateChatList()
@@ -525,9 +619,9 @@ final class ChatStore: ObservableObject {
 
     private func updateReadState(for model: ConversationTimelineModel) {
         if let threadID = model.threadID,
-           let thread = state.threads.first(where: { $0.chatId == model.chatID && $0.threadRootMessage.id == threadID }) {
+           let thread = thread(chatID: model.chatID, threadID: threadID) {
             model.updateReadState(unreadCount: thread.unreadCount, lastReadMessageID: thread.lastReadMessageId)
-        } else if model.threadID == nil, let chat = state.chats.first(where: { $0.id == model.chatID }) {
+        } else if model.threadID == nil, let chat = chat(id: model.chatID) {
             model.updateReadState(unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
         }
     }
@@ -615,22 +709,19 @@ final class ChatStore: ObservableObject {
 
     private func applyReadState(_ response: ReadStateResponse, chatID: String, threadID: String?) {
         listStateRevision += 1
-        if let threadID,
-           let index = state.threads.firstIndex(where: { $0.chatId == chatID && $0.threadRootMessage.id == threadID }) {
-            let thread = state.threads[index]
-            state.threads[index] = ThreadListItem(
+        if let threadID, let thread = thread(chatID: chatID, threadID: threadID) {
+            install(ThreadListItem(
                 chatId: thread.chatId, chatName: thread.chatName, chatAvatar: thread.chatAvatar,
                 threadRootMessage: thread.threadRootMessage, participants: thread.participants,
                 lastReply: thread.lastReply, replyCount: thread.replyCount, lastReplyAt: thread.lastReplyAt,
                 unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
-                subscribedAt: thread.subscribedAt, archived: thread.archived)
-        } else if threadID == nil, let index = state.chats.firstIndex(where: { $0.id == chatID }) {
-            let chat = state.chats[index]
-            state.chats[index] = ChatListItem(
+                subscribedAt: thread.subscribedAt, archived: thread.archived))
+        } else if threadID == nil, let chat = chat(id: chatID) {
+            install(ChatListItem(
                 id: chat.id, name: chat.name, avatar: chat.avatar, lastMessageAt: chat.lastMessageAt,
                 unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
                 lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil, archived: chat.archived,
-                kind: chat.kind, peer: chat.peer)
+                kind: chat.kind, peer: chat.peer))
         }
         // A notification or new thread can be open without an active-list row.
         for model in visibleTimelines() where model.chatID == chatID && model.threadID == threadID {
@@ -641,18 +732,15 @@ final class ChatStore: ObservableObject {
     func cancelRealtimeRecovery() {
         pins.cancelLoads()
         refreshGeneration += 1
-        refreshTask?.cancel()
-        refreshTask = nil
-        threadRefreshTask?.cancel()
-        threadRefreshTask = nil
-        threadRefreshDirty = false
-        state.isRefreshingThreads = false
-        if state.threadListLoadPhase == .loading { state.threadListLoadPhase = .idle }
+        for task in refreshTasks.values { task.cancel() }
+        refreshTasks.removeAll()
+        dirtyLists.removeAll()
+        for list in ListKind.allCases {
+            state[keyPath: list.refreshing] = false
+            if state[keyPath: list.phase] == .loading { state[keyPath: list.phase] = .idle }
+        }
         invalidationTask?.cancel()
         invalidationTask = nil
-        refreshDirty = false
-        state.isRefreshingChats = false
-        if state.chatListLoadPhase == .loading { state.chatListLoadPhase = .idle }
         recoveryGeneration += 1
         recoveryDirty.removeAll()
         for task in recoveryTasks.values { task.cancel() }

@@ -14,6 +14,8 @@ struct AuthenticatedShell: View {
     let onSignOut: () -> Void
 
     @State private var selectedScope: ConversationListScope = .messages
+    @State private var archivedScope: ConversationListScope = .messages
+    @State private var isBrowsingArchived = false
     @State private var selectedConversationID: ConversationKey?
     @State private var showsSettings = false
     @State private var isVisible = false
@@ -59,7 +61,8 @@ struct AuthenticatedShell: View {
         .onChange(of: chatStore.state) { state in
             guard let selectedConversationID, notificationNavigation == nil else { return }
             let loaded = selectedConversationID.threadID == nil
-                ? state.chatListLoadPhase == .loaded : state.threadListLoadPhase == .loaded
+                ? (isBrowsingArchived ? state.archivedChatListLoadPhase : state.chatListLoadPhase) == .loaded
+                : (isBrowsingArchived ? state.archivedThreadListLoadPhase : state.threadListLoadPhase) == .loaded
             if loaded && selectedConversation == nil { selectConversation(nil) }
         }
         .task(id: notifications.pendingNavigation?.id) { claimNotification() }
@@ -70,6 +73,8 @@ struct AuthenticatedShell: View {
         .onChange(of: me.uid) { _, _ in
             selectConversation(nil)
             showsSettings = false
+            isBrowsingArchived = false
+            archivedScope = .messages
         }
         .onChange(of: isSigningOut) { _, signingOut in
             if signingOut { selectConversation(nil) }
@@ -160,12 +165,18 @@ struct AuthenticatedShell: View {
     }
 
     @ViewBuilder private func chatList(usesPhoneNavigation: Bool = false) -> some View {
-        let badges = ConversationTabBadges(chats: chatStore.state.chats, threads: chatStore.state.threads)
+        let badges = ConversationTabBadges(
+            chats: isBrowsingArchived ? chatStore.state.archivedChats : chatStore.state.chats,
+            threads: isBrowsingArchived ? chatStore.state.archivedThreads : chatStore.state.threads,
+            archived: isBrowsingArchived)
+        let onBack: (() -> Void)? = isBrowsingArchived ? { closeArchived() } : nil
         let list = ChatListView(
             store: chatStore,
             drafts: chatStore.drafts,
             currentUserID: me.uid,
-            scope: selectedScope,
+            scope: isBrowsingArchived ? archivedScope : selectedScope,
+            archivedMode: isBrowsingArchived,
+            onOpenArchived: openArchived,
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectConversation($0.id) }
         )
@@ -178,41 +189,61 @@ struct AuthenticatedShell: View {
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
-                        accountButton
-                            .labelStyle(.iconOnly)
-                            .accessibilityLabel("Account")
+                        if isBrowsingArchived {
+                            Button("Back to chats", systemImage: "chevron.backward", action: closeArchived)
+                                .labelStyle(.iconOnly)
+                        } else {
+                            accountButton
+                                .labelStyle(.iconOnly)
+                                .accessibilityLabel("Account")
+                        }
                     }
                     // A segmented control must not participate in native title morphing.
                     if #available(iOS 26, *) {
                         ToolbarItem(placement: .topBarTrailing) {
-                            ConversationScopePicker(selection: $selectedScope, badges: badges)
+                            ConversationScopePicker(selection: listScope, badges: badges)
                         }
                         // The scope control already draws its own background.
                         .sharedBackgroundVisibility(.hidden)
                     } else {
                         ToolbarItem(placement: .topBarTrailing) {
-                            ConversationScopePicker(selection: $selectedScope, badges: badges)
+                            ConversationScopePicker(selection: listScope, badges: badges)
                         }
                     }
                 }
         } else if #available(iOS 26, *) {
             list
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    ConversationListHeader(selection: $selectedScope, badges: badges) { accountButton }
+                    ConversationListHeader(selection: listScope, badges: badges, onBack: onBack) { accountButton }
                 }
                 .scrollEdgeEffectStyle(.soft, for: .top)
         } else {
             list.safeAreaInset(edge: .top, spacing: 0) {
-                ConversationListHeader(selection: $selectedScope, badges: badges) { accountButton }
+                ConversationListHeader(selection: listScope, badges: badges, onBack: onBack) { accountButton }
                     .background(.regularMaterial)
             }
         }
         #else
         VStack(spacing: 0) {
-            ConversationListHeader(selection: $selectedScope, badges: badges) { accountButton }
+            ConversationListHeader(selection: listScope, badges: badges, onBack: onBack) { accountButton }
             list
         }
         #endif
+    }
+
+    private var listScope: Binding<ConversationListScope> {
+        Binding(
+            get: { isBrowsingArchived ? archivedScope : selectedScope },
+            set: { if isBrowsingArchived { archivedScope = $0 } else { selectedScope = $0 } })
+    }
+
+    private func openArchived() {
+        archivedScope = selectedScope
+        isBrowsingArchived = true
+    }
+
+    private func closeArchived() {
+        isBrowsingArchived = false
     }
 
     @ViewBuilder private var detailContent: some View {
@@ -404,11 +435,14 @@ struct AuthenticatedShell: View {
     private var selectedConversation: ConversationListItem? {
         guard let selectedConversationID else { return nil }
         if let threadID = selectedConversationID.threadID {
-            return chatStore.state.threads.first {
+            let matches: (ThreadListItem) -> Bool = {
                 $0.chatId == selectedConversationID.chatID && $0.threadRootMessage.id == threadID
-            }.map(ConversationListItem.thread)
+            }
+            return (chatStore.state.threads.first(where: matches)
+                ?? chatStore.state.archivedThreads.first(where: matches)).map(ConversationListItem.thread)
         }
-        return chatStore.state.chats.first { $0.id == selectedConversationID.chatID }.map(ConversationListItem.chat)
+        return (chatStore.state.chats.first { $0.id == selectedConversationID.chatID }
+            ?? chatStore.state.archivedChats.first { $0.id == selectedConversationID.chatID }).map(ConversationListItem.chat)
     }
 
 }

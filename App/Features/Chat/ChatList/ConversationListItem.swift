@@ -15,15 +15,15 @@ struct ConversationTabBadges: Equatable {
     var dms = 0
     var threads = 0
 
-    init(chats: [ChatListItem] = [], threads: [ThreadListItem] = [], now: Date = Date()) {
-        for chat in chats where !chat.archived && chat.unreadCount > 0 {
-            guard chat.mutedUntil.map({ $0 > now }) != true else { continue }
+    init(chats: [ChatListItem] = [], threads: [ThreadListItem] = [], archived: Bool = false, now: Date = Date()) {
+        for chat in chats where chat.archived == archived && chat.unreadCount > 0 {
+            guard archived || chat.mutedUntil.map({ $0 > now }) != true else { continue }
             switch chat.kind {
             case .group: groups += 1
             case .dm: dms += 1
             }
         }
-        self.threads = threads.reduce(0) { $0 + (!$1.archived && $1.unreadCount > 0 ? 1 : 0) }
+        self.threads = threads.reduce(0) { $0 + ($1.archived == archived && $1.unreadCount > 0 ? 1 : 0) }
     }
 
     subscript(scope: ConversationListScope) -> Int {
@@ -37,7 +37,7 @@ struct ConversationTabBadges: Equatable {
 }
 
 enum ConversationListAction: String, Equatable {
-    case archive, mute, unmute, markRead, markUnread
+    case archive, unarchive, mute, unmute, markRead, markUnread
 }
 
 enum ConversationListItem: Hashable, Identifiable {
@@ -109,15 +109,15 @@ enum ConversationListItem: Hashable, Identifiable {
         return (name?.isEmpty == false) ? name : String(localized: "User \(sender.uid)")
     }
 
-    static func entries(chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope, draftUpdatedAt: [ConversationKey: Date] = [:]) -> [Self] {
+    static func entries(chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope, archived: Bool = false, draftUpdatedAt: [ConversationKey: Date] = [:]) -> [Self] {
         var result: [Self] = []
         if scope.includesChats {
             result += chats.filter {
-                !$0.archived && (scope == .messages || (scope == .groups && $0.kind == .group) || (scope == .dms && $0.kind == .dm))
+                $0.archived == archived && (scope == .messages || (scope == .groups && $0.kind == .group) || (scope == .dms && $0.kind == .dm))
             }.map(Self.chat)
         }
         if scope.includesThreads {
-            result += threads.filter { !$0.archived }.map(Self.thread)
+            result += threads.filter { $0.archived == archived }.map(Self.thread)
         }
         return result.sorted {
             let lhs = max($0.activityDate, draftUpdatedAt[$0.id] ?? .distantPast)

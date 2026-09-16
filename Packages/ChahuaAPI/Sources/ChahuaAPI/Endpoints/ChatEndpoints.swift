@@ -53,6 +53,10 @@ public extension ChahuaClient {
         try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "archive"]))
     }
 
+    func unarchiveChat(chatID: String) async throws {
+        try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "archive"]))
+    }
+
     func muteChat(chatID: String) async throws -> MuteResponse {
         try await send(
             HTTPRequestSpec.json(.put, ["group", chatID, "mute"], body: MuteBody()),

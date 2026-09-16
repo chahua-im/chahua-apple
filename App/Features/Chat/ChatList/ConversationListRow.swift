@@ -2,6 +2,8 @@ import ChahuaAPI
 import SwiftUI
 
 struct ConversationListRow: View {
+    static let avatarDiameter: CGFloat = 48
+
     let item: ConversationListItem
     let draft: String
     @ObservedObject var store: ChatStore
@@ -25,7 +27,7 @@ struct ConversationListRow: View {
         HStack(alignment: .center, spacing: ChahuaTheme.Spacing.medium) {
             ConversationAvatarView(
                 item: item, store: store, currentUserID: currentUserID,
-                diameter: 48, isSelected: isSelected)
+                diameter: Self.avatarDiameter, isSelected: isSelected)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: ChahuaTheme.Spacing.medium) {
                     Text(item.title).font(.headline).lineLimit(1)

@@ -213,16 +213,20 @@ private actor HeldPinAPI: ChahuaAPIClient {
     func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
     func archiveChat(chatID: String) async throws { throw APIError.unavailable }
+    func unarchiveChat(chatID: String) async throws { throw APIError.unavailable }
     func archiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
+    func unarchiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
     func muteChat(chatID: String) async throws -> MuteResponse { throw APIError.unavailable }
     func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
     func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { throw APIError.unavailable }
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
+    func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }
     func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }

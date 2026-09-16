@@ -377,7 +377,6 @@ final class SwipeRowAppKitContainer: NSView, NSGestureRecognizerDelegate {
         place(leadingButton, CGRect(x: direction > 0 ? SwipeRowMetrics.edgeInset : leadingWidth - SwipeRowMetrics.edgeInset - width,
                                     y: y, width: width, height: SwipeRowMetrics.diameter))
         leadingButton.isEnabled = !isBusy && leadingWidth > 0
-        leadingButton.isArmed = isArmed
         for (index, button) in trailingButtons.enumerated() {
             let inset = SwipeRowMetrics.edgeInset + CGFloat(index) * (SwipeRowMetrics.diameter + SwipeRowMetrics.spacing)
             place(button, CGRect(x: direction > 0 ? trailingWidth - inset - SwipeRowMetrics.diameter : inset,
@@ -464,9 +463,6 @@ private final class SwipeRowAppKitHostingView: NSHostingView<SwipeRowAppKitConte
 
 private final class SwipeRowAppKitButton: NSButton {
     private var tint = NSColor.clear
-    var isArmed = false {
-        didSet { if isArmed != oldValue { needsDisplay = true } }
-    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -495,13 +491,6 @@ private final class SwipeRowAppKitButton: NSButton {
                                 yRadius: SwipeRowMetrics.diameter / 2)
         tint.withAlphaComponent(isHighlighted ? 0.75 : 1).setFill()
         path.fill()
-        if isArmed {
-            NSColor.white.setStroke()
-            let border = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
-                                      xRadius: SwipeRowMetrics.diameter / 2, yRadius: SwipeRowMetrics.diameter / 2)
-            border.lineWidth = 2
-            border.stroke()
-        }
         if let image {
             let size = image.size
             image.draw(in: CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,

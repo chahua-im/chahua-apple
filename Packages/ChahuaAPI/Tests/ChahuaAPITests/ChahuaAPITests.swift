@@ -340,6 +340,62 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
     }
 
+    func testUnarchiveUsesDeleteArchiveRoutesAndAcceptsEmpty204() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (204, "")
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
+            token: "candidate",
+            session: testSession()
+        )
+
+        try await client.unarchiveChat(chatID: "chat/one")
+        try await client.unarchiveThread(chatID: "chat/one", threadID: "root#two")
+
+        let components = try requests.values.map {
+            try XCTUnwrap(URLComponents(url: try XCTUnwrap($0.url), resolvingAgainstBaseURL: false))
+        }
+        XCTAssertEqual(components.map(\.percentEncodedPath), [
+            "/chats/chat%2Fone/archive",
+            "/chats/chat%2Fone/threads/root%23two/archive",
+        ])
+        for request in requests.values {
+            XCTAssertEqual(request.httpMethod, "DELETE")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+            XCTAssertNil(request.httpBody)
+            XCTAssertNil(request.url?.query)
+            XCTAssertNil(request.url?.fragment)
+        }
+    }
+
+    func testUnarchivePreservesServerErrors() async throws {
+        let body = #"{"error":"Membership required"}"#
+        StubURLProtocol.handler = { _ in (403, body) }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
+            token: "candidate",
+            session: testSession()
+        )
+
+        do {
+            try await client.unarchiveChat(chatID: "10")
+            XCTFail("Expected the chat restore to fail")
+        } catch APIError.http(let status, let responseBody) {
+            XCTAssertEqual(status, 403)
+            XCTAssertEqual(responseBody, Data(body.utf8))
+        }
+        do {
+            try await client.unarchiveThread(chatID: "10", threadID: "80")
+            XCTFail("Expected the thread restore to fail")
+        } catch APIError.http(let status, let responseBody) {
+            XCTAssertEqual(status, 403)
+            XCTAssertEqual(responseBody, Data(body.utf8))
+        }
+    }
+
     func testReactionPathsPreserveEmojiAndReservedCharactersAsSingleSegments() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in

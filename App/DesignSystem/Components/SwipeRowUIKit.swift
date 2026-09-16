@@ -170,7 +170,6 @@ final class SwipeRowUIKitContainer: UIView, UIGestureRecognizerDelegate {
         button.tintColor = .white
         button.backgroundColor = UIColor(action.tint)
         button.layer.cornerRadius = SwipeRowMetrics.diameter / 2
-        button.layer.borderColor = UIColor.white.cgColor
         button.accessibilityLabel = action.title
     }
 
@@ -238,7 +237,6 @@ final class SwipeRowUIKitContainer: UIView, UIGestureRecognizerDelegate {
         leadingButton.frame = CGRect(
             x: direction > 0 ? SwipeRowMetrics.edgeInset : leadingWidth - SwipeRowMetrics.edgeInset - stretchedWidth,
             y: y, width: stretchedWidth, height: SwipeRowMetrics.diameter)
-        leadingButton.layer.borderWidth = isArmed ? 2 : 0
         for (index, button) in trailingButtons.enumerated() {
             let inset = SwipeRowMetrics.edgeInset + CGFloat(index) * (SwipeRowMetrics.diameter + SwipeRowMetrics.spacing)
             button.frame = CGRect(

@@ -189,8 +189,9 @@ final class RealtimeCoordinator: ObservableObject {
             guard let self, !Task.isCancelled, self.generation == currentGeneration,
                   !self.activeScenes.isEmpty else { return }
             async let chats: Void = self.store.refreshActiveConversations()
+            async let archived: Void = self.store.refreshArchivedConversations()
             async let messages: Void = self.store.reconcileVisibleTimelines()
-            _ = await (chats, messages)
+            _ = await (chats, archived, messages)
         }
     }
 

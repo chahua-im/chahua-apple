@@ -43,8 +43,14 @@ public protocol ChahuaAPIClient: Sendable {
     /// Archives the current member's chat and mutes it indefinitely (204).
     func archiveChat(chatID: String) async throws
 
+    /// Restores the current member's chat and clears its mute (204).
+    func unarchiveChat(chatID: String) async throws
+
     /// Archives only this thread subscription, not its parent chat (204).
     func archiveThread(chatID: String, threadID: String) async throws
+
+    /// Restores only this thread subscription, leaving its parent chat unchanged (204).
+    func unarchiveThread(chatID: String, threadID: String) async throws
 
     /// Mutes chat notifications indefinitely with `PUT /group/{chatID}/mute`.
     func muteChat(chatID: String) async throws -> MuteResponse
