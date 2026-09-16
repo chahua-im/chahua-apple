@@ -186,33 +186,53 @@ struct ChatFloatingHeader<Avatar: View>: View {
     @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
+        #if os(macOS)
+        HStack(spacing: 8) {
+            navigationControl
+            identity
+        }
+        .frame(maxWidth: .infinity)
+        #else
         ZStack {
-            HStack(spacing: 8) {
-                avatar()
-                    .fixedSize()
-                    .accessibilityHidden(true)
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .accessibilityAddTraits(.isHeader)
-            }
-            .padding(.leading, 6)
-            .padding(.trailing, 14)
-            .frame(minHeight: 44)
-            .modifier(ChatGlassSurface(cornerRadius: 24))
-            .padding(.horizontal, onBack != nil || onClose != nil ? 52 : 0)
-
+            identity
+                .padding(.horizontal, onBack != nil || onClose != nil ? 52 : 0)
             if onBack != nil || onClose != nil {
                 HStack {
-                    if let onBack {
-                        headerControl(action: onBack, systemImage: "chevron.backward", accessibilityLabel: "Back")
-                    } else if let onClose {
-                        headerControl(action: onClose, systemImage: "xmark", accessibilityLabel: "Close conversation")
-                    }
+                    navigationControl
                     Spacer(minLength: 0)
                 }
             }
+        }
+        #endif
+    }
+
+    private var identity: some View {
+        HStack(spacing: 8) {
+            avatar()
+                .fixedSize()
+                .accessibilityHidden(true)
+            Text(title)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 14)
+        #if os(macOS)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        #else
+        .frame(minHeight: 44)
+        #endif
+        .modifier(ChatGlassSurface(cornerRadius: 24))
+    }
+
+    @ViewBuilder
+    private var navigationControl: some View {
+        if let onBack {
+            headerControl(action: onBack, systemImage: "chevron.backward", accessibilityLabel: "Back")
+        } else if let onClose {
+            headerControl(action: onClose, systemImage: "xmark", accessibilityLabel: "Close conversation")
         }
     }
 
@@ -225,10 +245,15 @@ struct ChatFloatingHeader<Avatar: View>: View {
             .contentShape(Rectangle())
         #if os(macOS)
         if #available(macOS 26, *) {
-            Button(action: action) { label }
+            Button(action: action) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 36, height: 36)
+            }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .buttonSizing(.flexible)
+                .frame(width: 44, height: 44)
                 .accessibilityLabel(accessibilityLabel)
         } else {
             Button(action: action) { label }

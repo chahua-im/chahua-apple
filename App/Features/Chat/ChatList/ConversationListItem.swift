@@ -36,7 +36,7 @@ struct ConversationTabBadges: Equatable {
     }
 }
 
-enum ConversationListAction: Equatable {
+enum ConversationListAction: String, Equatable {
     case archive, mute, unmute, markRead, markUnread
 }
 

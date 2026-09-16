@@ -1,81 +1,56 @@
 #if os(iOS)
-import ChahuaAPI
 import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 
-struct ConversationSwipeAction: Equatable {
-    let action: ConversationListAction
-    let title: String
-    let symbol: String
-
-    var tint: UIColor {
-        switch action {
-        case .archive: .systemIndigo
-        case .mute, .unmute: .systemOrange
-        case .markRead, .markUnread: .systemBlue
-        }
-    }
-}
-
 /// SwiftUI's swipeActions owns rectangular backgrounds and hides drag progress.
 /// This iOS-only container is needed for circular controls, continuous capsule
 /// stretching, release-only commits, and directional arbitration with List's pan.
-/// The actual conversation content and its accessibility actions remain SwiftUI.
-struct CircularConversationSwipeRow<Content: View>: UIViewRepresentable {
-    let id: ConversationKey
-    @Binding var revealedConversationID: ConversationKey?
-    let leadingAction: ConversationSwipeAction?
-    let trailingActions: [ConversationSwipeAction]
+/// The actual row content and its accessibility actions remain SwiftUI.
+struct SwipeRowUIKit<Content: View>: UIViewRepresentable {
+    let id: AnyHashable
+    let isRevealed: Bool
+    let leadingAction: SwipeRowAction?
+    let trailingActions: [SwipeRowAction]
     let isBusy: Bool
-    let onAction: (ConversationListAction) -> Void
+    let onRevealChanged: (Bool) -> Void
+    let onAction: (String) -> Void
     @ViewBuilder let content: () -> Content
 
-    func makeUIView(context: Context) -> ConversationSwipeContainer {
-        ConversationSwipeContainer()
+    func makeUIView(context: Context) -> SwipeRowUIKitContainer {
+        SwipeRowUIKitContainer()
     }
 
-    func updateUIView(_ view: ConversationSwipeContainer, context: Context) {
+    func updateUIView(_ view: SwipeRowUIKitContainer, context: Context) {
         view.setContent(content(), environment: context.environment)
         view.configure(
             id: id, leading: leadingAction, trailing: trailingActions,
-            isBusy: isBusy, isRevealed: revealedConversationID == id,
+            isBusy: isBusy, isRevealed: isRevealed,
             reduceMotion: context.environment.accessibilityReduceMotion,
             isRightToLeft: context.environment.layoutDirection == .rightToLeft,
-            onRevealChanged: { isRevealed in
-                if isRevealed {
-                    revealedConversationID = id
-                } else if revealedConversationID == id {
-                    revealedConversationID = nil
-                }
-            }, onAction: onAction)
+            onRevealChanged: onRevealChanged, onAction: onAction)
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ConversationSwipeContainer, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: SwipeRowUIKitContainer, context: Context) -> CGSize? {
         guard let width = proposal.width else { return nil }
         return uiView.contentSize(fitting: width)
     }
 
-    static func dismantleUIView(_ view: ConversationSwipeContainer, coordinator: ()) {
+    static func dismantleUIView(_ view: SwipeRowUIKitContainer, coordinator: ()) {
         view.detach()
     }
 }
 
-final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
-    private static let diameter: CGFloat = 44
-    private static let edgeInset: CGFloat = 12
-    private static let spacing: CGFloat = 8
-    private static let leadingReveal = diameter + edgeInset * 2
-
+final class SwipeRowUIKitContainer: UIView, UIGestureRecognizerDelegate {
     private let leadingClip = UIView()
     private let trailingClip = UIView()
     private let leadingButton = UIButton(type: .system)
     private var trailingButtons: [UIButton] = []
     private var hostedContent: (UIView & UIContentView)?
     private weak var observedScrollView: UIScrollView?
-    private var identity: ConversationKey?
-    private var leadingAction: ConversationSwipeAction?
-    private var trailingActions: [ConversationSwipeAction] = []
+    private var identity: AnyHashable?
+    private var leadingAction: SwipeRowAction?
+    private var trailingActions: [SwipeRowAction] = []
     private var isBusy = false
     private var reduceMotion = false
     private var direction: CGFloat = 1
@@ -85,10 +60,10 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
     private var isArmed = false
     private var previousWidth: CGFloat = 0
     private var onRevealChanged: ((Bool) -> Void)?
-    private var onAction: ((ConversationListAction) -> Void)?
+    private var onAction: ((String) -> Void)?
     private lazy var feedback = UIImpactFeedbackGenerator(style: .medium)
-    private lazy var pan: ConversationRowPanRecognizer = {
-        let recognizer = ConversationRowPanRecognizer(target: self, action: #selector(panned))
+    private lazy var pan: SwipeRowUIKitPanRecognizer = {
+        let recognizer = SwipeRowUIKitPanRecognizer(target: self, action: #selector(panned))
         recognizer.delegate = self
         recognizer.cancelsTouchesInView = true
         recognizer.delaysTouchesBegan = false
@@ -149,9 +124,9 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
     }
 
     func configure(
-        id: ConversationKey, leading: ConversationSwipeAction?, trailing: [ConversationSwipeAction],
+        id: AnyHashable, leading: SwipeRowAction?, trailing: [SwipeRowAction],
         isBusy: Bool, isRevealed: Bool, reduceMotion: Bool, isRightToLeft: Bool,
-        onRevealChanged: @escaping (Bool) -> Void, onAction: @escaping (ConversationListAction) -> Void
+        onRevealChanged: @escaping (Bool) -> Void, onAction: @escaping (String) -> Void
     ) {
         let nextDirection: CGFloat = isRightToLeft ? -1 : 1
         let identityChanged = identity != id
@@ -189,12 +164,12 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
         setNeedsLayout()
     }
 
-    private func configure(_ button: UIButton, action: ConversationSwipeAction) {
+    private func configure(_ button: UIButton, action: SwipeRowAction) {
         button.setImage(UIImage(systemName: action.symbol), for: .normal)
-        button.setPreferredSymbolConfiguration(.init(pointSize: 20, weight: .semibold), forImageIn: .normal)
+        button.setPreferredSymbolConfiguration(.init(pointSize: SwipeRowMetrics.symbolSize, weight: .semibold), forImageIn: .normal)
         button.tintColor = .white
-        button.backgroundColor = action.tint
-        button.layer.cornerRadius = Self.diameter / 2
+        button.backgroundColor = UIColor(action.tint)
+        button.layer.cornerRadius = SwipeRowMetrics.diameter / 2
         button.layer.borderColor = UIColor.white.cgColor
         button.accessibilityLabel = action.title
     }
@@ -244,16 +219,6 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
         applyOffset()
     }
 
-    private var trailingReveal: CGFloat {
-        guard !trailingActions.isEmpty else { return 0 }
-        return CGFloat(trailingActions.count) * Self.diameter
-            + CGFloat(trailingActions.count - 1) * Self.spacing + Self.edgeInset * 2
-    }
-
-    private var commitBoundary: CGFloat {
-        min(max(Self.leadingReveal + 64, bounds.width * 0.56), bounds.width - Self.edgeInset * 2)
-    }
-
     private func applyOffset() {
         hostedContent?.transform = CGAffineTransform(translationX: offset * direction, y: 0)
         let leadingWidth = max(0, offset)
@@ -268,32 +233,26 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
         trailingClip.isHidden = trailingActions.isEmpty
         leadingClip.accessibilityElementsHidden = leadingWidth == 0 || leadingClip.isHidden || isBusy
         trailingClip.accessibilityElementsHidden = trailingWidth == 0 || trailingClip.isHidden || isBusy
-        let y = (bounds.height - Self.diameter) / 2
-        let stretchedWidth = max(Self.diameter, leadingWidth - Self.edgeInset * 2)
+        let y = (bounds.height - SwipeRowMetrics.diameter) / 2
+        let stretchedWidth = max(SwipeRowMetrics.diameter, leadingWidth - SwipeRowMetrics.edgeInset * 2)
         leadingButton.frame = CGRect(
-            x: direction > 0 ? Self.edgeInset : leadingWidth - Self.edgeInset - stretchedWidth,
-            y: y, width: stretchedWidth, height: Self.diameter)
+            x: direction > 0 ? SwipeRowMetrics.edgeInset : leadingWidth - SwipeRowMetrics.edgeInset - stretchedWidth,
+            y: y, width: stretchedWidth, height: SwipeRowMetrics.diameter)
         leadingButton.layer.borderWidth = isArmed ? 2 : 0
         for (index, button) in trailingButtons.enumerated() {
-            let inset = Self.edgeInset + CGFloat(index) * (Self.diameter + Self.spacing)
+            let inset = SwipeRowMetrics.edgeInset + CGFloat(index) * (SwipeRowMetrics.diameter + SwipeRowMetrics.spacing)
             button.frame = CGRect(
-                x: direction > 0 ? trailingWidth - inset - Self.diameter : inset,
-                y: y, width: Self.diameter, height: Self.diameter)
+                x: direction > 0 ? trailingWidth - inset - SwipeRowMetrics.diameter : inset,
+                y: y, width: SwipeRowMetrics.diameter, height: SwipeRowMetrics.diameter)
         }
     }
 
     private func updateDrag(translation: CGFloat) {
         let proposed = dragStartOffset + translation * direction
-        if proposed > 0, leadingAction != nil {
-            offset = min(proposed, max(Self.leadingReveal, bounds.width - Self.edgeInset))
-        } else if proposed < 0, !trailingActions.isEmpty {
-            // Trailing controls stay circular and never arm an accidental archive.
-            let excess = max(0, -proposed - trailingReveal)
-            offset = max(proposed, -trailingReveal) - min(18, excess * 0.15)
-        } else {
-            offset = 0
-        }
-        let shouldArm = leadingAction != nil && offset >= commitBoundary
+        offset = SwipeRowMetrics.dragOffset(
+            proposed: proposed, width: bounds.width,
+            hasLeading: leadingAction != nil, trailingCount: trailingActions.count)
+        let shouldArm = leadingAction != nil && offset >= SwipeRowMetrics.commitBoundary(width: bounds.width)
         if shouldArm != isArmed {
             isArmed = shouldArm
             if shouldArm { feedback.impactOccurred() }
@@ -318,7 +277,7 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
         offset = target
         if animated, !reduceMotion {
             UIView.animate(
-                withDuration: 0.22, delay: 0,
+                withDuration: SwipeRowMetrics.animationDuration, delay: 0,
                 options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction]
             ) { self.applyOffset() }
         } else {
@@ -348,7 +307,7 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
         settle(to: 0, animated: animated, notify: notify)
     }
 
-    @objc private func panned(_ recognizer: ConversationRowPanRecognizer) {
+    @objc private func panned(_ recognizer: SwipeRowUIKitPanRecognizer) {
         switch recognizer.state {
         case .began:
             guard !isBusy else { return }
@@ -372,12 +331,7 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
                 settle(to: 0, animated: true, notify: true)
                 onAction?(committedAction)
             } else {
-                let target: CGFloat
-                if offset > 0 {
-                    target = offset >= Self.leadingReveal / 2 ? Self.leadingReveal : 0
-                } else {
-                    target = -offset >= trailingReveal / 2 ? -trailingReveal : 0
-                }
+                let target = SwipeRowMetrics.restingOffset(offset: offset, trailingCount: trailingActions.count)
                 settle(to: target, animated: true, notify: true)
             }
         case .cancelled, .failed:
@@ -429,7 +383,7 @@ final class ConversationSwipeContainer: UIView, UIGestureRecognizerDelegate {
 
 /// Fail vertical motion before the enclosing scroll view starts, rather than
 /// attaching a SwiftUI DragGesture that claims both axes and blocks List refresh.
-private final class ConversationRowPanRecognizer: UIGestureRecognizer {
+private final class SwipeRowUIKitPanRecognizer: UIGestureRecognizer {
     var canStart: ((CGFloat) -> Bool)?
     private(set) var translation: CGPoint = .zero
     private var initialLocation: CGPoint = .zero

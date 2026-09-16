@@ -9,8 +9,9 @@ struct ChatListView: View {
     let selectedConversationID: ConversationKey?
     let onSelectConversation: (ConversationListItem) -> Void
     @State private var isPullRefreshing = false
-    #if os(iOS)
     @State private var revealedConversationID: ConversationKey?
+    #if os(macOS)
+    @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
 
     var body: some View {
@@ -20,69 +21,40 @@ struct ChatListView: View {
         List {
             ConversationListLoadStatus(
                 state: store.state, scope: scope, isPullRefreshing: isPullRefreshing)
+                #if os(macOS)
+                .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                #endif
             if items.isEmpty && isLoaded {
                 ChahuaEmptyStateView(
                     title: "No conversations",
                     message: "Conversations in this category will appear here.",
                     systemImage: scope == .threads ? "text.bubble" : "bubble.left.and.bubble.right")
+                    #if os(macOS)
+                    .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                    #endif
             }
             ForEach(items) { item in
-                #if os(iOS)
                 swipeRow(for: item)
+                    #if os(macOS)
+                    .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                    #endif
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
-                #else
-                selectionButton(for: item)
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(selectedConversationID == item.id ? ChahuaTheme.ChatList.primary : Color.clear)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button {
-                            perform(.archive, on: item)
-                        } label: {
-                            Label("Archive", systemImage: "archivebox")
-                        }
-                        .tint(.indigo)
-                        .disabled(store.pendingListActions.contains(item.id))
-
-                        if case .chat(let chat) = item {
-                            let isMuted = (chat.mutedUntil ?? .distantPast) > Date()
-                            Button {
-                                perform(isMuted ? .unmute : .mute, on: item)
-                            } label: {
-                                if isMuted {
-                                    Label("Unmute", systemImage: "bell")
-                                } else {
-                                    Label("Mute", systemImage: "bell.slash")
-                                }
-                            }
-                            .tint(.orange)
-                            .disabled(store.pendingListActions.contains(item.id))
-                        }
-                    }
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        if item.unreadCount > 0, item.readThroughMessageID != nil {
-                            Button {
-                                perform(.markRead, on: item)
-                            } label: {
-                                Label("Mark as Read", systemImage: "envelope.open")
-                            }
-                            .tint(.blue)
-                            .disabled(store.pendingListActions.contains(item.id))
-                        }
-                    }
-                #endif
+                    .listRowSeparator(.hidden)
             }
             #if os(iOS)
             .listSectionSeparator(.hidden, edges: .top)
             #endif
         }
         .listStyle(.plain)
+        .contentMargins(.horizontal, 0, for: .scrollContent)
         .scrollContentBackground(.hidden)
-        #if os(iOS)
+        #if os(macOS)
+        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers, keepsScopeAlive: true))
+        #endif
         .onChange(of: scope) { _, _ in revealedConversationID = nil }
         .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
         .onDisappear { revealedConversationID = nil }
-        #endif
         .task(id: scope) { await loadScope() }
         .refreshable {
             isPullRefreshing = true
@@ -103,13 +75,11 @@ struct ChatListView: View {
 
     private func selectionButton(for item: ConversationListItem) -> some View {
         Button {
-            #if os(iOS)
             // A tap dismisses any open controls before it can navigate.
             guard revealedConversationID == nil else {
                 revealedConversationID = nil
                 return
             }
-            #endif
             guard selectedConversationID != item.id else { return }
             onSelectConversation(item)
         } label: {
@@ -131,25 +101,24 @@ struct ChatListView: View {
         .accessibilityAddTraits(selectedConversationID == item.id ? .isSelected : [])
     }
 
-    #if os(iOS)
     private func swipeRow(for item: ConversationListItem) -> some View {
         let leading = leadingSwipeAction(for: item)
         let trailing = trailingSwipeActions(for: item)
         let isBusy = store.pendingListActions.contains(item.id)
-        return CircularConversationSwipeRow(
-            id: item.id, revealedConversationID: $revealedConversationID,
+        return SwipeRow(
+            id: item.id, revealedID: $revealedConversationID,
             leadingAction: leading, trailingActions: trailing, isBusy: isBusy,
-            onAction: { perform($0, on: item) }
+            onAction: { performSwipeAction($0, on: item) }
         ) {
             selectionButton(for: item)
                 .background(selectedConversationID == item.id ? ChahuaTheme.ChatList.primary : Color.clear)
                 .accessibilityActions {
                     if !isBusy {
                         if let leading {
-                            Button(leading.title) { perform(leading.action, on: item) }
+                            Button(leading.title) { performSwipeAction(leading.action, on: item) }
                         }
                         ForEach(trailing, id: \.symbol) { action in
-                            Button(action.title) { perform(action.action, on: item) }
+                            Button(action.title) { performSwipeAction(action.action, on: item) }
                         }
                     }
                 }
@@ -162,31 +131,35 @@ struct ChatListView: View {
         }
     }
 
-    private func leadingSwipeAction(for item: ConversationListItem) -> ConversationSwipeAction? {
+    private func leadingSwipeAction(for item: ConversationListItem) -> SwipeRowAction? {
         guard item.readThroughMessageID != nil else { return nil }
         if item.unreadCount > 0 {
-            return .init(action: .markRead, title: String(localized: "Mark as Read"), symbol: "checkmark.message")
+            return .init(action: ConversationListAction.markRead.rawValue, title: String(localized: "Mark as Read"), symbol: "checkmark.message", tint: .blue)
         }
         if case .chat = item {
-            return .init(action: .markUnread, title: String(localized: "Mark as Unread"), symbol: "message.badge")
+            return .init(action: ConversationListAction.markUnread.rawValue, title: String(localized: "Mark as Unread"), symbol: "message.badge", tint: .blue)
         }
         // Threads have no mark-unread endpoint; do not offer a local-only badge.
         return nil
     }
 
-    private func trailingSwipeActions(for item: ConversationListItem) -> [ConversationSwipeAction] {
-        let archive = ConversationSwipeAction(action: .archive, title: String(localized: "Archive"), symbol: "archivebox")
+    private func trailingSwipeActions(for item: ConversationListItem) -> [SwipeRowAction] {
+        let archive = SwipeRowAction(action: ConversationListAction.archive.rawValue, title: String(localized: "Archive"), symbol: "archivebox", tint: .indigo)
         guard case .chat(let chat) = item else { return [archive] }
         let isMuted = (chat.mutedUntil ?? .distantPast) > Date()
         return [
             archive,
             .init(
-                action: isMuted ? .unmute : .mute,
+                action: (isMuted ? ConversationListAction.unmute : .mute).rawValue,
                 title: isMuted ? String(localized: "Unmute") : String(localized: "Mute"),
-                symbol: isMuted ? "bell" : "bell.slash"),
+                symbol: isMuted ? "bell" : "bell.slash", tint: .orange),
         ]
     }
-    #endif
+
+    private func performSwipeAction(_ action: String, on item: ConversationListItem) {
+        guard let action = ConversationListAction(rawValue: action) else { return }
+        perform(action, on: item)
+    }
 
     private var isLoaded: Bool {
         (!scope.includesChats || store.state.chatListLoadPhase == .loaded)
@@ -195,9 +168,7 @@ struct ChatListView: View {
 
     private func perform(_ action: ConversationListAction, on item: ConversationListItem) {
         guard !store.pendingListActions.contains(item.id) else { return }
-        #if os(iOS)
         revealedConversationID = nil
-        #endif
         Task { await store.performListAction(action, conversation: item.id) }
     }
 

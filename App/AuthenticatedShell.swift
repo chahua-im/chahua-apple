@@ -273,11 +273,19 @@ struct AuthenticatedShell: View {
         guard !isSigningOut, !message.isDeleted, message.chatId == chat.id else { return }
         let thread = ThreadNavigation(chat: chat, rootMessage: message)
         openedThread = thread
+        #if os(macOS)
+        withAnimation(nil) { threadPath = [thread.key] }
+        #else
         withAnimation { threadPath = [thread.key] }
+        #endif
     }
 
     private func popThread() {
+        #if os(macOS)
+        withAnimation(nil) { threadPath.removeAll() }
+        #else
         withAnimation { threadPath.removeAll() }
+        #endif
     }
 
 
