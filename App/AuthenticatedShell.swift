@@ -155,6 +155,7 @@ struct AuthenticatedShell: View {
                     switch route {
                     case .archive:
                         chatList(archived: true)
+                            .background(ArchiveEdgeBackGesture())
                     case .conversation(let key):
                         Group {
                             if openedThread?.key == key {

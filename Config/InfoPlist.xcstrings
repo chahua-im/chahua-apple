@@ -20,7 +20,7 @@
     },
     "CFBundleName" : {
       "comment" : "Bundle name",
-      "extractionState" : "stale",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
