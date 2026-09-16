@@ -92,6 +92,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public var compressionEnabled: Bool = true
     /// Once claimed, even an interrupted or failed request must replay the same payload.
     public var dispatchClaimed: Bool = false
+    public var sticker: MessageStickerResponse? = nil
 
     public var isReadyForDispatch: Bool {
         attachments.allSatisfy { $0.attachmentID != nil && $0.error == nil }
@@ -100,9 +101,10 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public var body: CreateMessageBody {
         precondition(isReadyForDispatch, "An unresolved attachment must never be omitted from a message")
         return CreateMessageBody(
-            messageType: .text, clientGeneratedId: clientGeneratedID, message: text,
+            messageType: sticker == nil ? .text : .sticker, clientGeneratedId: clientGeneratedID,
+            message: sticker == nil ? text : nil,
             attachmentIds: attachments.sorted { $0.position < $1.position }.map { $0.attachmentID! },
-            replyToId: replyToMessage?.id
+            replyToId: replyToMessage?.id, stickerId: sticker?.id
         )
     }
 }
@@ -132,4 +134,5 @@ public enum LocalStorageError: Error, Sendable {
     case notTail
     case dispatchAlreadyClaimed
     case invalidAttachments
+    case unsupportedMessageType
 }

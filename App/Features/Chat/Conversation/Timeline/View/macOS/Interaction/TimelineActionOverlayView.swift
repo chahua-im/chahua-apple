@@ -196,7 +196,7 @@ final class TimelineActionOverlayView: NSView {
             showsPending = true
         }
         pendingSurface.isHidden = !showsPending
-        blockButton.isEnabled = actions.blockPendingMessage != nil
+        blockButton.isEnabled = actions.blockPendingMessage != nil && row.entry.sticker == nil
         revokeButton.isEnabled = actions.revokePendingMessage != nil
         blockButton.alphaValue = blockButton.isEnabled ? 1 : 0.4
         revokeButton.alphaValue = revokeButton.isEnabled ? 1 : 0.4

@@ -87,6 +87,28 @@ public final class ChahuaLocalStore: Sendable {
         }
     }
 
+    /// Sends independently of the blocked composition without consuming its draft.
+    public func enqueueSticker(chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String, sticker: MessageStickerResponse, enqueuedAt: Date, replyToMessage: MessagePreview? = nil) async throws -> LocalConversationSnapshot {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
+        let stickerData = try JSONEncoder().encode(sticker)
+        return try await database.write { db in
+            try Self.ensure(db, key)
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            try Self.insert(db, key, id: clientGeneratedID, senderID: senderID, text: "", replyData: replyData, date: enqueuedAt, revision: 0, blocked: false)
+            try db.execute(sql: "UPDATE outgoing_message SET sticker = ? WHERE client_generated_id = ?", arguments: [stickerData, clientGeneratedID])
+            if let composition = before.composingItem {
+                // Keep the unsent composition last, after the new released item.
+                // Its identity, content, upload checkpoints and draft revision stay intact.
+                let sequence = try Int64.fetchOne(db, sql: "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?", arguments: [chatID, threadID ?? ""])!
+                try db.execute(sql: "UPDATE outgoing_message SET enqueue_sequence = ?, dispatch_order = ? WHERE client_generated_id = ?", arguments: [sequence, sequence, composition.clientGeneratedID])
+                try db.execute(sql: "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?", arguments: [chatID, threadID ?? ""])
+            }
+            try Self.bump(db, key)
+            return try Self.snapshot(db, key, directory: self.directory)
+        }
+    }
+
     public func setCompositionAttachments(chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64, attachments: [LocalOutgoingAttachment], compressionEnabled: Bool) async throws -> LocalConversationSnapshot {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         return try await database.write { db in
@@ -162,6 +184,7 @@ public final class ChahuaLocalStore: Sendable {
             try Self.ensure(db, key)
             let before = try Self.snapshot(db, key, directory: self.directory)
             let item = try Self.editableTail(before, itemID: itemID, expectedRevision: expectedRevision)
+            guard item.sticker == nil else { throw LocalStorageError.unsupportedMessageType }
             guard !item.isBlocked else { return before }
             let revision = max(before.draft.editRevision, item.editRevision) + 1
             let date = Date()
@@ -346,7 +369,9 @@ public final class ChahuaLocalStore: Sendable {
             let attachments = try decodeAttachments(row["attachments"] as Data, directory: directory)
             guard Set(attachments.map(\.id)).count == attachments.count,
                   attachments.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw LocalStorageError.corruptRecord }
-            return LocalOutgoingMessage(clientGeneratedID: row["client_generated_id"], chatID: key.chatID, threadID: key.threadID, senderID: sender, text: row["text"], replyToMessage: try decodeReply(row["reply_to_message"]), enqueuedAt: Date(timeIntervalSince1970: row["enqueued_at"]), enqueueSequence: row["enqueue_sequence"], dispatchOrder: row["enqueue_sequence"], state: state, attachments: attachments, isBlocked: row["is_blocked"], editRevision: row["edit_revision"], compressionEnabled: row["compression_enabled"], dispatchClaimed: row["dispatch_claimed"])
+            let sticker = try (row["sticker"] as Data?).map { try JSONDecoder().decode(MessageStickerResponse.self, from: $0) }
+            guard sticker == nil || (attachments.isEmpty && !(row["is_blocked"] as Bool)) else { throw LocalStorageError.corruptRecord }
+            return LocalOutgoingMessage(clientGeneratedID: row["client_generated_id"], chatID: key.chatID, threadID: key.threadID, senderID: sender, text: row["text"], replyToMessage: try decodeReply(row["reply_to_message"]), enqueuedAt: Date(timeIntervalSince1970: row["enqueued_at"]), enqueueSequence: row["enqueue_sequence"], dispatchOrder: row["enqueue_sequence"], state: state, attachments: attachments, isBlocked: row["is_blocked"], editRevision: row["edit_revision"], compressionEnabled: row["compression_enabled"], dispatchClaimed: row["dispatch_claimed"], sticker: sticker)
         }
         let composing = items.last?.isBlocked == true ? items.last : nil
         guard items.filter(\.isBlocked).count == (composing == nil ? 0 : 1) else { throw LocalStorageError.corruptRecord }

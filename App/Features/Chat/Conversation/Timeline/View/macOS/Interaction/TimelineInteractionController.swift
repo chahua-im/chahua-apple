@@ -271,6 +271,7 @@ final class TimelineInteractionController: NSObject {
         guard let row = selectedRow else { dismiss(); return }
         guard case .pending(let pending) = row.entry, !pending.dispatchClaimed,
               actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID),
+              revoke || pending.sticker == nil,
               let operation = revoke ? actions.revokePendingMessage : actions.blockPendingMessage
         else { refresh(); return }
         dismiss()

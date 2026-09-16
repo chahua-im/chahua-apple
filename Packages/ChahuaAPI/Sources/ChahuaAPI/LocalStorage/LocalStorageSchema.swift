@@ -131,6 +131,11 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
             DROP TABLE draft;
             """)
     }
+    migrator.registerMigration("v5_sticker_outbox") { db in
+        // A nil snapshot is an existing text/image message; a snapshot carries the
+        // sticker identity and media required both for dispatch and offline display.
+        try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN sticker BLOB")
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }

@@ -75,7 +75,7 @@ struct TimelineRowPresentation {
                     else { dimensions = (remote?.attachments ?? []).map(\.mediaDimensions) }
                     overlay = sticker || (!dimensions.isEmpty && !hasBody)
                     if sticker {
-                        sections.append(.sticker(CGSize(width: Int(remote?.sticker?.media.width ?? 0), height: Int(remote?.sticker?.media.height ?? 0))))
+                        sections.append(.sticker(CGSize(width: Int(message.entry.sticker?.media.width ?? 0), height: Int(message.entry.sticker?.media.height ?? 0))))
                     } else {
                         let names = MessageMentions.names(in: remote?.mentions ?? [])
                         let source = text as NSString

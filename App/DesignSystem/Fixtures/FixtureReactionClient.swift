@@ -81,6 +81,13 @@
         func me() async throws -> MeResponse { throw Failure.unexpectedOperation }
         func attachmentConfig() async throws -> AttachmentConfigResponse { throw Failure.unexpectedOperation }
         func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw Failure.unexpectedOperation }
+        func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw Failure.unexpectedOperation }
+        func listSubscribedStickerPacks() async throws -> [StickerPackSummary] { throw Failure.unexpectedOperation }
+        func listFavoriteStickers() async throws -> [MessageStickerResponse] { throw Failure.unexpectedOperation }
+        func getSticker(id: String) async throws -> StickerDetailResponse { throw Failure.unexpectedOperation }
+        func getStickerPack(id: String) async throws -> StickerPackDetailResponse { throw Failure.unexpectedOperation }
+        func setStickerFavorite(id: String, favorite: Bool) async throws { throw Failure.unexpectedOperation }
+        func setStickerPackSubscription(id: String, subscribed: Bool) async throws { throw Failure.unexpectedOperation }
         func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw Failure.unexpectedOperation }
         func archiveChat(chatID: String) async throws { throw Failure.unexpectedOperation }
         func unarchiveChat(chatID: String) async throws { throw Failure.unexpectedOperation }

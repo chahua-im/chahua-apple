@@ -88,12 +88,12 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
             }
             #if os(macOS)
             .environment(\.isChatSplitResizing, isSplit && isResizing)
-            .onChange(of: isResizing) { resizing in
+            .onChange(of: isResizing) { _, resizing in
                 // Gesture state also resets when SwiftUI cancels the drag.
                 if !resizing { dragStartWidth = nil }
             }
             #endif
-            .onChange(of: isSplit) { split in
+            .onChange(of: isSplit) { _, split in
                 if !split { dragStartWidth = nil }
             }
         }
@@ -343,7 +343,7 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
                                 GeometryReader { headerGeometry in
                                     Color.clear
                                         .onAppear { headerHeight = headerGeometry.size.height }
-                                        .onChange(of: headerGeometry.size.height) { headerHeight = $0 }
+                                        .onChange(of: headerGeometry.size.height) { _, height in headerHeight = height }
                                 }
                             }
                             .background(alignment: .top) {

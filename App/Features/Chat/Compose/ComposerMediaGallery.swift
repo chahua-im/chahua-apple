@@ -14,41 +14,32 @@ struct LocalOutgoingImagePreview: View {
     @State private var image: CGImage?
 
     var body: some View {
-        ZStack {
-            Color.secondary.opacity(0.12)
-            if let image {
-                let preview = Image(decorative: image, scale: 1)
-                preview.resizable().aspectRatio(contentMode: contentMode)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background {
-                        if showsBlurredBackdrop {
-                            #if os(macOS)
-                            // Match RemoteImageView: constrain AppKit's blurred backdrop
-                            // explicitly so its fill size cannot expand the foreground.
-                            GeometryReader { geometry in
-                                ZStack {
-                                    Color.black
-                                    preview.resizable().aspectRatio(contentMode: .fill)
-                                        .frame(width: geometry.size.width + 40, height: geometry.size.height + 40)
-                                        .blur(radius: 20).opacity(0.8)
-                                    Color.black.opacity(0.2)
-                                }
-                                .frame(width: geometry.size.width, height: geometry.size.height)
-                            }
-                            #else
-                            ZStack {
-                                preview.resizable().aspectRatio(contentMode: .fill)
-                                    .blur(radius: 20).scaleEffect(1.1).opacity(0.8)
-                                Color.black.opacity(0.2)
-                            }
-                            #endif
+        GeometryReader { geometry in
+            // A resizable image's aspect ratio can exceed its layout proposal.
+            // Keep every layer inside the tile instead of letting it size the gallery.
+            ZStack {
+                Color.secondary.opacity(0.12)
+                if let image {
+                    let preview = Image(decorative: image, scale: 1)
+                    if showsBlurredBackdrop {
+                        ZStack {
+                            Color.black
+                            preview.resizable().aspectRatio(contentMode: .fill)
+                                .frame(width: geometry.size.width + 40, height: geometry.size.height + 40)
+                                .blur(radius: 20).opacity(0.8)
+                            Color.black.opacity(0.2)
                         }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
                     }
-            } else {
-                Image(systemName: "photo").foregroundStyle(.secondary)
+                    preview.resizable().aspectRatio(contentMode: contentMode)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                } else {
+                    Image(systemName: "photo").foregroundStyle(.secondary)
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
-        .clipped()
         .task(id: isMeasuring ? "" : path) {
             guard !isMeasuring else { return }
             image = nil
@@ -110,6 +101,8 @@ struct ComposerMediaGallery: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let width = max(0, geometry.size.width)
+            let height = max(0, geometry.size.height)
             ScrollViewReader { scroll in
                 ScrollView {
                     LazyVStack(spacing: 4) {
@@ -117,27 +110,41 @@ struct ComposerMediaGallery: View {
                         // Unlike timeline galleries, composition must expose every selected item.
                         let leadingCount = attachments.count.isMultiple(of: 2) ? 0 : 1
                         if leadingCount == 1, let first = attachments.first {
-                            tile(first, index: 0, viewport: geometry.frame(in: .global))
-                                .frame(width: geometry.size.width,
-                                       height: attachments.count == 1 ? geometry.size.height :
-                                        (attachments.count == 3 ? geometry.size.height * 0.66 : geometry.size.width * 0.66))
-                                .id(first.id)
+                            if attachments.count == 1 {
+                                let ratio = CGFloat(max(1, first.width)) / CGFloat(max(1, first.height))
+                                let previewHeight = min(height, width)
+                                tile(first, index: 0, viewport: geometry.frame(in: .global))
+                                    .frame(width: min(width, previewHeight * ratio),
+                                           height: min(previewHeight, width / ratio))
+                                    .id(first.id)
+                            } else {
+                                tile(first, index: 0, viewport: geometry.frame(in: .global))
+                                    .frame(width: width, height: attachments.count == 3
+                                           ? max(96, min(width * 0.66, height * 0.66))
+                                           : width * 0.66)
+                                    .id(first.id)
+                            }
                         }
-                        let cellWidth = max(0, (geometry.size.width - 4) / 2)
+                        let cellWidth = max(0, (width - 4) / 2)
                         ForEach(0..<((attachments.count - leadingCount) / 2), id: \.self) { row in
                             HStack(spacing: 4) {
                                 ForEach(0..<2, id: \.self) { column in
                                     let index = leadingCount + row * 2 + column
                                     tile(attachments[index], index: index, viewport: geometry.frame(in: .global))
-                                        .frame(width: cellWidth, height: attachments.count == 2 ? geometry.size.height :
-                                            (attachments.count == 3 ? geometry.size.height * 0.34 - 4 : cellWidth))
+                                        .frame(width: cellWidth, height: attachments.count == 2
+                                               ? max(96, min(cellWidth, height))
+                                               : (attachments.count == 3
+                                                  ? max(96, min(cellWidth, height * 0.34 - 4)) : cellWidth))
                                         .id(attachments[index].id)
                                 }
                             }
                         }
                     }
+                    .frame(width: width)
+                    .frame(minHeight: height, alignment: .center)
                 }
                 .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize)
                 .onChange(of: drag.scrollTarget) { _, target in
                     guard let target else { return }
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -146,6 +153,7 @@ struct ComposerMediaGallery: View {
                 }
             }
         }
+        .clipped()
         .onAppear { drag.update(ids: attachmentIDs, isEnabled: isEnabled) }
         .onChange(of: attachmentIDs) { _, ids in drag.update(ids: ids, isEnabled: isEnabled) }
         .onChange(of: isEnabled) { _, enabled in drag.update(ids: attachmentIDs, isEnabled: enabled) }

@@ -162,6 +162,19 @@ public struct MessageStickerResponse: Codable, Hashable, Sendable {
     public let name: String?
     public let description: String?
 
+    public init(
+        id: String, emoji: String, createdAt: Date, isFavorited: Bool?,
+        media: MessageStickerMediaResponse, name: String? = nil, description: String? = nil
+    ) {
+        self.id = id
+        self.emoji = emoji
+        self.createdAt = createdAt
+        self.isFavorited = isFavorited
+        self.media = media
+        self.name = name
+        self.description = description
+    }
+
     fileprivate func normalizedForRealtime() -> Self {
         var copy = self
         copy.isFavorited = nil
@@ -176,6 +189,17 @@ public struct MessageStickerMediaResponse: Codable, Hashable, Sendable {
     public let size: Int64
     public let width: Int32?
     public let height: Int32?
+
+    public init(
+        id: String, url: String, contentType: String, size: Int64, width: Int32? = nil, height: Int32? = nil
+    ) {
+        self.id = id
+        self.url = url
+        self.contentType = contentType
+        self.size = size
+        self.width = width
+        self.height = height
+    }
 }
 
 public struct ReactionSummary: Codable, Hashable, Sendable {

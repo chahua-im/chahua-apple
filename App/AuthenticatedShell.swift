@@ -15,7 +15,7 @@ struct AuthenticatedShell: View {
 
     @State private var selectedScope: ConversationListScope = .messages
     @State private var archivedScope: ConversationListScope = .messages
-    @State private var isBrowsingArchived = false
+    @State private var listPath: [NavigationRoute] = []
     @State private var selectedConversationID: ConversationKey?
     @State private var showsSettings = false
     @State private var isVisible = false
@@ -24,6 +24,13 @@ struct AuthenticatedShell: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
+
+    private enum NavigationRoute: Hashable {
+        case archive
+        case conversation(ConversationKey)
+    }
+
+    private var isBrowsingArchived: Bool { listPath.last == .archive }
 
     private struct NotificationNavigation {
         let route: PushNotificationRoute
@@ -54,11 +61,11 @@ struct AuthenticatedShell: View {
             if geometry.size.width >= ChatSplitMetrics.splitThreshold {
                 adaptiveLayout
             } else {
-                phoneNavigation
+                listNavigation(includesDetail: true)
             }
             #endif
         }
-        .onChange(of: chatStore.state) { state in
+        .onChange(of: chatStore.state) { _, state in
             guard let selectedConversationID, notificationNavigation == nil else { return }
             let loaded = selectedConversationID.threadID == nil
                 ? (isBrowsingArchived ? state.archivedChatListLoadPhase : state.chatListLoadPhase) == .loaded
@@ -73,11 +80,14 @@ struct AuthenticatedShell: View {
         .onChange(of: me.uid) { _, _ in
             selectConversation(nil)
             showsSettings = false
-            isBrowsingArchived = false
+            listPath.removeAll()
             archivedScope = .messages
         }
         .onChange(of: isSigningOut) { _, signingOut in
-            if signingOut { selectConversation(nil) }
+            if signingOut {
+                selectConversation(nil)
+                listPath.removeAll()
+            }
         }
         .onAppear {
             isVisible = true
@@ -107,7 +117,13 @@ struct AuthenticatedShell: View {
 
     private var adaptiveLayout: some View {
         ChatSplitLayout(hasSelection: selectedConversationID != nil) { _ in
-            chatList()
+            #if os(iOS)
+            // Archive pushes within the sidebar without changing the split detail selection.
+            listNavigation(includesDetail: false)
+            #else
+            // macOS switches list content immediately; only iOS uses a native push.
+            chatList(archived: isBrowsingArchived)
+            #endif
         } detail: { isSplit in
             Group {
                 if let key = threadPath.last {
@@ -130,120 +146,121 @@ struct AuthenticatedShell: View {
         }
     }
 
-    private var phoneNavigation: some View {
-        NavigationStack(path: phonePath) {
-            chatList(usesPhoneNavigation: true)
-                .navigationDestination(for: ConversationKey.self) { key in
-                    Group {
-                        if openedThread?.key == key {
-                            threadDestination(key)
-                        } else {
-                            detailContent
+    #if os(iOS)
+    private func listNavigation(includesDetail: Bool) -> some View {
+        NavigationStack(path: includesDetail ? phonePath : $listPath) {
+            // The active root stays active underneath the pushed archive list.
+            chatList(archived: false)
+                .navigationDestination(for: NavigationRoute.self) { route in
+                    switch route {
+                    case .archive:
+                        chatList(archived: true)
+                    case .conversation(let key):
+                        Group {
+                            if openedThread?.key == key {
+                                threadDestination(key)
+                            } else {
+                                detailContent
+                            }
                         }
+                        .modifier(ChatPhoneDetailHeader(
+                            title: openedThread?.key == key ? openedThread?.title ?? String(localized: "Thread") : selectedTitle
+                        ) {
+                            selectedAvatar
+                        })
                     }
-                    #if os(iOS)
-                    .modifier(ChatPhoneDetailHeader(
-                        title: openedThread?.key == key ? openedThread?.title ?? String(localized: "Thread") : selectedTitle
-                    ) {
-                        selectedAvatar
-                    })
-                    #endif
                 }
         }
     }
 
-    private var phonePath: Binding<[ConversationKey]> {
+    private var phonePath: Binding<[NavigationRoute]> {
         Binding(
-            get: { selectedConversationID.map { [$0] + threadPath } ?? [] },
-            set: { path in
-                if path.first != selectedConversationID {
-                    selectConversation(path.first)
+            get: {
+                var path = listPath
+                if let selectedConversationID {
+                    path.append(.conversation(selectedConversationID))
+                    path.append(contentsOf: threadPath.map(NavigationRoute.conversation))
                 }
-                threadPath = Array(path.dropFirst())
+                return path
+            },
+            set: { path in
+                listPath = path.first == .archive ? [.archive] : []
+                let conversations = path.dropFirst(listPath.count).compactMap { route -> ConversationKey? in
+                    guard case .conversation(let key) = route else { return nil }
+                    return key
+                }
+                if conversations.first != selectedConversationID {
+                    selectConversation(conversations.first)
+                }
+                threadPath = Array(conversations.dropFirst())
             }
         )
     }
+    #endif
 
-    @ViewBuilder private func chatList(usesPhoneNavigation: Bool = false) -> some View {
+    private func chatList(archived: Bool) -> some View {
+        let scope = archived ? $archivedScope : $selectedScope
         let badges = ConversationTabBadges(
-            chats: isBrowsingArchived ? chatStore.state.archivedChats : chatStore.state.chats,
-            threads: isBrowsingArchived ? chatStore.state.archivedThreads : chatStore.state.threads,
-            archived: isBrowsingArchived)
-        let onBack: (() -> Void)? = isBrowsingArchived ? { closeArchived() } : nil
+            chats: archived ? chatStore.state.archivedChats : chatStore.state.chats,
+            threads: archived ? chatStore.state.archivedThreads : chatStore.state.threads,
+            archived: archived)
         let list = ChatListView(
             store: chatStore,
             drafts: chatStore.drafts,
             currentUserID: me.uid,
-            scope: isBrowsingArchived ? archivedScope : selectedScope,
-            archivedMode: isBrowsingArchived,
+            scope: scope.wrappedValue,
+            archivedMode: archived,
             onOpenArchived: openArchived,
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectConversation($0.id) }
         )
         #if os(iOS)
-        if usesPhoneNavigation {
-            list
-                .navigationTitle("")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar(.visible, for: .navigationBar)
-                .toolbarBackground(.hidden, for: .navigationBar)
-                .toolbar {
+        return list
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbar {
+                if !archived {
                     ToolbarItem(placement: .topBarLeading) {
-                        if isBrowsingArchived {
-                            Button("Back to chats", systemImage: "chevron.backward", action: closeArchived)
-                                .labelStyle(.iconOnly)
-                        } else {
-                            accountButton
-                                .labelStyle(.iconOnly)
-                                .accessibilityLabel("Account")
-                        }
-                    }
-                    // A segmented control must not participate in native title morphing.
-                    if #available(iOS 26, *) {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            ConversationScopePicker(selection: listScope, badges: badges)
-                        }
-                        // The scope control already draws its own background.
-                        .sharedBackgroundVisibility(.hidden)
-                    } else {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            ConversationScopePicker(selection: listScope, badges: badges)
-                        }
+                        accountButton
+                            .labelStyle(.iconOnly)
+                            .accessibilityLabel("Account")
                     }
                 }
-        } else if #available(iOS 26, *) {
-            list
-                .safeAreaBar(edge: .top, spacing: 0) {
-                    ConversationListHeader(selection: listScope, badges: badges, onBack: onBack) { accountButton }
+                // A segmented control must not participate in native title morphing.
+                if #available(iOS 26, *) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ConversationScopePicker(selection: scope, badges: badges)
+                    }
+                    // The scope control already draws its own background.
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ConversationScopePicker(selection: scope, badges: badges)
+                    }
                 }
-                .scrollEdgeEffectStyle(.soft, for: .top)
-        } else {
-            list.safeAreaInset(edge: .top, spacing: 0) {
-                ConversationListHeader(selection: listScope, badges: badges, onBack: onBack) { accountButton }
-                    .background(.regularMaterial)
             }
-        }
         #else
-        VStack(spacing: 0) {
-            ConversationListHeader(selection: listScope, badges: badges, onBack: onBack) { accountButton }
+        return VStack(spacing: 0) {
+            ConversationListHeader(
+                selection: scope, badges: badges,
+                onBack: archived ? { closeArchived() } : nil
+            ) { accountButton }
             list
         }
         #endif
     }
 
-    private var listScope: Binding<ConversationListScope> {
-        Binding(
-            get: { isBrowsingArchived ? archivedScope : selectedScope },
-            set: { if isBrowsingArchived { archivedScope = $0 } else { selectedScope = $0 } })
-    }
 
     private func openArchived() {
+        guard listPath.isEmpty else { return }
         archivedScope = selectedScope
-        isBrowsingArchived = true
+        listPath.append(.archive)
     }
 
     private func closeArchived() {
-        isBrowsingArchived = false
+        listPath.removeAll()
     }
 
     @ViewBuilder private var detailContent: some View {
@@ -388,6 +405,7 @@ struct AuthenticatedShell: View {
         // separate metadata task runs, including across cancellation/retry.
         threadPath.removeAll()
         openedThread = nil
+        listPath.removeAll()
         notificationNavigation = NotificationNavigation(route: route, userID: me.uid)
         showsSettings = false
         selectedConversationID = route.conversation

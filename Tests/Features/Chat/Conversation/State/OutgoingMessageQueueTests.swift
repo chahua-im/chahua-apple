@@ -6,6 +6,93 @@ import XCTest
 
 @MainActor
 final class OutgoingMessageQueueTests: XCTestCase {
+    func testStickerSnapshotsAndFailedThreadSendSurviveRestartWithoutConsumingDrafts() async throws {
+        let h = try await openHarness(foreground: false)
+        let sticker = MessageStickerResponse(
+            id: "sticker", emoji: "wave", createdAt: Date(timeIntervalSince1970: 1), isFavorited: true,
+            media: MessageStickerMediaResponse(id: "media", url: "https://example.test/sticker.webp",
+                contentType: "image/webp", size: 123, width: 200, height: 150),
+            name: "Wave", description: "A wave")
+        let reply = try TimelineTestFixtures.message(id: "quoted", at: 1).replyPreview
+        try await h.queue.saveDraft(chatID: "chat", threadID: "thread", text: "unfinished",
+            editRevision: 1, updatedAt: Date(), replyToMessage: reply)
+        let draft = h.queue.snapshots[ConversationKey(chatID: "chat", threadID: "thread")]?.draft
+        try await h.queue.enqueueSticker(chatID: "chat", sticker: sticker)
+        try await h.queue.enqueueSticker(chatID: "chat", threadID: "thread", sticker: sticker, replyToMessage: reply)
+        let parent = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        let thread = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat", threadID: "thread").first)
+        XCTAssertEqual(h.queue.snapshots[thread.conversationKey]?.draft, draft)
+        await h.close()
+
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat").first?.sticker, sticker)
+        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat", threadID: "thread").first?.sticker, sticker)
+        XCTAssertEqual(reopened.queue.snapshots[thread.conversationKey]?.draft, draft)
+        await reopened.queue.setForegroundActive(true)
+        try await eventually { await reopened.api.requests().count == 2 }
+        let requests = await reopened.api.requests()
+        let parentIndex = try XCTUnwrap(requests.firstIndex { $0.threadID == nil })
+        let threadIndex = try XCTUnwrap(requests.firstIndex { $0.threadID == "thread" })
+        XCTAssertEqual(requests[parentIndex].body, CreateMessageBody(
+            messageType: .sticker, clientGeneratedId: parent.clientGeneratedID, stickerId: sticker.id))
+        XCTAssertEqual(requests[threadIndex].body, CreateMessageBody(
+            messageType: .sticker, clientGeneratedId: thread.clientGeneratedID, replyToId: reply.id, stickerId: sticker.id))
+        await reopened.api.finish(parentIndex, with: .success(try response(requests[parentIndex])))
+        await reopened.api.finish(threadIndex, with: .failure(QueueTestError.network))
+        try await eventually {
+            reopened.queue.pendingMessages(chatID: "chat").isEmpty &&
+                reopened.queue.pendingMessages(chatID: "chat", threadID: "thread").first?.state == .failed
+        }
+        await reopened.close()
+
+        let retried = try await openHarness(root: h.root)
+        let restored = try XCTUnwrap(retried.queue.pendingMessages(chatID: "chat", threadID: "thread").first)
+        XCTAssertEqual(restored.state, .failed)
+        XCTAssertEqual(restored.sticker, sticker)
+        XCTAssertEqual(restored.replyToMessage, reply)
+        try await retried.queue.retry(chatID: "chat", threadID: "thread",
+            clientGeneratedID: thread.clientGeneratedID, scope: .message)
+        try await eventually { await retried.api.requests().count == 1 }
+        let request = try await firstRequest(retried.api)
+        XCTAssertEqual(request.threadID, "thread")
+        XCTAssertEqual(request.body, requests[threadIndex].body)
+        await retried.api.finish(0, with: .success(try response(request)))
+        try await eventually { retried.queue.pendingMessages(chatID: "chat", threadID: "thread").isEmpty }
+        XCTAssertEqual(retried.queue.snapshots[thread.conversationKey]?.draft, draft)
+    }
+
+    func testStickerSubmissionConsumesOnlyReplyAndPreservesTypedDraftAfterRestart() async throws {
+        let h = try await openHarness(foreground: false)
+        let drafts = ChatDraftStore(outgoingQueue: h.queue)
+        let observation = h.queue.events.sink { event in
+            if case .snapshot(let snapshot) = event { drafts.install(snapshot) }
+        }
+        let sticker = MessageStickerResponse(
+            id: "sticker", emoji: "wave", createdAt: Date(timeIntervalSince1970: 1), isFavorited: false,
+            media: MessageStickerMediaResponse(id: "media", url: "https://example.test/sticker.webp",
+                contentType: "image/webp", size: 123, width: 200, height: 150),
+            name: nil, description: nil)
+        let reply = try TimelineTestFixtures.message(id: "quoted", at: 1).replyPreview
+        drafts.setDraftText("keep typing", chatID: "chat", threadID: "thread")
+        drafts.setDraftReply(reply, chatID: "chat", threadID: "thread")
+
+        let submitted = try await drafts.submitSticker(sticker, chatID: "chat", threadID: "thread")
+        XCTAssertTrue(submitted)
+        XCTAssertEqual(drafts.draftText(chatID: "chat", threadID: "thread"), "keep typing")
+        XCTAssertNil(drafts.draftReply(chatID: "chat", threadID: "thread"))
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat", threadID: "thread").first?.replyToMessage, reply)
+        await drafts.flushAll()
+        observation.cancel()
+        drafts.reset()
+        await h.close()
+
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        let snapshot = try XCTUnwrap(reopened.queue.snapshots[ConversationKey(chatID: "chat", threadID: "thread")])
+        XCTAssertEqual(snapshot.draft.text, "keep typing")
+        XCTAssertNil(snapshot.draft.replyToMessage)
+        XCTAssertEqual(snapshot.outgoing.first?.sticker, sticker)
+    }
+
     func testThreadSendRetryAndAcknowledgementsUseOnlyTheirConversation() async throws {
         let h = try await openHarness()
         try await h.queue.enqueueText(chatID: "chat", threadID: "one", text: "reply", clearedDraftRevision: 1)
@@ -523,6 +610,80 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await h.close()
     }
 
+    func testDiscardDraftAttachmentsPreservesCaptionReplyAndPendingSendsAcrossRestart() async throws {
+        let h = try await openHarness(foreground: false)
+        try await h.queue.enqueueText(chatID: "chat", threadID: "thread", text: "thread send", clearedDraftRevision: 1)
+        try await h.queue.enqueueText(chatID: "chat", text: "parent send", clearedDraftRevision: 1)
+        try await h.queue.enqueueText(chatID: "other", text: "other send", clearedDraftRevision: 1)
+        try await h.queue.saveDraft(chatID: "chat", text: "parent draft", editRevision: 2, updatedAt: Date())
+        let reply = try TimelineTestFixtures.message(id: "target", at: 0).replyPreview
+        let caption = "keep this caption\n世界"
+        try await h.queue.saveDraft(
+            chatID: "chat", threadID: "thread", text: caption, editRevision: 2,
+            updatedAt: Date(), replyToMessage: reply)
+        let image = h.root.appendingPathComponent("selected.png")
+        try makeMediaPNG(red: 255, green: 0, blue: 0).write(to: image)
+        try await h.queue.importImages(urls: [image, image], chatID: "chat", threadID: "thread")
+        let key = ConversationKey(chatID: "chat", threadID: "thread")
+        let composition = try XCTUnwrap(h.queue.snapshots[key]?.composingItem)
+        await h.queue.setForegroundActive(true)
+        try await eventually { await h.api.requests().count == 3 }
+        let sending = h.queue.snapshots.mapValues(\.outgoing)
+        let parentDraft = h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft
+
+        try await h.queue.discardDraftAttachments(chatID: "chat", threadID: "thread")
+
+        XCTAssertEqual(h.queue.snapshots.mapValues(\.outgoing), sending)
+        XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft, parentDraft)
+        let discarded = try XCTUnwrap(h.queue.snapshots[key])
+        XCTAssertTrue(discarded.draft.attachments.isEmpty)
+        XCTAssertTrue(h.queue.draftAttachments(chatID: "chat", threadID: "thread").isEmpty)
+        XCTAssertEqual(discarded.draft.text, caption)
+        XCTAssertEqual(discarded.draft.replyToMessage, reply)
+        XCTAssertEqual(discarded.composingItem?.clientGeneratedID, composition.clientGeneratedID)
+        XCTAssertEqual(discarded.composingItem?.enqueueSequence, composition.enqueueSequence)
+        XCTAssertTrue(discarded.composingItem?.attachments.isEmpty == true)
+        await h.close()
+
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        let restored = try XCTUnwrap(reopened.queue.snapshots[key])
+        XCTAssertEqual(restored.draft, discarded.draft)
+        XCTAssertEqual(restored.composingItem, discarded.composingItem)
+        XCTAssertEqual(
+            reopened.queue.snapshots.mapValues { $0.outgoing.map(\.body) },
+            sending.mapValues { $0.map(\.body) })
+        let drafts = ChatDraftStore(outgoingQueue: reopened.queue)
+        for snapshot in reopened.queue.snapshots.values { drafts.install(snapshot) }
+        XCTAssertEqual(drafts.draftText(chatID: "chat", threadID: "thread"), caption)
+        XCTAssertTrue(reopened.queue.draftAttachments(chatID: "chat", threadID: "thread").isEmpty)
+    }
+
+    func testDiscardDraftAttachmentsPropagatesStaleEditWithoutLosingAttachments() async throws {
+        let h = try await openHarness(foreground: false)
+        let image = h.root.appendingPathComponent("selected.png")
+        try makeMediaPNG(red: 0, green: 255, blue: 0).write(to: image)
+        try await h.queue.importImages(urls: [image], chatID: "chat")
+        let key = ConversationKey(chatID: "chat")
+        let before = try XCTUnwrap(h.queue.snapshots[key])
+        let store = try await h.openStore(uid: 1)
+        let newer = try await store.saveDraft(
+            chatID: "chat", text: "newer caption", editRevision: before.draft.editRevision + 1,
+            updatedAt: Date())
+
+        do {
+            try await h.queue.discardDraftAttachments(chatID: "chat")
+            XCTFail("A stale discard must fail instead of closing with attachments still retained")
+        } catch LocalStorageError.staleDraft { }
+        XCTAssertEqual(h.queue.draftAttachments(chatID: "chat"), before.draft.attachments)
+        let durable = try await store.restore()
+        XCTAssertEqual(durable.first?.draft, newer.draft)
+
+        await h.queue.retryStorage()
+        try await h.queue.discardDraftAttachments(chatID: "chat")
+        XCTAssertTrue(h.queue.draftAttachments(chatID: "chat").isEmpty)
+        XCTAssertEqual(h.queue.snapshots[key]?.draft.text, "newer caption")
+    }
+
     func testReorderingCompletedAttachmentsDispatchesExistingIDsInLatestOrder() async throws {
         let h = try await openHarness(foreground: false)
         let store = try await h.openStore(uid: 1)
@@ -569,7 +730,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
     }
 
     private func response(_ request: HeldQueueAPI.Request) throws -> MessageResponse {
-        try TimelineTestFixtures.message(id: "server-\(request.body.clientGeneratedId)", chatID: request.chatID, at: 1, clientGeneratedID: request.body.clientGeneratedId, fields: request.threadID.map { ["replyRootId": $0] } ?? [:])
+        try TimelineTestFixtures.message(id: "server-\(request.body.clientGeneratedId)", chatID: request.chatID, at: 1, type: request.body.messageType, clientGeneratedID: request.body.clientGeneratedId, fields: request.threadID.map { ["replyRootId": $0] } ?? [:])
     }
 
     private func eventually(_ condition: @MainActor () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
@@ -675,6 +836,13 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
+    func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
+    func listSubscribedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
+    func listFavoriteStickers() async throws -> [MessageStickerResponse] { throw APIError.unavailable }
+    func getSticker(id: String) async throws -> StickerDetailResponse { throw APIError.unavailable }
+    func getStickerPack(id: String) async throws -> StickerPackDetailResponse { throw APIError.unavailable }
+    func setStickerFavorite(id: String, favorite: Bool) async throws { throw APIError.unavailable }
+    func setStickerPackSubscription(id: String, subscribed: Bool) async throws { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
     func archiveChat(chatID: String) async throws { throw APIError.unavailable }
     func unarchiveChat(chatID: String) async throws { throw APIError.unavailable }

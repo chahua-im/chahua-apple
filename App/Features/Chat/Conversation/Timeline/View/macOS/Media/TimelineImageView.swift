@@ -29,10 +29,10 @@ final class TimelineImageView: NSView {
     private var requestedVisible = false
     private var active = false
     private var generation: UInt64 = 0
-    private var staticLoading = false
-    private var animationLoading = false
-    private var staticFailed = false
-    private var animationFinished = false
+    private var imageTask: DownloadTask?
+    private var loading = false
+    private var failed = false
+    private var requestFinished = false
     private var isLocal = false
     private var decodedImage: NSImage?
     private var decodedCGImage: CGImage?
@@ -43,6 +43,7 @@ final class TimelineImageView: NSView {
     private var backdropCompletion: Task<Void, Never>?
     private var reportedImageAvailability = false
     var onImageAvailabilityChanged: ((Bool) -> Void)?
+    var onLoadFailure: ((String) -> Void)?
 
     var showsPlaceholderChrome = true {
         didSet { updateChrome() }
@@ -84,8 +85,7 @@ final class TimelineImageView: NSView {
         backdropCompletion?.cancel()
         NotificationCenter.default.removeObserver(self)
         MainActor.assumeIsolated {
-            foreground.kf.cancelDownloadTask()
-            animatedForeground?.kf.cancelDownloadTask()
+            imageTask?.cancel()
             animatedForeground?.stopAnimating()
         }
     }
@@ -101,18 +101,22 @@ final class TimelineImageView: NSView {
         let pixels = CGSize(width: max(1, thumbnailPixelSize.width), height: max(1, thumbnailPixelSize.height))
         let key = RequestKey(url: url, pixels: pixels, context: mediaContext.map(ObjectIdentifier.init), animates: animates)
         if key != requestKey || isLocal {
-            clearPayload()
+            let sameMedia = !isLocal && url != nil && requestKey?.url == url && requestKey?.context == key.context
+            if sameMedia {
+                cancelRequests(preservingImages: true)
+                requestFinished = animates && requestKey?.animates == true && requestFinished
+                if !animates {
+                    animatedForeground?.image = nil
+                    animatedForeground?.isHidden = true
+                    foreground.isHidden = false
+                }
+            } else {
+                clearPayload()
+            }
             requestKey = key
             self.mediaContext = mediaContext
-            staticFailed = url == nil
-            // Match CachedImageView's processor and scale cache key before starting
-            // asynchronous work, including when this view has not been attached yet.
-            if let url, let image = (mediaContext?.cache ?? .default).retrieveImageInMemoryCache(
-                forKey: url.absoluteString,
-                options: [.processor(DownsamplingImageProcessor(size: pixels)), .scaleFactor(1)]
-            ) {
-                installStatic(image)
-            }
+            failed = failed || url == nil
+            restoreFromMemory()
         } else {
             self.mediaContext = mediaContext
         }
@@ -120,7 +124,6 @@ final class TimelineImageView: NSView {
         setBackdropEnabled(showsBlurredBackdrop)
         needsLayout = true
         refreshVisibility()
-        startMissingRequests()
         updateChrome()
     }
 
@@ -130,8 +133,8 @@ final class TimelineImageView: NSView {
         clearPayload()
         isLocal = true
         self.contentMode = contentMode
-        staticLoading = isLoading
-        staticFailed = image == nil && !isLoading
+        loading = isLoading
+        failed = image == nil && !isLoading
         if let image {
             installStatic(NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)))
         }
@@ -153,6 +156,7 @@ final class TimelineImageView: NSView {
         setBackdropEnabled(false)
         updateChrome()
         onImageAvailabilityChanged = nil
+        onLoadFailure = nil
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -227,53 +231,101 @@ final class TimelineImageView: NSView {
         return CGRect(x: bounds.midX - result.width / 2, y: bounds.midY - result.height / 2, width: result.width, height: result.height)
     }
 
-    private func startMissingRequests() {
-        guard active, !isLocal, let key = requestKey, let url = key.url else { return }
-        let current = generation
-        if decodedImage == nil && !staticLoading && !staticFailed {
-            staticLoading = true
-            let options: KingfisherOptionsInfo = [
-                .processor(DownsamplingImageProcessor(size: key.pixels)), .scaleFactor(1),
-                .targetCache(mediaContext?.cache ?? .default), .downloader(mediaContext?.downloader ?? .default),
-                .cacheOriginalImage,
-            ]
-            foreground.kf.setImage(with: url, options: options) { [weak self] result in
-                guard let self, self.generation == current, self.requestKey == key else { return }
-                self.staticLoading = false
-                switch result {
-                case .success(let value): self.installStatic(value.image)
-                case .failure: self.staticFailed = true
-                }
-                self.needsLayout = true
-                self.updateChrome()
-            }
+    private func imageOptions(for key: RequestKey) -> KingfisherOptionsInfo {
+        var options: KingfisherOptionsInfo = [
+            .scaleFactor(1), .targetCache(mediaContext?.cache ?? .default),
+            .downloader(mediaContext?.downloader ?? .default), .cacheOriginalImage,
+            .callbackQueue(.mainCurrentOrAsync),
+        ]
+        if key.animates {
+            let processor = TimelineAnimatedImageProcessor()
+            options += [.processor(processor), .cacheSerializer(processor)]
+        } else {
+            options += [.processor(DownsamplingImageProcessor(size: key.pixels))]
         }
-        if key.animates && !animationLoading && !animationFinished {
-            let animated = makeAnimatedForeground()
-            animationLoading = true
-            animated.kf.setImage(with: url, options: [
-                .targetCache(mediaContext?.cache ?? .default), .downloader(mediaContext?.downloader ?? .default),
-                .cacheOriginalImage,
-            ]) { [weak self] result in
+        return options
+    }
+
+    private func restoreFromMemory() {
+        guard let key = requestKey, let url = key.url else { return }
+        let cache = mediaContext?.cache ?? .default
+        if !requestFinished, let image = cache.retrieveImageInMemoryCache(
+            forKey: url.absoluteString, options: imageOptions(for: key)
+        ), installImage(image, animates: key.animates) {
+            requestFinished = true
+        }
+        guard decodedCGImage == nil else { return }
+        // A different thumbnail size still has useful pixels. Never ask the
+        // network or wait for disk just to restore a warm first frame.
+        if let image = cache.retrieveImageInMemoryCache(forKey: TimelineImageMemory.firstFrameKey(for: url))
+            ?? cache.retrieveImageInMemoryCache(forKey: url.absoluteString,
+                options: [.processor(DownsamplingImageProcessor(size: key.pixels)), .scaleFactor(1)])
+            ?? cache.retrieveImageInMemoryCache(forKey: url.absoluteString) {
+            installStatic(image)
+        }
+    }
+
+    private func startMissingRequests() {
+        guard active, !isLocal, !loading, !failed, !requestFinished,
+              let key = requestKey, let url = key.url else { return }
+        restoreFromMemory()
+        guard !requestFinished else { return }
+        let current = generation
+        loading = true
+        // The manager never mutates our views before the reuse guard runs. One
+        // image supplies both the static frame and lazy animation, so a second
+        // representation's failure cannot erase a successfully decoded frame.
+        let task = KingfisherManager.shared.retrieveImage(
+            with: url, options: imageOptions(for: key),
+            downloadTaskUpdated: { [weak self] task in
+                Task { @MainActor [weak self] in
+                    guard let self, self.generation == current, self.requestKey == key, self.loading else {
+                        task?.cancel()
+                        return
+                    }
+                    self.imageTask = task
+                }
+            }
+        ) { [weak self] result in
+            MainActor.assumeIsolated {
                 guard let self, self.generation == current, self.requestKey == key else { return }
-                self.animationLoading = false
-                self.animationFinished = true
+                self.imageTask = nil
+                self.loading = false
+                self.requestFinished = true
                 switch result {
                 case .success(let value):
-                    let frames = value.image.kf.frameSource?.frameCount ?? value.image.kf.imageFrameCount ?? 1
-                    // A single-frame WebP must use the sharp static foreground,
-                    // not AnimatedImageView's animation-only layer renderer.
-                    self.animatedForeground?.isHidden = frames <= 1
-                    if self.decodedImage == nil { self.installStatic(value.image) }
-                    if frames <= 1 { self.animatedForeground?.image = nil }
+                    self.failed = !self.installImage(value.image, animates: key.animates)
                 case .failure:
-                    self.animatedForeground?.image = nil
-                    self.animatedForeground?.isHidden = true
+                    self.failed = true
+                }
+                if self.failed && self.decodedCGImage == nil {
+                    self.onLoadFailure?(String(localized: "Image download or decoding failed."))
                 }
                 self.needsLayout = true
                 self.refreshVisibility()
             }
         }
+        if generation == current, requestKey == key, loading { imageTask = task }
+    }
+
+    @discardableResult
+    private func installImage(_ image: NSImage, animates: Bool) -> Bool {
+        guard installStatic(image) else { return false }
+        if animates, let source = image.kf.frameSource, source.frameCount > 1 {
+            let animated = makeAnimatedForeground()
+            animated.image = image
+            // Seed drawable content before hiding the static view. Leaving both
+            // visible would show the first frame through later transparent frames.
+            animated.layer?.contents = decodedCGImage
+            animated.layer?.contentsGravity = .resize
+            animated.isHidden = false
+            foreground.isHidden = true
+        } else {
+            animatedForeground?.image = nil
+            animatedForeground?.isHidden = true
+            foreground.isHidden = false
+        }
+        return true
     }
 
     private func makeAnimatedForeground() -> AnimatedImageView {
@@ -290,16 +342,26 @@ final class TimelineImageView: NSView {
         return view
     }
 
-    private func installStatic(_ image: NSImage) {
-        decodedImage = image
-        foreground.image = image
-        var proposed = CGRect(origin: .zero, size: image.size)
-        decodedCGImage = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil)
-        staticFailed = false
+    @discardableResult
+    private func installStatic(_ image: NSImage) -> Bool {
+        guard let pixels = TimelineImageMemory.cgImage(image) else { return false }
+        // Retain a plain drawable first frame for immediate reuse and while the
+        // animator's asynchronous frame buffer initializes.
+        let firstFrame = TimelineImageMemory.image(pixels)
+        decodedImage = firstFrame
+        foreground.image = firstFrame
+        decodedCGImage = pixels
+        failed = false
+        if let url = requestKey?.url {
+            (mediaContext?.cache ?? .default).store(
+                firstFrame, forKey: TimelineImageMemory.firstFrameKey(for: url), toDisk: false
+            )
+        }
         cancelBackdrop()
         backdrop.contents = nil
         backdropSize = .zero
         prepareBackdropIfNeeded()
+        return true
     }
 
     private func setBackdropEnabled(_ enabled: Bool) {
@@ -316,35 +378,29 @@ final class TimelineImageView: NSView {
     }
 
     private func updateChrome() {
-        let hasImage = decodedImage != nil || animatedForeground?.isHidden == false
+        let hasImage = decodedCGImage != nil
         if hasImage != reportedImageAvailability {
             reportedImageAvailability = hasImage
             onImageAvailabilityChanged?(hasImage)
         }
-        errorImage.isHidden = !showsPlaceholderChrome || !staticFailed || hasImage
-        let loading = showsPlaceholderChrome && !hasImage && !staticFailed && (requestKey?.url != nil || staticLoading)
-        progress.isHidden = !loading
-        if loading && active { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
+        errorImage.isHidden = !showsPlaceholderChrome || !failed || hasImage
+        let showProgress = showsPlaceholderChrome && !hasImage && !failed && (requestKey?.url != nil || loading)
+        progress.isHidden = !showProgress || !active
+        if showProgress && active { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
     }
 
     private func cancelRequests(preservingImages: Bool) {
         generation &+= 1
-        // Completed images and their animator stay intact in the bounded reuse
-        // cell. Only unfinished requests need their Kingfisher identifier reset.
-        if staticLoading || !preservingImages {
-            let image = preservingImages ? decodedImage : nil
-            foreground.kf.cancelDownloadTask()
-            // Cancel alone does not invalidate Kingfisher's view task identifier.
-            foreground.kf.setImage(with: Optional<URL>.none)
-            foreground.image = image
-        }
-        if animationLoading || !preservingImages {
-            animatedForeground?.kf.cancelDownloadTask()
-            animatedForeground?.kf.setImage(with: Optional<URL>.none)
-        }
+        imageTask?.cancel()
+        imageTask = nil
         animatedForeground?.stopAnimating()
-        staticLoading = isLocal && staticLoading
-        animationLoading = false
+        if !preservingImages {
+            foreground.image = nil
+            foreground.isHidden = false
+            animatedForeground?.image = nil
+            animatedForeground?.isHidden = true
+        }
+        loading = isLocal && loading
     }
 
     private func clearPayload() {
@@ -355,9 +411,9 @@ final class TimelineImageView: NSView {
         decodedImage = nil
         decodedCGImage = nil
         isLocal = false
-        staticLoading = false
-        staticFailed = false
-        animationFinished = false
+        loading = false
+        failed = false
+        requestFinished = false
         animatedForeground?.isHidden = true
         backdrop.contents = nil
         backdropSize = .zero

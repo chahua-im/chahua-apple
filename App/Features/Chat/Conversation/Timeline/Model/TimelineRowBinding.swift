@@ -22,6 +22,7 @@ struct MessageInteractionSource {
 
 struct TimelineBubbleActions {
     var openMedia: ((MessageImageGallery) -> Void)?
+    var openSticker: ((String) -> Void)?
     var openReply: ((String) -> Void)?
     var replyToMessage: ((MessageResponse) -> Void)?
     var editMessage: ((MessageResponse) -> Void)?
@@ -63,6 +64,7 @@ struct TimelineRowBinding {
 extension TimelineBubbleActions {
     func hasSameRendering(as other: Self) -> Bool {
         (openMedia == nil) == (other.openMedia == nil)
+            && (openSticker == nil) == (other.openSticker == nil)
             && (openReply == nil) == (other.openReply == nil)
             && (replyToMessage == nil) == (other.replyToMessage == nil)
             && (editMessage == nil) == (other.editMessage == nil)

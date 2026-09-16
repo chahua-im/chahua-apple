@@ -19,6 +19,7 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     var attachments: [LocalOutgoingAttachment] = []
     var dispatchClaimed = false
     var editRevision: Int64 = 0
+    var sticker: MessageStickerResponse? = nil
 
     var id: String { clientGeneratedID }
 }

@@ -112,6 +112,11 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         self.model = model
         self.actions = actions
         super.init(nibName: nil, bundle: nil)
+        registerForTraitChanges([
+            UITraitPreferredContentSizeCategory.self, UITraitDisplayScale.self, UITraitLayoutDirection.self
+        ]) { (controller: TimelineCollectionViewController, _: UITraitCollection) in
+            controller.requestDisplayUpdate()
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -340,11 +345,6 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
         requestDisplayUpdate()
     }
 
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        requestDisplayUpdate()
-    }
-
     deinit {
         highlightTask?.cancel()
         NotificationCenter.default.removeObserver(self)
@@ -390,6 +390,7 @@ final class TimelineCollectionViewController: UIViewController, UICollectionView
     private func makeRowActions() -> TimelineBubbleActions {
         .init(
             openMedia: actions.openMedia == nil ? nil : { [weak self] in self?.actions.openMedia?($0) },
+            openSticker: actions.openSticker == nil ? nil : { [weak self] in self?.actions.openSticker?($0) },
             openReply: actions.openReply == nil ? nil : { [weak self] in self?.actions.openReply?($0) },
             replyToMessage: actions.replyToMessage == nil ? nil : { [weak self] in self?.actions.replyToMessage?($0) },
             editMessage: actions.editMessage == nil ? nil : { [weak self] in self?.actions.editMessage?($0) },

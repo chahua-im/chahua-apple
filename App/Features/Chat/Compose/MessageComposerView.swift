@@ -26,6 +26,9 @@ struct MessageComposerView: View {
     var onRetryAttachment: ((String) async throws -> Void)? = nil
     var onCompressionChanged: ((Bool) async throws -> Void)? = nil
     var onReorderAttachments: (([String]) async throws -> Void)? = nil
+    var onDiscardAttachments: (() async throws -> Void)? = nil
+    var stickerLibrary: StickerLibrary? = nil
+    var onSendSticker: ((MessageStickerResponse) async -> Bool)? = nil
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showsPhotos = false
     @State private var showsFiles = false
@@ -34,6 +37,7 @@ struct MessageComposerView: View {
     @FocusState private var isInputFocused: Bool
     @State private var showsAttachmentDialog = false
     @State private var isSubmitting = false
+    @State private var showsStickerPicker = false
 
     private var isAcquiring: Bool { attachmentState.isAcquiring }
     private var imageError: String? {
@@ -45,6 +49,7 @@ struct MessageComposerView: View {
     private var hasText: Bool { !(input.editorText ?? text).isEmpty }
     private var hasContent: Bool { hasText || (editingMessage == nil && !attachments.isEmpty) }
     private var canAcquire: Bool { isEnabled && !isAcquiring && !isSubmitting && editingMessage == nil && onImportImages != nil }
+    private var canPickSticker: Bool { canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil }
 
     private var editorText: Binding<String> {
         Binding(
@@ -69,8 +74,18 @@ struct MessageComposerView: View {
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Menu {
-                    Button("Photos", systemImage: "photo.on.rectangle") { showsPhotos = true }
-                    Button("Files", systemImage: "folder") { showsFiles = true }
+                    Button("Photos", systemImage: "photo.on.rectangle") {
+                        showsStickerPicker = false
+                        input.settleNativeInput()
+                        isInputFocused = false
+                        showsPhotos = true
+                    }
+                    Button("Files", systemImage: "folder") {
+                        showsStickerPicker = false
+                        input.settleNativeInput()
+                        isInputFocused = false
+                        showsFiles = true
+                    }
                     PasteButton(supportedContentTypes: [.image, .movie, .fileURL]) { importProviders($0) }
                 } label: {
                     Image(systemName: "paperclip")
@@ -123,7 +138,7 @@ struct MessageComposerView: View {
                         .background(
                             ComposerInputBridge(
                                 input: input, draft: $text, isFocused: isInputFocused,
-                                isEnabled: isEnabled && !isAcquiring && !showsAttachmentDialog,
+                                isEnabled: isEnabled && !isAcquiring && !showsAttachmentDialog && !showsStickerPicker,
                                 onCompositionChanged: onCompositionChanged, onSubmit: submit,
                                 focusOnEntry: true
                             )
@@ -131,15 +146,15 @@ struct MessageComposerView: View {
                         )
                         .accessibilityLabel("Message")
 
-                    Button {
-                    } label: {
-                        Image(systemName: "face.smiling")
+                    Button(action: toggleStickerPicker) {
+                        Image(systemName: showsStickerPicker ? "xmark" : "face.smiling")
                             .font(.system(size: 20))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(showsStickerPicker ? ChahuaTheme.accent : .secondary)
                             .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
-                    .disabled(true)
-                    .accessibilityLabel("Emoji (unavailable)")
+                    .disabled(!showsStickerPicker && !canPickSticker)
+                    .accessibilityLabel(showsStickerPicker ? "Close stickers" : "Stickers")
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -159,17 +174,25 @@ struct MessageComposerView: View {
         }
         .buttonStyle(.plain)
         .padding(12)
+            if showsStickerPicker, let stickerLibrary {
+                StickerPickerView(library: stickerLibrary, isEnabled: canPickSticker, onSelect: sendSticker)
+            }
         }
         #if os(iOS)
         .background {
-            ComposerOutsideTapObserver(isFocused: isInputFocused) {
+            ComposerOutsideTapObserver(isFocused: isInputFocused || showsStickerPicker) {
+                showsStickerPicker = false
                 isInputFocused = false
             }
         }
         #endif
         .sheet(isPresented: $showsAttachmentDialog, onDismiss: {
             input.receiveExternalText(text)
+            #if os(macOS)
             if isEnabled { isInputFocused = true }
+            #else
+            isInputFocused = false
+            #endif
         }) {
             ComposerAttachmentDialog(
                 text: $text, attachments: attachments, progress: attachmentProgress,
@@ -181,7 +204,16 @@ struct MessageComposerView: View {
                 onCompressionChanged: { enabled in performImageOperation { try await onCompressionChanged?(enabled) } },
                 onReorder: { ids in performImageOperation { try await onReorderAttachments?(ids) } },
                 onImportProviders: importProviders,
-                onSubmit: onSubmit, onCancel: { showsAttachmentDialog = false }
+                onSubmit: onSubmit,
+                onCancel: {
+                    guard let onDiscardAttachments else {
+                        if attachments.isEmpty { return }
+                        throw APIError.unavailable
+                    }
+                    attachmentState.isAcquiring = true
+                    defer { attachmentState.isAcquiring = false }
+                    try await onDiscardAttachments()
+                }
             )
         }
         .photosPicker(isPresented: $showsPhotos, selection: $selectedPhotos, matching: .any(of: [.images, .videos]))
@@ -222,6 +254,13 @@ struct MessageComposerView: View {
         }
         .onAppear { input.receiveExternalText(text) }
         .onChange(of: text) { _, text in input.receiveExternalText(text) }
+        .onChange(of: isInputFocused) { _, focused in
+            if focused { showsStickerPicker = false }
+        }
+        .onChange(of: editingMessage?.id) { _, _ in showsStickerPicker = false }
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled { showsStickerPicker = false }
+        }
         .onChange(of: attachmentState.dropRequest?.id) { _, id in
             guard id != nil, let providers = attachmentState.takeDrop() else { return }
             importProviders(providers)
@@ -349,9 +388,32 @@ struct MessageComposerView: View {
         .padding(.top, 12)
     }
 
+    private func toggleStickerPicker() {
+        guard showsStickerPicker || canPickSticker else { return }
+        input.settleNativeInput()
+        guard !input.isComposing else { return }
+        if showsStickerPicker {
+            showsStickerPicker = false
+            isInputFocused = true
+        } else {
+            isInputFocused = false
+            showsStickerPicker = true
+        }
+    }
+
+    private func sendSticker(_ sticker: MessageStickerResponse) async -> Bool {
+        guard canPickSticker, let onSendSticker else { return false }
+        isSubmitting = true
+        defer { isSubmitting = false }
+        let sent = await onSendSticker(sticker)
+        if sent { showsStickerPicker = false }
+        return sent
+    }
+
     private func presentAttachmentDialog() {
         input.settleNativeInput()
         guard !input.isComposing else { return }
+        showsStickerPicker = false
         isInputFocused = false
         showsAttachmentDialog = true
     }

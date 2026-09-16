@@ -45,7 +45,7 @@ final class OutgoingMessageQueue: ObservableObject {
     private var attachmentWorkers: [String: (id: UUID, task: Task<Void, Never>)] = [:]
     private var preparationWorker: (id: UUID, task: Task<Void, Never>)?
     private var preparingAttachmentID: String?
-    private var importingConversations = Set<ConversationKey>()
+    private var attachmentMutationConversations = Set<ConversationKey>()
     private var authenticationFailed = false
     private var fileCleanupTask: Task<Void, Never>?
 
@@ -76,7 +76,7 @@ final class OutgoingMessageQueue: ObservableObject {
         acknowledgements = [:]
         uncommittedFailures = [:]
         attachmentProgress = [:]
-        importingConversations = []
+        attachmentMutationConversations = []
         authenticationFailed = false
         storageState = uid == nil ? .inactive : .loading
         let previous = lifecycle
@@ -175,7 +175,7 @@ final class OutgoingMessageQueue: ObservableObject {
             || !draftAttachments(chatID: chatID, threadID: threadID).isEmpty
         else { throw LocalStorageError.blankMessage }
         guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed,
-            !importingConversations.contains(ConversationKey(chatID: chatID, threadID: threadID)) else {
+            !attachmentMutationConversations.contains(ConversationKey(chatID: chatID, threadID: threadID)) else {
             throw QueueError.storageUnavailable
         }
         let current = generation
@@ -184,6 +184,27 @@ final class OutgoingMessageQueue: ObservableObject {
         do {
             try await checkpoint(.enqueue, generation: current)
             let snapshot = try await store.enqueueText(chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: id, text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision, replyToMessage: replyToMessage)
+            try checkGeneration(current)
+            publish(snapshot)
+            wakeWorker(key: snapshot.conversationKey)
+        } catch {
+            storageFailed(error, generation: current)
+            throw error
+        }
+    }
+
+    func enqueueSticker(chatID: String, threadID: String? = nil, sticker: MessageStickerResponse, replyToMessage: MessagePreview? = nil) async throws {
+        guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed else {
+            throw QueueError.storageUnavailable
+        }
+        let current = generation
+        let id = UUID().uuidString
+        let date = Date()
+        do {
+            try await checkpoint(.enqueue, generation: current)
+            let snapshot = try await store.enqueueSticker(
+                chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: id,
+                sticker: sticker, enqueuedAt: date, replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
             wakeWorker(key: snapshot.conversationKey)
@@ -404,14 +425,14 @@ final class OutgoingMessageQueue: ObservableObject {
     func importImages(urls: [URL], chatID: String, threadID: String? = nil) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard storageState == .ready, let store, let uid = requestedUID,
-            !importingConversations.contains(key)
+            !attachmentMutationConversations.contains(key)
         else { throw QueueError.storageUnavailable }
         guard draftAttachments(chatID: chatID, threadID: threadID).count + urls.count <= 20 else {
             throw LocalStorageError.invalidAttachments
         }
         let current = generation
-        importingConversations.insert(key)
-        defer { if generation == current { importingConversations.remove(key) } }
+        attachmentMutationConversations.insert(key)
+        defer { if generation == current { attachmentMutationConversations.remove(key) } }
         let snapshot = try await store.beginComposition(chatID: chatID, threadID: threadID, senderID: uid)
         try checkGeneration(current)
         publish(snapshot)
@@ -432,6 +453,15 @@ final class OutgoingMessageQueue: ObservableObject {
             try checkGeneration(current)
             publish(updated)
         }
+    }
+
+    func discardDraftAttachments(chatID: String, threadID: String? = nil) async throws {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        guard storageState == .ready, !attachmentMutationConversations.contains(key) else {
+            throw QueueError.storageUnavailable
+        }
+        guard snapshots[key]?.composingItem != nil else { return }
+        try await changeAttachments(chatID: chatID, threadID: threadID) { _ in [] }
     }
 
     func removeAttachment(id: String, chatID: String, threadID: String? = nil) async throws {
@@ -459,10 +489,15 @@ final class OutgoingMessageQueue: ObservableObject {
         transform: (LocalOutgoingMessage) throws -> [LocalOutgoingAttachment]
     ) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
-        guard storageState == .ready, let store, let item = snapshots[key]?.composingItem else {
+        guard storageState == .ready, let store, let item = snapshots[key]?.composingItem,
+            !attachmentMutationConversations.contains(key) else {
             throw QueueError.storageUnavailable
         }
         let current = generation
+        // Imports span multiple awaits; exclude edits in both directions so an
+        // in-flight import cannot append another slot after a successful discard.
+        attachmentMutationConversations.insert(key)
+        defer { if generation == current { attachmentMutationConversations.remove(key) } }
         let attachments = try transform(item)
         let snapshot = try await store.setCompositionAttachments(
             chatID: chatID, threadID: threadID, itemID: item.clientGeneratedID,
@@ -682,7 +717,7 @@ final class OutgoingMessageQueue: ObservableObject {
             guard let self, self.generation == current else { return }
             self.fileCleanupTask = nil
             guard self.storageState == .ready, self.preparationWorker == nil,
-                self.attachmentWorkers.isEmpty, self.importingConversations.isEmpty else {
+                self.attachmentWorkers.isEmpty, self.attachmentMutationConversations.isEmpty else {
                 self.scheduleFileCleanup()
                 return
             }
@@ -740,7 +775,7 @@ final class OutgoingMessageQueue: ObservableObject {
         guard generation == current, !(error is CancellationError) else { return }
         if let error = error as? LocalStorageError {
             switch error {
-            case .blankMessage, .staleDraft, .notTail, .dispatchAlreadyClaimed, .invalidAttachments:
+            case .blankMessage, .staleDraft, .notTail, .dispatchAlreadyClaimed, .invalidAttachments, .unsupportedMessageType:
                 return
             case .unsupportedSchema, .corruptRecord:
                 break

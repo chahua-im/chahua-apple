@@ -115,7 +115,7 @@ struct TimelineLayoutEngine {
         }
         var mediaFrames: [CGRect] = []
         if sticker {
-            let dimensions = row.entry.remoteMessage?.sticker?.media
+            let dimensions = row.entry.sticker?.media
             let w = CGFloat(dimensions?.width ?? 0)
             let h = CGFloat(dimensions?.height ?? 0)
             let ratio = w.isFinite && h.isFinite && w > 0 && h > 0 ? w / h : 1

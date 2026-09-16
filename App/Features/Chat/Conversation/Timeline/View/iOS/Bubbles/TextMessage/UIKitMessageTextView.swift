@@ -64,6 +64,12 @@ final class UIKitMessageTextView: UITextView {
         layout.textContainer.widthTracksTextView = false
         layout.textContainer.heightTracksTextView = false
         setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        registerForTraitChanges([
+            UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self,
+            UITraitUserInterfaceLevel.self, UITraitDisplayGamut.self, UITraitDisplayScale.self
+        ]) { (view: UIKitMessageTextView, _: UITraitCollection) in
+            view.setNeedsDisplay()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -105,11 +111,6 @@ final class UIKitMessageTextView: UITextView {
         resignFirstResponder()
         contentLayout.update(attributedText: NSAttributedString(string: ""), metadata: nil)
         selectedRange = NSRange(location: 0, length: 0)
-        setNeedsDisplay()
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
         setNeedsDisplay()
     }
 

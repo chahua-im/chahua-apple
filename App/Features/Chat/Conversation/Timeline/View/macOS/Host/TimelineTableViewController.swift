@@ -787,6 +787,7 @@ final class TimelineTableViewController: NSViewController, NSTableViewDataSource
     private func makeRowActions() -> TimelineBubbleActions {
         .init(
             openMedia: actions.openMedia == nil ? nil : { [weak self] in self?.actions.openMedia?($0) },
+            openSticker: actions.openSticker == nil ? nil : { [weak self] in self?.actions.openSticker?($0) },
             openReply: actions.openReply == nil ? nil : { [weak self] in self?.actions.openReply?($0) },
             replyToMessage: actions.replyToMessage == nil ? nil : { [weak self] in self?.actions.replyToMessage?($0) },
             editMessage: actions.editMessage == nil ? nil : { [weak self] in self?.actions.editMessage?($0) },

@@ -211,6 +211,13 @@ private actor HeldPinAPI: ChahuaAPIClient {
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
+    func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
+    func listSubscribedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
+    func listFavoriteStickers() async throws -> [MessageStickerResponse] { throw APIError.unavailable }
+    func getSticker(id: String) async throws -> StickerDetailResponse { throw APIError.unavailable }
+    func getStickerPack(id: String) async throws -> StickerPackDetailResponse { throw APIError.unavailable }
+    func setStickerFavorite(id: String, favorite: Bool) async throws { throw APIError.unavailable }
+    func setStickerPackSubscription(id: String, subscribed: Bool) async throws { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
     func archiveChat(chatID: String) async throws { throw APIError.unavailable }
     func unarchiveChat(chatID: String) async throws { throw APIError.unavailable }

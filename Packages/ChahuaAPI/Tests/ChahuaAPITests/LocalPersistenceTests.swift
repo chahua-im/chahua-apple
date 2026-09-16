@@ -4,6 +4,84 @@ import XCTest
 @testable import ChahuaAPI
 
 final class LocalPersistenceTests: XCTestCase {
+    func testStickerEnqueuePreservesCompositionAndDispatchesBeforeItsAttachmentsAcrossReopen() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let begun = try await store!.beginComposition(chatID: "chat", threadID: "thread", senderID: 1)
+        let composition = try XCTUnwrap(begun.composingItem)
+        let slot = try attachment(directory: directory, id: "image", position: 0)
+        let attached = try await store!.setCompositionAttachments(
+            chatID: "chat", threadID: "thread", itemID: composition.clientGeneratedID,
+            expectedRevision: composition.editRevision, attachments: [slot], compressionEnabled: false)
+        let saved = try await store!.saveDraft(
+            chatID: "chat", threadID: "thread", text: "keep this draft",
+            editRevision: attached.draft.editRevision + 1, updatedAt: Date(), replyToMessage: preview(id: "draft-reply"))
+        let sticker = MessageStickerResponse(
+            id: "sticker", emoji: "wave", createdAt: Date(timeIntervalSince1970: 1),
+            isFavorited: true,
+            media: MessageStickerMediaResponse(id: "media", url: "https://example.test/sticker.webp",
+                contentType: "image/webp", size: 123, width: 200, height: 150),
+            name: "Wave", description: "A wave")
+        let reply = preview(id: "sticker-reply")
+        let enqueued = try await store!.enqueueSticker(
+            chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: "selected-sticker",
+            sticker: sticker, enqueuedAt: Date(timeIntervalSince1970: 2), replyToMessage: reply)
+        XCTAssertEqual(enqueued.draft, saved.draft)
+        XCTAssertEqual(enqueued.composingItem?.clientGeneratedID, composition.clientGeneratedID)
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        XCTAssertEqual(restored.first?.draft, saved.draft)
+        XCTAssertEqual(restored.first?.outgoing.first?.sticker, sticker)
+        let claim = try await store!.claimNext(chatID: "chat", threadID: "thread")
+        XCTAssertEqual(claim.message?.body, CreateMessageBody(
+            messageType: .sticker, clientGeneratedId: "selected-sticker", replyToId: reply.id, stickerId: sticker.id))
+        XCTAssertEqual(claim.message?.replyToMessage, reply)
+        let acknowledged = try await store!.acknowledge(chatID: "chat", threadID: "thread", clientGeneratedID: "selected-sticker")
+        XCTAssertTrue(acknowledged.outgoing.isEmpty)
+        XCTAssertEqual(acknowledged.draft, saved.draft)
+
+        var uploaded = try XCTUnwrap(acknowledged.composingItem?.attachments.first)
+        uploaded.attachmentID = "uploaded-image"
+        _ = try await store!.checkpointAttachment(
+            chatID: "chat", threadID: "thread", itemID: composition.clientGeneratedID, attachment: uploaded)
+        _ = try await store!.enqueueText(
+            chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: "unused",
+            text: saved.draft.text, enqueuedAt: Date(), clearedDraftRevision: saved.draft.editRevision + 1,
+            replyToMessage: saved.draft.replyToMessage)
+        let imageClaim = try await store!.claimNext(chatID: "chat", threadID: "thread")
+        XCTAssertEqual(imageClaim.message?.body.messageType, .text)
+        XCTAssertEqual(imageClaim.message?.body.message, "keep this draft")
+        XCTAssertEqual(imageClaim.message?.body.attachmentIds, ["uploaded-image"])
+        XCTAssertEqual(imageClaim.message?.body.replyToId, "draft-reply")
+        XCTAssertNil(imageClaim.message?.body.stickerId)
+    }
+
+    func testStickerCannotBecomeTextCompositionButCanBeRevokedBeforeDispatch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        let sticker = MessageStickerResponse(
+            id: "sticker", emoji: "wave", createdAt: Date(timeIntervalSince1970: 1), isFavorited: nil,
+            media: MessageStickerMediaResponse(id: "media", url: "https://example.test/sticker.webp",
+                contentType: "image/webp", size: 123, width: nil, height: nil),
+            name: nil, description: nil)
+        _ = try await store.enqueueSticker(chatID: "chat", senderID: 1, clientGeneratedID: "sticker-send",
+            sticker: sticker, enqueuedAt: Date())
+        do {
+            _ = try await store.blockTail(chatID: "chat", itemID: "sticker-send", expectedRevision: 0)
+            XCTFail("A sticker must not be converted into an empty text draft")
+        } catch LocalStorageError.unsupportedMessageType { }
+        let restored = try await store.restore()
+        XCTAssertNil(restored.first?.composingItem)
+        XCTAssertEqual(restored.first?.outgoing.first?.body.messageType, .sticker)
+        let revoked = try await store.revokeTail(chatID: "chat", itemID: "sticker-send", expectedRevision: 0)
+        XCTAssertTrue(revoked.outgoing.isEmpty)
+        let claim = try await store.claimNext(chatID: "chat")
+        XCTAssertNil(claim.message)
+    }
+
     func testLegacyDraftMigrationPreservesIdentityRevisionsAndRestoresFIFO() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -344,6 +422,54 @@ final class LocalPersistenceTests: XCTestCase {
             _ = try await store.enqueueText(chatID: "chat", senderID: 1, clientGeneratedID: "stale", text: "", enqueuedAt: Date(), clearedDraftRevision: completed.draft.editRevision)
             XCTFail("An old composer must not release a newly edited composition")
         } catch LocalStorageError.staleDraft { }
+    }
+
+    func testDiscardedDraftAttachmentsRejectLatePreparationAndUploadAcrossReopen() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let begun = try await store!.beginComposition(chatID: "chat", senderID: 1)
+        let item = try XCTUnwrap(begun.composingItem)
+        var preparing = try attachment(directory: directory, id: "preparing", position: 0)
+        var uploading = try attachment(directory: directory, id: "uploading", position: 1)
+        uploading.preparedPath = uploading.sourcePath
+        let attached = try await store!.setCompositionAttachments(
+            chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision,
+            attachments: [preparing, uploading], compressionEnabled: true)
+        let reply = preview(id: "target")
+        let saved = try await store!.saveDraft(
+            chatID: "chat", text: "keep this caption", editRevision: attached.draft.editRevision + 1,
+            updatedAt: Date(), replyToMessage: reply)
+        let discarded = try await store!.setCompositionAttachments(
+            chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: saved.draft.editRevision,
+            attachments: [], compressionEnabled: true)
+        XCTAssertTrue(discarded.draft.attachments.isEmpty)
+        XCTAssertEqual(discarded.draft.text, saved.draft.text)
+        XCTAssertEqual(discarded.draft.replyToMessage, reply)
+
+        // The blocked composition still exists; its retired slot IDs must not be recreated.
+        preparing.preparedPath = preparing.sourcePath
+        let latePreparation = try await store!.checkpointAttachment(
+            chatID: "chat", itemID: item.clientGeneratedID, attachment: preparing)
+        XCTAssertEqual(latePreparation, discarded)
+        uploading.attachmentID = "late-upload"
+        let lateUpload = try await store!.checkpointAttachment(
+            chatID: "chat", itemID: item.clientGeneratedID, attachment: uploading)
+        XCTAssertEqual(lateUpload, discarded)
+
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        XCTAssertEqual(restored.first, discarded)
+        _ = try await store!.enqueueText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "unused", text: discarded.draft.text,
+            enqueuedAt: Date(), clearedDraftRevision: discarded.draft.editRevision + 1,
+            replyToMessage: discarded.draft.replyToMessage)
+        let claim = try await store!.claimNext(chatID: "chat")
+        XCTAssertEqual(claim.message?.body.clientGeneratedId, item.clientGeneratedID)
+        XCTAssertEqual(claim.message?.body.message, "keep this caption")
+        XCTAssertEqual(claim.message?.body.replyToId, reply.id)
+        XCTAssertEqual(claim.message?.body.attachmentIds, [])
     }
 
     func testRevocationIgnoresLateUploadAndCannotResurrectComposition() async throws {

@@ -41,7 +41,7 @@ struct AppRootView: View {
             realtimeCoordinator.setSceneActive(id: sceneID, active: scenePhase == .active)
             notifications.setSceneActive(id: sceneID, active: scenePhase == .active)
         }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase) { _, phase in
             realtimeCoordinator.setSceneActive(id: sceneID, active: phase == .active)
             notifications.setSceneActive(id: sceneID, active: phase == .active)
         }

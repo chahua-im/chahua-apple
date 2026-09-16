@@ -46,6 +46,13 @@ enum ConversationTimelineEntry: Hashable {
         }
     }
 
+    var sticker: MessageStickerResponse? {
+        switch self {
+        case .remote(let message): message.isDeleted ? nil : message.sticker
+        case .pending(let pending): pending.sticker
+        }
+    }
+
     var replyToMessage: MessagePreview? {
         switch self {
         case .remote(let message): message.replyToMessage

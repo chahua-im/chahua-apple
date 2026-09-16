@@ -42,6 +42,9 @@ final class TimelineBubbleContentView: UIView {
         sectionMask.actions = ["path": NSNull(), "bounds": NSNull(), "position": NSNull()]
         sections.layer.mask = sectionMask
         addSubview(sections)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TimelineBubbleContentView, _: UITraitCollection) in
+            view.updateSurface()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -184,11 +187,6 @@ final class TimelineBubbleContentView: UIView {
         return super.hitTest(point, with: event)
     }
 
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        updateSurface()
-    }
-
     private var isFilled: Bool {
         guard let binding, case .message(let row) = binding.presentation.row else { return false }
         let sticker = row.entry.messageType == .sticker && row.entry.remoteMessage?.isDeleted != true
@@ -303,6 +301,9 @@ private final class TimelineHeaderView: UIView {
         addSubview(name); addSubview(group); addSubview(gender)
         isAccessibilityElement = true
         accessibilityTraits = .staticText
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TimelineHeaderView, _: UITraitCollection) in
+            view.updateColors()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -333,11 +334,6 @@ private final class TimelineHeaderView: UIView {
         groupSurface.frame = groupFrame
         group.frame = groupFrame.insetBy(dx: min(5, groupFrame.width / 2), dy: 0)
         gender.frame = itemFrames.count > 2 ? itemFrames[2] : .zero
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        updateColors()
     }
 
     private func updateColors() {
@@ -381,6 +377,9 @@ private final class TimelineReplyView: UIControl {
         addSubview(marker)
         addTarget(self, action: #selector(activate), for: .touchUpInside)
         isAccessibilityElement = true
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TimelineReplyView, _: UITraitCollection) in
+            view.updateColors()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -418,11 +417,6 @@ private final class TimelineReplyView: UIControl {
         stripe.frame = CGRect(x: 0, y: 0, width: min(3, bounds.width), height: bounds.height)
         author.frame = contentFrames.first ?? .zero
         previewLabel.frame = contentFrames.count > 1 ? contentFrames[1] : .zero
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        updateColors()
     }
 
     @objc private func activate() {
@@ -464,6 +458,12 @@ private final class TimelineMetadataView: UIView {
         layer.masksToBounds = true
         isAccessibilityElement = true
         accessibilityTraits = .staticText
+        registerForTraitChanges([
+            UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self,
+            UITraitUserInterfaceLevel.self, UITraitDisplayGamut.self, UITraitDisplayScale.self
+        ]) { (view: TimelineMetadataView, _: UITraitCollection) in
+            view.setNeedsDisplay()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -547,11 +547,6 @@ private final class TimelineMetadataView: UIView {
         metadata?.draw(in: drawingFrame, drawsSymbol: failureButton?.isHidden != false)
     }
 
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        setNeedsDisplay()
-    }
-
     @objc private func openFailure() {
         guard metadata?.state == .failed else { return }
         failureAction?()
@@ -585,6 +580,11 @@ private final class BubbleStandaloneView: UIView {
         isAccessibilityElement = true
         accessibilityTraits = .staticText
         clipsToBounds = true
+        registerForTraitChanges([
+            UITraitUserInterfaceStyle.self, UITraitDisplayScale.self, UITraitLayoutDirection.self
+        ]) { (view: BubbleStandaloneView, _: UITraitCollection) in
+            view.updatePaint()
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -600,11 +600,6 @@ private final class BubbleStandaloneView: UIView {
         text = ""; attributed = NSAttributedString(string: ""); symbol = nil
         accessibilityLabel = nil
         setNeedsDisplay()
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        updatePaint()
     }
 
     private func updatePaint() {

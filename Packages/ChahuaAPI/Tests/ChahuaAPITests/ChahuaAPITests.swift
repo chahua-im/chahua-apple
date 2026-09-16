@@ -427,6 +427,102 @@ final class ChahuaAPITests: XCTestCase {
         }
     }
 
+    func testStickerLibraryAndFlatDetailsDecodeServerResponses() async throws {
+        let sticker = #"""
+        {"id":"sticker-one","emoji":":wave:","createdAt":"2026-09-01T01:02:03.456Z","isFavorited":true,
+         "media":{"id":"media-one","url":"https://cdn.example/sticker.webm","contentType":"video/webm","size":4096,"width":320,"height":null}}
+        """#
+        let pack = #"""
+        {"id":"pack-one","ownerUid":42,"ownerName":null,"name":"Greetings","description":"Hello",
+         "createdAt":"2026-09-01T01:02:03Z","updatedAt":"2026-09-01T01:02:04.250Z",
+         "stickerCount":1,"isSubscribed":true,
+         "previewSticker":{"id":"sticker-one","emoji":":wave:",
+           "media":{"id":"media-one","url":"https://cdn.example/sticker.webm","contentType":"video/webm","size":4096}}}
+        """#
+        let flatPack = String(pack.dropLast()) + ",\"stickers\":[\(sticker)]}"
+        let flatSticker = String(sticker.dropLast()) + ",\"packs\":[\(pack)]}"
+        StubURLProtocol.handler = { request in
+            guard request.httpMethod == "GET",
+                  request.value(forHTTPHeaderField: "Authorization") == "Bearer candidate" else { return (403, "") }
+            switch request.url?.path {
+            case "/stickers/packs/mine/owned", "/stickers/packs/mine/subscribed":
+                return (200, "{\"packs\":[\(pack)]}")
+            case "/stickers/mine/favorites":
+                return (200, "{\"stickers\":[\(sticker)]}")
+            case "/stickers/packs/pack-one":
+                return (200, flatPack)
+            case "/stickers/sticker-one":
+                return (200, flatSticker)
+            default:
+                return (404, "")
+            }
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        let owned = try await client.listOwnedStickerPacks()
+        let subscribed = try await client.listSubscribedStickerPacks()
+        let favorites = try await client.listFavoriteStickers()
+        let packDetail = try await client.getStickerPack(id: "pack-one")
+        let stickerDetail = try await client.getSticker(id: "sticker-one")
+
+        XCTAssertEqual(owned.map(\.id), ["pack-one"])
+        XCTAssertEqual(subscribed, owned)
+        XCTAssertEqual(packDetail.pack, owned.first)
+        XCTAssertEqual(packDetail.stickers, favorites)
+        XCTAssertEqual(stickerDetail.sticker, favorites.first)
+        XCTAssertEqual(stickerDetail.packs, owned)
+        XCTAssertEqual(packDetail.pack.ownerUid, 42)
+        XCTAssertNil(packDetail.pack.ownerName)
+        XCTAssertEqual(packDetail.pack.updatedAt.timeIntervalSince(packDetail.pack.createdAt), 1.25, accuracy: 0.0001)
+        XCTAssertEqual(packDetail.pack.previewSticker?.media.contentType, "video/webm")
+        XCTAssertNil(packDetail.pack.previewSticker?.media.width)
+        XCTAssertEqual(stickerDetail.sticker.isFavorited, true)
+        XCTAssertNil(stickerDetail.sticker.name)
+        XCTAssertEqual(stickerDetail.sticker.media.width, 320)
+        XCTAssertNil(stickerDetail.sticker.media.height)
+    }
+
+    func testStickerMutationsUseBodylessPutAndDeleteAndPreserveErrors() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            if request.url?.path == "/stickers/forbidden/favorite" { return (403, "Forbidden") }
+            return (204, "")
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        try await client.setStickerFavorite(id: "sticker/one", favorite: true)
+        try await client.setStickerFavorite(id: "sticker/one", favorite: false)
+        try await client.setStickerPackSubscription(id: "pack#one", subscribed: true)
+        try await client.setStickerPackSubscription(id: "pack#one", subscribed: false)
+
+        let components = try requests.values.map {
+            try XCTUnwrap(URLComponents(url: try XCTUnwrap($0.url), resolvingAgainstBaseURL: false))
+        }
+        XCTAssertEqual(components.map(\.percentEncodedPath), [
+            "/stickers/sticker%2Fone/favorite", "/stickers/sticker%2Fone/favorite",
+            "/stickers/packs/pack%23one/subscription", "/stickers/packs/pack%23one/subscription",
+        ])
+        XCTAssertEqual(requests.values.map(\.httpMethod), ["PUT", "DELETE", "PUT", "DELETE"])
+        for request in requests.values {
+            XCTAssertNil(request.httpBody)
+            XCTAssertNil(request.url?.query)
+            XCTAssertNil(request.url?.fragment)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+        }
+        do {
+            try await client.setStickerFavorite(id: "forbidden", favorite: true)
+            XCTFail("A failed favorite mutation must not report success")
+        } catch APIError.http(let status, let body) {
+            XCTAssertEqual(status, 403)
+            XCTAssertEqual(body, Data("Forbidden".utf8))
+        }
+    }
+
     private func testSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

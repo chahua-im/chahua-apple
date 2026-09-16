@@ -88,6 +88,17 @@ public protocol ChahuaAPIClient: Sendable {
     func createPin(chatID: String, messageID: String) async throws -> PinResponse
     func deletePin(chatID: String, pinID: String) async throws
 
+    /// Sticker library snapshots and flat sticker/pack detail responses.
+    func listOwnedStickerPacks() async throws -> [StickerPackSummary]
+    func listSubscribedStickerPacks() async throws -> [StickerPackSummary]
+    func listFavoriteStickers() async throws -> [MessageStickerResponse]
+    func getSticker(id: String) async throws -> StickerDetailResponse
+    func getStickerPack(id: String) async throws -> StickerPackDetailResponse
+
+    /// Idempotent PUT/DELETE mutations; success has no response body.
+    func setStickerFavorite(id: String, favorite: Bool) async throws
+    func setStickerPackSubscription(id: String, subscribed: Bool) async throws
+
     /// Sends a message with `POST /chats/{chatID}/messages`.
     ///
     /// `clientGeneratedId` in the body identifies the client-side send attempt;

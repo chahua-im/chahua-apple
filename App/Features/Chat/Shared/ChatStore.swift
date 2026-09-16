@@ -31,7 +31,9 @@ struct ChatState: Equatable {
 final class ChatStore: ObservableObject {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "conversations")
     @Published private(set) var state = ChatState()
-    @Published var currentUserProfile: MeResponse?
+    @Published var currentUserProfile: MeResponse? {
+        didSet { stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? []) }
+    }
     @Published private(set) var pendingListActions = Set<ConversationKey>()
     @Published var listActionError: String?
     @Published private(set) var deletingMessageIDs = Set<String>()
@@ -40,6 +42,7 @@ final class ChatStore: ObservableObject {
     let reactions: MessageReactionController
     let pins: ChatPinController
     let drafts: ChatDraftStore
+    let stickers: StickerLibrary
     var onNotificationRead: ((ConversationKey, String) -> Void)?
     private var outgoingObservation: AnyCancellable?
     private var storageObservation: AnyCancellable?
@@ -104,6 +107,7 @@ final class ChatStore: ObservableObject {
             apiClient: apiClient, messageStore: conversationMessages, onInvalidToken: onInvalidToken
         )
         pins = ChatPinController(apiClient: apiClient, onInvalidToken: onInvalidToken)
+        stickers = StickerLibrary(apiClient: apiClient, onInvalidToken: onInvalidToken)
         outgoingObservation = outgoingQueue.events.sink { [weak self] event in
             self?.applyOutgoingEvent(event)
         }
@@ -142,11 +146,15 @@ final class ChatStore: ObservableObject {
             }
             return PendingOutgoingMessage(
                 chatID: message.chatID, threadID: message.threadID, clientGeneratedID: message.clientGeneratedID,
-                body: .init(messageType: .text, clientGeneratedId: message.clientGeneratedID, message: message.text, replyToId: message.replyToMessage?.id),
+                body: .init(
+                    messageType: message.sticker == nil ? .text : .sticker,
+                    clientGeneratedId: message.clientGeneratedID,
+                    message: message.sticker == nil ? message.text : nil,
+                    replyToId: message.replyToMessage?.id, stickerId: message.sticker?.id),
                 enqueuedAt: message.enqueuedAt, senderID: message.senderID,
                 state: state, replyToMessage: message.replyToMessage,
                 attachments: message.attachments, dispatchClaimed: message.dispatchClaimed,
-                editRevision: message.editRevision
+                editRevision: message.editRevision, sticker: message.sticker
             )
         }
     }
@@ -553,8 +561,10 @@ final class ChatStore: ObservableObject {
             invalidateChatList()
         case .friendRequestResolved, .friendshipRemoved:
             invalidateChatList()
+        case .stickerPackOrderUpdated(let payload):
+            stickers.setPackOrder(payload.order)
         case .pong, .presenceUpdate, .pinAdded, .threadPinAdded,
-             .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated, .friendRequestReceived:
+             .pinRemoved, .threadPinRemoved, .friendRequestReceived:
             break
         case .unknown:
             break
@@ -757,6 +767,7 @@ final class ChatStore: ObservableObject {
         cancelRealtimeRecovery()
         reactions.reset()
         pins.reset()
+        stickers.reset()
         conversationMessages.reset()
         state = ChatState()
     }

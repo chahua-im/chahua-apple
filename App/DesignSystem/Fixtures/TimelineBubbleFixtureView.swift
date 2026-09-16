@@ -168,7 +168,7 @@
                 Toggle("Dark", isOn: $dark)
                 Toggle("Action hooks", isOn: $handlersEnabled)
                 Toggle("Thread scope", isOn: $threadScope)
-                    .onChange(of: threadScope) { value in fixture.setThreadScope(value) }
+                    .onChange(of: threadScope) { _, value in fixture.setThreadScope(value) }
                 HStack {
                     Button("Queue") { Task { await fixture.queue() } }
                         .disabled(fixture.hasQueued)

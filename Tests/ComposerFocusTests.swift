@@ -1,3 +1,4 @@
+import ChahuaAPI
 import Combine
 import SwiftUI
 import XCTest
@@ -278,6 +279,47 @@ final class ComposerFocusTests: XCTestCase {
         }
     #endif
 
+    #if os(iOS)
+    func testAttachmentCaptionAndSendRemainAboveKeyboardWithPortraitPreview() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        let data = try makeMediaPNG(red: 40, green: 120, blue: 200, width: 300, height: 900)
+        try data.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let h = try await mount(text: "Keep this caption", caption: true)
+        h.state.media = [LocalOutgoingAttachment(
+            id: "portrait", generation: "original", position: 0,
+            sourcePath: file.path, previewPath: file.path, fileName: "portrait.png",
+            mimeType: "image/png", width: 300, height: 900, byteCount: Int64(data.count))]
+        // A reduced safe area also exercises compact space when the test host uses a hardware keyboard.
+        h.host.additionalSafeAreaInsets.bottom = 100
+        try await Task.sleep(for: .milliseconds(600))
+        h.host.view.layoutIfNeeded()
+        let editor = try XCTUnwrap(try h.focusedEditor() as? UIView)
+        let caption = editor.convert(editor.bounds, to: h.host.view)
+        let send = try XCTUnwrap(h.accessibilityElement(named: "Send"))
+        let sendFrame = h.host.view.convert(
+            h.window.convert(send.accessibilityFrame, from: h.window.screen.coordinateSpace), from: h.window)
+        let bottom = min(h.host.view.safeAreaLayoutGuide.layoutFrame.maxY, h.host.view.keyboardLayoutGuide.layoutFrame.minY)
+        XCTAssertGreaterThan(caption.height, 0)
+        XCTAssertGreaterThanOrEqual(caption.minY, h.host.view.safeAreaLayoutGuide.layoutFrame.minY)
+        XCTAssertLessThanOrEqual(caption.maxY, bottom + 1)
+        XCTAssertGreaterThan(sendFrame.height, 0)
+        XCTAssertLessThanOrEqual(sendFrame.maxY, bottom + 1)
+        let image = UIGraphicsImageRenderer(bounds: h.window.bounds).image { _ in
+            h.window.drawHierarchy(in: h.window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Attachment caption above keyboard"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let hideKeyboard = try XCTUnwrap(h.accessibilityElement(named: "Hide keyboard"))
+        XCTAssertTrue(hideKeyboard.accessibilityActivate())
+        try await pause()
+        XCTAssertFalse(editor.isFirstResponder)
+        XCTAssertEqual(h.state.text, "Keep this caption")
+    }
+    #endif
+
     private func pause() async throws { try await Task.sleep(for: .milliseconds(200)) }
 
     private func mount(text: String, enabled: Bool = true, caption: Bool = false) async throws -> FocusComposerHarness {
@@ -298,6 +340,7 @@ private final class FocusComposerState: ObservableObject {
     @Published var text: String
     @Published var enabled = true
     @Published var canSend = true
+    @Published var media: [LocalOutgoingAttachment] = []
     let caption: Bool
     @Published var showsComposer = true
     var composing = false
@@ -317,7 +360,7 @@ private struct FocusComposerRoot: View {
             Spacer()
             if state.caption {
                 ComposerAttachmentDialog(
-                    text: $state.text, attachments: [], progress: [:],
+                    text: $state.text, attachments: state.media, progress: [:],
                     compressionEnabled: true, isEnabled: state.enabled, canSend: state.canSend,
                     isAcquiring: false, attachmentError: nil,
                     onCompositionChanged: { state.composing = $0 },
@@ -505,18 +548,21 @@ private final class FocusComposerHarness {
     #else
         @discardableResult
         func pressSendButton() -> Bool {
-            func activate(_ element: NSObject) -> Bool {
-                if element.accessibilityLabel == "Send message" { return element.accessibilityActivate() }
+            accessibilityElement(named: "Send message")?.accessibilityActivate() ?? false
+        }
+
+        func accessibilityElement(named label: String) -> NSObject? {
+            func find(_ element: NSObject) -> NSObject? {
+                if element.accessibilityLabel == label { return element }
                 let count = element.accessibilityElementCount()
-                let exposed =
-                    count > 0 && count < 1000
+                let exposed = count > 0 && count < 1000
                     ? (0..<count).compactMap { element.accessibilityElement(at: $0) } : []
-                return (exposed + ((element as? UIView)?.subviews ?? [])).contains {
-                    guard let child = $0 as? NSObject else { return false }
-                    return activate(child)
+                for child in exposed + ((element as? UIView)?.subviews ?? []) {
+                    if let child = child as? NSObject, let match = find(child) { return match }
                 }
+                return nil
             }
-            return activate(host.view)
+            return find(host.view)
         }
     #endif
 

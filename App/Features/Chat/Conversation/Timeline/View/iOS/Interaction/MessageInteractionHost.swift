@@ -64,10 +64,10 @@ struct MessageInteractionHost<Content: View>: View {
                         )
                     })
             }
-            .onChange(of: model.rows) { _ in
+            .onChange(of: model.rows) { _, _ in
                 if target != nil && selectedRow == nil { target = nil }
             }
-            .onChange(of: scenePhase) { phase in
+            .onChange(of: scenePhase) { _, phase in
                 if phase != .active { target = nil }
             }
             .onDisappear { target = nil }
@@ -82,6 +82,7 @@ struct MessageInteractionHost<Content: View>: View {
                 mediaContext: mediaContext, actions: actions,
                 animation: animation,
                 onBlock: { pending in
+                    guard pending.sticker == nil else { return }
                     self.target = nil
                     actions.blockPendingMessage?(pending)
                 },
@@ -208,7 +209,7 @@ private struct MessageInteractionOverlay: View {
                         .background {
                             GeometryReader { size in
                                 Color.clear.onAppear { reactionHeight = size.size.height }
-                                    .onChange(of: size.size.height) { reactionHeight = $0 }
+                                    .onChange(of: size.size.height) { _, height in reactionHeight = height }
                             }
                         }
                         .frame(width: placement.reactionFrame.width, height: placement.reactionFrame.height)
@@ -223,7 +224,7 @@ private struct MessageInteractionOverlay: View {
                            actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID) {
                             VStack(spacing: 0) {
                                 Button("Move back to composer", systemImage: "square.and.pencil") { onBlock(pending) }
-                                    .disabled(actions.blockPendingMessage == nil)
+                                    .disabled(actions.blockPendingMessage == nil || pending.sticker != nil)
                                     .frame(maxWidth: .infinity, minHeight: 44)
                                 Divider()
                                 Button("Revoke unsent message", systemImage: "trash", role: .destructive) { onRevoke(pending) }
@@ -240,7 +241,7 @@ private struct MessageInteractionOverlay: View {
                     .background {
                         GeometryReader { size in
                             Color.clear.onAppear { actionsHeight = size.size.height }
-                                .onChange(of: size.size.height) { actionsHeight = $0 }
+                                .onChange(of: size.size.height) { _, height in actionsHeight = height }
                         }
                     }
                 }

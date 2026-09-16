@@ -192,6 +192,30 @@ final class ChatDraftStore: ObservableObject {
         }
     }
 
+    func discardAttachments(chatID: String, threadID: String? = nil) async throws {
+        let requestGeneration = generation
+        try await flushForAttachmentChange(chatID: chatID, threadID: threadID)
+        guard generation == requestGeneration else { throw CancellationError() }
+        try await outgoingQueue.discardDraftAttachments(chatID: chatID, threadID: threadID)
+    }
+
+    func submitSticker(_ sticker: MessageStickerResponse, chatID: String, threadID: String? = nil) async throws -> Bool {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let requestGeneration = generation
+        let reply = draftReplies[key]
+        try await flushForAttachmentChange(chatID: chatID, threadID: threadID)
+        guard generation == requestGeneration, !committingDrafts.contains(key),
+              !composingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
+        committingDrafts.insert(key)
+        defer { if generation == requestGeneration { committingDrafts.remove(key) } }
+        try await outgoingQueue.enqueueSticker(chatID: chatID, threadID: threadID, sticker: sticker, replyToMessage: reply)
+        guard generation == requestGeneration else { return false }
+        if draftReplies[key]?.id == reply?.id {
+            setDraftReply(nil, chatID: chatID, threadID: threadID)
+        }
+        return true
+    }
+
     func flushAll() async {
         let requestGeneration = generation
         for key in Array(drafts.keys) {

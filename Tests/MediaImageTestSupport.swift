@@ -65,10 +65,55 @@ private func makeSolidMediaImage(
     return try XCTUnwrap(context.makeImage())
 }
 
-func makeMediaWebPCheckerboard() throws -> Data {
-    try XCTUnwrap(Data(base64Encoded: """
+func makeMediaWebPCheckerboard(animated: Bool = false) throws -> Data {
+    let data = try XCTUnwrap(Data(base64Encoded: """
     UklGRhICAABXRUJQVlA4WAoAAAAgAAAAHwAAHwAASUNDUMgBAAAAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADZWUDhMIwAAAC8fwAcADzD/8z//8x94EAgkCPtbBjJARP/rUFVVVQUAsL8AAA==
     """))
+    guard animated else { return data }
+
+    // Reuse the existing lossless checkerboard, moving it between the halves
+    // of a transparent canvas. No second encoded/binary fixture is needed.
+    func littleEndian(_ value: Int, count: Int) -> Data {
+        Data((0 ..< count).map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) })
+    }
+    func chunk(_ name: String, _ payload: Data) -> Data {
+        var result = Data(name.utf8)
+        result.append(littleEndian(payload.count, count: 4))
+        result.append(payload)
+        if payload.count % 2 != 0 { result.append(0) }
+        return result
+    }
+    var framePayload = Data()
+    var offset = 12
+    while offset + 8 <= data.count {
+        let name = String(decoding: data[offset ..< offset + 4], as: UTF8.self)
+        let size = (0 ..< 4).reduce(0) { $0 | Int(data[offset + 4 + $1]) << ($1 * 8) }
+        let end = offset + 8 + size + size % 2
+        guard end <= data.count else { throw CocoaError(.fileReadCorruptFile) }
+        if name == "VP8L" { framePayload = data.subdata(in: offset ..< end) }
+        offset = end
+    }
+    guard !framePayload.isEmpty else { throw CocoaError(.fileReadCorruptFile) }
+    var extended = Data([0x12, 0, 0, 0]) // Animation and transparency.
+    extended.append(littleEndian(63, count: 3))
+    extended.append(littleEndian(31, count: 3))
+    var body = Data("WEBP".utf8)
+    body.append(chunk("VP8X", extended))
+    body.append(chunk("ANIM", Data(repeating: 0, count: 6)))
+    for x in [0, 16] { // WebP frame positions are stored in two-pixel units.
+        var frame = littleEndian(x, count: 3)
+        frame.append(littleEndian(0, count: 3))
+        frame.append(littleEndian(31, count: 3))
+        frame.append(littleEndian(31, count: 3))
+        frame.append(littleEndian(200, count: 3))
+        frame.append(3) // Replace pixels and dispose to the transparent background.
+        frame.append(framePayload)
+        body.append(chunk("ANMF", frame))
+    }
+    var result = Data("RIFF".utf8)
+    result.append(littleEndian(body.count, count: 4))
+    result.append(body)
+    return result
 }
 
 final class MediaImageFixture: @unchecked Sendable {

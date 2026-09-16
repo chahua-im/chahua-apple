@@ -34,6 +34,11 @@ struct ChatDetailView: View {
     @State private var pinToUnpin: PinResponse?
     @State private var messageToDelete: MessageResponse?
     @State private var deleteError = false
+    @State private var stickerToView: StickerSelection?
+
+    private struct StickerSelection: Identifiable {
+        let id: String
+    }
 
     init(
         chat: ChatListItem,
@@ -83,6 +88,9 @@ struct ChatDetailView: View {
         .task { await loadInteractionPermissions() }
         .task {
             if threadID == nil { await pins.load(chatID: chat.id, force: true) }
+        }
+        .sheet(item: $stickerToView) { selection in
+            StickerPackSheet(stickerID: selection.id, library: store.stickers, currentUserID: model.currentUserID)
         }
         .alert("Unpin Message", isPresented: Binding(
             get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
@@ -282,7 +290,12 @@ struct ChatDetailView: View {
                                     onReorderAttachments: { ids in
                                         try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
                                         try await outgoingQueue.reorderAttachments(ids: ids, chatID: chat.id, threadID: threadID)
-                                    }
+                                    },
+                                    onDiscardAttachments: {
+                                        try await drafts.discardAttachments(chatID: chat.id, threadID: threadID)
+                                    },
+                                    stickerLibrary: store.stickers,
+                                    onSendSticker: sendSticker
                                 )
                             }
                         })
@@ -309,6 +322,7 @@ struct ChatDetailView: View {
     private var bubbleActions: TimelineBubbleActions {
         var actions = TimelineBubbleActions()
         if let imageDetailPresenter { actions.openMedia = imageDetailPresenter.present }
+        actions.openSticker = { stickerToView = StickerSelection(id: $0) }
         actions.currentUserProfile = store.currentUserProfile
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
         actions.pinnedMessageIDs = Set(chatPins.map { $0.message.id })
@@ -324,7 +338,7 @@ struct ChatDetailView: View {
         actions.blockPendingMessage = { pending in changePending(pending, revoke: false) }
         actions.revokePendingMessage = { pending in changePending(pending, revoke: true) }
         actions.openLink = { url in
-            _ = openURL(url)
+            openURL(url)
         }
         if threadID == nil, onOpenThread != nil {
             actions.openThread = { id in
@@ -443,6 +457,20 @@ struct ChatDetailView: View {
         return outgoingQueue.storageState == .ready && !drafts.committingDrafts.contains(conversationKey)
     }
 
+    private func sendSticker(_ sticker: MessageStickerResponse) async -> Bool {
+        guard interactionContext.canWrite, editingMessage == nil,
+              outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
+        else { return false }
+        do {
+            let sent = try await drafts.submitSticker(sticker, chatID: chat.id, threadID: threadID)
+            if sent { await model.revealLatestAfterSend() }
+            return sent
+        } catch {
+            outboxError = error.localizedDescription
+            return false
+        }
+    }
+
     private func submitComposer() async -> Bool {
         guard let message = editingMessage else {
             let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID)
@@ -501,7 +529,8 @@ struct ChatDetailView: View {
     }
 
     private func changePending(_ pending: PendingOutgoingMessage, revoke: Bool) {
-        guard !pending.dispatchClaimed, !drafts.committingDrafts.contains(conversationKey), editingMessage == nil else { return }
+        guard !pending.dispatchClaimed, (revoke || pending.sticker == nil),
+              !drafts.committingDrafts.contains(conversationKey), editingMessage == nil else { return }
         Task {
             do {
                 try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)

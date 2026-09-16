@@ -39,8 +39,10 @@ final class TimelineMediaView: NSView {
             itemFrames = [CGRect(origin: .zero, size: mediaFrame.size)]
             let tile = tile(at: 0)
             tile.frame = itemFrames[0]
-            tile.configureSticker(row.entry.remoteMessage?.sticker, displayScale: environment.displayScale,
-                                  captionSize: environment.captionSize, mediaContext: binding.mediaContext)
+            tile.configureSticker(row.entry.sticker, displayScale: environment.displayScale,
+                                  captionSize: environment.captionSize, mediaContext: binding.mediaContext,
+                                  canOpen: !binding.context.isInteractionPreview && binding.actions.openSticker != nil)
+            tile.onOpen = { [weak self] in self?.openSticker() }
             tile.setVisible(visible)
             clearTiles(after: 1)
         } else if row.entry.messageType == .text {
@@ -122,6 +124,13 @@ final class TimelineMediaView: NSView {
               let gallery = MessageImageGallery(entry: row.entry, attachmentIndex: index) else { return }
         action(gallery)
     }
+
+    private func openSticker() {
+        guard let binding, !binding.context.isInteractionPreview,
+              case .message(let row) = binding.presentation.row,
+              row.entry.remoteMessage?.isDeleted != true, let sticker = row.entry.sticker else { return }
+        binding.actions.openSticker?(sticker.id)
+    }
 }
 
 @MainActor
@@ -130,9 +139,9 @@ private final class TimelineMediaTileView: NSButton {
 
     private let surface = TimelineMediaSurface(frame: .zero)
     private let imageView = TimelineImageView(frame: .zero)
+    private var stickerView: StickerMediaSurfaceView?
     private let warningSymbol = NSImageView(frame: .zero)
     private let warningLabel = NSTextField(wrappingLabelWithString: "")
-    private let stickerEmoji = NSTextField(labelWithString: "")
     private let playSymbol = NSImageView(frame: .zero)
     private let playBackground = NSView(frame: .zero)
     private let overflowShade = NSView(frame: .zero)
@@ -149,7 +158,6 @@ private final class TimelineMediaTileView: NSButton {
     private var gallery = false
     private var captionSize: CGFloat = 12
     private var overflowCount = 0
-    private var isStickerFallback = false
 
     override var isFlipped: Bool { true }
 
@@ -172,9 +180,6 @@ private final class TimelineMediaTileView: NSButton {
         surface.addSubview(warningSymbol)
         configureLabel(warningLabel)
         surface.addSubview(warningLabel)
-        configureLabel(stickerEmoji)
-        stickerEmoji.font = .systemFont(ofSize: 34)
-        surface.addSubview(stickerEmoji)
         playBackground.wantsLayer = true
         playBackground.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
         playBackground.layer?.cornerRadius = 22
@@ -208,6 +213,7 @@ private final class TimelineMediaTileView: NSButton {
 
     func configureRemote(_ attachment: AttachmentResponse, gallery: Bool, overflow: Int, displayScale: CGFloat,
                          captionSize: CGFloat, mediaContext: AppMediaContext?, canOpen: Bool) {
+        clearSticker()
         discardLocal()
         self.gallery = gallery
         self.captionSize = captionSize
@@ -232,6 +238,7 @@ private final class TimelineMediaTileView: NSButton {
     }
 
     func configurePending(_ attachment: LocalOutgoingAttachment, gallery: Bool, overflow: Int, captionSize: CGFloat, canOpen: Bool) {
+        clearSticker()
         let changed = localPath != attachment.previewPath || localAttachmentGeneration != attachment.generation
         let placementChanged = self.gallery != gallery
         self.gallery = gallery
@@ -258,34 +265,50 @@ private final class TimelineMediaTileView: NSButton {
     }
 
     func configureSticker(_ sticker: MessageStickerResponse?, displayScale: CGFloat, captionSize: CGFloat,
-                          mediaContext: AppMediaContext?) {
+                          mediaContext: AppMediaContext?, canOpen: Bool) {
         discardLocal()
+        imageView.clear()
         self.captionSize = captionSize
         resetChrome()
         configureSurface(gallery: false, video: false, overflow: 0)
         surface.layer?.backgroundColor = nil
         layer?.cornerRadius = 8
-        if let sticker, sticker.media.contentType.hasPrefix("image/") {
-            imageView.configure(url: URL(string: sticker.media.url), contentMode: .fit,
-                                animates: RemoteImageFormat.isAnimated(contentType: sticker.media.contentType),
-                                showsBlurredBackdrop: false, thumbnailPixelSize: pixelSize(displayScale), mediaContext: mediaContext)
+        imageView.isHidden = true
+        if let sticker {
+            let view: StickerMediaSurfaceView
+            if let stickerView { view = stickerView }
+            else {
+                view = StickerMediaSurfaceView(frame: bounds)
+                view.setAccessibilityElement(false)
+                surface.addSubview(view)
+                stickerView = view
+            }
+            view.isHidden = false
+            view.onError = { [weak self] in self?.setAccessibilityValue($0) }
+            view.configure(media: sticker.media, emoji: sticker.emoji, displayScale: displayScale, mediaContext: mediaContext)
         } else {
-            imageView.clear()
-            imageView.isHidden = true
-            isStickerFallback = true
-            stickerEmoji.stringValue = sticker?.emoji ?? ""
-            stickerEmoji.isHidden = stickerEmoji.stringValue.isEmpty
-            showWarning(symbol: "photo.badge.exclamationmark", label: String(localized: "Sticker preview unavailable"), color: .secondaryLabelColor)
+            clearSticker()
+            showWarning(symbol: "photo.badge.exclamationmark", label: String(localized: "Sticker data is missing."), color: .secondaryLabelColor)
         }
-        isEnabled = false
-        onOpen = nil
-        setAccessibilityRole(.image)
-        setAccessibilityLabel(sticker?.name ?? sticker?.emoji ?? String(localized: "[Sticker]"))
+        isEnabled = canOpen && sticker != nil
+        setAccessibilityRole(isEnabled ? .button : .image)
+        setAccessibilityLabel((sticker?.name).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (sticker?.emoji).flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "Sticker"))
+        setAccessibilityHelp(isEnabled ? String(localized: "Opens sticker pack") : nil)
         needsLayout = true
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func clearSticker() {
+        stickerView?.clear()
+        stickerView?.isHidden = true
+        setAccessibilityHelp(nil)
+        setAccessibilityValue(nil)
     }
 
     func clear() {
         discardLocal()
+        clearSticker()
         imageView.clear()
         requestedVisible = false
         active = false
@@ -337,6 +360,7 @@ private final class TimelineMediaTileView: NSButton {
         super.layout()
         surface.frame = bounds
         imageView.frame = bounds
+        stickerView?.frame = bounds
         overflowShade.frame = bounds
         overflowLabel.frame = CGRect(x: 0, y: bounds.midY - 21, width: bounds.width, height: 42)
         playBackground.frame = CGRect(x: bounds.midX - 22, y: bounds.midY - 22, width: 44, height: 44)
@@ -345,11 +369,6 @@ private final class TimelineMediaTileView: NSButton {
         let labelHeight = min(bounds.height, lineHeight * 2)
         warningLabel.frame = CGRect(x: 8, y: bounds.midY + 5, width: max(0, bounds.width - 16), height: labelHeight)
         warningSymbol.frame = CGRect(x: bounds.midX - 12, y: bounds.midY - 27, width: 24, height: 24)
-        if isStickerFallback && !stickerEmoji.isHidden {
-            stickerEmoji.frame = CGRect(x: 8, y: bounds.midY - 52, width: max(0, bounds.width - 16), height: 44)
-            warningSymbol.frame = CGRect(x: 8, y: bounds.midY + 8, width: 16, height: 16)
-            warningLabel.frame = CGRect(x: 28, y: bounds.midY + 5, width: max(0, bounds.width - 36), height: labelHeight)
-        }
         refreshVisibility()
     }
 
@@ -393,13 +412,10 @@ private final class TimelineMediaTileView: NSButton {
         warningSymbol.isHidden = true
         warningLabel.isHidden = true
         warningLabel.stringValue = ""
-        stickerEmoji.isHidden = true
-        stickerEmoji.stringValue = ""
         playSymbol.isHidden = true
         playBackground.isHidden = true
         overflowShade.isHidden = true
         overflowLabel.isHidden = true
-        isStickerFallback = false
     }
 
     private func showWarning(symbol: String, label: String, color: NSColor) {
@@ -420,6 +436,7 @@ private final class TimelineMediaTileView: NSButton {
             if !visible { cancelLocal() }
         }
         imageView.setVisible(visible)
+        stickerView?.setVisible(visible)
         if visible { startLocalIfNeeded() }
     }
 

@@ -885,6 +885,13 @@ private actor FakeChatAPI: ChahuaAPIClient {
     }
     func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
+    func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
+    func listSubscribedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
+    func listFavoriteStickers() async throws -> [MessageStickerResponse] { throw APIError.unavailable }
+    func getSticker(id: String) async throws -> StickerDetailResponse { throw APIError.unavailable }
+    func getStickerPack(id: String) async throws -> StickerPackDetailResponse { throw APIError.unavailable }
+    func setStickerFavorite(id: String, favorite: Bool) async throws { throw APIError.unavailable }
+    func setStickerPackSubscription(id: String, subscribed: Bool) async throws { throw APIError.unavailable }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
         if query.archived == true {
             guard !archivedThreadResults.isEmpty else { return .init(threads: []) }

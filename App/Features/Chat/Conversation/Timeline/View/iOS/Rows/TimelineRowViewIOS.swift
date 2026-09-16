@@ -256,12 +256,22 @@ private final class TimelineStandaloneView: UIView {
     private var presentation: TimelineRowPresentation?
     private var attributed = NSAttributedString(string: "")
     private var isDate = false
-    init() { super.init(frame: .zero); isOpaque = false; isAccessibilityElement = true; accessibilityTraits = .staticText }
+    init() {
+        super.init(frame: .zero)
+        isOpaque = false
+        isAccessibilityElement = true
+        accessibilityTraits = .staticText
+        registerForTraitChanges([
+            UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self, UITraitUserInterfaceLevel.self,
+            UITraitDisplayGamut.self, UITraitDisplayScale.self, UITraitLayoutDirection.self
+        ]) { (view: TimelineStandaloneView, _: UITraitCollection) in
+            view.updatePaint()
+        }
+    }
     required init?(coder: NSCoder) { nil }
     func bind(_ presentation: TimelineRowPresentation) { self.presentation = presentation; updatePaint() }
     func clear() { presentation = nil; attributed = NSAttributedString(string: ""); accessibilityLabel = nil; setNeedsDisplay() }
     override func layoutSubviews() { super.layoutSubviews(); layer.cornerRadius = isDate ? bounds.height / 2 : 0 }
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) { super.traitCollectionDidChange(previousTraitCollection); updatePaint() }
     private func updatePaint() {
         guard let p = presentation else { return }
         let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center; paragraph.lineBreakMode = .byWordWrapping
