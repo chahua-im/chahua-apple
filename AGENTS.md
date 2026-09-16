@@ -48,3 +48,6 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - For most new feature verification, especially look and feel and interaction behavior, request manual verification and feedback from the user rather than creating new fixtures or elaborate UI automation.
 - Give the user concise verification steps and the expected behavior. Distinguish checks performed from behavior awaiting manual verification.
 - Treat user-reported verification as authoritative; do not repeat checks they have already completed.
+
+## Documentation
+Try to keep code documentation inline when needed. Do not update `docs/setup.md` unless explicitly requested by the user.
