@@ -19,6 +19,8 @@ final class TimelineBubbleContentView: UIView {
     private var headerView: TimelineHeaderView?
     private var replyView: TimelineReplyView?
     private var mediaView: TimelineMediaView?
+    private var voiceView: (UIView & UIContentView)?
+    private var voiceController: VoicePlaybackController?
     private var textView: UIKitMessageTextView?
     private var metadataView: TimelineMetadataView?
     private var standaloneView: BubbleStandaloneView?
@@ -55,6 +57,11 @@ final class TimelineBubbleContentView: UIView {
 
     func bind(_ binding: TimelineRowBinding, resetSelection: Bool) {
         let geometryChanged = self.binding?.layout.frames != binding.layout.frames
+        if self.binding?.presentation.row.id != binding.presentation.row.id
+            || self.binding?.presentation.audioURL != binding.presentation.audioURL
+            || self.binding?.context.isInteractionPreview != binding.context.isInteractionPreview {
+            clearAudio()
+        }
         self.binding = binding
         if geometryChanged {
             let bubble = binding.layout.frames[.bubble] ?? .zero
@@ -89,6 +96,7 @@ final class TimelineBubbleContentView: UIView {
             mediaView?.clear()
             mediaView?.isHidden = true
         }
+        configureAudio()
         if localFrames[.text] != nil, let geometry = binding.layout.textGeometry {
             let view: UIKitMessageTextView
             if let textView {
@@ -143,6 +151,7 @@ final class TimelineBubbleContentView: UIView {
         headerView?.clear(); headerView?.isHidden = true
         replyView?.clear(); replyView?.isHidden = true
         mediaView?.clear(); mediaView?.isHidden = true
+        clearAudio()
         textView?.clear(); textView?.isHidden = true
         metadataView?.clear(); metadataView?.isHidden = true
         standaloneView?.clear(); standaloneView?.isHidden = true
@@ -153,8 +162,11 @@ final class TimelineBubbleContentView: UIView {
     }
 
     func setVisible(_ visible: Bool) {
+        guard self.visible != visible else { return }
         self.visible = visible
         mediaView?.setVisible(visible && mediaView?.isHidden == false)
+        if !visible { voiceController?.stop() }
+        configureAudio()
     }
 
     override func didMoveToWindow() {
@@ -170,6 +182,7 @@ final class TimelineBubbleContentView: UIView {
         headerView?.frame = localFrames[.title] ?? .zero
         replyView?.frame = localFrames[.reply] ?? .zero
         mediaView?.frame = localFrames[.media] ?? .zero
+        voiceView?.frame = localFrames[.audio] ?? .zero
         textView?.frame = localFrames[.text] ?? .zero
         metadataView?.frame = localFrames[.metadata] ?? .zero
         standaloneView?.frame = localFrames[.standalone] ?? .zero
@@ -185,6 +198,13 @@ final class TimelineBubbleContentView: UIView {
             return target
         }
         return super.hitTest(point, with: event)
+    }
+
+    /// The row's swipe/hold recognizer must yield to the shared control's gestures.
+    func ownsVoiceTouch(_ touch: UITouch) -> Bool {
+        guard visible, binding?.context.isInteractionPreview == false,
+              let frame = localFrames[.audio] else { return false }
+        return frame.contains(touch.location(in: self))
     }
 
     private var isFilled: Bool {
@@ -246,6 +266,40 @@ final class TimelineBubbleContentView: UIView {
         let view = TimelineMediaView(frame: .zero)
         sections.addSubview(view); mediaView = view
         return view
+    }
+
+    private func configureAudio() {
+        guard let binding, localFrames[.audio] != nil,
+              case .message(let row) = binding.presentation.row else { clearAudio(); return }
+        let controller = voiceController ?? VoicePlaybackController()
+        voiceController = controller
+        let environment = binding.presentation.environment
+        // Exception to native timeline sections: the existing UIKit timeline must
+        // retain measured row geometry, but playback/seek is one shared SwiftUI
+        // control. UIHostingConfiguration bridges only audio, not an entire row.
+        let configuration = UIHostingConfiguration {
+            VoiceMessageBubbleView(
+                controller: controller, url: binding.presentation.audioURL,
+                isOutgoing: row.isOutgoing,
+                isActive: visible && !binding.context.isInteractionPreview,
+                metrics: .init(bodySize: environment.bodySize, captionSize: environment.captionSize),
+                localeIdentifier: environment.localeIdentifier, layoutDirection: environment.layoutDirection)
+        }.margins(.all, 0)
+        if let voiceView {
+            voiceView.configuration = configuration
+        } else {
+            let view = configuration.makeContentView()
+            view.backgroundColor = .clear
+            sections.addSubview(view)
+            voiceView = view
+        }
+    }
+
+    private func clearAudio() {
+        voiceController?.stop()
+        voiceView?.removeFromSuperview()
+        voiceView = nil
+        voiceController = nil
     }
 
     private func makeMetadata() -> TimelineMetadataView {

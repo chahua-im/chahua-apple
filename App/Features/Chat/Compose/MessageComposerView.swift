@@ -29,10 +29,13 @@ struct MessageComposerView: View {
     var onDiscardAttachments: (() async throws -> Void)? = nil
     var stickerLibrary: StickerLibrary? = nil
     var onSendSticker: ((MessageStickerResponse) async -> Bool)? = nil
+    var onSendVoice: ((URL) async -> Bool)? = nil
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showsPhotos = false
     @State private var showsFiles = false
     @StateObject private var input = ComposerInputState()
+    @StateObject private var voiceRecorder = ComposerVoiceRecorder()
+    @Environment(\.scenePhase) private var scenePhase
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
     @FocusState private var isInputFocused: Bool
     @State private var showsAttachmentDialog = false
@@ -45,11 +48,17 @@ struct MessageComposerView: View {
         nonmutating set { attachmentState.error = newValue }
     }
 
-    private var canSubmit: Bool { isEnabled && canSend && !isAcquiring && !isSubmitting }
+    private var canSubmit: Bool { isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive }
     private var hasText: Bool { !(input.editorText ?? text).isEmpty }
     private var hasContent: Bool { hasText || (editingMessage == nil && !attachments.isEmpty) }
-    private var canAcquire: Bool { isEnabled && !isAcquiring && !isSubmitting && editingMessage == nil && onImportImages != nil }
+    private var canAcquire: Bool { isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive && editingMessage == nil && onImportImages != nil }
     private var canPickSticker: Bool { canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil }
+    private var showsVoiceButton: Bool { !hasContent && editingMessage == nil }
+    private var canStartVoice: Bool {
+        isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
+            && !hasContent && editingMessage == nil && onSendVoice != nil
+            && !showsPhotos && !showsFiles && !showsAttachmentDialog
+    }
 
     private var editorText: Binding<String> {
         Binding(
@@ -66,13 +75,14 @@ struct MessageComposerView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                 }
-                .disabled(!isEnabled || isAcquiring)
+                .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
             }
             if isAcquiring {
                 ProgressView("Preparing attachments…")
                     .font(.caption).controlSize(.small).padding(8)
             }
             HStack(alignment: .bottom, spacing: 8) {
+                if !voiceRecorder.isActive {
                 Menu {
                     Button("Photos", systemImage: "photo.on.rectangle") {
                         showsStickerPicker = false
@@ -96,6 +106,7 @@ struct MessageComposerView: View {
                 .disabled(!canAcquire)
                 .accessibilityLabel(editingMessage == nil ? "Add media" : "Attachments cannot be changed while editing")
                 .modifier(ChatGlassSurface(cornerRadius: 22))
+                }
 
             VStack(spacing: 0) {
                 if let editing = editingMessage {
@@ -104,6 +115,13 @@ struct MessageComposerView: View {
                     replyMarker(reply)
                 }
 
+                if voiceRecorder.isActive, let onSendVoice {
+                    ComposerVoicePanel(
+                        recorder: voiceRecorder,
+                        isEnabled: isEnabled && canSend && !isSubmitting,
+                        onSendVoice: onSendVoice
+                    )
+                } else {
                 HStack(alignment: .bottom, spacing: 0) {
                     TextField("Message", text: editorText, axis: .vertical)
                         .textFieldStyle(.plain)
@@ -113,7 +131,7 @@ struct MessageComposerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 12)
                         .padding(.vertical, 12)
-                        .disabled(!isEnabled || isAcquiring)
+                        .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
                         .focused($isInputFocused)
                         #if !os(macOS)
                         .onSubmit(submit)
@@ -138,7 +156,7 @@ struct MessageComposerView: View {
                         .background(
                             ComposerInputBridge(
                                 input: input, draft: $text, isFocused: isInputFocused,
-                                isEnabled: isEnabled && !isAcquiring && !showsAttachmentDialog && !showsStickerPicker,
+                                isEnabled: isEnabled && !isAcquiring && !voiceRecorder.isActive && !showsAttachmentDialog && !showsStickerPicker,
                                 onCompositionChanged: onCompositionChanged, onSubmit: submit,
                                 focusOnEntry: true
                             )
@@ -156,21 +174,27 @@ struct MessageComposerView: View {
                     .disabled(!showsStickerPicker && !canPickSticker)
                     .accessibilityLabel(showsStickerPicker ? "Close stickers" : "Stickers")
                 }
+                }
             }
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .modifier(ChatGlassSurface(cornerRadius: 22))
 
-            Button(action: submit) {
-                Image(systemName: hasContent ? "paperplane.fill" : "mic")
-                    .font(.system(size: 20))
-                    .foregroundStyle(hasContent && canSubmit ? ChahuaTheme.accent : .secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+            if !voiceRecorder.isActive {
+                Button {
+                    if showsVoiceButton { startVoiceRecording() }
+                    else { submit() }
+                } label: {
+                    Image(systemName: showsVoiceButton ? "mic" : "paperplane.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle((showsVoiceButton ? canStartVoice : hasContent && canSubmit) ? ChahuaTheme.accent : .secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .disabled(showsVoiceButton ? !canStartVoice : !hasContent || !canSubmit)
+                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: showsVoiceButton ? canStartVoice : hasContent && canSubmit))
+                .accessibilityLabel(showsVoiceButton ? Text("Record voice message") : Text("Send message"))
+                .modifier(ComposerSendFocus())
             }
-            .disabled(!hasContent || !canSubmit)
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: hasContent && canSubmit))
-            .accessibilityLabel(hasContent ? Text("Send message") : Text("Voice message (unavailable)"))
-            .modifier(ComposerSendFocus())
         }
         .buttonStyle(.plain)
         .padding(12)
@@ -252,14 +276,37 @@ struct MessageComposerView: View {
         } message: {
             Text(imageError ?? "")
         }
-        .onAppear { input.receiveExternalText(text) }
-        .onChange(of: text) { _, text in input.receiveExternalText(text) }
+        .alert("Voice message", isPresented: Binding(get: { voiceRecorder.error != nil }, set: { if !$0 { voiceRecorder.error = nil } })) {
+            Button("OK") { voiceRecorder.error = nil }
+        } message: {
+            Text(voiceRecorder.error ?? "")
+        }
+        .onDisappear { voiceRecorder.discard() }
+        .onChange(of: scenePhase) { _, phase in
+            voiceRecorder.setSceneActive(phase == .active)
+            // A permission alert can make the scene inactive; only backgrounding cancels it.
+            if phase == .background { voiceRecorder.suspend() }
+        }
+        .onAppear {
+            input.receiveExternalText(text)
+            voiceRecorder.setSceneActive(scenePhase == .active)
+        }
+        .onChange(of: text) { _, text in
+            input.receiveExternalText(text)
+            if !text.isEmpty { voiceRecorder.discard() }
+        }
         .onChange(of: isInputFocused) { _, focused in
             if focused { showsStickerPicker = false }
         }
-        .onChange(of: editingMessage?.id) { _, _ in showsStickerPicker = false }
+        .onChange(of: editingMessage?.id) { _, id in
+            showsStickerPicker = false
+            if id != nil { voiceRecorder.discard() }
+        }
         .onChange(of: isEnabled) { _, enabled in
-            if !enabled { showsStickerPicker = false }
+            if !enabled {
+                showsStickerPicker = false
+                voiceRecorder.suspend()
+            }
         }
         .onChange(of: attachmentState.dropRequest?.id) { _, id in
             guard id != nil, let providers = attachmentState.takeDrop() else { return }
@@ -267,11 +314,12 @@ struct MessageComposerView: View {
         }
         .onChange(of: attachments.map(\.id)) { oldIDs, newIDs in
             if newIDs.contains(where: { !oldIDs.contains($0) }) {
+                voiceRecorder.discard()
                 if !showsAttachmentDialog { presentAttachmentDialog() }
             }
         }
         .onChange(of: replyFocusRequest) { _, _ in
-            if isEnabled { isInputFocused = true }
+            if isEnabled && !voiceRecorder.isActive { isInputFocused = true }
         }
     }
 
@@ -335,10 +383,10 @@ struct MessageComposerView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .disabled(reply.isDeleted)
+            .disabled(reply.isDeleted || voiceRecorder.isBusy)
             Button {
                 onCancelReply?()
-                isInputFocused = true
+                if !voiceRecorder.isActive { isInputFocused = true }
             } label: {
                 Image(systemName: "xmark")
                     .foregroundStyle(.secondary)
@@ -346,7 +394,7 @@ struct MessageComposerView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Cancel reply")
-            .disabled(!isEnabled)
+            .disabled(!isEnabled || voiceRecorder.isBusy)
             .modifier(ComposerSendFocus())
         }
         .padding(.horizontal, 12)
@@ -387,6 +435,15 @@ struct MessageComposerView: View {
         .padding(.horizontal, 12)
         .padding(.top, 12)
     }
+    private func startVoiceRecording() {
+        guard canStartVoice else { return }
+        input.settleNativeInput()
+        guard !input.isComposing, !hasText else { return }
+        showsStickerPicker = false
+        isInputFocused = false
+        voiceRecorder.start()
+    }
+
 
     private func toggleStickerPicker() {
         guard showsStickerPicker || canPickSticker else { return }
@@ -411,6 +468,7 @@ struct MessageComposerView: View {
     }
 
     private func presentAttachmentDialog() {
+        guard !voiceRecorder.isActive else { return }
         input.settleNativeInput()
         guard !input.isComposing else { return }
         showsStickerPicker = false

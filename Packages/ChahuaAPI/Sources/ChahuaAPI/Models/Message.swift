@@ -67,6 +67,15 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         return copy
     }
 
+    /// Refreshes media after server processing without reverting reactions or deletion.
+    public func replacingAttachments(_ attachments: [AttachmentResponse]) -> Self {
+        guard !isDeleted else { return self }
+        var copy = self
+        copy.attachments = attachments
+        copy.hasAttachments = !attachments.isEmpty
+        return copy
+    }
+
     public func replacingThreadReplyCount(_ count: Int64) -> Self {
         var copy = self
         copy.threadInfo = ThreadInfo(replyCount: count)

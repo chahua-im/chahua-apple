@@ -25,7 +25,7 @@ private struct AttachmentUploadBody: Encodable {
     let filename: String
     let contentType: String
     let size: Int64
-    let purpose = "media"
+    let purpose: String
     let width: Int
     let height: Int
     let order: Int
@@ -51,6 +51,7 @@ public extension ChahuaClient {
         let response = try await send(
             HTTPRequestSpec.json(.post, ["attachments", "upload-url"], body: AttachmentUploadBody(
                 filename: fileName, contentType: contentType, size: size,
+                purpose: contentType.lowercased().hasPrefix("audio/") ? "voice" : "media",
                 width: width, height: height, order: order
             )),
             decoding: AttachmentUploadResponse.self

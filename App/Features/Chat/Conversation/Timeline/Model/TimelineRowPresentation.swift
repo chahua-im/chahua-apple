@@ -16,6 +16,7 @@ enum RowSectionKey: Hashable {
     case body(String, mentionLabels: [String])
     case reply(author: String, preview: String)
     case media([CGSize], category: String)
+    case audio
     case sticker(CGSize)
     case metadata(CGSize, overlay: Bool)
     case reaction(emoji: String, count: Int64, reactors: Int)
@@ -38,6 +39,24 @@ struct TimelineRowPresentation {
     let standaloneText: String?
     let layoutKey: RowLayoutKey
 
+    /// Resolve only the source identifier here; playback owns all file/network I/O.
+    var audioURL: URL? {
+        guard case .message(let message) = row, message.entry.messageType == .audio,
+              message.entry.remoteMessage?.isDeleted != true else { return nil }
+        switch message.entry {
+        case .pending(let pending):
+            guard pending.attachments.count == 1, let attachment = pending.attachments.first,
+                  attachment.mimeType.lowercased().hasPrefix("audio/"),
+                  !attachment.uploadPath.isEmpty else { return nil }
+            return URL(fileURLWithPath: attachment.uploadPath)
+        case .remote(let remote):
+            guard remote.attachments.count == 1, let attachment = remote.attachments.first,
+                  attachment.kind.lowercased().hasPrefix("audio/"), let url = URL(string: attachment.url),
+                  url.scheme?.lowercased() == "https", url.host?.isEmpty == false else { return nil }
+            return url
+        }
+    }
+
     @MainActor
     static func make(row: TimelineRow, currentUserProfile: MeResponse?, currentUserID: Int32?, isThreadTimeline: Bool, environment: TimelineLayoutEnvironment) -> Self {
         var title: TitleContent?
@@ -53,8 +72,9 @@ struct TimelineRowPresentation {
             let deleted = remote?.isDeleted == true
             let system = message.entry.messageType == .system
             let sticker = message.entry.messageType == .sticker
-            let supported = message.entry.messageType == .text || sticker
-            sections.append(.kind(system ? "system" : deleted ? "deleted" : sticker ? "sticker" : supported ? "text" : "unsupported"))
+            let audio = message.entry.messageType == .audio
+            let supported = message.entry.messageType == .text || sticker || audio
+            sections.append(.kind(system ? "system" : deleted ? "deleted" : sticker ? "sticker" : audio ? "audio" : supported ? "text" : "unsupported"))
             if system {
                 standaloneText = deleted ? String(localized: "[Deleted]") : message.entry.text ?? ""
                 sections.append(.standalone(standaloneText!, author: remote?.sender.name.flatMap { $0.isEmpty ? nil : $0 }))
@@ -71,11 +91,14 @@ struct TimelineRowPresentation {
                     let text = message.entry.text ?? ""
                     let hasBody = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     let dimensions: [CGSize]
-                    if case .pending(let pending) = message.entry { dimensions = pending.attachments.map(\.mediaDimensions) }
+                    if audio { dimensions = [] }
+                    else if case .pending(let pending) = message.entry { dimensions = pending.attachments.map(\.mediaDimensions) }
                     else { dimensions = (remote?.attachments ?? []).map(\.mediaDimensions) }
-                    overlay = sticker || (!dimensions.isEmpty && !hasBody)
+                    overlay = sticker || (!audio && !dimensions.isEmpty && !hasBody)
                     if sticker {
                         sections.append(.sticker(CGSize(width: Int(message.entry.sticker?.media.width ?? 0), height: Int(message.entry.sticker?.media.height ?? 0))))
+                    } else if audio {
+                        sections.append(.audio)
                     } else {
                         let names = MessageMentions.names(in: remote?.mentions ?? [])
                         let source = text as NSString

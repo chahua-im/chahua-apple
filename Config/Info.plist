@@ -24,6 +24,8 @@
 	<string>$(APNS_ENVIRONMENT)</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record and send voice messages.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Share and save photos and images</string>
 	<key>UILaunchScreen</key>

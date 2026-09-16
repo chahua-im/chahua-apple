@@ -53,7 +53,8 @@ final class MessageRowGestureCoordinator {
     }
 
     fileprivate func capture(touch: UITouch, event: UIEvent) -> MessageRowTouchSession? {
-        guard let view, view.window != nil, !nativeTextOwnsTouch(touch, in: view) else { return nil }
+        guard let view, view.window != nil,
+              !nativeControlOwnsTouch(touch, in: view, allowsVoiceContextMenu: event.buttonMask.contains(.secondary)) else { return nil }
         let input: MessageRowTouchSession.Input
         switch touch.type {
         case .direct:
@@ -111,10 +112,11 @@ final class MessageRowGestureCoordinator {
         )
     }
 
-    fileprivate func nativeTextOwnsTouch(_ touch: UITouch, in root: UIView) -> Bool {
+    fileprivate func nativeControlOwnsTouch(_ touch: UITouch, in root: UIView, allowsVoiceContextMenu: Bool = false) -> Bool {
         var ancestor = touch.view
         while let current = ancestor {
             if current is UITextField { return true }
+            if !allowsVoiceContextMenu, let bubble = current as? TimelineBubbleContentView, bubble.ownsVoiceTouch(touch) { return true }
             if current === root { break }
             ancestor = current.superview
         }
@@ -126,7 +128,7 @@ final class MessageRowGestureCoordinator {
 
     fileprivate func canContinue(_ session: MessageRowTouchSession) -> Bool {
         guard let view, view.window != nil, markers[session.rowID]?.marker != nil else { return false }
-        return !nativeTextOwnsTouch(session.touch, in: view)
+        return !nativeControlOwnsTouch(session.touch, in: view, allowsVoiceContextMenu: session.input == .secondaryPointer)
     }
 
     fileprivate func windowRect(for rect: CGRect) -> CGRect? {

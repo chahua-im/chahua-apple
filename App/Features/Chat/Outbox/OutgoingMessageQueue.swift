@@ -214,6 +214,38 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
+    func enqueueVoice(chatID: String, threadID: String? = nil, fileURL: URL, replyToMessage: MessagePreview? = nil) async throws {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed,
+              !attachmentMutationConversations.contains(key) else {
+            throw QueueError.storageUnavailable
+        }
+        let current = generation
+        attachmentMutationConversations.insert(key)
+        defer {
+            if generation == current {
+                attachmentMutationConversations.remove(key)
+                scheduleFileCleanup()
+            }
+        }
+        // Keep the recorder's source intact until both the account copy and row are durable.
+        let attachment = try await OutgoingVoiceFiles.importVoice(from: fileURL, directory: store.directory)
+        try checkGeneration(current)
+        try Task.checkCancellation()
+        do {
+            try await checkpoint(.enqueue, generation: current)
+            let snapshot = try await store.enqueueVoice(
+                chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: UUID().uuidString,
+                attachment: attachment, enqueuedAt: Date(), replyToMessage: replyToMessage)
+            try checkGeneration(current)
+            publish(snapshot)
+            wakeWorker(key: key)
+        } catch {
+            storageFailed(error, generation: current)
+            throw error
+        }
+    }
+
     func retry(chatID: String, threadID: String? = nil, clientGeneratedID: String, scope: OutgoingRetryScope) async throws {
         guard storageState == .ready, let store, !authenticationFailed else { throw QueueError.storageUnavailable }
         let current = generation
@@ -572,8 +604,8 @@ final class OutgoingMessageQueue: ObservableObject {
         let current = generation
         let transport = transportGeneration
         if preparationWorker == nil,
-            let item = items.first(where: { $0.attachments.contains { !$0.isUploaded && $0.preparedPath == nil && $0.error == nil } }),
-            let attachment = item.attachments.first(where: { !$0.isUploaded && $0.preparedPath == nil && $0.error == nil })
+            let item = items.first(where: { $0.attachments.contains { !$0.isAudio && !$0.isUploaded && $0.preparedPath == nil && $0.error == nil } }),
+            let attachment = item.attachments.first(where: { !$0.isAudio && !$0.isUploaded && $0.preparedPath == nil && $0.error == nil })
         {
             let id = UUID()
             preparingAttachmentID = attachment.id
@@ -782,5 +814,71 @@ final class OutgoingMessageQueue: ObservableObject {
             }
         }
         storageState = .failed
+    }
+}
+
+/// Recorded M4A is upload-ready; the server canonicalizes voice to Ogg Opus.
+/// Account-owned Outbox storage keeps retention, uploads and cleanup shared with media.
+nonisolated private enum OutgoingVoiceFiles {
+    enum ImportError: LocalizedError {
+        case invalidAudio
+        var errorDescription: String? { String(localized: "The voice recording is not a valid M4A file.") }
+    }
+
+    static func importVoice(from url: URL, directory: URL) async throws -> LocalOutgoingAttachment {
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard url.isFileURL,
+                  try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                throw ImportError.invalidAudio
+            }
+            let root = try OutgoingImageFiles.root(directory)
+            let manager = FileManager.default
+            let outbox = root.appendingPathComponent("Outbox", isDirectory: true)
+            try manager.createDirectory(at: outbox, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try OutgoingImageFiles.checkOutbox(outbox, root: root)
+            let id = UUID().uuidString
+            let staging = outbox.appendingPathComponent(".\(id).import", isDirectory: true)
+            let installed = outbox.appendingPathComponent(id, isDirectory: true)
+            try manager.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            defer { try? manager.removeItem(at: staging) }
+            let copied = staging.appendingPathComponent("voice.m4a")
+            let input = try FileHandle(forReadingFrom: url)
+            defer { try? input.close() }
+            // The recorder supplies an M4A container, never an image/video composition.
+            guard let header = try input.read(upToCount: 12), header.count == 12,
+                  header[4..<8].elementsEqual("ftyp".utf8),
+                  url.pathExtension.lowercased() == "m4a" else {
+                throw ImportError.invalidAudio
+            }
+            try input.seek(toOffset: 0)
+            guard manager.createFile(atPath: copied.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            let output = try FileHandle(forWritingTo: copied)
+            defer { try? output.close() }
+            var byteCount: Int64 = 0
+            while true {
+                try Task.checkCancellation()
+                guard let data = try input.read(upToCount: 1_048_576), !data.isEmpty else { break }
+                try output.write(contentsOf: data)
+                byteCount += Int64(data.count)
+            }
+            try output.synchronize()
+            try Task.checkCancellation()
+            try manager.moveItem(at: staging, to: installed)
+            let path = installed.appendingPathComponent("voice.m4a").path
+            return LocalOutgoingAttachment(
+                id: id, generation: UUID().uuidString, position: 0,
+                sourcePath: path, preparedPath: path, previewPath: path,
+                fileName: "voice.m4a", mimeType: "audio/mp4", width: 0, height: 0, byteCount: byteCount)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 }

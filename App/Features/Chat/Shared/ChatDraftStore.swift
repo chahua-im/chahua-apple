@@ -216,6 +216,30 @@ final class ChatDraftStore: ObservableObject {
         return true
     }
 
+    func submitVoice(fileURL: URL, chatID: String, threadID: String? = nil) async throws -> Bool {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let requestGeneration = generation
+        let reply = draftReplies[key]
+        try await flushForAttachmentChange(chatID: chatID, threadID: threadID)
+        guard generation == requestGeneration, !committingDrafts.contains(key),
+              !composingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
+        committingDrafts.insert(key)
+        defer {
+            if generation == requestGeneration {
+                committingDrafts.remove(key)
+                if unsavedDrafts.contains(key) { scheduleDraftSave(key: key) }
+            }
+        }
+        try await outgoingQueue.enqueueVoice(chatID: chatID, threadID: threadID, fileURL: fileURL, replyToMessage: reply)
+        guard generation == requestGeneration else { return false }
+        // A voice message has no caption. Text/media entered during recording
+        // remains a separate draft, including edits made while enqueue suspends.
+        if draftReplies[key]?.id == reply?.id {
+            setDraftReply(nil, chatID: chatID, threadID: threadID)
+        }
+        return true
+    }
+
     func flushAll() async {
         let requestGeneration = generation
         for key in Array(drafts.keys) {

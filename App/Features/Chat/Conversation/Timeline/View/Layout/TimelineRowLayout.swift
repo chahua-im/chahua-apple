@@ -1,7 +1,7 @@
 import CoreGraphics
 
 enum TimelineSectionID: Hashable {
-    case avatar, title, bubble, reply, media, text, metadata, reactions, thread, standalone
+    case avatar, title, bubble, reply, media, audio, text, metadata, reactions, thread, standalone
 }
 
 struct TimelineRowLayout {

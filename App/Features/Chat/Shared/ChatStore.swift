@@ -147,9 +147,9 @@ final class ChatStore: ObservableObject {
             return PendingOutgoingMessage(
                 chatID: message.chatID, threadID: message.threadID, clientGeneratedID: message.clientGeneratedID,
                 body: .init(
-                    messageType: message.sticker == nil ? .text : .sticker,
+                    messageType: message.messageType,
                     clientGeneratedId: message.clientGeneratedID,
-                    message: message.sticker == nil ? message.text : nil,
+                    message: message.messageType == .text ? message.text : nil,
                     replyToId: message.replyToMessage?.id, stickerId: message.sticker?.id),
                 enqueuedAt: message.enqueuedAt, senderID: message.senderID,
                 state: state, replyToMessage: message.replyToMessage,

@@ -15,6 +15,8 @@ final class TimelineBubbleContentView: NSView {
     private var headerView: TimelineHeaderView?
     private var replyView: TimelineReplyView?
     private var mediaView: TimelineMediaView?
+    private var voiceView: NSHostingView<VoiceMessageBubbleView>?
+    private var voiceController: VoicePlaybackController?
     private var textView: AppKitMessageTextView?
     private var metadataView: TimelineMetadataView?
     private var standaloneView: BubbleStandaloneView?
@@ -52,6 +54,11 @@ final class TimelineBubbleContentView: NSView {
 
     func bind(_ binding: TimelineRowBinding, resetSelection: Bool) {
         let geometryChanged = self.binding?.layout.frames != binding.layout.frames
+        if self.binding?.presentation.row.id != binding.presentation.row.id
+            || self.binding?.presentation.audioURL != binding.presentation.audioURL
+            || self.binding?.context.isInteractionPreview != binding.context.isInteractionPreview {
+            clearAudio()
+        }
         self.binding = binding
         if geometryChanged {
             let bubble = binding.layout.frames[.bubble] ?? .zero
@@ -76,6 +83,7 @@ final class TimelineBubbleContentView: NSView {
             view.bind(binding)
             view.setVisible(visible)
         } else { mediaView?.clear(); mediaView?.isHidden = true }
+        configureAudio()
         if localFrames[.text] != nil, let geometry = binding.layout.textGeometry {
             let view: AppKitMessageTextView
             if let textView { view = textView }
@@ -126,6 +134,7 @@ final class TimelineBubbleContentView: NSView {
         headerView?.clear(); headerView?.isHidden = true
         replyView?.clear(); replyView?.isHidden = true
         mediaView?.clear(); mediaView?.isHidden = true
+        clearAudio()
         textView?.clear(); textView?.isHidden = true
         metadataView?.clear(); metadataView?.isHidden = true
         standaloneView?.clear(); standaloneView?.isHidden = true
@@ -135,8 +144,11 @@ final class TimelineBubbleContentView: NSView {
     }
 
     func setVisible(_ visible: Bool) {
+        guard self.visible != visible else { return }
         self.visible = visible
         mediaView?.setVisible(visible && mediaView?.isHidden == false)
+        if !visible { voiceController?.stop() }
+        configureAudio()
     }
 
     override func viewDidMoveToWindow() {
@@ -150,6 +162,7 @@ final class TimelineBubbleContentView: NSView {
         headerView?.frame = localFrames[.title] ?? .zero
         replyView?.frame = localFrames[.reply] ?? .zero
         mediaView?.frame = localFrames[.media] ?? .zero
+        voiceView?.frame = localFrames[.audio] ?? .zero
         textView?.frame = localFrames[.text] ?? .zero
         metadataView?.frame = localFrames[.metadata] ?? .zero
         standaloneView?.frame = localFrames[.standalone] ?? .zero
@@ -225,6 +238,38 @@ final class TimelineBubbleContentView: NSView {
     private func makeMedia() -> TimelineMediaView {
         let view = TimelineMediaView(frame: .zero); sections.addSubview(view); mediaView = view; return view
     }
+    private func configureAudio() {
+        guard let binding, localFrames[.audio] != nil,
+              case .message(let row) = binding.presentation.row else { clearAudio(); return }
+        let controller = voiceController ?? VoicePlaybackController()
+        voiceController = controller
+        let environment = binding.presentation.environment
+        let content = VoiceMessageBubbleView(
+            controller: controller, url: binding.presentation.audioURL,
+            isOutgoing: row.isOutgoing,
+            isActive: visible && !binding.context.isInteractionPreview,
+            metrics: .init(bodySize: environment.bodySize, captionSize: environment.captionSize),
+            localeIdentifier: environment.localeIdentifier, layoutDirection: environment.layoutDirection)
+        if let voiceView {
+            voiceView.rootView = content
+        } else {
+            // Exception to native timeline sections: AppKit retains the measured
+            // row and chrome, while one shared SwiftUI control owns playback and
+            // seeking. Hosting only audio avoids duplicate platform control UIs.
+            let view = NSHostingView(rootView: content)
+            view.sizingOptions = []
+            sections.addSubview(view)
+            voiceView = view
+        }
+    }
+
+    private func clearAudio() {
+        voiceController?.stop()
+        voiceView?.removeFromSuperview()
+        voiceView = nil
+        voiceController = nil
+    }
+
     private func makeMetadata() -> TimelineMetadataView {
         let view = TimelineMetadataView(frame: .zero); sections.addSubview(view); metadataView = view; return view
     }

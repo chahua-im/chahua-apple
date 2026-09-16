@@ -295,7 +295,8 @@ struct ChatDetailView: View {
                                         try await drafts.discardAttachments(chatID: chat.id, threadID: threadID)
                                     },
                                     stickerLibrary: store.stickers,
-                                    onSendSticker: sendSticker
+                                    onSendSticker: sendSticker,
+                                    onSendVoice: sendVoice
                                 )
                             }
                         })
@@ -471,6 +472,20 @@ struct ChatDetailView: View {
         }
     }
 
+    private func sendVoice(_ fileURL: URL) async -> Bool {
+        guard interactionContext.canWrite, editingMessage == nil,
+              outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
+        else { return false }
+        do {
+            let sent = try await drafts.submitVoice(fileURL: fileURL, chatID: chat.id, threadID: threadID)
+            if sent { await model.revealLatestAfterSend() }
+            return sent
+        } catch {
+            outboxError = error.localizedDescription
+            return false
+        }
+    }
+
     private func submitComposer() async -> Bool {
         guard let message = editingMessage else {
             let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID)
@@ -529,7 +544,7 @@ struct ChatDetailView: View {
     }
 
     private func changePending(_ pending: PendingOutgoingMessage, revoke: Bool) {
-        guard !pending.dispatchClaimed, (revoke || pending.sticker == nil),
+        guard !pending.dispatchClaimed, (revoke || pending.messageType == .text),
               !drafts.committingDrafts.contains(conversationKey), editingMessage == nil else { return }
         Task {
             do {

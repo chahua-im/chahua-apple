@@ -32,6 +32,7 @@ struct TimelineLayoutEngine {
         let text = row.entry.text ?? ""
         let deleted = row.entry.remoteMessage?.isDeleted == true
         let sticker = row.entry.messageType == .sticker && !deleted
+        let audio = row.entry.messageType == .audio && !deleted
         let supported = row.entry.messageType == .text && !deleted
         let hasBody = supported && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let remote = supported ? row.entry.remoteMessage?.attachments ?? [] : []
@@ -54,7 +55,7 @@ struct TimelineLayoutEngine {
             if let descriptor = labelFont.fontDescriptor.withSymbolicTraits(.traitItalic) { labelFont = BubbleNativeFont(descriptor: descriptor, size: e.bodySize) }
             #endif
         }
-        let unsupported = !supported && !sticker && !deleted
+        let unsupported = !supported && !sticker && !audio && !deleted
         let symbolSize = unsupported ? MessageNativeSymbol.size("questionmark.square.dashed", fontSize: e.bodySize, semibold: false) : .zero
         if let label = p.standaloneText {
             preferredText = nativeSize(label, font: labelFont).width + 24 + (unsupported ? symbolSize.width + 8 : 0)
@@ -80,7 +81,8 @@ struct TimelineLayoutEngine {
             let itemsWidth = content.symbol.width + content.label.width + content.chevron.width
             return itemsWidth + (6 + 12 + 24)
         } ?? 0
-        let preferred = max(preferredMedia?.width ?? 0, preferredText, metadata.map { $0.size.width + 24 } ?? 0, preferredTitle)
+        let preferredAudio = audio ? VoiceMessageBubbleMetrics.preferredWidth(bodySize: e.bodySize) : 0
+        let preferred = max(preferredMedia?.width ?? 0, preferredAudio, preferredText, metadata.map { $0.size.width + 24 } ?? 0, preferredTitle)
         let b = min(c, pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
         let bubbleX = centralX + (row.isOutgoing ? c - b : 0)
         let innerWidth = min(b, max(1, b - 24))
@@ -141,6 +143,13 @@ struct TimelineLayoutEngine {
                 height += mediaHeight
             }
         }
+        if audio {
+            if p.title == nil && p.reply == nil { height += 8 }
+            let audioHeight = pixel(VoiceMessageBubbleMetrics(bodySize: e.bodySize, captionSize: e.captionSize)
+                .height(for: innerWidth), e)
+            frames[.audio] = CGRect(x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: audioHeight)
+            height += audioHeight + 4
+        }
         var geometry: MessageTextGeometry?
         if hasBody {
             height += hasMedia ? 4 : p.reply == nil && p.title == nil ? 8 : 0
@@ -168,7 +177,7 @@ struct TimelineLayoutEngine {
                 let pillWidth = min(media.width, size.width + 2 * pillPadding)
                 frames[.metadata] = CGRect(x: media.maxX - outerInset - pillWidth, y: max(media.minY, media.maxY - outerInset - pillHeight), width: pillWidth, height: pillHeight)
             } else if hasMedia || !hasBody {
-                if !hasMedia && p.reply == nil && p.title == nil { height += 8 }
+                if !hasMedia && !audio && p.reply == nil && p.title == nil { height += 8 }
                 let size = scaled(metadata.size, width: innerWidth)
                 let metadataHeight = pixel(size.height, e)
                 frames[.metadata] = CGRect(x: bubbleX + b - inset - size.width, y: bubbleY + height, width: size.width, height: metadataHeight)

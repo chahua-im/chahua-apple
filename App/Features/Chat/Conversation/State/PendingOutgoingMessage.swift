@@ -22,6 +22,7 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     var sticker: MessageStickerResponse? = nil
 
     var id: String { clientGeneratedID }
+    var messageType: MessageType { body.messageType }
 }
 
 enum ConversationMessageDisplayState: Hashable {

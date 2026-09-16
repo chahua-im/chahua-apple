@@ -464,6 +464,37 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(model).first?.reactions, [])
     }
 
+    func testCanonicalAudioPublicationRefreshesAcknowledgementWithoutUndoingLaterState() async throws {
+        let uploaded = try TimelineTestFixtures.message(id: "voice", at: 1, type: .audio, clientGeneratedID: "send", fields: [
+            "message": NSNull(), "hasAttachments": true,
+            "attachments": [["id": "upload", "url": "https://media.example/voice.m4a", "kind": "audio/mp4",
+                             "size": 1200, "fileName": "voice.m4a"]],
+        ])
+        let published = try TimelineTestFixtures.message(id: "voice", at: 1, type: .audio, clientGeneratedID: "send", fields: [
+            "message": NSNull(), "hasAttachments": true,
+            "attachments": [["id": "canonical", "url": "https://media.example/voice.ogg", "kind": "audio/ogg",
+                             "size": 900, "fileName": "voice.ogg"]],
+        ])
+        let (model, source, _) = try makeModel(pages: [.success(try TimelineTestFixtures.page([]))])
+        await model.open()
+        source.store.acknowledge(uploaded)
+        let reactions = try reactionFixture()
+        source.store.apply(.reactionUpdated(.init(messageId: "voice", chatId: "chat", reactions: reactions)))
+        source.store.apply(.message(published))
+        source.store.acknowledge(uploaded)
+
+        let messages = remoteMessages(model)
+        XCTAssertEqual(messages.map(\.id), ["voice"])
+        XCTAssertEqual(messages.first?.attachments.first?.url, "https://media.example/voice.ogg")
+        XCTAssertEqual(messages.first?.reactions, reactions)
+
+        source.store.apply(.messageDeleted(published.redactedForDeletion()))
+        source.store.apply(.message(published))
+        let deleted = try XCTUnwrap(remoteMessages(model).first)
+        XCTAssertTrue(deleted.isDeleted)
+        XCTAssertTrue(deleted.attachments.isEmpty)
+    }
+
     func testTwoModelsHaveIndependentHistoryGapsAndJumpAvailability() async throws {
         let source = ScriptedTimelineSource(pages: [
             .success(try historyPage(ids: 1 ... 2, newerCursor: "2")),

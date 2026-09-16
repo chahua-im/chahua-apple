@@ -12,6 +12,7 @@
 		C0AA0003303BCC2200320001 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0AA0002303BCC2200320001 /* ChahuaAPI */; };
 		C0CC0001303BCC2200320001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0005303BCC2200320001 /* Kingfisher */; };
 		C0CC0002303BCC2200320001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0006303BCC2200320001 /* Kingfisher */; };
+		C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C0EE0002303BCC2200320001 /* ChahuaAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			files = (
 				C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */,
 				C0CC0001303BCC2200320001 /* Kingfisher in Frameworks */,
+				C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -128,6 +130,7 @@
 			packageProductDependencies = (
 				C0AA0001303BCC2200320001 /* ChahuaAPI */,
 				C0CC0005303BCC2200320001 /* Kingfisher */,
+				C0EE0002303BCC2200320001 /* ChahuaAudio */,
 			);
 			productName = "chahua-ios";
 			productReference = C0985FCE303BCC22003200C0 /* Chahua.app */;
@@ -196,6 +199,7 @@
 			packageReferences = (
 				C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */,
 				C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Kingfisher" */,
+				C0EE0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C0985FCF303BCC22003200C0 /* Products */;
@@ -704,6 +708,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ChahuaAPI;
 		};
+		C0EE0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAudio" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ChahuaAudio;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -737,6 +745,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Kingfisher" */;
 			productName = Kingfisher;
+		};
+		C0EE0002303BCC2200320001 /* ChahuaAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0EE0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAudio" */;
+			productName = ChahuaAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

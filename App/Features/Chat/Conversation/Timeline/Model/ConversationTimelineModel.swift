@@ -644,8 +644,24 @@ final class ConversationTimelineModel: ObservableObject {
         guard event.conversationChatID == chatID else { return false }
         switch event {
         case .message(let message):
-            guard accepts(message), window.index(matching: message) == nil, deferredKey(matching: message) == nil,
-                  replay || !deletedIDs.contains(message.id) else { return false }
+            guard accepts(message), replay || !deletedIDs.contains(message.id) else { return false }
+            if window.index(matching: message) != nil || deferredKey(matching: message) != nil {
+                // Publication replaces an acknowledged M4A with canonical Opus
+                // through a create event, not messageUpdated. Merge only that
+                // one-way attachment transition: an unversioned duplicate create
+                // must not undo newer edits, reactions, deletion, or canonical audio.
+                if message.messageType == .audio, !message.isDeleted,
+                   message.attachments.count == 1, message.attachments[0].kind == "audio/ogg" {
+                    mutateKnown(message) { existing in
+                        guard existing.messageType == .audio, !existing.isDeleted,
+                              !deletedIDs.contains(existing.id), existing.attachments.count == 1,
+                              existing.attachments[0].kind.hasPrefix("audio/"),
+                              existing.attachments[0].kind != "audio/ogg" else { return existing }
+                        return existing.replacingAttachments(message.attachments)
+                    }
+                }
+                return false
+            }
             let content = deletedIDs.contains(message.id) ? message.redactedForDeletion() : message
             let message = content.redactingReplyPreview(messageIDs: deletedIDs)
             let outcome: TimelineWindow.LiveInsertOutcome

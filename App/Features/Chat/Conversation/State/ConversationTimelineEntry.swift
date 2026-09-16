@@ -35,7 +35,7 @@ enum ConversationTimelineEntry: Hashable {
     var messageType: MessageType {
         switch self {
         case .remote(let message): message.messageType
-        case .pending(let pending): pending.body.messageType
+        case .pending(let pending): pending.messageType
         }
     }
 

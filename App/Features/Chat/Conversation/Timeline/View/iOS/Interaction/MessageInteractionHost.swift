@@ -82,7 +82,7 @@ struct MessageInteractionHost<Content: View>: View {
                 mediaContext: mediaContext, actions: actions,
                 animation: animation,
                 onBlock: { pending in
-                    guard pending.sticker == nil else { return }
+                    guard pending.body.messageType == .text else { return }
                     self.target = nil
                     actions.blockPendingMessage?(pending)
                 },
@@ -224,7 +224,7 @@ private struct MessageInteractionOverlay: View {
                            actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID) {
                             VStack(spacing: 0) {
                                 Button("Move back to composer", systemImage: "square.and.pencil") { onBlock(pending) }
-                                    .disabled(actions.blockPendingMessage == nil || pending.sticker != nil)
+                                    .disabled(actions.blockPendingMessage == nil || pending.body.messageType != .text)
                                     .frame(maxWidth: .infinity, minHeight: 44)
                                 Divider()
                                 Button("Revoke unsent message", systemImage: "trash", role: .destructive) { onRevoke(pending) }

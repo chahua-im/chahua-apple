@@ -44,6 +44,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
     public var attachmentID: String?
     public var error: String?
     public var isUploaded: Bool { attachmentID != nil }
+    public var isAudio: Bool { mimeType.lowercased().hasPrefix("audio/") }
     public var uploadPath: String { preparedPath ?? sourcePath }
 
     public init(id: String, generation: String, position: Int, sourcePath: String, preparedPath: String? = nil, previewPath: String, fileName: String, mimeType: String, width: Int, height: Int, byteCount: Int64, attachmentID: String? = nil, error: String? = nil) {
@@ -94,6 +95,12 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public var dispatchClaimed: Bool = false
     public var sticker: MessageStickerResponse? = nil
 
+    public var messageType: MessageType {
+        if sticker != nil { return .sticker }
+        if attachments.count == 1, attachments[0].isAudio { return .audio }
+        return .text
+    }
+
     public var isReadyForDispatch: Bool {
         attachments.allSatisfy { $0.attachmentID != nil && $0.error == nil }
     }
@@ -101,8 +108,8 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public var body: CreateMessageBody {
         precondition(isReadyForDispatch, "An unresolved attachment must never be omitted from a message")
         return CreateMessageBody(
-            messageType: sticker == nil ? .text : .sticker, clientGeneratedId: clientGeneratedID,
-            message: sticker == nil ? text : nil,
+            messageType: messageType, clientGeneratedId: clientGeneratedID,
+            message: messageType == .text ? text : nil,
             attachmentIds: attachments.sorted { $0.position < $1.position }.map { $0.attachmentID! },
             replyToId: replyToMessage?.id, stickerId: sticker?.id
         )
