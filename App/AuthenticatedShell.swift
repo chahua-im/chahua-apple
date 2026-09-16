@@ -215,32 +215,40 @@ struct AuthenticatedShell: View {
             onSelectConversation: { selectConversation($0.id) }
         )
         #if os(iOS)
-        return list
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.visible, for: .navigationBar)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .toolbar {
-                if !archived {
-                    ToolbarItem(placement: .topBarLeading) {
-                        accountButton
-                            .labelStyle(.iconOnly)
-                            .accessibilityLabel("Account")
+        return GeometryReader { geometry in
+            // Toolbar custom views use intrinsic sizing rather than the list's
+            // width proposal. Reserve the leading control and bar margins so the
+            // same picker fits both the account button and native archive Back.
+            // A fixed width would move it into the toolbar's overflow menu.
+            let picker = ConversationScopePicker(selection: scope, badges: badges)
+                .frame(minWidth: 0, maxWidth: max(0, geometry.size.width - 96))
+            list
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.visible, for: .navigationBar)
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .toolbar {
+                    if !archived {
+                        ToolbarItem(placement: .topBarLeading) {
+                            accountButton
+                                .labelStyle(.iconOnly)
+                                .accessibilityLabel("Account")
+                        }
+                    }
+                    // A segmented control must not participate in native title morphing.
+                    if #available(iOS 26, *) {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            picker
+                        }
+                        // The scope control already draws its own background.
+                        .sharedBackgroundVisibility(.hidden)
+                    } else {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            picker
+                        }
                     }
                 }
-                // A segmented control must not participate in native title morphing.
-                if #available(iOS 26, *) {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ConversationScopePicker(selection: scope, badges: badges)
-                    }
-                    // The scope control already draws its own background.
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ConversationScopePicker(selection: scope, badges: badges)
-                    }
-                }
-            }
+        }
         #else
         return VStack(spacing: 0) {
             ConversationListHeader(

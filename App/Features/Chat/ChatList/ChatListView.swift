@@ -218,11 +218,10 @@ struct ChatListView: View {
     }
 
     private func trailingSwipeActions(for item: ConversationListItem) -> [SwipeRowAction] {
-        if archivedMode {
-            return [.init(action: ConversationListAction.unarchive.rawValue,
-                          title: String(localized: "Unarchive"), symbol: "arrow.uturn.backward", tint: .green)]
-        }
-        let archive = SwipeRowAction(action: ConversationListAction.archive.rawValue, title: String(localized: "Archive"), symbol: "archivebox", tint: .indigo)
+        let archive = SwipeRowAction(
+            action: (archivedMode ? ConversationListAction.unarchive : .archive).rawValue,
+            title: archivedMode ? String(localized: "Unarchive") : String(localized: "Archive"),
+            symbol: archivedMode ? "tray" : "archivebox", tint: .indigo)
         guard case .chat(let chat) = item else { return [archive] }
         let isMuted = (chat.mutedUntil ?? .distantPast) > Date()
         return [

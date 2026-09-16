@@ -53,6 +53,12 @@ struct StickerPackSheet: View {
                             }
                         }
                         .buttonStyle(.bordered)
+                        // Action-state labels switch as a whole; do not morph
+                        // inserted letters or button widths during a mutation.
+                        .transaction {
+                            $0.animation = nil
+                            $0.disablesAnimations = true
+                        }
                         if let detail = packDetail {
                             Divider()
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 4)], spacing: 4) {
