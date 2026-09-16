@@ -114,9 +114,9 @@ final class TimelineChromeView: NSView {
         }
         repositionProgress.frame = NSRect(x: max(0, (width - 52) / 2), y: max(0, (height - 52) / 2), width: 52, height: 52)
         jumpControl.frame = NSRect(
-            x: max(0, width - ChahuaTheme.Spacing.large - 44),
-            y: max(0, height - presentation.composerInset - ChahuaTheme.Spacing.large - 44),
-            width: 44, height: 44
+            x: max(0, width - ChahuaTheme.Spacing.large - TimelineJumpControl.diameter),
+            y: max(0, height - presentation.composerInset - ChahuaTheme.Spacing.large - TimelineJumpControl.diameter),
+            width: TimelineJumpControl.diameter, height: TimelineJumpControl.diameter
         )
     }
 
@@ -394,28 +394,34 @@ private final class TimelineEdgeView: NSView {
 
 @MainActor
 private final class TimelineJumpControl: NSView {
+    static let diameter: CGFloat = 32
+    // Badge center relative to the button's top-right corner.
+    // Positive x moves right; negative y moves up (this view is flipped).
+    static let defaultBadgeOffset = CGPoint(x: -4, y: 0)
     var onAction: (() -> Void)?
-    private let background = timelineChromeMaterial(cornerRadius: 22)
+    private let background = timelineChromeMaterial(cornerRadius: TimelineJumpControl.diameter / 2)
     private let button = TimelineChromeButton(title: String(localized: "Jump to latest messages"), symbol: "chevron.down")
     private let badge = timelineChromeLabel(style: .caption2)
+    private let badgeBackground = NSView()
     override var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         button.contentTintColor = .labelColor
-        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
         button.onAction = { [weak self] in self?.onAction?() }
-        let caption = NSFont.preferredFont(forTextStyle: .caption2)
-        badge.font = NSFontManager.shared.convert(caption, toHaveTrait: .boldFontMask)
+        badge.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         badge.textColor = .white
         badge.alignment = .center
-        badge.wantsLayer = true
-        badge.layer?.masksToBounds = true
-        badge.isHidden = true
+        badgeBackground.wantsLayer = true
+        badgeBackground.layer?.masksToBounds = true
+        badgeBackground.isHidden = true
+        badgeBackground.setAccessibilityElement(false)
         badge.setAccessibilityElement(false)
         addSubview(background)
         addSubview(button)
-        addSubview(badge)
+        badgeBackground.addSubview(badge)
+        addSubview(badgeBackground)
         updateBadgeColor()
     }
 
@@ -424,7 +430,7 @@ private final class TimelineJumpControl: NSView {
     func setCount(_ count: Int64) {
         let title = String(localized: "Jump to latest messages")
         badge.stringValue = String(max(0, count))
-        badge.isHidden = count <= 0
+        badgeBackground.isHidden = count <= 0
         button.setAccessibilityLabel(title)
         button.setAccessibilityValue(count > 0 ? String(localized: "\(count) unread messages") : nil)
         needsLayout = true
@@ -434,12 +440,18 @@ private final class TimelineJumpControl: NSView {
         super.layout()
         background.frame = bounds
         button.frame = bounds
-        let font = badge.font ?? NSFont.systemFont(ofSize: 11)
-        let textSize = (badge.stringValue as NSString).size(withAttributes: [.font: font])
-        let height = ceil(textSize.height) + 10
-        let width = max(height, ceil(textSize.width) + 10)
-        badge.frame = NSRect(x: bounds.maxX - width + 8, y: -8, width: width, height: height)
-        badge.layer?.cornerRadius = height / 2
+        // NSTextField does not vertically center text in an enlarged frame.
+        // Keep its fitting height and center it inside the separate badge surface.
+        let textSize = badge.fittingSize
+        let height = max(18, ceil(textSize.height) + 4)
+        let width = max(height, ceil(textSize.width) + 6)
+        badgeBackground.frame = NSRect(
+            x: bounds.maxX - width / 2 + Self.defaultBadgeOffset.x,
+            y: -height / 2 + Self.defaultBadgeOffset.y, width: width, height: height)
+        badgeBackground.layer?.cornerRadius = height / 2
+        badge.frame = NSRect(
+            x: (width - textSize.width) / 2, y: (height - textSize.height) / 2,
+            width: textSize.width, height: textSize.height)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -455,8 +467,54 @@ private final class TimelineJumpControl: NSView {
 
     private func updateBadgeColor() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            badge.layer?.backgroundColor = NSColor(ChahuaTheme.accent).cgColor
+            badgeBackground.layer?.backgroundColor = NSColor(ChahuaTheme.accent).cgColor
         }
     }
 }
+
+#if DEBUG
+#Preview("Jump to latest badges", traits: .fixedLayout(width: 320, height: 180)) {
+    HStack(spacing: 24) {
+        TimelineJumpPreviewControl(count: 1)
+        TimelineJumpPreviewControl(count: 1234)
+    }
+    .padding(24)
+}
+
+private struct TimelineJumpPreviewControl: NSViewRepresentable {
+    let count: Int64
+
+    func makeNSView(context: Context) -> TimelineJumpPreviewHost {
+        let host = TimelineJumpPreviewHost()
+        host.clipsToBounds = false
+        host.control.clipsToBounds = false
+        return host
+    }
+
+    func updateNSView(_ view: TimelineJumpPreviewHost, context: Context) {
+        view.control.setCount(count)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TimelineJumpPreviewHost, context: Context) -> CGSize? {
+        CGSize(width: 120, height: 120)
+    }
+}
+
+private final class TimelineJumpPreviewHost: NSView {
+    let control = TimelineJumpControl()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        addSubview(control)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        let size = TimelineJumpControl.diameter
+        control.frame = NSRect(x: bounds.midX - size / 2, y: bounds.midY - size / 2, width: size, height: size)
+    }
+}
+#endif
 #endif
