@@ -252,6 +252,9 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let contentType = spec.contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         if let userAgent = configuration.userAgent { request.setValue(userAgent, forHTTPHeaderField: "User-Agent") }
+        if let appVersion = configuration.appVersion {
+            request.setValue(appVersion, forHTTPHeaderField: "X-App-Version")
+        }
         for (field, value) in spec.headers { request.setValue(value, forHTTPHeaderField: field) }
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpMethod = spec.method.rawValue

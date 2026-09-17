@@ -25,6 +25,27 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertTrue(recorded.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer candidate" })
     }
 
+    func testRequestsIncludeConfiguredAppVersion() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (200, #"{"uid":1,"username":"fixture","gender":0,"stickerPackOrder":[],"permissions":[],"avatarUrl":null}"#)
+        }
+        let client = ChahuaClient(
+            configuration: ChahuaConfiguration(
+                baseURL: URL(string: "https://api.example")!,
+                appVersion: "ios-0.2-201"
+            ),
+            token: "candidate",
+            session: testSession()
+        )
+
+        _ = try await client.me()
+
+        let request = try XCTUnwrap(requests.values.first)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-App-Version"), "ios-0.2-201")
+    }
+
     func testAuthenticateRejectsInvalidCandidateWithoutInstallingIt() async throws {
         StubURLProtocol.handler = { _ in (401, "") }
         let client = ChahuaClient(
