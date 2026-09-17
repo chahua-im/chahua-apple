@@ -156,9 +156,10 @@ final class ChatDraftStore: ObservableObject {
         }
     }
 
-    func submitDraft(chatID: String, threadID: String? = nil) async -> Bool {
+    func submitDraft(chatID: String, threadID: String? = nil, text submittedText: String? = nil) async -> Bool {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let text = draftText(chatID: chatID, threadID: threadID).trimmingCharacters(in: .whitespacesAndNewlines)
+        // A media caption stays modal-local until this atomic enqueue.
+        let text = (submittedText ?? draftText(chatID: chatID, threadID: threadID)).trimmingCharacters(in: .whitespacesAndNewlines)
         guard (!text.isEmpty || !outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty), !composingDrafts.contains(key),
               !committingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
         pendingDraftSaves.removeValue(forKey: key)?.cancel()

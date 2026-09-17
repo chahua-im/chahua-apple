@@ -7,6 +7,32 @@ import XCTest
 
 @MainActor
 final class MessageRowLayoutTests: XCTestCase {
+    func testVoiceDurationSharesTimestampRowWithoutOverlapAtNarrowAndLargeTextSizes() throws {
+        let message = try TimelineTestFixtures.message(id: "voice-footer", at: 1, type: .audio, fields: [
+            "message": NSNull(), "hasAttachments": true,
+            "attachments": [["id": "voice", "url": "https://media.example/voice.ogg",
+                             "kind": "audio/ogg", "size": 900, "fileName": "voice.ogg"]],
+        ])
+        let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: true, groupPosition: .single, showsSenderName: false))
+        for (width, body, caption): (CGFloat, CGFloat, CGFloat) in [(360, 17, 12), (200, 34, 24)] {
+            let environment = TimelineLayoutEnvironment.current(
+                timelineWidth: width, bodySize: body, captionSize: caption, caption2Size: caption)
+            let presentation = TimelineRowPresentation.make(
+                row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
+            let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+            let audio = try XCTUnwrap(layout.frames[.audio])
+            let timestamp = try XCTUnwrap(layout.frames[.metadata])
+            let metrics = presentation.voiceMetrics
+            let duration = CGRect(x: audio.minX, y: audio.maxY - metrics.statusHeight,
+                                  width: metrics.statusWidth(for: audio.width), height: metrics.statusHeight)
+            XCTAssertEqual(duration.midY, timestamp.midY, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(duration.maxX, timestamp.minX)
+            XCTAssertGreaterThan(duration.width, 0)
+            XCTAssertGreaterThan(timestamp.width, 0)
+            XCTAssertTrue(audio.insetBy(dx: -0.5, dy: -0.5).contains(timestamp))
+        }
+    }
+
     func testReactionsStayBelowBubbleAndAvatarOnBothSides() async throws {
         for outgoing in [false, true] {
             let message = try TimelineTestFixtures.message(id: "accessories", senderID: outgoing ? 1 : 2, at: 0, fields: [

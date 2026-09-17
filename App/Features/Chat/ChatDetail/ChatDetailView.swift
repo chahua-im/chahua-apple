@@ -486,15 +486,15 @@ struct ChatDetailView: View {
         }
     }
 
-    private func submitComposer() async -> Bool {
+    private func submitComposer(_ text: String) async -> Bool {
         guard let message = editingMessage else {
-            let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID)
+            let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID, text: text)
             if sent { await model.revealLatestAfterSend() }
             return sent
         }
         guard !isUpdatingMessage else { return false }
         isUpdatingMessage = true
-        let submittedText = editText
+        let submittedText = text
         let didUpdate = await store.updateMessage(message, text: submittedText)
         isUpdatingMessage = false
         if didUpdate {

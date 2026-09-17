@@ -4,6 +4,7 @@ import SwiftUI
     import AppKit
 #else
     import UIKit
+    import UniformTypeIdentifiers
 #endif
 
 enum ComposerInputSnapshot {
@@ -30,7 +31,7 @@ struct ComposerSendFocus: ViewModifier {
 }
 
 // SwiftUI exposes no marked-text API. Observe its editor without replacing its
-// delegate or editing model. On macOS intercept submission before AppKit's
+// text delegate or editing model. On macOS intercept submission before AppKit's
 // field-editor Return command ends editing and subsequent focus selects all.
 #if os(macOS)
     struct ComposerInputBridge: NSViewRepresentable {
@@ -144,7 +145,7 @@ struct ComposerSendFocus: ViewModifier {
             editor.isEditable = isEnabled
             marker.connect(
                 input: input, draft: draft, isFocused: true, isEnabled: isEnabled,
-                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit, focusOnEntry: true)
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
         }
 
         func captionHeight(for width: CGFloat) -> CGFloat {
@@ -193,6 +194,7 @@ struct ComposerSendFocus: ViewModifier {
         let isEnabled: Bool
         let onCompositionChanged: ((Bool) -> Void)?
         var onSubmit: (() -> Void)? = nil
+        var onPasteImages: (([NSItemProvider]) -> Void)? = nil
         // Desktop entry focus must not raise the software keyboard on iOS.
         var focusOnEntry = false
 
@@ -206,6 +208,8 @@ struct ComposerSendFocus: ViewModifier {
             marker.connect(
                 input: input, draft: draft, isFocused: isFocused, isEnabled: isEnabled,
                 onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
+            marker.onPasteImages = onPasteImages
+            marker.updateImagePasteSupport()
         }
 
         static func dismantleUIView(_ marker: ComposerInputMarker, coordinator: ()) { marker.disconnect() }
@@ -228,6 +232,11 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         private var entryFocusScheduled = false
     #else
         private weak var editor: UIView?
+        var onPasteImages: (([NSItemProvider]) -> Void)?
+        private weak var pasteEditor: (any UITextPasteConfigurationSupporting)?
+        private weak var previousPasteDelegate: (any UITextPasteDelegate)?
+        private var previousPasteConfiguration: UIPasteConfiguration?
+        private var pendingPastedImages: [NSItemProvider] = []
     #endif
 
     func connect(
@@ -255,6 +264,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         stopMonitoring()
         #if os(macOS)
             entryFocusPending = false
+        #else
+            onPasteImages = nil
+            pendingPastedImages.removeAll()
         #endif
         input?.nativeInput = nil
         input = nil
@@ -263,6 +275,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
     private func stopMonitoring() {
         NotificationCenter.default.removeObserver(self)
+        #if os(iOS)
+            restoreImagePasteSupport()
+        #endif
         editor = nil
         #if os(macOS)
             editorOwner = nil
@@ -494,6 +509,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             if let editor { return scopes(editor) ? editor : nil }
             guard isComposerFocused, let candidate = firstInput(in: window), scopes(candidate) else { return nil }
             editor = candidate
+            updateImagePasteSupport(for: candidate)
             return candidate
         }
 
@@ -528,12 +544,46 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         // Preserve UIKit's native behavior until hardware dispatch is verified.
         func insertNewline() -> Bool { false }
 
+        // SwiftUI's image paste command requires iOS 27. Extend the existing
+        // editor's paste configuration on older systems without replacing its
+        // text delegate, selection, undo handling or IME editing model.
+        func updateImagePasteSupport() {
+            if let editor = resolveEditor() { updateImagePasteSupport(for: editor) }
+        }
+
+        private func updateImagePasteSupport(for view: UIView) {
+            guard onPasteImages != nil, isComposerEnabled,
+                  let target = view as? any UITextPasteConfigurationSupporting else {
+                restoreImagePasteSupport()
+                return
+            }
+            guard pasteEditor !== target else { return }
+            restoreImagePasteSupport()
+            pasteEditor = target
+            previousPasteDelegate = target.pasteDelegate
+            previousPasteConfiguration = target.pasteConfiguration
+            let types = target.pasteConfiguration?.acceptableTypeIdentifiers ?? [UTType.text.identifier]
+            target.pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: types + [UTType.image.identifier])
+            target.pasteDelegate = self
+        }
+
+        private func restoreImagePasteSupport() {
+            if let target = pasteEditor, target.pasteDelegate === self {
+                target.pasteDelegate = previousPasteDelegate
+                target.pasteConfiguration = previousPasteConfiguration
+            }
+            pasteEditor = nil
+            previousPasteDelegate = nil
+            previousPasteConfiguration = nil
+        }
+
         @objc private func nativeChanged(_ notification: Notification) {
             if notification.name == UITextField.textDidEndEditingNotification
                 || notification.name == UITextView.textDidEndEditingNotification,
                 let ended = notification.object as? UIView, ended === editor
             {
                 input?.nativeEditingEnded(snapshot(of: ended))
+                restoreImagePasteSupport()
                 editor = nil
                 return
             }
@@ -544,6 +594,29 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 }
 
 #if os(iOS)
+extension ComposerInputMarker: UITextPasteDelegate {
+    func textPasteConfigurationSupporting(_ textPasteConfigurationSupporting: any UITextPasteConfigurationSupporting, transform item: any UITextPasteItem) {
+        guard item.itemProvider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
+            if previousPasteDelegate?.textPasteConfigurationSupporting?(textPasteConfigurationSupporting, transform: item) == nil {
+                item.setDefaultResult()
+            }
+            return
+        }
+        item.setNoResult()
+        guard isComposerEnabled, onPasteImages != nil else { return }
+        pendingPastedImages.append(item.itemProvider)
+        guard pendingPastedImages.count == 1 else { return }
+        // Batch images from one paste before opening the attachment dialog.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let providers = self.pendingPastedImages
+            self.pendingPastedImages.removeAll()
+            guard self.isComposerEnabled, !providers.isEmpty else { return }
+            self.onPasteImages?(providers)
+        }
+    }
+}
+
 /// A window observer includes navigation and empty timeline space. SwiftUI's
 /// ancestor tap gestures cannot exclude the composer's bounds without competing
 /// with native row gestures, so this recognizer observes without preventing them.
@@ -592,5 +665,49 @@ final class ComposerOutsideTapView: UIView, UIGestureRecognizerDelegate {
 private final class ComposerOutsideTapRecognizer: UITapGestureRecognizer {
     override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
     override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+}
+
+/// A presented iPad sheet can overlap the keyboard without receiving a reduced
+/// SwiftUI proposal. UIKit's keyboard layout guide measures only the overlap
+/// still present after SwiftUI safe-area avoidance, including floating keyboards.
+/// This transparent background never owns focus or changes the text editor.
+struct ComposerKeyboardAvoidance: UIViewRepresentable {
+    var onOverlapChange: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> KeyboardView { KeyboardView() }
+    func updateUIView(_ view: KeyboardView, context: Context) {
+        view.onOverlapChange = onOverlapChange
+    }
+
+    final class KeyboardView: UIView {
+        var onOverlapChange: ((CGFloat) -> Void)?
+        private let keyboardTop = UIView()
+        private var reportedOverlap: CGFloat = -1
+
+        init() {
+            super.init(frame: .zero)
+            keyboardLayoutGuide.followsUndockedKeyboard = true
+            keyboardTop.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(keyboardTop)
+            NSLayoutConstraint.activate([
+                keyboardTop.topAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor),
+                keyboardTop.leadingAnchor.constraint(equalTo: leadingAnchor),
+                keyboardTop.widthAnchor.constraint(equalToConstant: 0),
+                keyboardTop.heightAnchor.constraint(equalToConstant: 0),
+            ])
+        }
+
+        required init?(coder: NSCoder) { nil }
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard window != nil else { return }
+            let overlap = max(0, bounds.maxY - safeAreaInsets.bottom - keyboardTop.frame.minY)
+            guard abs(overlap - reportedOverlap) > 0.5 else { return }
+            reportedOverlap = overlap
+            DispatchQueue.main.async { [weak self] in self?.onOverlapChange?(overlap) }
+        }
+    }
 }
 #endif

@@ -105,6 +105,8 @@ final class TimelineBubbleContentView: NSView {
             let view = metadataView ?? makeMetadata()
             view.isHidden = false
             view.configure(metadata, overlay: p.metadataIsOverlay && localFrames[.media] != nil, failureAction: failureAction)
+            // Audio hosts the shared footer behind native timestamp/status.
+            sections.addSubview(view, positioned: .above, relativeTo: nil)
         } else { metadataView?.clear(); metadataView?.isHidden = true }
         if localFrames[.standalone] != nil, let text = p.standaloneText {
             let view = standaloneView ?? makeStandalone()
@@ -248,7 +250,7 @@ final class TimelineBubbleContentView: NSView {
             controller: controller, url: binding.presentation.audioURL,
             isOutgoing: row.isOutgoing,
             isActive: visible && !binding.context.isInteractionPreview,
-            metrics: .init(bodySize: environment.bodySize, captionSize: environment.captionSize),
+            metrics: binding.presentation.voiceMetrics,
             localeIdentifier: environment.localeIdentifier, layoutDirection: environment.layoutDirection)
         if let voiceView {
             voiceView.rootView = content

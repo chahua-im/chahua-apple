@@ -40,32 +40,40 @@ struct FixtureGalleryView: View {
                     .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
                 }
                 #endif
-                Section("Form controls") {
+                Section {
                     ChahuaTextField(title: "Username", prompt: "Username", text: .constant("fixture-user"))
                     ChahuaSecureField(title: "Password", prompt: "Password", text: .constant(""), validationMessage: "Invalid credentials.")
                     ChahuaPrimaryButton(title: "Sign in", isWorking: false, action: {})
                     ChahuaPrimaryButton(title: "Signing in", isWorking: true, action: {})
+                } header: {
+                    Text(verbatim: "Form controls")
                 }
-                Section("Content states") {
+                Section {
                     ChahuaLoadingView(title: "Loading")
                     ChahuaEmptyStateView(title: "No content", message: "There is nothing to show yet.", systemImage: "tray")
                     ChahuaRecoverableErrorView(title: "Something went wrong", message: "Try again when you are connected.", retryTitle: "Try again", onRetry: {})
+                } header: {
+                    Text(verbatim: "Content states")
                 }
-                Section("Avatars and images") {
+                Section {
                     AvatarView(url: nil, displayName: "Ada Lovelace")
                     RemoteImageView(url: nil, phaseOverride: .empty).frame(height: 44)
                     RemoteImageView(url: nil, phaseOverride: .failure).frame(height: 44)
+                } header: {
+                    Text(verbatim: "Avatars and images")
                 }
-                Section("Timestamps") {
+                Section {
                     TimestampView(date: fixtureDate, style: .time)
                     TimestampView(date: fixtureDate, style: .date)
                     TimestampView(date: fixtureDate, style: .dateTime)
                     TimestampView(date: fixtureDate, style: .relative)
+                } header: {
+                    Text(verbatim: "Timestamps")
                 }
             }
             .listStyle(.plain)
             }
-            .navigationTitle("Component gallery")
+            .navigationTitle(Text(verbatim: "Component gallery"))
         }
     }
 

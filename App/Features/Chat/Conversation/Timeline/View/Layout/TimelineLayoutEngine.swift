@@ -145,10 +145,9 @@ struct TimelineLayoutEngine {
         }
         if audio {
             if p.title == nil && p.reply == nil { height += 8 }
-            let audioHeight = pixel(VoiceMessageBubbleMetrics(bodySize: e.bodySize, captionSize: e.captionSize)
-                .height(for: innerWidth), e)
+            let audioHeight = pixel(p.voiceMetrics.height(for: innerWidth), e)
             frames[.audio] = CGRect(x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: audioHeight)
-            height += audioHeight + 4
+            height += audioHeight + 8
         }
         var geometry: MessageTextGeometry?
         if hasBody {
@@ -169,7 +168,18 @@ struct TimelineLayoutEngine {
             height += frames[.standalone]!.height + 8
         }
         if let metadata {
-            if p.metadataIsOverlay, let media = frames[.media] {
+            if audio, let audioFrame = frames[.audio] {
+                // The SwiftUI duration reserves this trailing region. Both use
+                // the same metrics, including narrow-width metadata scaling.
+                let metrics = p.voiceMetrics
+                let size = metrics.displayedMetadataSize(for: innerWidth)
+                let footerY = audioFrame.minY + metrics.height(for: innerWidth) - metrics.statusHeight
+                frames[.metadata] = CGRect(
+                    x: audioFrame.maxX - size.width,
+                    y: footerY + (metrics.statusHeight - size.height) / 2,
+                    width: size.width, height: size.height
+                )
+            } else if p.metadataIsOverlay, let media = frames[.media] {
                 let outerInset = min(sticker ? 4 : 6, media.width / 2)
                 let pillPadding = min(6, max(0, (media.width - 2 * outerInset) / 2))
                 let size = scaled(metadata.size, width: max(0, media.width - 2 * (outerInset + pillPadding)))

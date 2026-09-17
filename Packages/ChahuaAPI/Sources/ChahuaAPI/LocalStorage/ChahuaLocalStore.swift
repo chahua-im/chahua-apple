@@ -77,7 +77,9 @@ public final class ChahuaLocalStore: Sendable {
             guard !trimmed.isEmpty || before.composingItem?.attachments.isEmpty == false else { throw LocalStorageError.blankMessage }
             if let item = before.composingItem {
                 try Self.validateAttachments(item.attachments, directory: self.directory)
-                try db.execute(sql: "UPDATE outgoing_message SET sender_id = ?, text = ?, reply_to_message = ?, is_blocked = 0, edit_revision = ?, updated_at = ? WHERE client_generated_id = ?", arguments: [senderID, trimmed, replyData, clearedDraftRevision, enqueuedAt.timeIntervalSince1970, item.clientGeneratedID])
+                // Draft creation time is not send time: optimistic timeline ordering
+                // and sender grouping must agree with the eventual acknowledgement.
+                try db.execute(sql: "UPDATE outgoing_message SET sender_id = ?, text = ?, reply_to_message = ?, is_blocked = 0, edit_revision = ?, enqueued_at = ?, updated_at = ? WHERE client_generated_id = ?", arguments: [senderID, trimmed, replyData, clearedDraftRevision, enqueuedAt.timeIntervalSince1970, enqueuedAt.timeIntervalSince1970, item.clientGeneratedID])
             } else {
                 try Self.insert(db, key, id: clientGeneratedID, senderID: senderID, text: trimmed, replyData: replyData, date: enqueuedAt, revision: clearedDraftRevision, blocked: false)
             }

@@ -8,6 +8,71 @@ import SwiftUI
 
 @MainActor
 final class TimelineCollectionViewControllerTests: XCTestCase {
+    func testInteractionDismissalPublishesAfterNativeUpdateAndRemovesOverlay() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIViewController()
+        window.makeKeyAndVisible()
+        let coordinator = MessageInteractionWindowPresenter.Coordinator()
+        defer { coordinator.remove(); window.isHidden = true }
+        let initialSubviews = window.subviews
+        var state: MessageInteractionAnimation?
+        coordinator.overlay = { animation in
+            state = animation
+            return AnyView(Color.clear)
+        }
+        coordinator.isPresented = true
+        coordinator.attach(to: window)
+        try await Task.sleep(for: .milliseconds(200))
+        let animation = try XCTUnwrap(state)
+        XCTAssertTrue(animation.isPresented)
+        var insideUpdate = false
+        let observation = animation.objectWillChange.sink {
+            XCTAssertFalse(insideUpdate, "Dismissal must not publish inside updateUIView")
+        }
+        defer { observation.cancel() }
+        coordinator.isPresented = false
+        insideUpdate = true
+        coordinator.attach(to: window)
+        insideUpdate = false
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertFalse(animation.isPresented)
+        XCTAssertEqual(window.subviews, initialSubviews, "Dismissal must still remove the native overlay")
+    }
+
+    func testDeletionRemovesNativeRowsAndEmptyDateSeparators() async throws {
+        let messages = try [
+            TimelineTestFixtures.message(id: "first", at: 0),
+            TimelineTestFixtures.message(id: "second", at: 86_400),
+        ]
+        let store = ConversationMessageStore()
+        let source = BubbleSource(page: try TimelineTestFixtures.page(messages))
+        let model = ConversationTimelineModel(chatID: "chat", currentUserID: 1, isGroupChat: true,
+                                              source: source, messageStore: store)
+        let controller = TimelineCollectionViewController(model: model, actions: .init())
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; model.close() }
+        await model.loadInitial()
+        try await Task.sleep(for: .milliseconds(100))
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        XCTAssertEqual(collection.numberOfItems(inSection: 0), 4)
+
+        store.apply(.messageDeleted(messages[1].redactedForDeletion()))
+        try await Task.sleep(for: .milliseconds(100))
+        controller.view.layoutIfNeeded()
+        XCTAssertEqual(model.rows.compactMap(\.messageID), ["first"])
+        XCTAssertEqual(collection.numberOfItems(inSection: 0), 2, "Remove the bubble and its now-empty day")
+
+        store.apply(.messagesBulkDeleted(.init(chatId: "chat", messageIds: ["first"])))
+        try await Task.sleep(for: .milliseconds(100))
+        controller.view.layoutIfNeeded()
+        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertEqual(collection.numberOfItems(inSection: 0), 0, "No deleted placeholder or orphan separator remains")
+    }
+
     func testPreviewPreservesImageOnlyAndOversizedBubbleGeometry() async throws {
         let image = try TimelineTestFixtures.message(id: "image-preview", at: 0, fields: [
             "message": NSNull(), "hasAttachments": true,
@@ -96,6 +161,14 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         await model.jumpToLiveEdge()
         XCTAssertNil(model.updates.value.pendingScroll,
                      "A jump already at its destination must finish without an animation callback")
+
+        controller.scrollViewWillBeginDragging(collection)
+        collection.setContentOffset(CGPoint(x: 0, y: collection.contentOffset.y - 100), animated: false)
+        controller.scrollViewDidEndDragging(collection, willDecelerate: false)
+        await model.revealLatestAfterSend()
+        controller.viewDidLayoutSubviews()
+        XCTAssertEqual(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height, 0, accuracy: 1,
+                       "Sending must reveal the live edge immediately, without waiting for a scroll animation")
 
         controller.view.frame.size.height = 350
         parent.view.layoutIfNeeded()

@@ -66,6 +66,12 @@ struct ConversationListRow: View {
                             .background(isMuted ? ChahuaTheme.ChatList.muted(for: colorScheme) : ChahuaTheme.ChatList.primary, in: Capsule())
                             .fixedSize()
                             .accessibilityLabel("\(item.unreadCount) unread messages")
+                    } else if isMuted {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(isSelected ? Color.white.opacity(0.88) : Color.secondary)
+                            .frame(minWidth: 24)
+                            .accessibilityLabel("Muted")
                     }
                 }
                 .frame(height: 19)

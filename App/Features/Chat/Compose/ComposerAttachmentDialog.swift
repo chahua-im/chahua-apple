@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
     import UIKit
 #endif
 
-/// Caption edits use the conversation draft directly: cancellation never discards text.
+/// The caller supplies a modal-local caption draft and transfers it on dismissal.
 struct ComposerAttachmentDialog: View {
     @Binding var text: String
     let attachments: [LocalOutgoingAttachment]
@@ -28,11 +28,17 @@ struct ComposerAttachmentDialog: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var input = ComposerInputState()
     @FocusState private var isCaptionFocused: Bool
+    #if os(macOS)
+    @FocusState private var isCancelFocused: Bool
+    #endif
     @State private var isSubmitting = false
     @State private var isCancelling = false
     @State private var cancellationError: String?
     @State private var sendFailed = false
     @State private var isMediaDropTargeted = false
+    #if os(iOS)
+    @State private var keyboardOverlap: CGFloat = 0
+    #endif
 
     private var canInteract: Bool { isEnabled && !isAcquiring && !isSubmitting && !isCancelling }
     private var canEditCaption: Bool { isEnabled && !isSubmitting && !isCancelling }
@@ -62,10 +68,8 @@ struct ComposerAttachmentDialog: View {
                 .clipped()
             }
             .padding(.horizontal, 12)
-        }
-        // Reserve the caption before proposing a viewport to the gallery.
-        // SwiftUI's keyboard safe area keeps this bar above the iOS keyboard.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // The caption is a real layout row, not an overlay on the gallery.
+            // Its height is reserved before the flexible media viewport is sized.
             VStack(spacing: 4) {
                 if isAcquiring {
                     ProgressView("Updating attachments…").controlSize(.small)
@@ -83,10 +87,19 @@ struct ComposerAttachmentDialog: View {
             }
             .background(.regularMaterial)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if os(iOS)
+        .padding(.bottom, keyboardOverlap)
+        .background {
+            ComposerKeyboardAvoidance { keyboardOverlap = $0 }
+        }
+        #endif
         .buttonStyle(.plain)
         .background(.regularMaterial)
         #if os(macOS)
         .frame(width: 520, height: attachments.count > 1 ? 620 : 520)
+        // AppKit otherwise chooses the native caption as its initial key view.
+        .defaultFocus($isCancelFocused, true)
         #endif
         .contentShape(Rectangle())
         .onDrop(of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted, perform: importDrop)
@@ -112,13 +125,6 @@ struct ComposerAttachmentDialog: View {
         .onAppear {
             input.receiveExternalText(text)
         }
-        .task {
-            #if os(iOS)
-                await Task.yield()
-                guard !Task.isCancelled else { return }
-                isCaptionFocused = true
-            #endif
-        }
         .onChange(of: text) { _, value in input.receiveExternalText(value) }
         .onDisappear { input.settleNativeInput() }
     }
@@ -133,12 +139,27 @@ struct ComposerAttachmentDialog: View {
             }
             .accessibilityLabel("Cancel")
             .disabled(isAcquiring || isSubmitting || isCancelling)
-            .modifier(ComposerSendFocus())
+            #if os(macOS)
+            .focusable()
+            .focused($isCancelFocused)
+            #endif
             Spacer()
             Text("\(attachments.count) Media")
                 .font(.headline)
                 .accessibilityLabel("\(attachments.count) attachments")
             Spacer()
+            #if os(iOS)
+            if isCaptionFocused {
+                Button(action: dismissKeyboard) {
+                    Image(systemName: "keyboard.chevron.compact.down")
+                        .font(.title3)
+                        .frame(width: 44, height: 44)
+                        .background(.background.opacity(0.8), in: Circle())
+                }
+                .disabled(isSubmitting || isCancelling)
+                .accessibilityLabel("Hide keyboard")
+            }
+            #endif
             Menu {
                 if attachments.contains(where: { $0.mimeType.hasPrefix("image/") }) {
                     Toggle("Compress images", isOn: Binding(
@@ -165,15 +186,6 @@ struct ComposerAttachmentDialog: View {
 
     private var captionBar: some View {
         HStack(alignment: .bottom, spacing: 12) {
-            #if os(iOS)
-                Button(action: dismissKeyboard) {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                        .font(.title3)
-                        .frame(width: 44, height: 48)
-                }
-                .disabled(!isCaptionFocused || isSubmitting || isCancelling)
-                .accessibilityLabel("Hide keyboard")
-            #endif
             captionEditor
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)

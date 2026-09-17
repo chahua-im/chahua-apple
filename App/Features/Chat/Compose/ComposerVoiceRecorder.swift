@@ -8,9 +8,13 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         case idle, requestingPermission, recording, preview, sending
     }
 
+    enum HoldAction { case preview, lock, send }
+
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var previewURL: URL?
+    @Published private(set) var isLocked = false
+    @Published private(set) var liveWaveform = VoiceRecordingWaveform()
     @Published var error: String?
 
     var isActive: Bool { phase != .idle }
@@ -72,20 +76,24 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         }
     }
 
-    func start() {
+    func start(holding: Bool = false) {
         guard phase == .idle else { return }
         error = nil
+        isLocked = !holding
+        liveWaveform = VoiceRecordingWaveform()
         phase = .requestingPermission
         generation = UUID()
         let request = generation
         permissionWasGranted = false
         permissionTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
             let granted = await Self.requestPermission()
             guard !Task.isCancelled, let self, self.generation == request,
                   self.phase == .requestingPermission else { return }
             self.permissionTask = nil
             guard granted else {
                 self.phase = .idle
+                self.isLocked = false
                 self.error = String(localized: "Allow microphone access in Settings to record voice messages.")
                 return
             }
@@ -94,14 +102,30 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         }
     }
 
+    /// Resolve the touch gesture once. A released permission request must not
+    /// start recording later; only an explicit lock retains that intent.
+    func finishHold(_ action: HoldAction, using onSendVoice: @escaping (URL) async -> Bool) {
+        guard phase == .requestingPermission || phase == .recording else { return }
+        switch action {
+        case .lock:
+            isLocked = true
+        case .preview:
+            stop()
+        case .send:
+            stop()
+            if phase == .preview { send(using: onSendVoice) }
+        }
+    }
+
     func stop() {
+        if phase == .requestingPermission { discard(); return }
         guard phase == .recording, let recorder else { return }
         elapsed = max(elapsed, recorder.currentTime)
         finishRecording()
-        // Flutter uses the same 500 ms minimum for a usable voice draft.
-        guard elapsed >= 0.5 else {
+        isLocked = false
+        guard elapsed >= 1 else {
             discard()
-            error = String(localized: "Record for at least half a second before sending.")
+            error = String(localized: "Voice message is too short. Record for at least 1 second.")
             return
         }
         previewURL = files?.recordingURL
@@ -110,6 +134,7 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
 
     func send(using onSendVoice: @escaping (URL) async -> Bool) {
         guard phase == .preview, let files else { return }
+        VoicePlaybackController.stopAll()
         error = nil
         phase = .sending
         sendTask = Task {
@@ -143,6 +168,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         finishRecording()
         previewURL = nil
         files = nil
+        isLocked = false
+        liveWaveform = VoiceRecordingWaveform()
         elapsed = 0
         phase = .idle
         error = nil
@@ -192,6 +219,7 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             ])
             self.recorder = recorder
             recorder.delegate = self
+            recorder.isMeteringEnabled = true
             guard recorder.prepareToRecord(), recorder.record() else {
                 throw CocoaError(.fileWriteUnknown)
             }
@@ -199,10 +227,12 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             phase = .recording
             clockTask = Task { [weak self] in
                 while !Task.isCancelled {
-                    do { try await Task.sleep(for: .milliseconds(100)) }
+                    do { try await Task.sleep(for: .milliseconds(50)) }
                     catch { return }
                     guard let self, self.phase == .recording else { return }
                     if let recorder = self.recorder, recorder.isRecording {
+                        recorder.updateMeters()
+                        self.liveWaveform.append(power: recorder.peakPower(forChannel: 0))
                         self.elapsed = recorder.currentTime
                     }
                 }

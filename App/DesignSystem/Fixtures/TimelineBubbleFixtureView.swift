@@ -31,7 +31,7 @@
                     VStack(alignment: .leading, spacing: 0) {
                         ConversationListHeader(selection: $listScope) {
                             Menu {
-                                Text("Alex")
+                                Text(verbatim: "Alex")
                             } label: {
                                 AvatarView(
                                     url: ProcessInfo.processInfo.environment["CHAHUA_FIXTURE_AVATAR"].map { URL(fileURLWithPath: $0) },
@@ -42,9 +42,13 @@
                             Button {
                                 hasSelection = true
                             } label: {
-                                Label("Native bubble timeline", systemImage: "bubble.left.and.bubble.right")
+                                Label {
+                                    Text(verbatim: "Native bubble timeline")
+                                } icon: {
+                                    Image(systemName: "bubble.left.and.bubble.right")
+                                }
                             }
-                            Text("Drag the divider to resize the sidebar.")
+                            Text(verbatim: "Drag the divider to resize the sidebar.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             diagnosticControls
@@ -111,11 +115,13 @@
                 } else if let error = fixture.error {
                     Text(error).textSelection(.enabled).padding()
                 } else {
-                    ProgressView("Generating local fixtures")
+                    ProgressView {
+                        Text(verbatim: "Generating local fixtures")
+                    }
                 }
             }
             .preferredColorScheme(dark ? .dark : .light)
-            .navigationTitle("Native bubble timeline")
+            .navigationTitle(Text(verbatim: "Native bubble timeline"))
             .frame(minWidth: 300, minHeight: 400)
             .task { fixture.prepare() }
             #if os(macOS)
@@ -148,8 +154,8 @@
                     maxHeight: 160,
                     isEnabled: true,
                     canSend: true,
-                    onSubmit: {
-                        event = "Submitted: \(draft)" + (replyToMessage.map { " → \($0.id)" } ?? "")
+                    onSubmit: { text in
+                        event = "Submitted: \(text)" + (replyToMessage.map { " → \($0.id)" } ?? "")
                         draft = ""
                         replyToMessage = nil
                         return true
@@ -165,30 +171,48 @@
 
         private var diagnosticControls: some View {
             VStack(alignment: .leading, spacing: 8) {
-                Toggle("Dark", isOn: $dark)
-                Toggle("Action hooks", isOn: $handlersEnabled)
-                Toggle("Thread scope", isOn: $threadScope)
+                Toggle(isOn: $dark) { Text(verbatim: "Dark") }
+                Toggle(isOn: $handlersEnabled) { Text(verbatim: "Action hooks") }
+                Toggle(isOn: $threadScope) { Text(verbatim: "Thread scope") }
                     .onChange(of: threadScope) { _, value in fixture.setThreadScope(value) }
                 HStack {
-                    Button("Queue") { Task { await fixture.queue() } }
+                    Button {
+                        Task { await fixture.queue() }
+                    } label: {
+                        Text(verbatim: "Queue")
+                    }
                         .disabled(fixture.hasQueued)
-                    Button("Sending") {
+                    Button {
                         fixture.store.markSending(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending")
+                    } label: {
+                        Text(verbatim: "Sending")
                     }
-                    Button("Fail") {
+                    Button {
                         fixture.store.markFailed(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending")
+                    } label: {
+                        Text(verbatim: "Fail")
                     }
-                    Button("Acknowledge") { fixture.acknowledge() }
+                    Button {
+                        fixture.acknowledge()
+                    } label: {
+                        Text(verbatim: "Acknowledge")
+                    }
                 }
-                Button("Fail next reaction") { fixture.reactionClient.failNextMutation = true }
+                Button {
+                    fixture.reactionClient.failNextMutation = true
+                } label: {
+                    Text(verbatim: "Fail next reaction")
+                }
                 #if os(macOS)
-                Button(scrollExperiment == nil ? "Run scroll sweep (1,200 frames)" : "Stop scroll sweep") {
+                Button {
                     if let current = scrollExperiment {
                         current.cancel()
                         scrollExperiment = nil
                         event = "Sweep stopped"
                     }
                     else { startScrollExperiment() }
+                } label: {
+                    Text(verbatim: scrollExperiment == nil ? "Run scroll sweep (1,200 frames)" : "Stop scroll sweep")
                 }
                 .disabled(fixture.timeline == nil)
                 #endif

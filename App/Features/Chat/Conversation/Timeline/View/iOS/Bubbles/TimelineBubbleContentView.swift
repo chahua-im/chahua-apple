@@ -282,7 +282,7 @@ final class TimelineBubbleContentView: UIView {
                 controller: controller, url: binding.presentation.audioURL,
                 isOutgoing: row.isOutgoing,
                 isActive: visible && !binding.context.isInteractionPreview,
-                metrics: .init(bodySize: environment.bodySize, captionSize: environment.captionSize),
+                metrics: binding.presentation.voiceMetrics,
                 localeIdentifier: environment.localeIdentifier, layoutDirection: environment.layoutDirection)
         }.margins(.all, 0)
         if let voiceView {

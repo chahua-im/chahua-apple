@@ -15,6 +15,71 @@ import XCTest
 
 @MainActor
 final class ComposerFocusTests: XCTestCase {
+    func testCaptionWaitsForUserFocus() async throws {
+        let h = try FocusComposerHarness(text: "caption", enabled: true, caption: true)
+        addTeardownBlock { @MainActor in h.close() }
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertFalse(h.hasFocusedEditor)
+        try h.focus()
+        try await pause()
+        XCTAssertTrue(h.hasFocusedEditor)
+    }
+
+    #if os(iOS)
+    func testStickerPickerRestoresOnlyDisplacedInputFocus() async throws {
+        let h = try await mount(text: "")
+        h.state.stickerLibrary = StickerLibrary(apiClient: FakeChatAPI(), onInvalidToken: {})
+        try await pause()
+        XCTAssertTrue(h.hasFocusedEditor)
+        XCTAssertTrue(try XCTUnwrap(h.accessibilityElement(named: "Stickers")).accessibilityActivate())
+        try await pause()
+        XCTAssertFalse(h.hasFocusedEditor)
+        XCTAssertTrue(try XCTUnwrap(h.accessibilityElement(named: "Close stickers")).accessibilityActivate())
+        try await pause()
+        XCTAssertTrue(h.hasFocusedEditor)
+
+        h.blur()
+        try await pause()
+        XCTAssertTrue(try XCTUnwrap(h.accessibilityElement(named: "Stickers")).accessibilityActivate())
+        try await pause()
+        XCTAssertTrue(try XCTUnwrap(h.accessibilityElement(named: "Close stickers")).accessibilityActivate())
+        try await pause()
+        XCTAssertFalse(h.hasFocusedEditor)
+    }
+    #endif
+
+    #if os(iOS)
+    func testInputPasteImportsImageWithoutReplacingCaptionAndKeepsTextPasteNative() async throws {
+        let h = try await mount(text: "caption")
+        let imported = expectation(description: "Image imported from input paste")
+        h.state.onImportImages = { urls in
+            XCTAssertEqual(urls.count, 1)
+            let image = try UIImage(data: Data(contentsOf: XCTUnwrap(urls.first)))
+            XCTAssertEqual(image?.size, CGSize(width: 16, height: 12))
+            imported.fulfill()
+        }
+        try await pause()
+        let editor = try XCTUnwrap(h.focusedEditor() as? UITextView)
+        let previousItems = UIPasteboard.general.items
+        defer { UIPasteboard.general.items = previousItems }
+        try h.selectEnd()
+        UIPasteboard.general.string = " tail"
+        editor.paste(nil)
+        try await pause()
+        XCTAssertEqual(h.state.text, "caption tail")
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 12), format: format).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 16, height: 12))
+        }
+        editor.paste(nil)
+        await fulfillment(of: [imported], timeout: 3)
+        XCTAssertEqual(h.state.text, "caption tail", "Images must become attachments, not text replacements.")
+    }
+    #endif
+
     func testSendingKeepsEditingSessionThroughDraftCommit() async throws {
         let h = try await mount(text: "send this")
         let editor = try h.focusedEditor()
@@ -192,7 +257,7 @@ final class ComposerFocusTests: XCTestCase {
             let caption = (1...30).map { "Caption line \($0)" }.joined(separator: "\n")
             let h = try await mount(text: caption, caption: true)
             let editor = try h.focusedEditor()
-            XCTAssertEqual(editor.selectedRange(), NSRange(location: caption.utf16.count, length: 0))
+            try h.selectEnd()
             try h.insertIntoFocusedEditor("!")
             try await pause()
             XCTAssertEqual(h.state.text, caption + "!")
@@ -280,6 +345,68 @@ final class ComposerFocusTests: XCTestCase {
     #endif
 
     #if os(iOS)
+    func testAttachmentCaptionIsIsolatedUntilCancelOrSuccessfulSend() async throws {
+        let h = try await mount(text: "original draft")
+        let media = LocalOutgoingAttachment(
+            id: "caption", generation: "original", position: 0,
+            sourcePath: "/missing-fixture.png", previewPath: "/missing-fixture.png", fileName: "caption.png",
+            mimeType: "image/png", width: 300, height: 900, byteCount: 1)
+        h.state.media = [media]
+        try await Task.sleep(for: .milliseconds(600))
+        try h.focus()
+        try await pause()
+        try h.selectEnd()
+        try h.insertIntoFocusedEditor(" edited")
+        try await pause()
+        XCTAssertEqual(h.state.text, "original draft", "Caption typing must not change the compose bar")
+        let capture = UIGraphicsImageRenderer(bounds: h.window.bounds).image { _ in
+            h.window.drawHierarchy(in: h.window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: capture)
+        attachment.name = "Isolated caption and underlying composer"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        h.state.onSubmit = { caption in
+            h.state.submits += 1
+            XCTAssertEqual(caption, "original draft edited")
+            return false
+        }
+        XCTAssertTrue(try XCTUnwrap(h.accessibilityElement(named: "Send")).accessibilityActivate())
+        try await pause()
+        XCTAssertEqual(h.state.submits, 1)
+        XCTAssertNotNil(h.host.presentedViewController, "Failed sends keep the modal open")
+        XCTAssertEqual(h.state.text, "original draft")
+        let cancel = try XCTUnwrap(h.accessibilityElement(named: "Cancel"))
+        XCTAssertTrue(cancel.accessibilityActivate())
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertNil(h.host.presentedViewController)
+        XCTAssertEqual(h.state.text, "original draft edited", "X transfers the caption back")
+
+        h.state.media = [media]
+        try await Task.sleep(for: .milliseconds(600))
+        try h.focus()
+        try await pause()
+        try h.selectEnd()
+        try h.insertIntoFocusedEditor(" sent")
+        try await pause()
+        h.state.onSubmit = { caption in
+            h.state.submits += 1
+            XCTAssertEqual(caption, "original draft edited sent")
+            h.state.text = ""
+            h.state.media = []
+            return true
+        }
+        XCTAssertTrue(try XCTUnwrap(h.accessibilityElement(named: "Send")).accessibilityActivate())
+        for _ in 0 ..< 40 {
+            if h.host.presentedViewController == nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertNil(h.host.presentedViewController)
+        XCTAssertEqual(h.state.text, "", "Successful sends must not restore the modal caption")
+        XCTAssertEqual(h.state.submits, 2)
+    }
+
     func testAttachmentCaptionAndSendRemainAboveKeyboardWithPortraitPreview() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
         let data = try makeMediaPNG(red: 40, green: 120, blue: 200, width: 300, height: 900)
@@ -290,18 +417,20 @@ final class ComposerFocusTests: XCTestCase {
             id: "portrait", generation: "original", position: 0,
             sourcePath: file.path, previewPath: file.path, fileName: "portrait.png",
             mimeType: "image/png", width: 300, height: 900, byteCount: Int64(data.count))]
-        // A reduced safe area also exercises compact space when the test host uses a hardware keyboard.
-        h.host.additionalSafeAreaInsets.bottom = 100
+        // Exercise the presented sheet, not an inline approximation of its root.
+        let presented = try XCTUnwrap(h.host.presentedViewController)
+        presented.additionalSafeAreaInsets.bottom = 100
         try await Task.sleep(for: .milliseconds(600))
-        h.host.view.layoutIfNeeded()
+        let root = h.editorRoot
+        root.layoutIfNeeded()
         let editor = try XCTUnwrap(try h.focusedEditor() as? UIView)
-        let caption = editor.convert(editor.bounds, to: h.host.view)
+        let caption = editor.convert(editor.bounds, to: root)
         let send = try XCTUnwrap(h.accessibilityElement(named: "Send"))
-        let sendFrame = h.host.view.convert(
+        let sendFrame = root.convert(
             h.window.convert(send.accessibilityFrame, from: h.window.screen.coordinateSpace), from: h.window)
-        let bottom = min(h.host.view.safeAreaLayoutGuide.layoutFrame.maxY, h.host.view.keyboardLayoutGuide.layoutFrame.minY)
+        let bottom = min(root.safeAreaLayoutGuide.layoutFrame.maxY, root.keyboardLayoutGuide.layoutFrame.minY)
         XCTAssertGreaterThan(caption.height, 0)
-        XCTAssertGreaterThanOrEqual(caption.minY, h.host.view.safeAreaLayoutGuide.layoutFrame.minY)
+        XCTAssertGreaterThanOrEqual(caption.minY, root.safeAreaLayoutGuide.layoutFrame.minY)
         XCTAssertLessThanOrEqual(caption.maxY, bottom + 1)
         XCTAssertGreaterThan(sendFrame.height, 0)
         XCTAssertLessThanOrEqual(sendFrame.maxY, bottom + 1)
@@ -326,7 +455,10 @@ final class ComposerFocusTests: XCTestCase {
         let harness = try FocusComposerHarness(text: text, enabled: enabled, caption: caption)
         addTeardownBlock { @MainActor in harness.close() }
         try await pause()
-        #if !os(macOS)
+        #if os(macOS)
+            if caption { try harness.focus(); try await pause() }
+        #else
+            if caption { try await Task.sleep(for: .milliseconds(400)) }
             try harness.focus()
             try await pause()
         #endif
@@ -343,6 +475,9 @@ private final class FocusComposerState: ObservableObject {
     @Published var media: [LocalOutgoingAttachment] = []
     let caption: Bool
     @Published var showsComposer = true
+    @Published var onImportImages: (([URL]) async throws -> Void)?
+    @Published var stickerLibrary: StickerLibrary?
+    var onSubmit: ((String) async -> Bool)?
     var composing = false
     var submits = 0
     var editingEnded = false
@@ -359,25 +494,38 @@ private struct FocusComposerRoot: View {
         VStack {
             Spacer()
             if state.caption {
-                ComposerAttachmentDialog(
-                    text: $state.text, attachments: state.media, progress: [:],
-                    compressionEnabled: true, isEnabled: state.enabled, canSend: state.canSend,
-                    isAcquiring: false, attachmentError: nil,
-                    onCompositionChanged: { state.composing = $0 },
-                    onRemove: { _ in }, onRetry: { _ in }, onCompressionChanged: { _ in },
-                    onReorder: { _ in }, onImportProviders: { _ in },
-                    onSubmit: { state.submits += 1; return true }, onCancel: {})
+                #if os(iOS)
+                Color.clear.sheet(isPresented: $state.showsComposer) { captionDialog }
+                #else
+                captionDialog
+                #endif
             } else if state.showsComposer {
                 MessageComposerView(
                     text: $state.text, attachmentState: state.attachments,
                     maxHeight: 160, isEnabled: state.enabled, canSend: state.canSend,
-                    onSubmit: {
+                    onSubmit: { text in
+                        if let submit = state.onSubmit { return await submit(text) }
                         state.submits += 1
                         state.canSend = false
                         return true
-                    }, onCompositionChanged: { state.composing = $0 })
+                    }, onCompositionChanged: { state.composing = $0 },
+                    attachments: state.media,
+                    onImportImages: state.onImportImages,
+                    onDiscardAttachments: { state.media = [] },
+                    stickerLibrary: state.stickerLibrary, onSendSticker: { _ in true })
             }
         }
+    }
+
+    private var captionDialog: some View {
+        ComposerAttachmentDialog(
+            text: $state.text, attachments: state.media, progress: [:],
+            compressionEnabled: true, isEnabled: state.enabled, canSend: state.canSend,
+            isAcquiring: false, attachmentError: nil,
+            onCompositionChanged: { state.composing = $0 },
+            onRemove: { _ in }, onRetry: { _ in }, onCompressionChanged: { _ in },
+            onReorder: { _ in }, onImportProviders: { _ in },
+            onSubmit: { state.submits += 1; return true }, onCancel: {})
     }
 }
 
@@ -433,6 +581,8 @@ private final class FocusComposerHarness {
         #if os(macOS)
             window.close()
         #else
+            state.showsComposer = false
+            host.dismiss(animated: false)
             window.isHidden = true
             window.rootViewController = nil
             priorKeyWindow?.makeKey()
@@ -445,8 +595,24 @@ private final class FocusComposerHarness {
         [view] + view.subviews.flatMap(allViews)
     }
 
+    var editorRoot: ComposerTestView {
+        #if os(macOS)
+        host.view
+        #else
+        host.presentedViewController?.view ?? host.view
+        #endif
+    }
+
+    var hasFocusedEditor: Bool {
+        #if os(macOS)
+        window.firstResponder is NSTextView
+        #else
+        allViews(editorRoot).contains { $0.isFirstResponder && $0 is any UITextInput }
+        #endif
+    }
+
     func focus() throws {
-        let views = allViews(host.view)
+        let views = allViews(editorRoot)
         #if os(macOS)
             if let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }) {
                 XCTAssertTrue(window.makeFirstResponder(field))
@@ -467,7 +633,7 @@ private final class FocusComposerHarness {
     #else
         func focusedEditor() throws -> any UITextInput {
             try XCTUnwrap(
-                allViews(host.view).first(where: \.isFirstResponder) as? any UITextInput,
+                allViews(editorRoot).first(where: \.isFirstResponder) as? any UITextInput,
                 "Typing must not require refocusing the composer.")
         }
     #endif
@@ -562,7 +728,7 @@ private final class FocusComposerHarness {
                 }
                 return nil
             }
-            return find(host.view)
+            return find(editorRoot)
         }
     #endif
 

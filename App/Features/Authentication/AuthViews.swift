@@ -50,7 +50,11 @@ struct AuthLoginView: View {
                     SecureField("Manual JWT", text: $manualJWT).textFieldStyle(.roundedBorder)
                     Button("Sign in with manual JWT") { Task { await model.signIn(candidateJWT: manualJWT); manualJWT = "" } }
                         .disabled(model.isSubmitting)
-                    Button("Component gallery") { showingGallery = true }
+                    Button {
+                        showingGallery = true
+                    } label: {
+                        Text(verbatim: "Component gallery")
+                    }
                 }.padding(.top, ChahuaTheme.Spacing.small)
             }
             .sheet(isPresented: $showingGallery) { FixtureGalleryView() }

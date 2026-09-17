@@ -39,6 +39,11 @@ struct TimelineRowPresentation {
     let standaloneText: String?
     let layoutKey: RowLayoutKey
 
+    /// Native metadata and the hosted duration label share the audio footer.
+    var voiceMetrics: VoiceMessageBubbleMetrics {
+        .init(bodySize: environment.bodySize, captionSize: environment.captionSize, metadataSize: metadata?.size ?? .zero)
+    }
+
     /// Resolve only the source identifier here; playback owns all file/network I/O.
     var audioURL: URL? {
         guard case .message(let message) = row, message.entry.messageType == .audio,

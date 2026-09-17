@@ -186,7 +186,8 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         XCTAssertEqual(source.queries.count, 1)
         XCTAssertEqual(model.rows.filter { $0.stableMessageKey == .clientGenerated("send") }.count, 1)
-        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: true))
+        XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: false))
+        XCTAssertFalse(model.updates.value.animateFollowing)
         XCTAssertTrue(model.state.live.followsLatest)
     }
 
@@ -374,13 +375,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.release()
         await loading.value
 
-        let final = try XCTUnwrap(remoteMessages(model).first)
-        XCTAssertEqual(final.id, "1")
-        XCTAssertTrue(final.isDeleted)
-        XCTAssertNil(final.message)
-        XCTAssertFalse(final.hasAttachments)
-        XCTAssertTrue(final.attachments.isEmpty)
-        XCTAssertTrue(final.reactions.isEmpty)
+        XCTAssertTrue(model.rows.isEmpty, "Deleted messages leave neither bubbles nor date separators")
         XCTAssertFalse(updates.value.contains { snapshot in
             snapshot.rows.contains { row in
                 if case .message(let row) = row { return row.entry.text == "old" }
@@ -444,7 +439,11 @@ final class ConversationTimelineModelTests: XCTestCase {
     func testDuplicateCreateAndLateAcknowledgementCannotUndoEditOrDelete() async throws {
         let created = try TimelineTestFixtures.message(id: "1", at: 1, text: "old", clientGeneratedID: "send")
         let edited = try TimelineTestFixtures.message(id: "1", at: 1, text: "new", clientGeneratedID: "send")
-        let (model, source, _) = try makeModel(pages: [.success(try TimelineTestFixtures.page([]))])
+        let (model, source, _) = try makeModel(pages: [
+            .success(try TimelineTestFixtures.page([])),
+            .success(try TimelineTestFixtures.page([created])),
+            .success(try TimelineTestFixtures.page([created])),
+        ])
         await model.open()
         source.store.enqueue(pending(id: "send"))
         var visibleKeys: [[ConversationMessageStableKey]] = []
@@ -457,11 +456,17 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(model).map(\.message), ["new"])
         XCTAssertTrue(visibleKeys.allSatisfy { $0 == [.clientGenerated("send")] })
         source.store.apply(.messageDeleted(edited.redactedForDeletion()))
+        XCTAssertTrue(model.rows.isEmpty)
+        source.store.apply(.message(created))
+        source.store.acknowledge(created)
         source.store.apply(.messageUpdated(edited))
         source.store.apply(.reactionUpdated(.init(messageId: "1", chatId: "chat", reactions: try reactionFixture())))
-        XCTAssertTrue(try XCTUnwrap(remoteMessages(model).first).isDeleted)
-        XCTAssertNil(remoteMessages(model).first?.message)
-        XCTAssertEqual(remoteMessages(model).first?.reactions, [])
+        XCTAssertTrue(model.rows.isEmpty, "Late events and acknowledgements must not restore deleted rows")
+        await model.reconcileAfterReconnect()
+        XCTAssertTrue(model.rows.isEmpty, "A stale HTTP snapshot must not restore a deleted row")
+        await model.jumpToMessage("1")
+        XCTAssertEqual(model.state.repositionFailure, .message("1"))
+        XCTAssertTrue(model.rows.isEmpty, "A reply jump cannot target a removed bubble")
     }
 
     func testCanonicalAudioPublicationRefreshesAcknowledgementWithoutUndoingLaterState() async throws {
@@ -490,9 +495,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         source.store.apply(.messageDeleted(published.redactedForDeletion()))
         source.store.apply(.message(published))
-        let deleted = try XCTUnwrap(remoteMessages(model).first)
-        XCTAssertTrue(deleted.isDeleted)
-        XCTAssertTrue(deleted.attachments.isEmpty)
+        XCTAssertTrue(model.rows.isEmpty)
     }
 
     func testTwoModelsHaveIndependentHistoryGapsAndJumpAvailability() async throws {
@@ -510,17 +513,16 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.store.apply(.message(created))
         source.store.apply(.messageUpdated(try TimelineTestFixtures.message(id: "1", at: 1, text: "edited in both")))
         source.store.apply(.messageDeleted(try TimelineTestFixtures.message(id: "2", at: 2).redactedForDeletion()))
-        XCTAssertEqual(remoteMessages(historical).map(\.id), ["1", "2"])
-        XCTAssertEqual(remoteMessages(latest).map(\.id), ["1", "2", "3"])
+        XCTAssertEqual(remoteMessages(historical).map(\.id), ["1"])
+        XCTAssertEqual(remoteMessages(latest).map(\.id), ["1", "3"])
         for model in [historical, latest] {
             XCTAssertEqual(remoteMessages(model).first?.message, "edited in both")
-            XCTAssertTrue(try XCTUnwrap(remoteMessages(model).first { $0.id == "2" }).isDeleted)
         }
         XCTAssertTrue(historical.showsJumpToLatest)
         XCTAssertFalse(latest.showsJumpToLatest)
         await historical.jumpToLiveEdge()
         XCTAssertEqual(remoteMessages(historical).map(\.id), ["3"], "A latest replacement must not bridge the old history gap")
-        XCTAssertEqual(remoteMessages(latest).map(\.id), ["1", "2", "3"])
+        XCTAssertEqual(remoteMessages(latest).map(\.id), ["1", "3"])
     }
 
     func testDeferredMutationsRemainWindowLocalUntilLatestClosesTheGap() async throws {
@@ -537,9 +539,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(model).map(\.id), ["1"])
         XCTAssertTrue(model.showsJumpToLatest)
         await model.jumpToLiveEdge()
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["2", "3"])
-        XCTAssertTrue(try XCTUnwrap(remoteMessages(model).last).isDeleted)
-        XCTAssertNil(remoteMessages(model).last?.message)
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["2"])
     }
 
     func testEmptyLatestSnapshotDiscardsOldDeferredRowsButReplaysInFlightCreate() async throws {
@@ -557,8 +557,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.store.apply(.messageDeleted(fresh.redactedForDeletion()))
         source.release()
         await jumping.value
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["3"])
-        XCTAssertTrue(try XCTUnwrap(remoteMessages(model).first).isDeleted)
+        XCTAssertTrue(model.rows.isEmpty)
     }
 
     func testReconnectJoinsInitialOpenInsteadOfStartingACompetingReplacement() async throws {
@@ -607,8 +606,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(model).last?.reactions.first?.count, 3)
         source.store.apply(.reactionUpdated(.init(messageId: "2", chatId: "chat", reactions: [])))
         source.store.apply(.messagesBulkDeleted(.init(chatId: "chat", messageIds: ["1", "missing"])))
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "2"])
-        XCTAssertTrue(try XCTUnwrap(remoteMessages(model).first).isDeleted)
+        XCTAssertEqual(remoteMessages(model).map(\.id), ["2"])
         let quoted = try XCTUnwrap(remoteMessages(model).last?.replyToMessage)
         XCTAssertEqual(quoted.id, "1")
         XCTAssertTrue(quoted.isDeleted)

@@ -2,6 +2,11 @@ import ChahuaAPI
 import Combine
 import Foundation
 import XCTest
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 @testable import chahua_apple
 
 @MainActor
@@ -608,6 +613,85 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertEqual(concurrency, 1)
         XCTAssertFalse(h.queue.pendingMessages(chatID: "chat").contains { $0.state == .failed })
         await h.close()
+    }
+
+    func testRestoredMediaSendUsesSubmissionTimeAndKeepsSenderVisibleThroughAcknowledgement() async throws {
+        let h = try await openHarness(foreground: false)
+        let chatStore = ChatStore(apiClient: h.api, outgoingQueue: h.queue, onInvalidToken: {})
+        defer { chatStore.cancelRealtimeRecovery() }
+        let profile = try JSONDecoder().decode(MeResponse.self, from: Data(#"""
+        {"uid": 1, "username": "Ada", "gender": 2, "stickerPackOrder": [], "permissions": []}
+        """#.utf8))
+        chatStore.currentUserProfile = profile
+        // A long-lived caption draft would previously sort between the two
+        // earlier outgoing messages, hiding both its sender header and avatar.
+        try await h.queue.saveDraft(chatID: "chat", text: "Caption", editRevision: 1,
+                                    updatedAt: TimelineTestFixtures.date(second: 1))
+        let image = h.root.appendingPathComponent("selected.png")
+        try makeMediaPNG(red: 255, green: 0, blue: 0).write(to: image)
+        try await h.queue.importImages(urls: [image], chatID: "chat")
+        let composition = try XCTUnwrap(h.queue.snapshots[ConversationKey(chatID: "chat")]?.composingItem)
+        let localStore = try await h.openStore(uid: 1)
+        _ = try await localStore.enqueueText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "unused", text: "Caption",
+            enqueuedAt: TimelineTestFixtures.date(second: 4), clearedDraftRevision: composition.editRevision + 1)
+        await h.queue.retryStorage()
+
+        let history = try [
+            TimelineTestFixtures.message(id: "before-draft", at: 0),
+            TimelineTestFixtures.message(id: "after-draft", at: 2),
+            TimelineTestFixtures.message(id: "incoming", senderID: 2, at: 3),
+        ]
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
+        let native = TimelineRowView(frame: .zero)
+        var actions = TimelineBubbleActions()
+        actions.currentUserProfile = profile
+        func assertSenderVisible(remote: [MessageResponse]) throws -> TimelineMessageRow {
+            let projection = chatStore.conversationMessages.projection(
+                for: "chat", remoteMessages: remote, includePendingOutgoing: true)
+            let rows = TimelineRowsBuilder(currentUserID: 1, isGroupChat: true, calendar: .current).build(projection.entries)
+            let row = try XCTUnwrap(rows.compactMap { row -> TimelineMessageRow? in
+                guard case .message(let message) = row,
+                      message.entry.stableKey == .clientGenerated(composition.clientGeneratedID) else { return nil }
+                return message
+            }.first)
+            XCTAssertEqual(row.groupPosition, .single)
+            let presentation = TimelineRowPresentation.make(
+                row: .message(row), currentUserProfile: profile, currentUserID: 1,
+                isThreadTimeline: false, environment: environment)
+            XCTAssertEqual(presentation.title?.name, "Ada")
+            let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+            XCTAssertNotNil(layout.frames[.title])
+            XCTAssertNotNil(layout.frames[.avatar])
+            native.frame = CGRect(origin: .zero, size: layout.size)
+            native.bind(.init(presentation: presentation, layout: layout, context: .init(),
+                              actions: actions, mediaContext: nil))
+            #if os(macOS)
+            native.layoutSubtreeIfNeeded()
+            let avatar = try XCTUnwrap(native.subviews.compactMap { $0 as? TimelineAvatarView }.first)
+            XCTAssertFalse(avatar.isHidden)
+            XCTAssertTrue(avatar.accessibilityLabel()?.contains("Ada") == true)
+            #elseif os(iOS)
+            native.layoutIfNeeded()
+            let avatar = try XCTUnwrap(native.subviews.flatMap(\.subviews).compactMap { $0 as? TimelineAvatarView }.first)
+            XCTAssertFalse(avatar.isHidden)
+            XCTAssertTrue(avatar.accessibilityLabel?.contains("Ada") == true)
+            #endif
+            return row
+        }
+        let pending = try assertSenderVisible(remote: history)
+        XCTAssertEqual(pending.entry.displayState, .queued)
+        let acknowledgement = try TimelineTestFixtures.message(
+            id: "confirmed-media", at: 5, text: "Caption", clientGeneratedID: composition.clientGeneratedID,
+            fields: ["hasAttachments": true, "attachments": [[
+                "id": "image", "url": "https://example.invalid/image.png", "kind": "image/png",
+                "size": 1, "fileName": "image.png", "width": 1, "height": 1,
+            ]]])
+        let accepted = await h.queue.acceptAcknowledgement(acknowledgement)
+        XCTAssertTrue(accepted)
+        let confirmed = try assertSenderVisible(remote: history + [acknowledgement])
+        XCTAssertEqual(confirmed.entry.stableKey, pending.entry.stableKey)
+        XCTAssertEqual(confirmed.entry.displayState, .delivered)
     }
 
     func testDiscardDraftAttachmentsPreservesCaptionReplyAndPendingSendsAcrossRestart() async throws {

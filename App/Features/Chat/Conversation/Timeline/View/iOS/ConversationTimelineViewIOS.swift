@@ -7,6 +7,7 @@ struct ConversationTimelineView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.chatHeaderInset) private var chatHeaderInset
     @Environment(\.chatComposerInset) private var chatComposerInset
+    @ScaledMetric(relativeTo: .caption2) private var jumpBadgeDiameter: CGFloat = 22
     var initialPosition: TimelineInitialPosition = .liveEdge
     var loadsInitialAutomatically = true
     var actions = TimelineBubbleActions()
@@ -23,7 +24,15 @@ struct ConversationTimelineView: View {
                         jumpToLatestSymbol
                             .overlay(alignment: .topTrailing) {
                                 if model.jumpUnreadCount > 0 {
-                                    Text("\(model.jumpUnreadCount)").font(.caption2.bold()).padding(5).foregroundStyle(.white).background(ChahuaTheme.accent, in: Capsule()).offset(x: 8, y: -8)
+                                    Text("\(model.jumpUnreadCount)")
+                                        .font(.caption2.bold())
+                                        .lineLimit(1)
+                                        .fixedSize()
+                                        .padding(.horizontal, 5)
+                                        .frame(minWidth: jumpBadgeDiameter, minHeight: jumpBadgeDiameter)
+                                        .foregroundStyle(.white)
+                                        .background(ChahuaTheme.accent, in: Capsule())
+                                        .offset(x: 8, y: -8)
                                 }
                             }
                     }

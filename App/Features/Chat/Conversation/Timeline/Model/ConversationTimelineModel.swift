@@ -441,13 +441,13 @@ final class ConversationTimelineModel: ObservableObject {
         return false
     }
 
-    func jumpToLiveEdge() async {
+    func jumpToLiveEdge(animated: Bool = true) async {
         if recoveryTask != nil { invalidateRequests() }
         state.repositionFailure = nil
         state.reconciliationFailed = false
         if canReuseLatestWindow {
             state.live.followsLatest = true
-            requestScroll(.bottom(animated: true))
+            requestScroll(.bottom(animated: animated))
             return
         }
         if case .repositioning(.liveEdge) = state.content { return }
@@ -511,9 +511,9 @@ final class ConversationTimelineModel: ObservableObject {
         canReuseLatestWindowAfterPendingChange = false
         if state.content == .ready, canReuse {
             state.live.followsLatest = true
-            publish(animateFollowing: true, position: .bottom(animated: true))
+            publish(position: .bottom(animated: false))
         } else if state.content == .ready || state.content == .repositioning(.liveEdge) {
-            await jumpToLiveEdge()
+            await jumpToLiveEdge(animated: false)
         } else if state.content == .idle || state.content == .initialLoadFailed {
             await loadInitial()
         }
@@ -780,7 +780,11 @@ final class ConversationTimelineModel: ObservableObject {
     private func setEdge(_ side: EdgeSide, _ value: ConversationTimelineState.Edge) { if side == .older { state.older = value } else { state.newer = value } }
     private var liveEdgeQuery: ListMessagesQuery { .init(max: Self.pageSize, threadID: threadID) }
     private func aroundQuery(for position: TimelineInitialPosition) -> ListMessagesQuery { if case .message(let id) = position { return .init(around: id, max: Self.pageSize, threadID: threadID) }; return liveEdgeQuery }
-    private func rowID(forServerID id: String) -> TimelineRowID? { window.index(ofServerID: id).map { .message(window.messages[$0].timelineStableKey) } }
+    private func rowID(forServerID id: String) -> TimelineRowID? {
+        guard !deletedIDs.contains(id), let index = window.index(ofServerID: id),
+              !window.messages[index].isDeleted else { return nil }
+        return .message(window.messages[index].timelineStableKey)
+    }
 
     private func publish(animateFollowing: Bool = false, position: TimelineScrollIntent? = nil, reset: Bool = false) {
         if state.live.pendingLiveCount != deferredCreates.count { state.live.pendingLiveCount = deferredCreates.count }
@@ -793,7 +797,13 @@ final class ConversationTimelineModel: ObservableObject {
         let projection = messageStore.projection(for: chatID, threadID: threadID, remoteMessages: remoteMessages, includePendingOutgoing: true)
         let changed = projection != lastProjection || reset
         if changed {
-            let newRows = builder.build(projection.entries, unreadBeforeMessageID: unreadBeforeMessageID)
+            // Keep tombstones in the window for pagination and acknowledgement
+            // reconciliation, but exclude them before grouping and separators.
+            let visibleEntries = projection.entries.filter { entry in
+                guard let message = entry.remoteMessage else { return true }
+                return !message.isDeleted && !deletedIDs.contains(message.id)
+            }
+            let newRows = builder.build(visibleEntries, unreadBeforeMessageID: unreadBeforeMessageID)
             if newRows != rows { rows = newRows }
             lastProjection = projection
             snapshotRevision &+= 1

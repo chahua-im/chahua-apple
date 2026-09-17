@@ -578,7 +578,7 @@ final class ChatStoreTests: XCTestCase {
         h.store.drafts.setDraftText("keep this", chatID: "chat")
         await h.store.drafts.flushDraft(chatID: "chat")
         h.probe.failEnqueue = true
-        let failed = await h.store.drafts.submitDraft(chatID: "chat")
+        let failed = await h.store.drafts.submitDraft(chatID: "chat", text: "modal caption")
         XCTAssertFalse(failed)
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "keep this")
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), reply)
@@ -592,13 +592,13 @@ final class ChatStoreTests: XCTestCase {
 
         h.probe.failEnqueue = false
         await h.store.retryLocalStorage()
-        let retried = await h.store.drafts.submitDraft(chatID: "chat")
+        let retried = await h.store.drafts.submitDraft(chatID: "chat", text: "modal caption")
         XCTAssertTrue(retried)
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "")
         XCTAssertNil(h.store.drafts.draftReply(chatID: "chat"))
         XCTAssertFalse(h.store.drafts.draftSaveFailed)
         let afterRetry = try await h.localStore.restore()
-        XCTAssertEqual(afterRetry.flatMap(\.outgoing).map(\.text), ["keep this"])
+        XCTAssertEqual(afterRetry.flatMap(\.outgoing).map(\.text), ["modal caption"])
         XCTAssertNil(afterRetry.first?.draft.replyToMessage)
         XCTAssertEqual(afterRetry.flatMap(\.outgoing).first?.replyToMessage, reply)
     }
@@ -789,7 +789,7 @@ private final class DraftStorageProbe {
     }
 }
 
-private actor FakeChatAPI: ChahuaAPIClient {
+actor FakeChatAPI: ChahuaAPIClient {
     var chatQueries: [ListChatsQuery] = []
     private var chatResults: [Result<ListChatsResponse, Error>]
     private var threadResults: [Result<ListThreadsResponse, Error>]

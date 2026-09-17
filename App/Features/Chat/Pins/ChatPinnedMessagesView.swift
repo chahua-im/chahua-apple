@@ -48,11 +48,13 @@ struct ChatPinnedMessageBar: View {
                 .accessibilityLabel("Open thread")
             }
             Button(action: onShowAll) {
-                VStack(spacing: 2) {
+                HStack(spacing: 4) {
                     Image(systemName: "list.dash")
-                    if count > 1 { Text(count, format: .number).font(.caption2.monospacedDigit()) }
+                    Text(count, format: .number).font(.caption.monospacedDigit())
                 }
-                .frame(width: 36, height: 44)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 6)
+                .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
             }
             .accessibilityLabel("View all pinned messages")

@@ -132,13 +132,16 @@ struct MessageInteractionWindowPresenter: UIViewRepresentable {
         private func dismiss() {
             guard controller != nil, dismissal == nil else { return }
             lift?.cancel()
-            withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.92)) {
-                animation.isPresented = false
-                animation.previewScale = 1
-                animation.previewOpacity = reduceMotion ? 0 : 1
-            }
             dismissal = Task { @MainActor [weak self] in
-                guard let self else { return }
+                // attach(to:) is called by updateUIView. Publish only after
+                // that SwiftUI update has finished, as with the entry animation.
+                await Task.yield()
+                guard let self, !Task.isCancelled else { return }
+                withAnimation(self.reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.28, dampingFraction: 0.92)) {
+                    self.animation.isPresented = false
+                    self.animation.previewScale = 1
+                    self.animation.previewOpacity = self.reduceMotion ? 0 : 1
+                }
                 try? await Task.sleep(for: .milliseconds(self.reduceMotion ? 150 : 280))
                 guard !Task.isCancelled else { return }
                 self.remove()

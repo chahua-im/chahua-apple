@@ -217,35 +217,35 @@ struct AuthenticatedShell: View {
         )
         #if os(iOS)
         return GeometryReader { geometry in
-            // Toolbar custom views use intrinsic sizing rather than the list's
-            // width proposal. Reserve the leading control and bar margins so the
-            // same picker fits both the account button and native archive Back.
-            // A fixed width would move it into the toolbar's overflow menu.
+            // One custom toolbar item owns the avatar/picker spacing. Give the
+            // container an explicit width: UIKit otherwise measures its flexible
+            // segmented control at zero inside the horizontal stack.
             let picker = ConversationScopePicker(selection: scope, badges: badges)
-                .frame(minWidth: 0, maxWidth: max(0, geometry.size.width - 96))
+                .frame(minWidth: 0, maxWidth: max(0, geometry.size.width - (archived ? 96 : accountAvatarDiameter + 40)))
+            let header = HStack(spacing: 8) {
+                accountButton
+                    .labelStyle(.iconOnly)
+                    .accessibilityLabel("Account")
+                picker
+            }
+            .buttonStyle(.plain)
+            .frame(width: max(0, geometry.size.width - 32))
             list
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar(.visible, for: .navigationBar)
                 .toolbarBackground(.hidden, for: .navigationBar)
                 .toolbar {
-                    if !archived {
-                        ToolbarItem(placement: .topBarLeading) {
-                            accountButton
-                                .labelStyle(.iconOnly)
-                                .accessibilityLabel("Account")
-                        }
-                    }
-                    // A segmented control must not participate in native title morphing.
+                    // Keep the avatar and picker in one item so native toolbar
+                    // group spacing cannot add an extra gap in split columns.
                     if #available(iOS 26, *) {
                         ToolbarItem(placement: .topBarTrailing) {
-                            picker
+                            if archived { picker } else { header }
                         }
-                        // The scope control already draws its own background.
                         .sharedBackgroundVisibility(.hidden)
                     } else {
                         ToolbarItem(placement: .topBarTrailing) {
-                            picker
+                            if archived { picker } else { header }
                         }
                     }
                 }

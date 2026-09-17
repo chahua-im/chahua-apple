@@ -9,7 +9,7 @@ struct MessageComposerView: View {
     let maxHeight: CGFloat
     let isEnabled: Bool
     let canSend: Bool
-    let onSubmit: () async -> Bool
+    let onSubmit: (String) async -> Bool
     var onCompositionChanged: ((Bool) -> Void)? = nil
     var replyToMessage: MessagePreview? = nil
     var replyFocusRequest = 0
@@ -39,8 +39,11 @@ struct MessageComposerView: View {
     @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
     @FocusState private var isInputFocused: Bool
     @State private var showsAttachmentDialog = false
+    @State private var attachmentCaption = ""
+    @State private var attachmentSubmitted = false
     @State private var isSubmitting = false
     @State private var showsStickerPicker = false
+    @State private var stickerPickerStoleFocus = false
 
     private var isAcquiring: Bool { attachmentState.isAcquiring }
     private var imageError: String? {
@@ -54,6 +57,7 @@ struct MessageComposerView: View {
     private var canAcquire: Bool { isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive && editingMessage == nil && onImportImages != nil }
     private var canPickSticker: Bool { canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil }
     private var showsVoiceButton: Bool { !hasContent && editingMessage == nil }
+    private var showsVoiceControl: Bool { showsVoiceButton || voiceRecorder.isActive }
     private var canStartVoice: Bool {
         isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
             && !hasContent && editingMessage == nil && onSendVoice != nil
@@ -67,36 +71,53 @@ struct MessageComposerView: View {
         )
     }
 
+    private var composerInputBridge: some View {
+        let enabled = isEnabled && !isAcquiring && !voiceRecorder.isActive && !showsAttachmentDialog && !showsStickerPicker
+        #if os(iOS)
+        let pasteImages: (([NSItemProvider]) -> Void)? = canAcquire ? { importProviders($0) } : nil
+        return ComposerInputBridge(
+            input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
+            onCompositionChanged: onCompositionChanged, onSubmit: submit,
+            onPasteImages: pasteImages
+        )
+        .accessibilityHidden(true)
+        #else
+        return ComposerInputBridge(
+            input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
+            onCompositionChanged: onCompositionChanged, onSubmit: submit, focusOnEntry: true
+        )
+        .accessibilityHidden(true)
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            if editingMessage == nil, !attachments.isEmpty {
-                Button(action: presentAttachmentDialog) {
-                    Label("Review \(attachments.count) attachments", systemImage: "photo.on.rectangle")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                }
-                .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
-            }
-            if isAcquiring {
-                ProgressView("Preparing attachments…")
-                    .font(.caption).controlSize(.small).padding(8)
-            }
             HStack(alignment: .bottom, spacing: 8) {
-                if !voiceRecorder.isActive {
+                if voiceRecorder.previewURL != nil {
+                    Button { voiceRecorder.discard() } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 20))
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
+                    }
+                    .accessibilityLabel("Discard voice message")
+                    .disabled(voiceRecorder.phase == .sending)
+                    .modifier(ChatGlassSurface(cornerRadius: 22))
+                    .modifier(ComposerSendFocus())
+                } else if !voiceRecorder.isActive {
                 Menu {
                     Button("Photos", systemImage: "photo.on.rectangle") {
-                        showsStickerPicker = false
+                        dismissStickerPicker(restoreFocus: false)
                         input.settleNativeInput()
                         isInputFocused = false
                         showsPhotos = true
                     }
                     Button("Files", systemImage: "folder") {
-                        showsStickerPicker = false
+                        dismissStickerPicker(restoreFocus: false)
                         input.settleNativeInput()
                         isInputFocused = false
                         showsFiles = true
                     }
-                    PasteButton(supportedContentTypes: [.image, .movie, .fileURL]) { importProviders($0) }
                 } label: {
                     Image(systemName: "paperclip")
                         .font(.system(size: 20))
@@ -115,12 +136,8 @@ struct MessageComposerView: View {
                     replyMarker(reply)
                 }
 
-                if voiceRecorder.isActive, let onSendVoice {
-                    ComposerVoicePanel(
-                        recorder: voiceRecorder,
-                        isEnabled: isEnabled && canSend && !isSubmitting,
-                        onSendVoice: onSendVoice
-                    )
+                if voiceRecorder.isActive {
+                    ComposerVoicePanel(recorder: voiceRecorder)
                 } else {
                 HStack(alignment: .bottom, spacing: 0) {
                     TextField("Message", text: editorText, axis: .vertical)
@@ -153,15 +170,7 @@ struct MessageComposerView: View {
                             else { return .ignored }
                             return .handled
                         }
-                        .background(
-                            ComposerInputBridge(
-                                input: input, draft: $text, isFocused: isInputFocused,
-                                isEnabled: isEnabled && !isAcquiring && !voiceRecorder.isActive && !showsAttachmentDialog && !showsStickerPicker,
-                                onCompositionChanged: onCompositionChanged, onSubmit: submit,
-                                focusOnEntry: true
-                            )
-                            .accessibilityHidden(true)
-                        )
+                        .background(composerInputBridge)
                         .accessibilityLabel("Message")
 
                     Button(action: toggleStickerPicker) {
@@ -173,28 +182,57 @@ struct MessageComposerView: View {
                     }
                     .disabled(!showsStickerPicker && !canPickSticker)
                     .accessibilityLabel(showsStickerPicker ? "Close stickers" : "Stickers")
+                    .modifier(ComposerSendFocus())
                 }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
             .modifier(ChatGlassSurface(cornerRadius: 22))
 
-            if !voiceRecorder.isActive {
-                Button {
-                    if showsVoiceButton { startVoiceRecording() }
-                    else { submit() }
-                } label: {
-                    Image(systemName: showsVoiceButton ? "mic" : "paperplane.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle((showsVoiceButton ? canStartVoice : hasContent && canSubmit) ? ChahuaTheme.accent : .secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
+            ZStack {
+                // The user-requested touch hold/drag interaction and pointer click
+                // interaction need separate platform controls. Keep either control
+                // mounted here so recording state never replaces an active gesture.
+                #if os(iOS)
+                ComposerVoiceControlIOS(
+                    recorder: voiceRecorder,
+                    isEnabled: isEnabled && canSend && !isSubmitting && onSendVoice != nil,
+                    canStart: canStartVoice,
+                    onStart: startVoiceRecording,
+                    onSendVoice: onSendVoice
+                )
+                .opacity(showsVoiceControl ? 1 : 0)
+                .allowsHitTesting(showsVoiceControl)
+                .accessibilityHidden(!showsVoiceControl)
+                #elseif os(macOS)
+                ComposerVoiceControlMac(
+                    recorder: voiceRecorder,
+                    isEnabled: isEnabled && canSend && !isSubmitting && onSendVoice != nil,
+                    canStart: canStartVoice,
+                    onStart: startVoiceRecording,
+                    onSendVoice: onSendVoice
+                )
+                .opacity(showsVoiceControl ? 1 : 0)
+                .allowsHitTesting(showsVoiceControl)
+                .accessibilityHidden(!showsVoiceControl)
+                #endif
+
+                if !showsVoiceControl {
+                    Button(action: submit) {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(hasContent && canSubmit ? ChahuaTheme.accent : .secondary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
+                    }
+                    .disabled(!hasContent || !canSubmit)
+                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: hasContent && canSubmit))
+                    .accessibilityLabel("Send message")
+                    .modifier(ComposerSendFocus())
                 }
-                .disabled(showsVoiceButton ? !canStartVoice : !hasContent || !canSubmit)
-                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: showsVoiceButton ? canStartVoice : hasContent && canSubmit))
-                .accessibilityLabel(showsVoiceButton ? Text("Record voice message") : Text("Send message"))
-                .modifier(ComposerSendFocus())
             }
+            .frame(width: 44, height: 44)
+            .zIndex(1)
         }
         .buttonStyle(.plain)
         .padding(12)
@@ -205,12 +243,14 @@ struct MessageComposerView: View {
         #if os(iOS)
         .background {
             ComposerOutsideTapObserver(isFocused: isInputFocused || showsStickerPicker) {
-                showsStickerPicker = false
+                dismissStickerPicker(restoreFocus: false)
                 isInputFocused = false
             }
         }
         #endif
         .sheet(isPresented: $showsAttachmentDialog, onDismiss: {
+            if !attachmentSubmitted { text = attachmentCaption }
+            attachmentCaption = ""
             input.receiveExternalText(text)
             #if os(macOS)
             if isEnabled { isInputFocused = true }
@@ -219,7 +259,7 @@ struct MessageComposerView: View {
             #endif
         }) {
             ComposerAttachmentDialog(
-                text: $text, attachments: attachments, progress: attachmentProgress,
+                text: $attachmentCaption, attachments: attachments, progress: attachmentProgress,
                 compressionEnabled: compressionEnabled, isEnabled: isEnabled,
                 canSend: canSend, isAcquiring: isAcquiring, attachmentError: imageError,
                 onCompositionChanged: onCompositionChanged,
@@ -228,7 +268,11 @@ struct MessageComposerView: View {
                 onCompressionChanged: { enabled in performImageOperation { try await onCompressionChanged?(enabled) } },
                 onReorder: { ids in performImageOperation { try await onReorderAttachments?(ids) } },
                 onImportProviders: importProviders,
-                onSubmit: onSubmit,
+                onSubmit: {
+                    let sent = await onSubmit(attachmentCaption)
+                    if sent { attachmentSubmitted = true }
+                    return sent
+                },
                 onCancel: {
                     guard let onDiscardAttachments else {
                         if attachments.isEmpty { return }
@@ -296,15 +340,15 @@ struct MessageComposerView: View {
             if !text.isEmpty { voiceRecorder.discard() }
         }
         .onChange(of: isInputFocused) { _, focused in
-            if focused { showsStickerPicker = false }
+            if focused { dismissStickerPicker(restoreFocus: false) }
         }
         .onChange(of: editingMessage?.id) { _, id in
-            showsStickerPicker = false
+            dismissStickerPicker(restoreFocus: false)
             if id != nil { voiceRecorder.discard() }
         }
         .onChange(of: isEnabled) { _, enabled in
             if !enabled {
-                showsStickerPicker = false
+                dismissStickerPicker(restoreFocus: false)
                 voiceRecorder.suspend()
             }
         }
@@ -435,13 +479,14 @@ struct MessageComposerView: View {
         .padding(.horizontal, 12)
         .padding(.top, 12)
     }
-    private func startVoiceRecording() {
-        guard canStartVoice else { return }
+    private func startVoiceRecording(holding: Bool) -> Bool {
+        guard canStartVoice else { return false }
         input.settleNativeInput()
-        guard !input.isComposing, !hasText else { return }
-        showsStickerPicker = false
+        guard !input.isComposing, !hasText else { return false }
+        dismissStickerPicker(restoreFocus: false)
         isInputFocused = false
-        voiceRecorder.start()
+        voiceRecorder.start(holding: holding)
+        return true
     }
 
 
@@ -450,12 +495,20 @@ struct MessageComposerView: View {
         input.settleNativeInput()
         guard !input.isComposing else { return }
         if showsStickerPicker {
-            showsStickerPicker = false
-            isInputFocused = true
+            dismissStickerPicker(restoreFocus: true)
         } else {
+            stickerPickerStoleFocus = isInputFocused
             isInputFocused = false
             showsStickerPicker = true
         }
+    }
+
+    private func dismissStickerPicker(restoreFocus: Bool) {
+        guard showsStickerPicker else { return }
+        let shouldRestore = restoreFocus && stickerPickerStoleFocus && isEnabled
+        showsStickerPicker = false
+        stickerPickerStoleFocus = false
+        if shouldRestore { isInputFocused = true }
     }
 
     private func sendSticker(_ sticker: MessageStickerResponse) async -> Bool {
@@ -463,15 +516,18 @@ struct MessageComposerView: View {
         isSubmitting = true
         defer { isSubmitting = false }
         let sent = await onSendSticker(sticker)
-        if sent { showsStickerPicker = false }
+        if sent { dismissStickerPicker(restoreFocus: true) }
         return sent
     }
 
     private func presentAttachmentDialog() {
-        guard !voiceRecorder.isActive else { return }
+        guard !voiceRecorder.isActive, !showsAttachmentDialog else { return }
         input.settleNativeInput()
         guard !input.isComposing else { return }
-        showsStickerPicker = false
+        // The modal owns its edits until send or dismissal, not the compose bar.
+        attachmentCaption = text
+        attachmentSubmitted = false
+        dismissStickerPicker(restoreFocus: false)
         isInputFocused = false
         showsAttachmentDialog = true
     }
@@ -483,8 +539,9 @@ struct MessageComposerView: View {
             return
         }
         isSubmitting = true
+        let submittedText = text
         Task {
-            _ = await onSubmit()
+            _ = await onSubmit(submittedText)
             isSubmitting = false
         }
     }
