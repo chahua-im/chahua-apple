@@ -337,6 +337,7 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func setStickerFavorite(id: String, favorite: Bool) async throws { throw APIError.unavailable }
     func setStickerPackSubscription(id: String, subscribed: Bool) async throws { throw APIError.unavailable }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
+    func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse { throw APIError.unavailable }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
     func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }

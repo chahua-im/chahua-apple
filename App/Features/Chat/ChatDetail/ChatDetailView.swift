@@ -26,6 +26,7 @@ struct ChatDetailView: View {
     @State private var editingMessage: MessageResponse?
     @State private var editText = ""
     @State private var isUpdatingMessage = false
+    @State private var isComposerComposing = false
     @State private var editError: String?
     @State private var outboxError: String?
     @StateObject private var composerAttachments = ComposerAttachmentState()
@@ -258,6 +259,7 @@ struct ChatDetailView: View {
                                     canSend: canSubmitComposer,
                                     onSubmit: submitComposer,
                                     onCompositionChanged: { composing in
+                                        isComposerComposing = composing
                                         guard editingMessage == nil else { return }
                                         drafts.setDraftComposing(composing, chatID: chat.id, threadID: threadID)
                                     },
@@ -296,7 +298,10 @@ struct ChatDetailView: View {
                                     },
                                     stickerLibrary: store.stickers,
                                     onSendSticker: sendSticker,
-                                    onSendVoice: sendVoice
+                                    onSendVoice: sendVoice,
+                                    onSearchMembers: { query in
+                                        try await store.searchMembers(chatID: chat.id, query: query)
+                                    }
                                 )
                             }
                         })
@@ -452,8 +457,8 @@ struct ChatDetailView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard interactionContext.canWrite else { return false }
         if let editingMessage {
-            return !text.isEmpty && !isUpdatingMessage
-                && text != editingMessage.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !isUpdatingMessage && (isComposerComposing
+                || (!text.isEmpty && text != editingMessage.message?.trimmingCharacters(in: .whitespacesAndNewlines)))
         }
         return outgoingQueue.storageState == .ready && !drafts.committingDrafts.contains(conversationKey)
     }

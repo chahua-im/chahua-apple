@@ -101,6 +101,7 @@
         func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw Failure.unexpectedOperation }
         func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw Failure.unexpectedOperation }
         func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw Failure.unexpectedOperation }
+        func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse { throw Failure.unexpectedOperation }
         func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
             throw Failure.unexpectedOperation
         }

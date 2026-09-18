@@ -61,6 +61,9 @@ public protocol ChahuaAPIClient: Sendable {
     /// Fetches current membership and DM peer identity with `GET /group/{chatID}`.
     func groupInfo(chatID: String) async throws -> GroupInfoResponse
 
+    /// Searches current group members with authenticated `GET /group/{chatID}/members`.
+    func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse
+
     /// Fetches the server's DM authorization decision with `GET /friends/{peerUID}`.
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse
 

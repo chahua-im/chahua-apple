@@ -30,6 +30,7 @@ struct MessageComposerView: View {
     var stickerLibrary: StickerLibrary? = nil
     var onSendSticker: ((MessageStickerResponse) async -> Bool)? = nil
     var onSendVoice: ((URL) async -> Bool)? = nil
+    var onSearchMembers: ComposerMemberSearch? = nil
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showsPhotos = false
     @State private var showsFiles = false
@@ -52,7 +53,9 @@ struct MessageComposerView: View {
     }
 
     private var canSubmit: Bool { isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive }
-    private var hasText: Bool { !(input.editorText ?? text).isEmpty }
+    // The binding intentionally excludes native IME preedit; it still enables
+    // explicit Send, which commits the visible marked text before submitting.
+    private var hasText: Bool { input.isComposing || !(input.editorText ?? text).isEmpty }
     private var hasContent: Bool { hasText || (editingMessage == nil && !attachments.isEmpty) }
     private var canAcquire: Bool { isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive && editingMessage == nil && onImportImages != nil }
     private var canPickSticker: Bool { canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil }
@@ -77,14 +80,14 @@ struct MessageComposerView: View {
         let pasteImages: (([NSItemProvider]) -> Void)? = canAcquire ? { importProviders($0) } : nil
         return ComposerInputBridge(
             input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
-            onCompositionChanged: onCompositionChanged, onSubmit: submit,
+            onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
             onPasteImages: pasteImages
         )
         .accessibilityHidden(true)
         #else
         return ComposerInputBridge(
             input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
-            onCompositionChanged: onCompositionChanged, onSubmit: submit, focusOnEntry: true
+            onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit, focusOnEntry: true
         )
         .accessibilityHidden(true)
         #endif
@@ -92,6 +95,12 @@ struct MessageComposerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ComposerMentionSuggestions(
+                input: input, wireText: text,
+                isEnabled: isEnabled && isInputFocused && !isAcquiring && !isSubmitting
+                    && !voiceRecorder.isActive && !showsAttachmentDialog && !showsStickerPicker,
+                search: onSearchMembers
+            )
             HStack(alignment: .bottom, spacing: 8) {
                 if voiceRecorder.previewURL != nil {
                     Button { voiceRecorder.discard() } label: {
@@ -151,11 +160,18 @@ struct MessageComposerView: View {
                         .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
                         .focused($isInputFocused)
                         #if !os(macOS)
-                        .onSubmit(submit)
+                        .onSubmit(keyboardSubmit)
+                        .onKeyPress(keys: [.return]) { press in
+                            guard press.modifiers.isEmpty, !input.isComposing,
+                                  case .committed = input.nativeInput?.snapshot() else { return .ignored }
+                            keyboardSubmit()
+                            return .handled
+                        }
                         #endif
                         .onKeyPress(.escape) {
                             guard !input.isComposing else { return .ignored }
-                            if let editing = editingMessage, (input.editorText ?? text) == editing.message {
+                            if input.onMentionKey?(.dismiss) == true { return .handled }
+                            if let editing = editingMessage, text == editing.message {
                                 onCancelEdit?()
                             } else if replyToMessage != nil {
                                 onCancelReply?()
@@ -165,10 +181,16 @@ struct MessageComposerView: View {
                             return .handled
                         }
                         .onKeyPress(.upArrow) {
-                            guard !input.isComposing, !hasText, attachments.isEmpty, replyToMessage == nil, editingMessage == nil,
+                            guard !input.isComposing else { return .ignored }
+                            if input.onMentionKey?(.up) == true { return .handled }
+                            guard !hasText, attachments.isEmpty, replyToMessage == nil, editingMessage == nil,
                                 onRequestEditLastMessage?() == true
                             else { return .ignored }
                             return .handled
+                        }
+                        .onKeyPress(.downArrow) {
+                            guard !input.isComposing else { return .ignored }
+                            return input.onMentionKey?(.down) == true ? .handled : .ignored
                         }
                         .background(composerInputBridge)
                         .accessibilityLabel("Message")
@@ -281,7 +303,8 @@ struct MessageComposerView: View {
                     attachmentState.isAcquiring = true
                     defer { attachmentState.isAcquiring = false }
                     try await onDiscardAttachments()
-                }
+                },
+                onSearchMembers: onSearchMembers
             )
         }
         .photosPicker(isPresented: $showsPhotos, selection: $selectedPhotos, matching: .any(of: [.images, .videos]))
@@ -332,6 +355,7 @@ struct MessageComposerView: View {
             if phase == .background { voiceRecorder.suspend() }
         }
         .onAppear {
+            input.setMentionNames(MessageMentions.names(in: editingMessage?.mentions ?? []))
             input.receiveExternalText(text)
             voiceRecorder.setSceneActive(scenePhase == .active)
         }
@@ -343,6 +367,7 @@ struct MessageComposerView: View {
             if focused { dismissStickerPicker(restoreFocus: false) }
         }
         .onChange(of: editingMessage?.id) { _, id in
+            input.setMentionNames(MessageMentions.names(in: editingMessage?.mentions ?? []))
             dismissStickerPicker(restoreFocus: false)
             if id != nil { voiceRecorder.discard() }
         }
@@ -451,7 +476,7 @@ struct MessageComposerView: View {
                 Text("Edit message")
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
-                Text(message.message ?? "")
+                Text(messagePreview(message.replyPreview))
                     .font(.system(size: fontSize * 12 / 15))
                     .foregroundStyle(.primary)
             }
@@ -532,8 +557,20 @@ struct MessageComposerView: View {
         showsAttachmentDialog = true
     }
 
-    private func submit() {
+    private func keyboardSubmit() {
+        guard !input.isComposing else { return }
+        if input.onMentionKey?(.accept) == true { return }
         guard canSubmit, input.prepareSubmission(allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty) else { return }
+        sendCommittedText()
+    }
+
+    private func submit() {
+        guard canSubmit, input.prepareExplicitSubmission(allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty) else { return }
+        sendCommittedText()
+    }
+
+    private func sendCommittedText() {
+        _ = input.onMentionKey?(.dismiss)
         if editingMessage == nil, !attachments.isEmpty {
             presentAttachmentDialog()
             return

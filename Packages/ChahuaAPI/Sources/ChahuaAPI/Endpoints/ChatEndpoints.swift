@@ -28,6 +28,32 @@ public struct ListChatsQuery: Sendable, Equatable {
     }
 }
 
+/// Query fields accepted by `GET /group/{chatID}/members`.
+public struct ListMembersQuery: Sendable, Equatable {
+    public var q: String?
+    /// The server supports `autocomplete` and `submitted` search modes.
+    public var mode: String
+    public var limit: Int
+    /// Member UID returned as `ListMembersResponse.nextCursor`.
+    public var after: Int32?
+
+    public init(q: String? = nil, mode: String = "autocomplete", limit: Int = 8, after: Int32? = nil) {
+        self.q = q
+        self.mode = mode
+        self.limit = limit
+        self.after = after
+    }
+
+    var queryItems: [URLQueryItem] {
+        [
+            q.map { URLQueryItem(name: "q", value: $0) },
+            URLQueryItem(name: "mode", value: mode),
+            URLQueryItem(name: "limit", value: String(limit)),
+            after.map { URLQueryItem(name: "after", value: String($0)) },
+        ].compactMap { $0 }
+    }
+}
+
 public struct MuteResponse: Codable, Hashable, Sendable {
     public let mutedUntil: Date
 
@@ -83,6 +109,13 @@ public extension ChahuaClient {
         try await send(
             HTTPRequestSpec(method: .get, path: ["group", chatID]),
             decoding: GroupInfoResponse.self
+        )
+    }
+
+    func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse {
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["group", chatID, "members"], query: query.queryItems),
+            decoding: ListMembersResponse.self
         )
     }
 

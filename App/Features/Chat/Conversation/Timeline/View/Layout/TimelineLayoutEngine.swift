@@ -150,8 +150,13 @@ struct TimelineLayoutEngine {
             height += audioHeight + 8
         }
         var geometry: MessageTextGeometry?
+        // TextKit's 1.4× line boxes already include leading. A body-only bubble
+        // needs the compact section inset on both edges, not the header's 8pt
+        // inset. Keep the native text/metadata geometry together so selection,
+        // link targets and the timestamp's last-line alignment do not shift.
+        let bodyOnlyInset: CGFloat = p.title == nil && p.reply == nil && !hasMedia ? 4 : 8
         if hasBody {
-            height += hasMedia ? 4 : p.reply == nil && p.title == nil ? 8 : 0
+            height += hasMedia ? 4 : p.reply == nil && p.title == nil ? bodyOnlyInset : 0
             geometry = textMeasurer.geometry(for: innerWidth)
             // Snap the allocated extent before snapping its origin below. Rounding
             // both edges independently can shorten the native drawing surface at
@@ -159,7 +164,7 @@ struct TimelineLayoutEngine {
             let textHeight = pixel(geometry!.size.height, e)
             frames[.text] = CGRect(x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: textHeight)
             height += textHeight
-            if !hasMedia { height += 8 }
+            if !hasMedia { height += bodyOnlyInset }
         } else if let label = p.standaloneText {
             if p.title == nil && p.reply == nil { height += 8 }
             let labelWidth = max(0, innerWidth - displayedSymbolSize.width - standaloneGap)

@@ -92,6 +92,68 @@
             XCTAssertEqual(harness.persisted, "draft final")
             XCTAssertFalse(harness.input.prepareSubmission(), "Do not reuse a consumed editing-end snapshot.")
         }
+
+        func testLatinPreeditUnmarksInReturnTransactionWithoutSending() {
+            let harness = NativeComposerHarness(text: "draft ")
+            defer { harness.input.detach() }
+            harness.mark("ni")
+            harness.editor.unmarkText()
+            XCTAssertFalse(harness.input.prepareSubmission())
+            harness.input.settleNativeInput()
+            XCTAssertEqual(harness.persisted, "draft ni")
+            XCTAssertTrue(harness.input.prepareSubmission())
+        }
+
+        func testExplicitSubmissionCommitsVisiblePreeditWithoutChoosingCandidate() {
+            let harness = NativeComposerHarness(text: "draft ")
+            defer { harness.input.detach() }
+            harness.mark("ni")
+            XCTAssertTrue(harness.input.prepareExplicitSubmission())
+            XCTAssertFalse(harness.editor.hasMarkedText())
+            XCTAssertEqual(harness.persisted, "draft ni")
+            XCTAssertFalse(harness.input.isComposing)
+        }
+
+        func testExplicitSubmissionConsumesOwnedPreeditAfterFocusLoss() {
+            let harness = NativeComposerHarness(text: "draft ")
+            defer { harness.input.detach() }
+            harness.mark("ni")
+            harness.input.nativeEditingEnded(.marked, visibleText: harness.editor.attributedString())
+            harness.input.nativeInput = nil
+            XCTAssertTrue(harness.input.prepareExplicitSubmission())
+            XCTAssertEqual(harness.persisted, "draft ni")
+            XCTAssertFalse(harness.input.prepareExplicitSubmission())
+        }
+
+        func testSelectedMentionKeepsUIDWithoutTokenizingEqualPlainName() throws {
+            let harness = NativeComposerHarness(text: "@Ada @a")
+            defer { harness.input.detach() }
+            harness.input.refreshMentionQuery()
+            let query = try XCTUnwrap(harness.input.mentionQuery)
+            XCTAssertTrue(harness.input.insertMention(uid: 42, label: "Ada", query: query))
+            XCTAssertEqual(harness.editor.string, "@Ada @Ada ")
+            XCTAssertEqual(harness.persisted, "@Ada @[uid:42] ")
+            XCTAssertFalse(harness.input.insertMention(uid: 99, label: "Ada", query: query), "Stale result must not replace a new caret position.")
+        }
+
+        func testRestoredMentionLabelsAndQueryRespectSelectionAndIdentity() {
+            let harness = NativeComposerHarness(text: "@[uid:2] @[uid:9] @a")
+            defer { harness.input.detach() }
+            harness.input.setMentionNames([2: "Ada"])
+            XCTAssertEqual(harness.input.editorText, "@Ada @User 9 @a")
+            XCTAssertEqual(harness.persisted, "@[uid:2] @[uid:9] @a")
+            harness.editor.setSelectedRange(NSRange(location: 3, length: 0))
+            harness.input.refreshMentionQuery()
+            XCTAssertNil(harness.input.mentionQuery)
+            harness.editor.setSelectedRange(NSRange(location: 13, length: 2))
+            harness.input.refreshMentionQuery()
+            XCTAssertNil(harness.input.mentionQuery)
+            harness.editor.setSelectedRange(NSRange(location: 15, length: 0))
+            harness.input.refreshMentionQuery()
+            XCTAssertEqual(harness.input.mentionQuery?.query, "a")
+            harness.mark("b")
+            XCTAssertNil(harness.input.mentionQuery)
+        }
     }
 
     @MainActor
@@ -117,16 +179,40 @@
             )
             input.nativeInput = self
             input.receiveExternalText(text)
+            installMentionText(input.mentionText)
         }
 
         func snapshot() -> ComposerInputSnapshot {
-            editor.hasMarkedText() ? .marked : .committed(editor.string)
+            editor.hasMarkedText() ? .marked : .committed(ComposerMentionText.wireText(editor.attributedString()))
         }
 
         func insertNewline() -> Bool {
             guard !editor.hasMarkedText() else { return false }
             editor.insertNewlineIgnoringFieldEditor(nil)
             return true
+        }
+
+        var attributedText: NSAttributedString? { editor.attributedString() }
+        var selection: NSRange? { editor.selectedRange() }
+        var canHydrateMentionLabels: Bool { !editor.hasMarkedText() }
+
+        func installMentionText(_ text: NSAttributedString) {
+            guard !editor.hasMarkedText() else { return }
+            let range = editor.selectedRange()
+            editor.textStorage?.setAttributedString(text)
+            let start = min(range.location, text.length)
+            editor.setSelectedRange(NSRange(location: start, length: min(range.length, text.length - start)))
+        }
+
+        func replaceMention(in range: NSRange, with text: NSAttributedString) -> Bool {
+            editor.insertText(text, replacementRange: range)
+            return true
+        }
+
+        func commitMarkedText() -> ComposerInputSnapshot {
+            editor.unmarkText()
+            editor.inputContext?.discardMarkedText()
+            return snapshot()
         }
 
         func mark(_ text: String) {

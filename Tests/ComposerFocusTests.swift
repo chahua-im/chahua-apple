@@ -182,8 +182,8 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertTrue(h.state.enabled)
     }
 
-    func testSendButtonDuringCompositionLeavesCandidateUnsent() async throws {
-        let h = try await mount(text: "prefix ")
+    func testSendButtonCommitsVisiblePreeditAndSubmitsOnce() async throws {
+        let h = try await mount(text: "")
         try h.selectEnd()
         try h.mark("ni")
         try await pause()
@@ -191,10 +191,13 @@ final class ComposerFocusTests: XCTestCase {
         h.pressSendButton()
 
         try await pause()
-        XCTAssertEqual(h.state.submits, 0)
-        XCTAssertEqual(h.state.text, "prefix ")
-        XCTAssertTrue(h.state.composing)
+        XCTAssertEqual(h.state.submits, 1)
+        XCTAssertEqual(h.state.text, "ni")
+        XCTAssertFalse(h.state.composing)
         XCTAssertTrue(h.state.enabled)
+        h.pressSendButton()
+        try await pause()
+        XCTAssertEqual(h.state.submits, 1)
     }
 
     func testRemovingMarkedComposerDoesNotSaveIntermediateText() async throws {
@@ -209,7 +212,138 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertFalse(h.state.composing)
     }
 
+    func testMentionCompletionDoesNotSendAndSurvivesContinuedTyping() async throws {
+        let h = try await mount(text: "")
+        var searched = false
+        h.state.onSearchMembers = { query in
+            if query.mode == "autocomplete", query.q == "a" { searched = true }
+            return [.init(uid: 11, username: "Ada")]
+        }
+        h.state.onSubmit = { [weak state = h.state] text in
+            XCTAssertEqual(text, "@[uid:11] hello")
+            state?.submits += 1
+            return true
+        }
+        try await pause()
+        try h.insertIntoFocusedEditor("@a")
+        for _ in 0..<30 {
+            if searched { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try await pause()
+        #if os(iOS)
+        let image = UIGraphicsImageRenderer(bounds: h.window.bounds).image { _ in
+            h.window.drawHierarchy(in: h.window.bounds, afterScreenUpdates: true)
+        }
+        let capture = XCTAttachment(image: image)
+        capture.name = "Mention suggestions above composer"
+        capture.lifetime = .keepAlways
+        add(capture)
+        #endif
+        #if os(iOS)
+        XCTAssertTrue(h.accessibilityElement(named: "Mention Ada")?.accessibilityActivate() == true)
+        #else
+        h.pressReturn()
+        #endif
+        try await pause()
+        XCTAssertEqual(h.state.text, "@[uid:11] ")
+        XCTAssertEqual(h.state.submits, 0)
+        try h.insertIntoFocusedEditor("hello")
+        try await pause()
+        XCTAssertEqual(h.state.text, "@[uid:11] hello")
+        h.pressSendButton()
+        try await pause()
+        XCTAssertEqual(h.state.submits, 1)
+    }
+
     #if os(macOS)
+        func testMentionSelectionUndoAndOrdinaryEditsPreserveIdentity() async throws {
+            let h = try await mount(text: "")
+            let editor = try h.focusedEditor()
+            let undo = try XCTUnwrap(editor.undoManager)
+            // Keep SwiftUI's deferred binding updates inside each simulated
+            // user event; XCTest does not run AppKit's normal event boundaries.
+            undo.groupsByEvent = false
+            undo.beginUndoGrouping()
+            defer {
+                if undo.groupingLevel > 0 { undo.endUndoGrouping() }
+                undo.groupsByEvent = true
+            }
+            func nextEvent() {
+                if undo.groupingLevel > 0 { undo.endUndoGrouping() }
+                undo.beginUndoGrouping()
+            }
+            func replay(_ action: () -> Void) {
+                if undo.groupingLevel > 0 { undo.endUndoGrouping() }
+                action()
+            }
+            var firstSearch = false
+            var secondSearch = false
+            h.state.onSearchMembers = { query in
+                if query.mode == "submitted" {
+                    return [.init(uid: 11, username: "Ada"), .init(uid: 22, username: "Ada")]
+                }
+                if query.q == "a" {
+                    firstSearch = true
+                    return [.init(uid: 11, username: "Ada")]
+                }
+                if query.q == "b" {
+                    secondSearch = true
+                    return [.init(uid: 22, username: "Ada")]
+                }
+                return []
+            }
+            try await pause()
+            try h.insertIntoFocusedEditor("@a")
+            for _ in 0..<30 {
+                if firstSearch { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            try await pause()
+            nextEvent()
+            h.pressReturn()
+            try await pause()
+            XCTAssertEqual(h.state.text, "@[uid:11] ")
+            XCTAssertEqual(h.state.submits, 0)
+
+            nextEvent()
+            try h.insertIntoFocusedEditor("@b")
+            for _ in 0..<30 {
+                if secondSearch { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            try await pause()
+            nextEvent()
+            h.pressReturn()
+            try await pause()
+            XCTAssertEqual(editor.string, "@Ada @Ada ")
+            XCTAssertEqual(h.state.text, "@[uid:11] @[uid:22] ")
+            replay { undo.undo() }
+            try await pause()
+            XCTAssertEqual(h.state.text, "@[uid:11] @b")
+            replay { undo.redo() }
+            try await pause()
+            XCTAssertEqual(h.state.text, "@[uid:11] @[uid:22] ")
+
+            nextEvent()
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+            try h.insertIntoFocusedEditor("Hi ")
+            try await pause()
+            XCTAssertEqual(h.state.text, "Hi @[uid:11] @[uid:22] ")
+            nextEvent()
+            editor.breakUndoCoalescing()
+            editor.setSelectedRange(NSRange(location: 5, length: 1))
+            try h.insertIntoFocusedEditor("x")
+            try await pause()
+            XCTAssertEqual(h.state.text, "Hi @Axa @[uid:22] ")
+            replay { undo.undo() }
+            try await pause()
+            XCTAssertEqual(h.state.text, "Hi @[uid:11] @[uid:22] ")
+            replay { undo.redo() }
+            try await pause()
+            XCTAssertEqual(h.state.text, "Hi @Axa @[uid:22] ")
+        }
+
         func testChatEntryFocusAppendsWithoutSelectingRestoredDraft() async throws {
             let h = try await mount(text: "saved draft")
             try h.insertIntoFocusedEditor("!")
@@ -477,6 +611,7 @@ private final class FocusComposerState: ObservableObject {
     @Published var showsComposer = true
     @Published var onImportImages: (([URL]) async throws -> Void)?
     @Published var stickerLibrary: StickerLibrary?
+    @Published var onSearchMembers: ComposerMemberSearch?
     var onSubmit: ((String) async -> Bool)?
     var composing = false
     var submits = 0
@@ -512,7 +647,8 @@ private struct FocusComposerRoot: View {
                     attachments: state.media,
                     onImportImages: state.onImportImages,
                     onDiscardAttachments: { state.media = [] },
-                    stickerLibrary: state.stickerLibrary, onSendSticker: { _ in true })
+                    stickerLibrary: state.stickerLibrary, onSendSticker: { _ in true },
+                    onSearchMembers: state.onSearchMembers)
             }
         }
     }
@@ -525,7 +661,8 @@ private struct FocusComposerRoot: View {
             onCompositionChanged: { state.composing = $0 },
             onRemove: { _ in }, onRetry: { _ in }, onCompressionChanged: { _ in },
             onReorder: { _ in }, onImportProviders: { _ in },
-            onSubmit: { state.submits += 1; return true }, onCancel: {})
+            onSubmit: { state.submits += 1; return true }, onCancel: {},
+            onSearchMembers: state.onSearchMembers)
     }
 }
 

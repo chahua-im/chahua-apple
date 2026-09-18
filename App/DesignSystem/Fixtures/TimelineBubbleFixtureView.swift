@@ -163,7 +163,8 @@
                     replyToMessage: replyToMessage,
                     replyFocusRequest: replyFocusRequest,
                     onCancelReply: { replyToMessage = nil },
-                    onOpenReply: { id in Task { await model.jumpToMessage(id) } }
+                    onOpenReply: { id in Task { await model.jumpToMessage(id) } },
+                    onSearchMembers: { query in fixture.members(matching: query) }
                 )
             }
         }
@@ -452,6 +453,21 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
         timeline = ConversationTimelineModel(chatID: "bubble-fixtures", currentUserID: 1, isGroupChat: true, source: self, messageStore: store, threadID: enabled ? "fixture-root" : nil)
     }
 
+
+    func members(matching query: ListMembersQuery) -> [MemberResponse] {
+        // Reuse this diagnostic conversation's senders, without another fixture.
+        var senders: [Int32: MemberResponse] = [:]
+        for message in messages {
+            let sender = message.sender
+            senders[sender.uid] = MemberResponse(uid: sender.uid, username: sender.name, avatarUrl: sender.avatarUrl)
+        }
+        let prefix = (query.q ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return Array(senders.values.filter {
+            (query.after == nil || $0.uid > query.after!)
+                && (prefix.isEmpty || ($0.username ?? "").lowercased().hasPrefix(prefix)
+                    || (query.mode == "submitted" && String($0.uid) == prefix))
+        }.sorted { $0.uid < $1.uid }.prefix(max(0, query.limit)))
+    }
 
     func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse {
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601

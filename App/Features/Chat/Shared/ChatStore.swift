@@ -678,6 +678,21 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func searchMembers(chatID: String, query: ListMembersQuery) async throws -> [MemberResponse] {
+        try Task.checkCancellation()
+        let requestGeneration = generation
+        do {
+            let response = try await apiClient.listMembers(chatID: chatID, query: query)
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            return response.members
+        } catch {
+            guard generation == requestGeneration else { throw CancellationError() }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            throw error
+        }
+    }
+
     func fetchMessages(chatID: String, query: ListMessagesQuery = .init()) async throws -> ListMessagesResponse {
         let requestGeneration = generation
         do {

@@ -24,6 +24,7 @@ struct ComposerAttachmentDialog: View {
     let onImportProviders: ([NSItemProvider]) -> Void
     let onSubmit: () async -> Bool
     let onCancel: () async throws -> Void
+    var onSearchMembers: ComposerMemberSearch? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var input = ComposerInputState()
@@ -68,8 +69,8 @@ struct ComposerAttachmentDialog: View {
                 .clipped()
             }
             .padding(.horizontal, 12)
-            // The caption is a real layout row, not an overlay on the gallery.
-            // Its height is reserved before the flexible media viewport is sized.
+            // Reserve the caption, suggestions and Send at their ideal height;
+            // the media viewport gives up space as the keyboard or IME grows.
             VStack(spacing: 4) {
                 if isAcquiring {
                     ProgressView("Updating attachments…").controlSize(.small)
@@ -83,13 +84,21 @@ struct ComposerAttachmentDialog: View {
                     Text(attachmentError).font(.callout).foregroundStyle(.red)
                         .lineLimit(2)
                 }
+                ComposerMentionSuggestions(
+                    input: input, wireText: text, isEnabled: canEditCaption,
+                    search: onSearchMembers
+                )
                 captionBar
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
             .background(.regularMaterial)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #if os(iOS)
         .padding(.bottom, keyboardOverlap)
+        // Measure outside the padding so reserving overlap cannot move the probe
+        // and feed the same keyboard space back into the next layout pass.
         .background {
             ComposerKeyboardAvoidance { keyboardOverlap = $0 }
         }
@@ -209,7 +218,7 @@ struct ComposerAttachmentDialog: View {
         #if os(macOS)
             ComposerCaptionInput(
                 input: input, draft: $text, isEnabled: canEditCaption,
-                onCompositionChanged: onCompositionChanged, onSubmit: submit
+                onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit
             )
             .overlay(alignment: .topLeading) {
                 if (input.editorText ?? text).isEmpty {
@@ -225,12 +234,21 @@ struct ComposerAttachmentDialog: View {
                 .lineLimit(1...3)
                 .disabled(!canEditCaption)
                 .focused($isCaptionFocused)
-                .onSubmit(submit)
+                .onSubmit(keyboardSubmit)
+                .onKeyPress(keys: [.return]) { press in
+                    guard press.modifiers.isEmpty, !input.isComposing,
+                          case .committed = input.nativeInput?.snapshot() else { return .ignored }
+                    keyboardSubmit()
+                    return .handled
+                }
+                .onKeyPress(.upArrow) { mentionKey(.up) }
+                .onKeyPress(.downArrow) { mentionKey(.down) }
+                .onKeyPress(.escape) { mentionKey(.dismiss) }
                 .background(
                     ComposerInputBridge(
                         input: input, draft: $text, isFocused: isCaptionFocused,
                         isEnabled: canEditCaption,
-                        onCompositionChanged: onCompositionChanged, onSubmit: submit
+                        onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit
                     )
                     .accessibilityHidden(true)
                 )
@@ -293,8 +311,25 @@ struct ComposerAttachmentDialog: View {
         }
     }
 
-    private func submit() {
+    private func mentionKey(_ key: ComposerMentionKey) -> KeyPress.Result {
+        guard !input.isComposing else { return .ignored }
+        return input.onMentionKey?(key) == true ? .handled : .ignored
+    }
+
+    private func keyboardSubmit() {
+        guard !input.isComposing else { return }
+        if input.onMentionKey?(.accept) == true { return }
         guard canSubmit, input.prepareSubmission(allowEmptyUnfocused: true) else { return }
+        sendCommittedCaption()
+    }
+
+    private func submit() {
+        guard canSubmit, input.prepareExplicitSubmission(allowEmptyUnfocused: true) else { return }
+        sendCommittedCaption()
+    }
+
+    private func sendCommittedCaption() {
+        _ = input.onMentionKey?(.dismiss)
         isSubmitting = true
         sendFailed = false
         Task {

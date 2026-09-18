@@ -225,6 +225,8 @@ struct AuthenticatedShell: View {
             let header = HStack(spacing: 8) {
                 accountButton
                     .labelStyle(.iconOnly)
+                    .frame(width: 44, height: 44)
+                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
                     .accessibilityLabel("Account")
                 picker
             }
