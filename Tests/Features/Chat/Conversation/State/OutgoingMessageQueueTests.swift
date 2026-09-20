@@ -80,12 +80,16 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let reply = try TimelineTestFixtures.message(id: "quoted", at: 1).replyPreview
         drafts.setDraftText("keep typing", chatID: "chat", threadID: "thread")
         drafts.setDraftReply(reply, chatID: "chat", threadID: "thread")
+        h.faults.failures = [.saveDraft]
+        await drafts.flushDraft(chatID: "chat", threadID: "thread")
+        XCTAssertTrue(drafts.draftSaveFailed)
 
         let submitted = try await drafts.submitSticker(sticker, chatID: "chat", threadID: "thread")
         XCTAssertTrue(submitted)
         XCTAssertEqual(drafts.draftText(chatID: "chat", threadID: "thread"), "keep typing")
         XCTAssertNil(drafts.draftReply(chatID: "chat", threadID: "thread"))
         XCTAssertEqual(h.queue.pendingMessages(chatID: "chat", threadID: "thread").first?.replyToMessage, reply)
+        h.faults.failures = []
         await drafts.flushAll()
         observation.cancel()
         drafts.reset()
@@ -473,6 +477,39 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await restored.api.finish(0, with: .success(try response(retried)))
         try await eventually { restored.queue.pendingMessages(chatID: "chat").isEmpty }
         await restored.close()
+    }
+
+    func testDraftSaveFailureDoesNotBlockSubmissionOrDispatchOfQueuedMessages() async throws {
+        let h = try await openHarness()
+        let drafts = ChatDraftStore(outgoingQueue: h.queue)
+        let observation = h.queue.events.sink { event in
+            if case .snapshot(let snapshot) = event { drafts.install(snapshot) }
+        }
+        defer {
+            observation.cancel()
+            drafts.reset()
+        }
+        try await h.queue.enqueueText(chatID: "chat", text: "first", clearedDraftRevision: 1)
+        try await eventually { await h.api.requests().count == 1 }
+        let first = try await firstRequest(h.api)
+        let reply = try TimelineTestFixtures.message(id: "quoted", at: 1).replyPreview
+        drafts.setDraftText("send despite autosave failure", chatID: "chat")
+        drafts.setDraftReply(reply, chatID: "chat")
+        h.faults.failures = [.saveDraft]
+        await drafts.flushDraft(chatID: "chat")
+        XCTAssertTrue(drafts.draftSaveFailed)
+        XCTAssertEqual(drafts.draftText(chatID: "chat"), "send despite autosave failure")
+
+        let submitted = await drafts.submitDraft(chatID: "chat")
+        XCTAssertTrue(submitted)
+        XCTAssertEqual(drafts.draftText(chatID: "chat"), "")
+        await h.api.finish(0, with: .success(try response(first)))
+        try await eventually { await h.api.requests().count == 2 }
+        let requests = await h.api.requests()
+        XCTAssertEqual(requests.map(\.body.message), ["first", "send despite autosave failure"])
+        XCTAssertEqual(requests[1].body.replyToId, reply.id)
+        await h.api.finish(1, with: .success(try response(requests[1])))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").isEmpty }
     }
 
     func testEnqueueAndClaimStorageFailuresNeverSendUncommittedWork() async throws {

@@ -150,13 +150,10 @@ struct TimelineLayoutEngine {
             height += audioHeight + 8
         }
         var geometry: MessageTextGeometry?
-        // TextKit's 1.4× line boxes already include leading. A body-only bubble
-        // needs the compact section inset on both edges, not the header's 8pt
-        // inset. Keep the native text/metadata geometry together so selection,
-        // link targets and the timestamp's last-line alignment do not shift.
-        let bodyOnlyInset: CGFloat = p.title == nil && p.reply == nil && !hasMedia ? 4 : 8
+        // Omitting the sender title removes only that row and its gap, not the
+        // bubble's outer text padding.
         if hasBody {
-            height += hasMedia ? 4 : p.reply == nil && p.title == nil ? bodyOnlyInset : 0
+            height += hasMedia ? 4 : p.reply == nil && p.title == nil ? TimelineRowMetrics.textVerticalInset : 0
             geometry = textMeasurer.geometry(for: innerWidth)
             // Snap the allocated extent before snapping its origin below. Rounding
             // both edges independently can shorten the native drawing surface at
@@ -164,7 +161,7 @@ struct TimelineLayoutEngine {
             let textHeight = pixel(geometry!.size.height, e)
             frames[.text] = CGRect(x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: textHeight)
             height += textHeight
-            if !hasMedia { height += bodyOnlyInset }
+            if !hasMedia { height += TimelineRowMetrics.textVerticalInset }
         } else if let label = p.standaloneText {
             if p.title == nil && p.reply == nil { height += 8 }
             let labelWidth = max(0, innerWidth - displayedSymbolSize.width - standaloneGap)
@@ -269,7 +266,7 @@ struct TimelineLayoutEngine {
         var contentFrames: [[CGRect]] = []
         for reaction in reactions {
             let emoji = nativeSize(reaction.emoji, size: 18.5)
-            var w = emoji.width + 7.5
+            var w = emoji.width + 12
             var h = max(26, emoji.height)
             var countSize: CGSize = .zero
             let reactors = min(5, reaction.reactors?.count ?? 0)
@@ -278,13 +275,13 @@ struct TimelineLayoutEngine {
                 if reaction.count > 5 {
                     let label = nativeSize("+\(reaction.count - 5)", size: 11)
                     countSize = label
-                    w += 2 + label.width + 4
+                    w += 2 + label.width
                     h = max(h, label.height)
                 }
             } else if reaction.count > 1 {
                 let label = nativeSize("\(reaction.count)", size: 12)
                 countSize = label
-                w += 2 + label.width + 6
+                w += 2 + label.width
                 h = max(h, label.height)
             }
             let size = CGSize(width: min(width, pixel(w, e)), height: pixel(h, e))

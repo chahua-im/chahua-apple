@@ -1,6 +1,7 @@
 import ChahuaAPI
 import Combine
 import Foundation
+import OSLog
 
 enum OutgoingStorageState: Equatable {
     case inactive, loading, ready, failed
@@ -13,6 +14,8 @@ enum OutgoingQueueEvent {
 
 @MainActor
 final class OutgoingMessageQueue: ObservableObject {
+    private static let logger = Logger(subsystem: "app.chahua.chat", category: "outbox")
+
     enum StorageOperation: Equatable {
         case restore, saveDraft, enqueue, claim, fail, retry, acknowledge
     }
@@ -121,7 +124,7 @@ final class OutgoingMessageQueue: ObservableObject {
                 self.transportReady = true
                 self.wakeWorkers()
             } catch {
-                self.storageFailed(error, generation: current)
+                self.storageFailed(error, operation: "foreground restore", generation: current)
             }
         }
     }
@@ -157,15 +160,19 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     func saveDraft(chatID: String, threadID: String? = nil, text: String, editRevision: Int64, updatedAt: Date, replyToMessage: MessagePreview? = nil) async throws {
-        guard let store, requestedUID != nil else { throw QueueError.storageUnavailable }
         let current = generation
+        guard let store, requestedUID != nil else {
+            logStorageError(QueueError.storageUnavailable, operation: "save draft (storage unavailable)", generation: current)
+            throw QueueError.storageUnavailable
+        }
         do {
             try await checkpoint(.saveDraft, generation: current)
             let snapshot = try await store.saveDraft(chatID: chatID, threadID: threadID, text: text, editRevision: editRevision, updatedAt: updatedAt, replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
         } catch {
-            storageFailed(error, generation: current)
+            // Autosave is best-effort; durable outbox work must remain dispatchable.
+            logStorageError(error, operation: "save draft", generation: current)
             throw error
         }
     }
@@ -188,7 +195,7 @@ final class OutgoingMessageQueue: ObservableObject {
             publish(snapshot)
             wakeWorker(key: snapshot.conversationKey)
         } catch {
-            storageFailed(error, generation: current)
+            storageFailed(error, operation: "enqueue text", generation: current)
             throw error
         }
     }
@@ -209,7 +216,7 @@ final class OutgoingMessageQueue: ObservableObject {
             publish(snapshot)
             wakeWorker(key: snapshot.conversationKey)
         } catch {
-            storageFailed(error, generation: current)
+            storageFailed(error, operation: "enqueue sticker", generation: current)
             throw error
         }
     }
@@ -241,7 +248,7 @@ final class OutgoingMessageQueue: ObservableObject {
             publish(snapshot)
             wakeWorker(key: key)
         } catch {
-            storageFailed(error, generation: current)
+            storageFailed(error, operation: "enqueue voice", generation: current)
             throw error
         }
     }
@@ -256,7 +263,7 @@ final class OutgoingMessageQueue: ObservableObject {
             publish(snapshot)
             wakeWorker(key: snapshot.conversationKey)
         } catch {
-            storageFailed(error, generation: current)
+            storageFailed(error, operation: "retry message", generation: current)
             throw error
         }
     }
@@ -276,6 +283,7 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func openAndRestore(uid: Int32, generation current: UInt64, transport: UInt64) async {
+        var operation = "open store"
         do {
             let local: ChahuaLocalStore
             if let store { local = store } else { local = try await localStoreFactory(uid) }
@@ -283,6 +291,7 @@ final class OutgoingMessageQueue: ObservableObject {
             store = local
             // Deletions precede interrupted-send recovery: never redispatch known delivery.
             for message in Array(acknowledgements.values) {
+                operation = "replay acknowledgement"
                 try await checkpoint(.acknowledge, generation: current)
                 let snapshot = try await local.acknowledge(chatID: message.chatId, threadID: message.replyRootId, clientGeneratedID: message.clientGeneratedId)
                 try checkGeneration(current)
@@ -291,21 +300,24 @@ final class OutgoingMessageQueue: ObservableObject {
                 uncommittedFailures[message.clientGeneratedId] = nil
             }
             for pending in Array(uncommittedFailures.values) {
+                operation = "replay send failure"
                 try await checkpoint(.fail, generation: current)
                 let snapshot = try await local.fail(chatID: pending.chatID, threadID: pending.threadID, clientGeneratedID: pending.clientGeneratedID)
                 try checkGeneration(current)
                 publish(snapshot)
                 uncommittedFailures[pending.clientGeneratedID] = nil
             }
+            operation = "restore"
             try await checkpoint(.restore, generation: current)
             let restored = try await local.restore()
             try checkGeneration(current)
             for snapshot in restored { publish(snapshot) }
             storageState = .ready
+            Self.logger.info("Outbox storage restored; queue ready")
             if transportGeneration == transport { transportReady = true }
             wakeWorkers()
         } catch {
-            storageFailed(error, generation: current)
+            storageFailed(error, operation: operation, generation: current)
         }
     }
 
@@ -362,7 +374,7 @@ final class OutgoingMessageQueue: ObservableObject {
                 guard let message = claim.message, canDispatch(generation: current, transport: transport) else { return }
                 pending = message
             } catch {
-                storageFailed(error, generation: current)
+                storageFailed(error, operation: "claim message", generation: current)
                 return
             }
             do {
@@ -395,7 +407,7 @@ final class OutgoingMessageQueue: ObservableObject {
                         publish(snapshot)
                         uncommittedFailures[pending.clientGeneratedID] = nil
                     } catch {
-                        storageFailed(error, generation: current)
+                        storageFailed(error, operation: "persist send failure", generation: current)
                     }
                 }
                 guard generation == current else { return }
@@ -428,7 +440,7 @@ final class OutgoingMessageQueue: ObservableObject {
             acknowledgements[message.clientGeneratedId] = nil
         } catch {
             guard generation == current else { return }
-            storageFailed(error, generation: current)
+            storageFailed(error, operation: "acknowledge message", generation: current)
             events.send(.acknowledged(snapshot: nil, message: message))
         }
         if generation == current { wakeWorker(key: ConversationKey(chatID: message.chatId, threadID: message.replyRootId)) }
@@ -707,7 +719,7 @@ final class OutgoingMessageQueue: ObservableObject {
             try checkGeneration(current)
             publish(updated)
         } catch {
-            storageFailed(error, generation: current)
+            storageFailed(error, operation: "checkpoint attachment", generation: current)
             throw error
         }
     }
@@ -803,17 +815,29 @@ final class OutgoingMessageQueue: ObservableObject {
         guard generation == current else { throw CancellationError() }
     }
 
-    private func storageFailed(_ error: Error, generation current: UInt64) {
+    private func storageFailed(_ error: Error, operation: String, generation current: UInt64) {
         guard generation == current, !(error is CancellationError) else { return }
         if let error = error as? LocalStorageError {
             switch error {
             case .blankMessage, .staleDraft, .notTail, .dispatchAlreadyClaimed, .invalidAttachments, .unsupportedMessageType:
+                logStorageError(error, operation: operation, generation: current, level: .default)
                 return
             case .unsupportedSchema, .corruptRecord:
                 break
             }
         }
+        logStorageError(error, operation: operation, generation: current)
         storageState = .failed
+    }
+
+    private func logStorageError(_ error: Error, operation: String, generation current: UInt64, level: OSLogType = .error) {
+        guard generation == current, !(error is CancellationError) else { return }
+        let error = error as NSError
+        // SQLite and file errors can contain SQL values, message content, or paths.
+        Self.logger.log(level: level, "Local persistence failed: operation=\(operation, privacy: .public) domain=\(error.domain, privacy: .public) code=\(error.code, privacy: .public) details=\(error.description, privacy: .private)")
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+            Self.logger.log(level: level, "Local persistence underlying error: operation=\(operation, privacy: .public) domain=\(underlying.domain, privacy: .public) code=\(underlying.code, privacy: .public) details=\(underlying.description, privacy: .private)")
+        }
     }
 }
 

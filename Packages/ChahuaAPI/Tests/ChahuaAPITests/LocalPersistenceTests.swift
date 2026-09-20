@@ -83,9 +83,19 @@ final class LocalPersistenceTests: XCTestCase {
     }
 
     func testLegacyDraftMigrationPreservesIdentityRevisionsAndRestoresFIFO() async throws {
+        try await assertLegacyDraftMigration(hasReplyContext: false)
+    }
+
+    func testLegacyReplyContextMigrationPreservesDraftAndQueuedReplies() async throws {
+        try await assertLegacyDraftMigration(hasReplyContext: true)
+    }
+
+    private func assertLegacyDraftMigration(hasReplyContext: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let reply = hasReplyContext ? preview(id: "quoted") : nil
+        let replyData = try reply.map { try JSONEncoder().encode($0) }
         do {
             let legacy = try DatabaseQueue(path: directory.appendingPathComponent("chat.sqlite").path)
             try await legacy.write { db in
@@ -115,6 +125,15 @@ final class LocalPersistenceTests: XCTestCase {
                     INSERT INTO outgoing_message VALUES ('A', 'chat', 1, 'first', 100, 0, 1, 'failed');
                     INSERT INTO outgoing_message VALUES ('B', 'chat', 1, 'retry', 101, 1, 0, 'sending');
                     """)
+                if let replyData {
+                    try db.execute(sql: """
+                        ALTER TABLE draft ADD COLUMN reply_to_message BLOB;
+                        ALTER TABLE outgoing_message ADD COLUMN reply_to_message BLOB;
+                        INSERT INTO grdb_migrations VALUES ('v2_reply_context');
+                        """)
+                    try db.execute(sql: "UPDATE draft SET reply_to_message = ?", arguments: [replyData])
+                    try db.execute(sql: "UPDATE outgoing_message SET reply_to_message = ?", arguments: [replyData])
+                }
             }
         }
         let store = try ChahuaLocalStore(directory: directory)
@@ -124,6 +143,8 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(parent.draft.text, "unsent 世界")
         XCTAssertEqual(parent.draft.editRevision, 5)
         XCTAssertEqual(parent.draft.updatedAt, Date(timeIntervalSince1970: 123))
+        XCTAssertEqual(parent.draft.replyToMessage, reply)
+        XCTAssertEqual(parent.outgoing.map(\.replyToMessage), [reply, reply])
         XCTAssertEqual(parent.revision, 8)
         XCTAssertEqual(parent.outgoing.map(\.clientGeneratedID), ["A", "B"])
         XCTAssertEqual(parent.outgoing.map(\.state), [.failed, .queued])
@@ -142,6 +163,42 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(queued.draft.text, "")
         let blockedByFailure = try await store.claimNext(chatID: "chat")
         XCTAssertNil(blockedByFailure.message)
+    }
+
+    func testThreadSchemaWithoutLegacyMigrationIdentityReopensWithoutLosingReplies() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let reply = preview(id: "quoted")
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        _ = try await store!.enqueueText(
+            chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: "queued",
+            text: "outgoing", enqueuedAt: Date(), clearedDraftRevision: 1, replyToMessage: reply)
+        let saved = try await store!.saveDraft(
+            chatID: "chat", threadID: "thread", text: "draft", editRevision: 2,
+            updatedAt: Date(), replyToMessage: reply)
+        store = nil
+        do {
+            let database = try DatabaseQueue(path: directory.appendingPathComponent("chat.sqlite").path)
+            try await database.write { db in
+                // The thread-first release never registered the earlier reply migration.
+                try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v2_reply_context'")
+            }
+        }
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        XCTAssertEqual(restored, [saved])
+        store = nil
+        do {
+            let database = try DatabaseQueue(path: directory.appendingPathComponent("chat.sqlite").path)
+            try await database.write { db in
+                try db.execute(sql: "INSERT INTO grdb_migrations VALUES ('unknown_future_schema')")
+            }
+        }
+        XCTAssertThrowsError(try ChahuaLocalStore(directory: directory)) { error in
+            guard case LocalStorageError.unsupportedSchema = error else {
+                return XCTFail("An unknown future schema must still be rejected: \(error)")
+            }
+        }
     }
 
     func testThreadDraftFailureRetryAndAcknowledgementStayIsolatedAcrossReopen() async throws {

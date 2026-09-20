@@ -130,7 +130,7 @@ final class ChatDraftStore: ObservableObject {
             guard generation == requestGeneration else { return }
             draftSaveFailed = false
         } catch {
-            guard generation == requestGeneration else { return }
+            guard generation == requestGeneration, !(error is CancellationError) else { return }
             draftSaveFailed = true
         }
     }
@@ -204,7 +204,8 @@ final class ChatDraftStore: ObservableObject {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let requestGeneration = generation
         let reply = draftReplies[key]
-        try await flushForAttachmentChange(chatID: chatID, threadID: threadID)
+        // This send preserves the composition; autosaving it is best-effort.
+        await flushDraft(chatID: chatID, threadID: threadID)
         guard generation == requestGeneration, !committingDrafts.contains(key),
               !composingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
         committingDrafts.insert(key)
@@ -221,7 +222,8 @@ final class ChatDraftStore: ObservableObject {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let requestGeneration = generation
         let reply = draftReplies[key]
-        try await flushForAttachmentChange(chatID: chatID, threadID: threadID)
+        // A voice send does not consume the text/media draft.
+        await flushDraft(chatID: chatID, threadID: threadID)
         guard generation == requestGeneration, !committingDrafts.contains(key),
               !composingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
         committingDrafts.insert(key)

@@ -29,6 +29,9 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
             CREATE INDEX outgoing_dispatch ON outgoing_message(chat_id, dispatch_order);
             """)
     }
+    // Shipped before thread-scoped storage. Keep its identity registered so
+    // those databases are not mistaken for an unsupported future schema.
+    migrator.registerMigration("v2_reply_context", migrate: addLocalReplyContext)
     migrator.registerMigration("v2_thread_conversations") { db in
         // The empty SQL thread identifier represents the parent conversation only.
         // Rebuild rather than mutate primary keys so existing drafts and outbox order survive.
@@ -46,6 +49,7 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
                 text TEXT NOT NULL,
                 edit_revision INTEGER NOT NULL,
                 updated_at REAL NOT NULL,
+                reply_to_message BLOB,
                 PRIMARY KEY(chat_id, thread_id),
                 FOREIGN KEY(chat_id, thread_id) REFERENCES local_conversation(chat_id, thread_id)
             );
@@ -59,16 +63,17 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
                 enqueue_sequence INTEGER NOT NULL,
                 dispatch_order INTEGER NOT NULL,
                 state TEXT NOT NULL CHECK(state IN ('queued','sending','failed')),
+                reply_to_message BLOB,
                 UNIQUE(chat_id, thread_id, enqueue_sequence),
                 FOREIGN KEY(chat_id, thread_id) REFERENCES local_conversation(chat_id, thread_id)
             );
             INSERT INTO local_conversation_v2
                 SELECT chat_id, '', revision, next_enqueue_sequence FROM local_conversation;
             INSERT INTO draft_v2
-                SELECT chat_id, '', text, edit_revision, updated_at FROM draft;
+                SELECT chat_id, '', text, edit_revision, updated_at, reply_to_message FROM draft;
             INSERT INTO outgoing_message_v2
                 SELECT client_generated_id, chat_id, '', sender_id, text, enqueued_at,
-                       enqueue_sequence, dispatch_order, state FROM outgoing_message;
+                       enqueue_sequence, dispatch_order, state, reply_to_message FROM outgoing_message;
             DROP TABLE draft;
             DROP TABLE outgoing_message;
             DROP TABLE local_conversation;
@@ -78,12 +83,7 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
             CREATE INDEX outgoing_dispatch ON outgoing_message(chat_id, thread_id, dispatch_order);
             """)
     }
-    migrator.registerMigration("v3_reply_context") { db in
-        try db.execute(sql: """
-            ALTER TABLE draft ADD COLUMN reply_to_message BLOB;
-            ALTER TABLE outgoing_message ADD COLUMN reply_to_message BLOB;
-            """)
-    }
+    migrator.registerMigration("v3_reply_context", migrate: addLocalReplyContext)
     migrator.registerMigration("v4_blocked_image_outbox") { db in
         try db.execute(sql: """
             ALTER TABLE outgoing_message ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0;
@@ -140,4 +140,15 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }
     try migrator.migrate(queue)
+}
+
+private func addLocalReplyContext(_ db: Database) throws {
+    // Both shipped histories converge here: replies preceded threads on older
+    // installs, while newer installs added replies after the thread migration.
+    // Fully upgraded stores have already replaced draft with a blocked outbox item.
+    for table in ["draft", "outgoing_message"] where try db.tableExists(table) {
+        if try !db.columns(in: table).contains(where: { $0.name == "reply_to_message" }) {
+            try db.execute(sql: "ALTER TABLE \(table) ADD COLUMN reply_to_message BLOB")
+        }
+    }
 }

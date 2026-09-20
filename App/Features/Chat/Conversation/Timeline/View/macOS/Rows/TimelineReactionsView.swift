@@ -71,6 +71,11 @@ final class TimelineReactionsView: NSView {
 private final class ReactionLabelCell: NSTextFieldCell {
     override func drawingRect(forBounds rect: NSRect) -> NSRect { rect }
     override func titleRect(forBounds rect: NSRect) -> NSRect { rect }
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        // Match the layout engine's glyph measurements without NSTextFieldCell's
+        // additional internal padding, which clips narrow reaction counts.
+        attributedStringValue.draw(with: cellFrame, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
 }
 private final class ReactionLabel: NSTextField {
     init() {
