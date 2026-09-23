@@ -131,6 +131,7 @@ lane :ci_artifacts do
       derived_data_path: File.join(root, "build", "DerivedData-macos"),
       output_directory: File.join(root, "build", "macos"),
       output_name: "Chahua",
+      export_method: "developer-id",
       skip_package_pkg: true,
       xcargs: "CURRENT_PROJECT_VERSION=#{version} DEVELOPMENT_TEAM=9422PL3GFR " \
               "ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO " \
@@ -138,15 +139,10 @@ lane :ci_artifacts do
       buildlog_path: File.join(root, "build", "logs"),
       xcodebuild_formatter: ""
     )
+    # The artifact is Developer ID-signed but intentionally unnotarized. The
+    # manual macOS release job submits, staples, and publishes a selected ZIP.
     zip = File.join(output, "Chahua-macOS.zip")
     sh("codesign", "--verify", "--deep", "--strict", app)
-    sh("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zip)
-    sh("xcrun", "notarytool", "submit", zip,
-       "--key", ENV.fetch("ASC_KEY_FILE"), "--key-id", ENV.fetch("ASC_KEY_ID"),
-       "--issuer", ENV.fetch("ASC_ISSUER_ID"), "--wait", "--timeout", "30m")
-    sh("xcrun", "stapler", "staple", app)
-    sh("xcrun", "stapler", "validate", app)
-    FileUtils.rm_f(zip)
     sh("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zip)
 
     artifacts = ["Chahua.ipa", "Chahua-macOS.zip"]

@@ -19,7 +19,7 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 [bundle exec] fastlane ci_artifacts
 ```
 
-Build the checked commit's App Store IPA and notarized Developer ID app ZIP
+Build the checked commit's App Store IPA and Developer ID-signed macOS app ZIP
 
 ----
 

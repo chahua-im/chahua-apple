@@ -1,8 +1,7 @@
 // Standalone Pipeline from SCM, main branch, script path ci/Jenkinsfile.apple-build.
 // Job: chahua/chahua-apple-build. Empty GIT_COMMIT_SHA builds origin/main tip; otherwise a pinned SHA.
 // Install rbenv/ruby-build, Xcode, both SDKs and native build dependencies on the agent.
-// Credentials: github-app; apple-match-ssh (SSH key); apple-match-password (secret text);
-// asc-api-key (secret .p8 file), asc-key-id and asc-issuer-id (secret text, team API key).
+// Credentials: github-app; apple-match-ssh (SSH key); apple-match-password (secret text).
 // Preload github.com known_hosts. Match assets must already exist (read-only CI).
 // Plugins: Git, Credentials Binding, SSH Agent, Copy Artifact, Lockable Resources, Pipeline.
 // CFBundleVersion uses BUILD_NUMBER directly; initialize/preserve the job counter accordingly.
@@ -13,7 +12,7 @@ pipeline {
     skipDefaultCheckout(true)
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '90', artifactNumToKeepStr: '90'))
-    copyArtifactPermission('chahua/deploy/apple-appstore-publish')
+    copyArtifactPermission('chahua/deploy/apple-appstore-publish,chahua/deploy/apple-macos-notarize')
   }
 
   parameters {
@@ -79,10 +78,7 @@ git merge-base --is-ancestor HEAD origin/main
           steps {
             sshagent(credentials: ['apple-match-ssh']) {
               withCredentials([
-                string(credentialsId: 'apple-match-password', variable: 'MATCH_PASSWORD'),
-                file(credentialsId: 'asc-api-key', variable: 'ASC_KEY_FILE'),
-                string(credentialsId: 'asc-key-id', variable: 'ASC_KEY_ID'),
-                string(credentialsId: 'asc-issuer-id', variable: 'ASC_ISSUER_ID')
+                string(credentialsId: 'apple-match-password', variable: 'MATCH_PASSWORD')
               ]) {
                 sh 'bundle exec fastlane ci_artifacts'
               }
