@@ -149,7 +149,6 @@ lane :ci_artifacts do
     File.write(File.join(output, "apple-artifact-metadata.json"), JSON.pretty_generate(
       buildNumber: number,
       bundleVersion: version,
-      commitSha: ENV.fetch("GIT_COMMIT_SHA"),
       artifacts: artifacts.to_h { |name| [name, Digest::SHA256.file(File.join(output, name)).hexdigest] }
     ))
   ensure
