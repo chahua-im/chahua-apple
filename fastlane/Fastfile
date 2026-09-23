@@ -116,9 +116,7 @@ lane :ci_artifacts do
         teamID: "9422PL3GFR",
         provisioningProfiles: { "app.chahua.chat" => "match AppStore app.chahua.chat" }
       },
-      xcargs: "CURRENT_PROJECT_VERSION=#{version} DEVELOPMENT_TEAM=9422PL3GFR " \
-              "CODE_SIGN_IDENTITY='iPhone Distribution' " \
-              "PROVISIONING_PROFILE_SPECIFIER='match AppStore app.chahua.chat'",
+      xcargs: "CURRENT_PROJECT_VERSION=#{version} DEVELOPMENT_TEAM=9422PL3GFR",
       buildlog_path: File.join(root, "build", "logs"),
       xcodebuild_formatter: ""
     )
@@ -136,8 +134,6 @@ lane :ci_artifacts do
       skip_package_pkg: true,
       xcargs: "CURRENT_PROJECT_VERSION=#{version} DEVELOPMENT_TEAM=9422PL3GFR " \
               "ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO " \
-              "CODE_SIGN_IDENTITY='Developer ID Application' " \
-              "PROVISIONING_PROFILE_SPECIFIER='match Direct app.chahua.chat macos' " \
               "OTHER_CODE_SIGN_FLAGS='--timestamp' ENABLE_HARDENED_RUNTIME=YES",
       buildlog_path: File.join(root, "build", "logs"),
       xcodebuild_formatter: ""
