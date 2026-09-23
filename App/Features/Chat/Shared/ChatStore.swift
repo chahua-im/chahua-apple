@@ -60,6 +60,69 @@ final class ChatStore: ObservableObject {
     private var recoveryDirty = Set<String>()
     private var recoveryGeneration = 0
     private var timelines: [ObjectIdentifier: WeakTimeline] = [:]
+    private var groupMutationStates: [String: GroupMutationState] = [:]
+
+    private struct GroupMutationState {
+        var token: UUID
+        var waiters: [CheckedContinuation<UUID, Never>]
+    }
+
+    private func serializeGroupMutation<Result>(
+        chatID: String, operation: @MainActor () async throws -> Result
+    ) async throws -> Result {
+        let token = await acquireGroupMutation(chatID: chatID)
+        defer { releaseGroupMutation(chatID: chatID, token: token) }
+        try Task.checkCancellation()
+        return try await operation()
+    }
+
+    private func acquireGroupMutation(chatID: String) async -> UUID {
+        if var state = groupMutationStates[chatID] {
+            return await withCheckedContinuation { continuation in
+                state.waiters.append(continuation)
+                groupMutationStates[chatID] = state
+            }
+        }
+        let token = UUID()
+        groupMutationStates[chatID] = .init(token: token, waiters: [])
+        return token
+    }
+
+    private func releaseGroupMutation(chatID: String, token: UUID) {
+        guard var state = groupMutationStates[chatID], state.token == token else { return }
+        guard !state.waiters.isEmpty else {
+            groupMutationStates.removeValue(forKey: chatID)
+            return
+        }
+        let next = state.waiters.removeFirst()
+        let nextToken = UUID()
+        state.token = nextToken
+        groupMutationStates[chatID] = state
+        next.resume(returning: nextToken)
+    }
+
+    private func cancelQueuedGroupMutations() {
+        let waiters = groupMutationStates.values.flatMap { $0.waiters }
+        groupMutationStates.removeAll()
+        for waiter in waiters { waiter.resume(returning: UUID()) }
+    }
+
+    private func performGroupRequest<Result>(
+        generation requestGeneration: Int, operation: () async throws -> Result
+    ) async throws -> Result {
+        try Task.checkCancellation()
+        guard generation == requestGeneration else { throw CancellationError() }
+        do {
+            let response = try await operation()
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            return response
+        } catch {
+            guard generation == requestGeneration else { throw CancellationError() }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            throw error
+        }
+    }
 
     private struct WeakTimeline {
         weak var value: ConversationTimelineModel?
@@ -324,6 +387,30 @@ final class ChatStore: ObservableObject {
 
     func performListAction(_ action: ConversationListAction, conversation: ConversationKey) async {
         guard !pendingListActions.contains(conversation) else { return }
+        let requestGeneration = generation
+        pendingListActions.insert(conversation)
+        listActionError = nil
+        defer {
+            if generation == requestGeneration { pendingListActions.remove(conversation) }
+        }
+        do {
+            try await serializeGroupMutation(chatID: conversation.chatID) {
+                guard self.generation == requestGeneration else { throw CancellationError() }
+                await self.performListActionRequest(
+                    action, conversation: conversation, generation: requestGeneration)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            guard generation == requestGeneration, !Task.isCancelled else { return }
+            listActionError = String(localized: "Couldn’t update conversation. Please try again.")
+            if case APIError.invalidToken = error { await onInvalidToken() }
+        }
+    }
+
+    private func performListActionRequest(
+        _ action: ConversationListAction, conversation: ConversationKey, generation requestGeneration: Int
+    ) async {
         let item: ConversationListItem
         if let threadID = conversation.threadID {
             guard let thread = thread(chatID: conversation.chatID, threadID: threadID) else { return }
@@ -333,12 +420,6 @@ final class ChatStore: ObservableObject {
             item = .chat(chat)
         }
 
-        let requestGeneration = generation
-        pendingListActions.insert(conversation)
-        listActionError = nil
-        defer {
-            if generation == requestGeneration { pendingListActions.remove(conversation) }
-        }
         do {
             try Task.checkCancellation()
             switch action {
@@ -376,7 +457,8 @@ final class ChatStore: ObservableObject {
                 guard case .chat(let original) = item else { return }
                 let mutedUntil: Date?
                 if action == .mute {
-                    mutedUntil = try await apiClient.muteChat(chatID: conversation.chatID).mutedUntil
+                    mutedUntil = try await apiClient.muteChat(
+                        chatID: conversation.chatID, durationSeconds: nil).mutedUntil
                 } else {
                     try await apiClient.unmuteChat(chatID: conversation.chatID)
                     mutedUntil = nil
@@ -384,7 +466,8 @@ final class ChatStore: ObservableObject {
                 guard generation == requestGeneration else { return }
                 let latest = chat(id: conversation.chatID) ?? original
                 // DELETE /mute also unarchives the chat.
-                applyArchiveState(to: latest, archived: action == .unmute ? false : latest.archived, mutedUntil: mutedUntil)
+                applyArchiveState(
+                    to: latest, archived: action == .unmute ? false : latest.archived, mutedUntil: mutedUntil)
             case .markRead:
                 guard item.unreadCount > 0, let messageID = item.readThroughMessageID else { return }
                 try await markRead(chatID: conversation.chatID, threadID: conversation.threadID, messageID: messageID)
@@ -678,19 +761,104 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func searchMembers(chatID: String, query: ListMembersQuery) async throws -> [MemberResponse] {
-        try Task.checkCancellation()
+    func groupInfo(chatID: String) async throws -> GroupInfoResponse {
         let requestGeneration = generation
-        do {
-            let response = try await apiClient.listMembers(chatID: chatID, query: query)
-            try Task.checkCancellation()
-            guard generation == requestGeneration else { throw CancellationError() }
-            return response.members
-        } catch {
-            guard generation == requestGeneration else { throw CancellationError() }
-            if case APIError.invalidToken = error { await onInvalidToken() }
-            throw error
+        let response: GroupInfoResponse = try await performGroupRequest(generation: requestGeneration) {
+            try await apiClient.groupInfo(chatID: chatID)
         }
+        guard response.id == chatID else { throw APIError.unexpectedResponse }
+        return response
+    }
+
+    func groupMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse {
+        let requestGeneration = generation
+        return try await performGroupRequest(generation: requestGeneration) {
+            try await apiClient.listMembers(chatID: chatID, query: query)
+        }
+    }
+
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse {
+        let requestGeneration = generation
+        let member: MemberResponse = try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            return try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.updateGroupMemberRole(chatID: chatID, uid: uid, role: role)
+            }
+        }
+        guard member.uid == uid else { throw APIError.unexpectedResponse }
+        invalidateChatList()
+        return member
+    }
+
+    func removeGroupMember(chatID: String, uid: Int32) async throws {
+        let requestGeneration = generation
+        try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.removeGroupMember(chatID: chatID, uid: uid)
+            }
+        }
+        invalidateChatList()
+    }
+
+    func leaveGroup(chatID: String, uid: Int32) async throws {
+        let requestGeneration = generation
+        try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.removeGroupMember(chatID: chatID, uid: uid)
+            }
+        }
+        guard generation == requestGeneration else { throw CancellationError() }
+        removeGroupFromLists(chatID: chatID)
+    }
+
+    func muteGroup(chatID: String, durationSeconds: Int?) async throws -> Date {
+        let requestGeneration = generation
+        let mutedUntil: Date = try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            return try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.muteChat(chatID: chatID, durationSeconds: durationSeconds).mutedUntil
+            }
+        }
+        guard generation == requestGeneration else { throw CancellationError() }
+        if let chat = chat(id: chatID) {
+            applyArchiveState(to: chat, archived: chat.archived, mutedUntil: mutedUntil)
+        }
+        invalidateChatList()
+        return mutedUntil
+    }
+
+    func unmuteGroup(chatID: String) async throws {
+        let requestGeneration = generation
+        try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.unmuteChat(chatID: chatID)
+            }
+        }
+        guard generation == requestGeneration else { throw CancellationError() }
+        if let chat = chat(id: chatID) {
+            // DELETE /mute also unarchives the chat.
+            applyArchiveState(to: chat, archived: false, mutedUntil: nil)
+        }
+        invalidateChatList()
+    }
+
+    func searchMembers(chatID: String, query: ListMembersQuery) async throws -> [MemberResponse] {
+        let response = try await groupMembers(chatID: chatID, query: query)
+        return response.members
+    }
+
+    private func removeGroupFromLists(chatID: String) {
+        state.chats.removeAll { $0.id == chatID }
+        state.archivedChats.removeAll { $0.id == chatID }
+        state.threads.removeAll { $0.chatId == chatID }
+        state.archivedThreads.removeAll { $0.chatId == chatID }
+        recoveryTasks.removeValue(forKey: chatID)?.cancel()
+        recoveryDirty.remove(chatID)
+        // Fences in-flight snapshots before the next refresh can observe the leave.
+        invalidateChatList()
     }
 
     func fetchMessages(chatID: String, query: ListMessagesQuery = .init()) async throws -> ListMessagesResponse {
@@ -774,6 +942,7 @@ final class ChatStore: ObservableObject {
 
     func reset() {
         generation += 1
+        cancelQueuedGroupMutations()
         pendingListActions.removeAll()
         deletingMessageIDs.removeAll()
         listActionError = nil

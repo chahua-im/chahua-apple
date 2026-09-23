@@ -108,6 +108,29 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertFalse(h.state.editingEnded, "Send must not end and restart native editing.")
     }
 
+    #if os(macOS)
+    func testSendingExpandedDraftRestoresSingleLineHeight() async throws {
+        let h = try await mount(text: "")
+        let editor = try h.focusedEditor()
+        let singleLineHeight = editor.frame.height
+        try h.insertIntoFocusedEditor(String(repeating: "A long message that wraps across the composer. ", count: 30))
+        try await pause()
+        XCTAssertGreaterThan(editor.frame.height, singleLineHeight + 20)
+        h.submit()
+        try await pause()
+        XCTAssertEqual(h.state.submits, 1)
+        h.state.text = ""
+        h.state.canSend = true
+        try await pause()
+        XCTAssertEqual(editor.string, "")
+        XCTAssertEqual(editor.frame.height, singleLineHeight, accuracy: 1)
+        XCTAssertTrue(try h.focusedEditor() === editor)
+        try h.insertIntoFocusedEditor("next message")
+        try await pause()
+        XCTAssertEqual(h.state.text, "next message")
+    }
+    #endif
+
     func testFailedCommitRetainsDraftAndFocusForRetry() async throws {
         let h = try await mount(text: "send this")
         h.submit()
@@ -359,6 +382,28 @@ final class ComposerFocusTests: XCTestCase {
             h.state.canSend = true
             try await pause()
             XCTAssertFalse(h.window.firstResponder === editor, "An ordinary update must not reacquire entry focus.")
+        }
+
+        func testRestoredTextUsesComposerTypingFont() async throws {
+            let h = try await mount(text: "")
+            let editor = try h.focusedEditor()
+            let typingFont = try XCTUnwrap((editor.typingAttributes[.font] as? NSFont) ?? editor.font)
+
+            h.state.text = "existing message"
+            try await pause()
+
+            let loadedFont = try XCTUnwrap(
+                editor.textStorage?.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+            XCTAssertEqual(loadedFont.fontName, typingFont.fontName)
+            XCTAssertEqual(loadedFont.pointSize, typingFont.pointSize)
+
+            try h.selectEnd()
+            try h.insertIntoFocusedEditor("!")
+            try await pause()
+            let typedFont = try XCTUnwrap(
+                editor.textStorage?.attribute(.font, at: editor.string.utf16.count - 1, effectiveRange: nil) as? NSFont)
+            XCTAssertEqual(typedFont.fontName, typingFont.fontName)
+            XCTAssertEqual(typedFont.pointSize, typingFont.pointSize)
         }
 
         func testChatEntryWaitsForPermissionsWithoutRefocusingOnLaterPermissionChanges() async throws {

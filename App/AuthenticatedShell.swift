@@ -20,6 +20,7 @@ struct AuthenticatedShell: View {
     @State private var showsSettings = false
     @State private var isVisible = false
     @State private var notificationNavigation: NotificationNavigation?
+    @State private var groupPath: [GroupRoute] = []
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -28,6 +29,11 @@ struct AuthenticatedShell: View {
     private enum NavigationRoute: Hashable {
         case archive
         case conversation(ConversationKey)
+        case group(GroupRoute)
+    }
+
+    private enum GroupRoute: Hashable {
+        case info(ChatListItem)
     }
 
     private var isBrowsingArchived: Bool { listPath.last == .archive }
@@ -125,24 +131,33 @@ struct AuthenticatedShell: View {
             chatList(archived: isBrowsingArchived)
             #endif
         } detail: { isSplit in
-            Group {
-                if let key = threadPath.last {
-                    threadDestination(key)
-                } else {
-                    detailContent
+            NavigationStack(path: $groupPath) {
+                Group {
+                    if let key = threadPath.last {
+                        threadDestination(key)
+                    } else {
+                        detailContent
+                    }
+                }
+                .modifier(ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
+                    ChatFloatingHeader(
+                        title: threadPath.isEmpty ? selectedTitle : openedThread?.title ?? String(localized: "Thread"),
+                        onBack: !threadPath.isEmpty ? popThread : isSplit ? nil : { selectConversation(nil) },
+                        onClose: isSplit && threadPath.isEmpty ? { selectConversation(nil) } : nil,
+                        onOpenInfo: infoAction
+                    ) {
+                        selectedAvatar
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
+                })
+                #if os(iOS)
+                .toolbar(.hidden, for: .navigationBar)
+                #endif
+                .navigationDestination(for: GroupRoute.self) { route in
+                    groupDestination(route)
                 }
             }
-            .modifier(ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
-                ChatFloatingHeader(
-                    title: threadPath.isEmpty ? selectedTitle : openedThread?.title ?? String(localized: "Thread"),
-                    onBack: !threadPath.isEmpty ? popThread : isSplit ? nil : { selectConversation(nil) },
-                    onClose: isSplit && threadPath.isEmpty ? { selectConversation(nil) } : nil
-                ) {
-                    selectedAvatar
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 12)
-            })
         }
     }
 
@@ -165,10 +180,13 @@ struct AuthenticatedShell: View {
                             }
                         }
                         .modifier(ChatPhoneDetailHeader(
-                            title: openedThread?.key == key ? openedThread?.title ?? String(localized: "Thread") : selectedTitle
+                            title: openedThread?.key == key ? openedThread?.title ?? String(localized: "Thread") : selectedTitle,
+                            onOpenInfo: key.threadID == nil ? infoAction : nil
                         ) {
                             selectedAvatar
                         })
+                    case .group(let route):
+                        groupDestination(route)
                     }
                 }
         }
@@ -181,6 +199,7 @@ struct AuthenticatedShell: View {
                 if let selectedConversationID {
                     path.append(.conversation(selectedConversationID))
                     path.append(contentsOf: threadPath.map(NavigationRoute.conversation))
+                    path.append(contentsOf: groupPath.map(NavigationRoute.group))
                 }
                 return path
             },
@@ -194,6 +213,10 @@ struct AuthenticatedShell: View {
                     selectConversation(conversations.first)
                 }
                 threadPath = Array(conversations.dropFirst())
+                groupPath = path.compactMap { route in
+                    guard case .group(let group) = route else { return nil }
+                    return group
+                }
             }
         )
     }
@@ -348,6 +371,48 @@ struct AuthenticatedShell: View {
     }
 
 
+    private var infoAction: (() -> Void)? {
+        guard threadPath.isEmpty, let chat = selectedGroup else { return nil }
+        return {
+            guard groupPath.isEmpty, !isSigningOut else { return }
+            withAnimation { groupPath.append(.info(chat)) }
+        }
+    }
+
+    private var selectedGroup: ChatListItem? {
+        guard selectedConversationID?.threadID == nil else { return nil }
+        let chat: ChatListItem?
+        if let notificationChat = notificationNavigation?.chat {
+            chat = notificationChat
+        } else if case .chat(let selected) = selectedConversation {
+            chat = selected
+        } else {
+            chat = nil
+        }
+        return chat?.kind == .group ? chat : nil
+    }
+
+    @ViewBuilder
+    private func groupDestination(_ route: GroupRoute) -> some View {
+        Group {
+            switch route {
+            case .info(let chat):
+                GroupInfoView(
+                    chat: chat, currentUserID: me.uid, store: chatStore,
+                    onLeave: {
+                        if selectedConversationID?.chatID == chat.id { selectConversation(nil) }
+                    })
+                    .id(chat.id)
+            }
+        }
+        // Native destinations must not inherit the timeline's floating-header inset.
+        .environment(\.chatHeaderInset, 0)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        #endif
+    }
+
     private var accountButton: some View {
         Button {
             showsSettings = true
@@ -396,7 +461,7 @@ struct AuthenticatedShell: View {
     }
 
     private var visibleConversation: ConversationKey? {
-        guard isVisible, scenePhase == .active, !showsSettings, !isSigningOut else { return nil }
+        guard isVisible, scenePhase == .active, !showsSettings, !isSigningOut, groupPath.isEmpty else { return nil }
         if let key = threadPath.last { return key }
         if let navigation = notificationNavigation {
             return navigation.chat == nil ? nil : navigation.route.conversation
@@ -414,6 +479,7 @@ struct AuthenticatedShell: View {
               let route = notifications.takeNavigation() else { return }
         // Taking is synchronous across windows; keep the route while the
         // separate metadata task runs, including across cancellation/retry.
+        groupPath.removeAll()
         threadPath.removeAll()
         openedThread = nil
         listPath.removeAll()
@@ -423,6 +489,7 @@ struct AuthenticatedShell: View {
     }
 
     private func selectConversation(_ conversation: ConversationKey?) {
+        groupPath.removeAll()
         threadPath.removeAll()
         openedThread = nil
         notificationNavigation = nil

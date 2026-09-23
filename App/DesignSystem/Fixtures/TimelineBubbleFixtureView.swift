@@ -435,7 +435,7 @@ private final class TimelineBubbleFixtureModel: ObservableObject, TimelineMessag
         guard let timeline, !hasQueued else { return }
         hasQueued = true
         store.enqueue(.init(chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending", body: .init(messageType: .text, clientGeneratedId: "diagnostic-pending", message: "Pending acknowledgement retains row identity"), enqueuedAt: Date(), senderID: 1, state: .queued))
-        await timeline.revealLatestAfterSend()
+        timeline.revealLatestAfterSend()
     }
 
     func acknowledge() {

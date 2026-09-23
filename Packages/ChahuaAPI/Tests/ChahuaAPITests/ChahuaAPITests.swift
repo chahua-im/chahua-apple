@@ -417,6 +417,84 @@ final class ChahuaAPITests: XCTestCase {
         }
     }
 
+    func testGroupMetadataAndMemberMutationsUseDocumentedWireContract() async throws {
+        let requests = RequestRecorder()
+        let member = #"""
+        {"uid":17,"username":"Ada","avatarUrl":null,"role":"admin",
+         "joinedAt":"2026-09-01T01:02:03Z","gender":0,"userGroup":null}
+        """#
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.percentEncodedPath
+            switch (request.httpMethod, path) {
+            case ("GET", "/group/chat%2Fone"):
+                return (200, #"""
+                {"id":"chat/one","name":"Engineering","description":"Release work",
+                 "avatar":null,"mutedUntil":"2026-09-01T02:02:03.250Z",
+                 "myRole":"admin","kind":"group","peer":null}
+                """#)
+            case ("GET", "/group/chat%2Fone/members"):
+                return (200, #"{"members":[\#(member)],"nextCursor":17,"canManageMembers":true}"#)
+            case ("PATCH", "/group/chat%2Fone/members/17"):
+                return (200, member)
+            case ("DELETE", "/group/chat%2Fone/members/17"):
+                return (204, "")
+            case ("PUT", "/group/chat%2Fone/mute"):
+                return (200, #"{"mutedUntil":"2026-09-01T03:02:03Z"}"#)
+            default:
+                return (404, "")
+            }
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        let group = try await client.groupInfo(chatID: "chat/one")
+        let page = try await client.listMembers(
+            chatID: "chat/one", query: .init(q: "ada", mode: "submitted", limit: 20, after: 9))
+        let updated = try await client.updateGroupMemberRole(chatID: "chat/one", uid: 17, role: .admin)
+        try await client.removeGroupMember(chatID: "chat/one", uid: 17)
+        let timedMute = try await client.muteChat(chatID: "chat/one", durationSeconds: 3_600)
+        let indefiniteMute = try await client.muteChat(chatID: "chat/one", durationSeconds: nil)
+
+        XCTAssertEqual(group.description, "Release work")
+        XCTAssertEqual(group.myRole, .admin)
+        XCTAssertEqual(try XCTUnwrap(group.mutedUntil).timeIntervalSince1970, 1_788_228_123.25, accuracy: 0.0001)
+        XCTAssertEqual(page.members, [.init(uid: 17, username: "Ada", role: .admin)])
+        XCTAssertEqual(page.nextCursor, 17)
+        XCTAssertTrue(page.canManageMembers)
+        XCTAssertEqual(updated.role, .admin)
+        XCTAssertEqual(timedMute, indefiniteMute)
+
+        let recorded = requests.values
+        XCTAssertEqual(recorded.map(\.httpMethod), ["GET", "GET", "PATCH", "DELETE", "PUT", "PUT"])
+        let components = try recorded.map {
+            try XCTUnwrap(URLComponents(url: try XCTUnwrap($0.url), resolvingAgainstBaseURL: false))
+        }
+        XCTAssertEqual(components.map(\.percentEncodedPath), [
+            "/group/chat%2Fone", "/group/chat%2Fone/members", "/group/chat%2Fone/members/17",
+            "/group/chat%2Fone/members/17", "/group/chat%2Fone/mute", "/group/chat%2Fone/mute",
+        ])
+        XCTAssertEqual(components[1].queryItems, [
+            URLQueryItem(name: "q", value: "ada"),
+            URLQueryItem(name: "mode", value: "submitted"),
+            URLQueryItem(name: "limit", value: "20"),
+            URLQueryItem(name: "after", value: "9"),
+        ])
+        XCTAssertTrue(recorded.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer candidate" })
+
+        let updateBody = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: requestBody(recorded[2])) as? [String: String])
+        XCTAssertEqual(updateBody, ["role": "admin"])
+        let timedMuteBody = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: requestBody(recorded[4])) as? [String: Int])
+        XCTAssertEqual(timedMuteBody, ["durationSeconds": 3_600])
+        let indefiniteMuteBody = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: requestBody(recorded[5])) as? [String: Any])
+        XCTAssertNil(indefiniteMuteBody["durationSeconds"])
+    }
+
+
     func testReactionPathsPreserveEmojiAndReservedCharactersAsSingleSegments() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in

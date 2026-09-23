@@ -52,8 +52,11 @@ public protocol ChahuaAPIClient: Sendable {
     /// Restores only this thread subscription, leaving its parent chat unchanged (204).
     func unarchiveThread(chatID: String, threadID: String) async throws
 
-    /// Mutes chat notifications indefinitely with `PUT /group/{chatID}/mute`.
-    func muteChat(chatID: String) async throws -> MuteResponse
+    /// Mutes chat notifications with `PUT /group/{chatID}/mute`.
+    ///
+    /// A `nil` duration requests the server's indefinite mute; a non-`nil`
+    /// duration is measured in seconds.
+    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse
 
     /// Unmutes an active chat. The server also clears its archive flag.
     func unmuteChat(chatID: String) async throws
@@ -63,6 +66,12 @@ public protocol ChahuaAPIClient: Sendable {
 
     /// Searches current group members with authenticated `GET /group/{chatID}/members`.
     func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse
+
+    /// Changes a group member's server-authorized role with `PATCH /group/{chatID}/members/{uid}`.
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse
+
+    /// Removes a member with `DELETE /group/{chatID}/members/{uid}`.
+    func removeGroupMember(chatID: String, uid: Int32) async throws
 
     /// Fetches the server's DM authorization decision with `GET /friends/{peerUID}`.
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse

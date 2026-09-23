@@ -117,16 +117,34 @@ public enum GroupRole: String, Codable, Hashable, Sendable {
 public struct GroupInfoResponse: Codable, Hashable, Sendable {
     public let id: String
     public let name: String?
+    public let description: String?
     public let avatar: String?
+    public let mutedUntil: Date?
     public let myRole: GroupRole?
     public let kind: ChatKind
     public let peer: MemberSummary?
+
+    public init(
+        id: String, name: String? = nil, description: String? = nil, avatar: String? = nil,
+        mutedUntil: Date? = nil, myRole: GroupRole? = nil, kind: ChatKind, peer: MemberSummary? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.avatar = avatar
+        self.mutedUntil = mutedUntil
+        self.myRole = myRole
+        self.kind = kind
+        self.peer = peer
+    }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
         name = try container.decodeIfPresent(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
         avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+        mutedUntil = try container.decodeIfPresent(Date.self, forKey: .mutedUntil)
         myRole = try container.decodeIfPresent(GroupRole.self, forKey: .myRole)
         kind = try container.decodeIfPresent(ChatKind.self, forKey: .kind) ?? .group
         peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)

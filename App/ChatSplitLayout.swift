@@ -183,6 +183,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
     let title: String
     var onBack: (() -> Void)?
     var onClose: (() -> Void)?
+    var onOpenInfo: (() -> Void)?
     @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
@@ -206,7 +207,19 @@ struct ChatFloatingHeader<Avatar: View>: View {
         #endif
     }
 
+    @ViewBuilder
     private var identity: some View {
+        if let onOpenInfo {
+            Button(action: onOpenInfo) { identityLabel }
+                .buttonStyle(.plain)
+                .accessibilityHint("Open group information")
+                .accessibilityIdentifier("group-info-button")
+        } else {
+            identityLabel
+        }
+    }
+
+    private var identityLabel: some View {
         HStack(spacing: 8) {
             avatar()
                 .fixedSize()
@@ -224,7 +237,8 @@ struct ChatFloatingHeader<Avatar: View>: View {
         #else
         .frame(minHeight: 44)
         #endif
-        .modifier(ChatGlassSurface(cornerRadius: 24))
+        .contentShape(Capsule())
+        .modifier(ChatGlassSurface(cornerRadius: 24, isInteractive: onOpenInfo != nil))
     }
 
     @ViewBuilder
@@ -275,6 +289,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
 /// The title bar's safe area becomes scroll breathing room, not an opaque layout band.
 struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
     let title: String
+    var onOpenInfo: (() -> Void)?
     @ViewBuilder var avatar: () -> Avatar
 
     func body(content: Content) -> some View {
@@ -288,7 +303,7 @@ struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    ChatFloatingHeader(title: title, avatar: avatar)
+                    ChatFloatingHeader(title: title, onOpenInfo: onOpenInfo, avatar: avatar)
                 }
             }
     }

@@ -506,16 +506,24 @@ final class ConversationTimelineModel: ObservableObject {
 
     func dismissRepositionFailure() { state.repositionFailure = nil }
 
-    func revealLatestAfterSend() async {
+    // Reveal a locally available tail immediately. History networking must not
+    // keep the composer submitting after its durable enqueue has completed.
+    func revealLatestAfterSend() {
         let canReuse = canReuseLatestWindow || canReuseLatestWindowAfterPendingChange
         canReuseLatestWindowAfterPendingChange = false
         if state.content == .ready, canReuse {
             state.live.followsLatest = true
             publish(position: .bottom(animated: false))
-        } else if state.content == .ready || state.content == .repositioning(.liveEdge) {
-            await jumpToLiveEdge(animated: false)
-        } else if state.content == .idle || state.content == .initialLoadFailed {
-            await loadInitial()
+            return
+        }
+        let requestGeneration = generation
+        Task { [weak self] in
+            guard let self, generation == requestGeneration else { return }
+            if state.content == .ready || state.content == .repositioning(.liveEdge) {
+                await jumpToLiveEdge(animated: false)
+            } else if state.content == .idle || state.content == .initialLoadFailed {
+                await loadInitial()
+            }
         }
     }
 

@@ -402,14 +402,26 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
     }
 
     func installMentionText(_ text: NSAttributedString) {
-        guard !changingMentionStorage, resolveEditor() != nil,
+        guard !changingMentionStorage, let editor = resolveEditor(),
               case .committed = snapshot(), let storage = mentionStorage else { return }
         let oldText = mentionSnapshot(storage.string)
         let oldSelection = selection
+        let textChanged = storage.string != text.string
         changingMentionStorage = true
         storage.beginEditing()
-        if storage.string != text.string {
-            storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text.string)
+        if textChanged {
+            #if os(macOS)
+                // This replacement bypasses the SwiftUI TextField's attributed
+                // update. Match the font it already chose for normal typing so a
+                // restored edit does not fall back to NSTextStorage's default.
+                let font = (editor.typingAttributes[.font] as? NSFont) ?? editor.font
+                let replacement = font.map {
+                    NSAttributedString(string: text.string, attributes: [.font: $0])
+                } ?? NSAttributedString(string: text.string)
+                storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: replacement)
+            #else
+                storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text.string)
+            #endif
         }
         storage.endEditing()
         trackedSpans = ComposerMentionText.spans(in: text)
@@ -417,6 +429,12 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         if let oldSelection {
             setSelection(mappedSelection(oldSelection, from: oldText, to: text))
         }
+        #if os(macOS)
+            // Direct storage replacement bypasses NSTextView's change callback.
+            // Notify the existing SwiftUI field so its multiline height updates,
+            // without replacing the control or interrupting keyboard focus.
+            if textChanged { editor.didChangeText() }
+        #endif
         changingMentionStorage = false
     }
 

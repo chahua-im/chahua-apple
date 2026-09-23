@@ -63,8 +63,11 @@ public struct MuteResponse: Codable, Hashable, Sendable {
 }
 
 private struct MuteBody: Encodable {
-    // An absent duration requests the server's indefinite mute.
-    let durationSeconds: Int? = nil
+    let durationSeconds: Int?
+}
+
+private struct UpdateGroupMemberRoleBody: Encodable {
+    let role: GroupRole
 }
 
 public extension ChahuaClient {
@@ -83,9 +86,9 @@ public extension ChahuaClient {
         try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "archive"]))
     }
 
-    func muteChat(chatID: String) async throws -> MuteResponse {
+    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
         try await send(
-            HTTPRequestSpec.json(.put, ["group", chatID, "mute"], body: MuteBody()),
+            HTTPRequestSpec.json(.put, ["group", chatID, "mute"], body: MuteBody(durationSeconds: durationSeconds)),
             decoding: MuteResponse.self
         )
     }
@@ -117,6 +120,18 @@ public extension ChahuaClient {
             HTTPRequestSpec(method: .get, path: ["group", chatID, "members"], query: query.queryItems),
             decoding: ListMembersResponse.self
         )
+    }
+
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse {
+        try await send(
+            HTTPRequestSpec.json(
+                .patch, ["group", chatID, "members", String(uid)], body: UpdateGroupMemberRoleBody(role: role)),
+            decoding: MemberResponse.self
+        )
+    }
+
+    func removeGroupMember(chatID: String, uid: Int32) async throws {
+        try await send(HTTPRequestSpec(method: .delete, path: ["group", chatID, "members", String(uid)]))
     }
 
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {

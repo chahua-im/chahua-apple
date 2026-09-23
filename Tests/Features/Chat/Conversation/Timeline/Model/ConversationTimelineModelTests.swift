@@ -182,13 +182,32 @@ final class ConversationTimelineModelTests: XCTestCase {
         model.viewportDidChange(.init(firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1, distanceToTop: 5_000, distanceToBottom: 100, height: 400), reason: .user, revision: model.updates.value.revision)
         source.store.replacePending(chatID: "chat", with: [pending(id: "send")])
 
-        await model.revealLatestAfterSend()
+        model.revealLatestAfterSend()
 
         XCTAssertEqual(source.queries.count, 1)
         XCTAssertEqual(model.rows.filter { $0.stableMessageKey == .clientGenerated("send") }.count, 1)
         XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: false))
         XCTAssertFalse(model.updates.value.animateFollowing)
         XCTAssertTrue(model.state.live.followsLatest)
+    }
+
+    func testScheduledRevealAfterSendDoesNotWaitForLiveEdgeFetch() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .success(try historyPage(ids: 1 ... 2, newerCursor: "2")),
+            .success(try livePage(ids: 1 ... 3)),
+        ])
+        await model.loadInitial()
+        XCTAssertFalse(model.isAtLiveEdge)
+        source.holdNextRequest()
+
+        model.revealLatestAfterSend()
+        await source.waitUntilHeld()
+
+        XCTAssertEqual(source.queries.count, 2)
+        XCTAssertEqual(model.state.content, .repositioning(.liveEdge))
+        source.release()
+        await source.drain()
+        XCTAssertEqual(model.state.content, .ready)
     }
 
     func testLiveMessageOffLiveEdgeIsDeferredAndMakesJumpAvailable() async throws {

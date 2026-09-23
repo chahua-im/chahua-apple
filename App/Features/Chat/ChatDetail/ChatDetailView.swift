@@ -469,7 +469,7 @@ struct ChatDetailView: View {
         else { return false }
         do {
             let sent = try await drafts.submitSticker(sticker, chatID: chat.id, threadID: threadID)
-            if sent { await model.revealLatestAfterSend() }
+            if sent { model.revealLatestAfterSend() }
             return sent
         } catch {
             outboxError = error.localizedDescription
@@ -483,7 +483,7 @@ struct ChatDetailView: View {
         else { return false }
         do {
             let sent = try await drafts.submitVoice(fileURL: fileURL, chatID: chat.id, threadID: threadID)
-            if sent { await model.revealLatestAfterSend() }
+            if sent { model.revealLatestAfterSend() }
             return sent
         } catch {
             outboxError = error.localizedDescription
@@ -494,7 +494,7 @@ struct ChatDetailView: View {
     private func submitComposer(_ text: String) async -> Bool {
         guard let message = editingMessage else {
             let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID, text: text)
-            if sent { await model.revealLatestAfterSend() }
+            if sent { model.revealLatestAfterSend() }
             return sent
         }
         guard !isUpdatingMessage else { return false }

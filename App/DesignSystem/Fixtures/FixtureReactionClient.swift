@@ -93,7 +93,7 @@
         func unarchiveChat(chatID: String) async throws { throw Failure.unexpectedOperation }
         func archiveThread(chatID: String, threadID: String) async throws { throw Failure.unexpectedOperation }
         func unarchiveThread(chatID: String, threadID: String) async throws { throw Failure.unexpectedOperation }
-        func muteChat(chatID: String) async throws -> MuteResponse { throw Failure.unexpectedOperation }
+        func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse { throw Failure.unexpectedOperation }
         func unmuteChat(chatID: String) async throws { throw Failure.unexpectedOperation }
         func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
         func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw Failure.unexpectedOperation }
@@ -102,6 +102,8 @@
         func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw Failure.unexpectedOperation }
         func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw Failure.unexpectedOperation }
         func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse { throw Failure.unexpectedOperation }
+        func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse { throw Failure.unexpectedOperation }
+        func removeGroupMember(chatID: String, uid: Int32) async throws { throw Failure.unexpectedOperation }
         func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
             throw Failure.unexpectedOperation
         }

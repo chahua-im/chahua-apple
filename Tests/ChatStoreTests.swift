@@ -54,6 +54,86 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertNil(store.listActionError)
     }
 
+    func testLeaveRemovesConversationAndFencesLateListSnapshotWithoutDiscardingDrafts() async throws {
+        let target = ChatListItem(id: "chat", name: "Group", unreadCount: 7, archived: false, kind: .group)
+        let other = ChatListItem(id: "other", name: "Other", unreadCount: 2, archived: false, kind: .group)
+        let archivedTarget = ChatListItem(id: "chat", name: "Group", unreadCount: 3, archived: true, kind: .group)
+        let activeThread = try ScopeTestFixtures.thread(chatID: "chat", id: "active")
+        let archivedThread = try ScopeTestFixtures.thread(chatID: "chat", id: "archived", archived: true)
+        let api = FakeChatAPI(
+            threadResults: [.success(.init(threads: [activeThread]))],
+            archivedChatResults: [.success(.init(chats: [archivedTarget]))],
+            archivedThreadResults: [.success(.init(threads: [archivedThread]))],
+            removeMemberResults: [.success(())],
+            suspendChatRequests: true)
+        let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.cancelRealtimeRecovery() }
+
+        let initial = Task { await store.loadActiveChats() }
+        await api.waitForChatRequest()
+        await api.resumeChatRequest(with: .success(.init(chats: [target, other])))
+        await initial.value
+        await store.loadActiveThreads()
+        await store.loadArchivedChats()
+        await store.loadArchivedThreads()
+        store.drafts.setDraftText("Unsaved draft", chatID: "chat")
+
+        let refresh = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        let leave = Task { try await store.leaveGroup(chatID: "chat", uid: 1) }
+        try await leave.value
+
+        XCTAssertEqual(store.state.chats, [other])
+        XCTAssertTrue(store.state.archivedChats.isEmpty)
+        XCTAssertTrue(store.state.threads.isEmpty)
+        XCTAssertTrue(store.state.archivedThreads.isEmpty)
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Unsaved draft")
+
+        await api.resumeChatRequest(with: .success(.init(chats: [target, other])))
+        await api.waitForChatRequest()
+        XCTAssertEqual(store.state.chats, [other])
+        await api.resumeChatRequest(with: .success(.init(chats: [other])))
+        await refresh.value
+        XCTAssertEqual(store.state.chats, [other])
+        XCTAssertTrue(store.state.archivedChats.isEmpty)
+        XCTAssertTrue(store.state.threads.isEmpty)
+        XCTAssertTrue(store.state.archivedThreads.isEmpty)
+    }
+
+    func testMuteGroupPreservesPreviewAndReadStateAndUnmuteUnarchives() async throws {
+        let message = try TimelineTestFixtures.message(id: "latest", at: 2)
+        let chat = ChatListItem(
+            id: "chat", name: "Group", lastMessageAt: Date(timeIntervalSince1970: 2),
+            unreadCount: 7, lastReadMessageId: "read", lastMessage: message.replyPreview,
+            archived: true, kind: .group)
+        let mutedUntil = Date(timeIntervalSince1970: 3_600)
+        let api = FakeChatAPI(
+            archivedChatResults: [.success(.init(chats: [chat]))],
+            muteResults: [.success(.init(mutedUntil: mutedUntil))],
+            unmuteResults: [.success(())])
+        let store = ChatStore(apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.cancelRealtimeRecovery() }
+        await store.loadArchivedChats()
+
+        let receivedMutedUntil = try await store.muteGroup(chatID: "chat", durationSeconds: 3_600)
+        XCTAssertEqual(receivedMutedUntil, mutedUntil)
+        let muted = try XCTUnwrap(store.state.archivedChats.first)
+        XCTAssertEqual(muted.unreadCount, chat.unreadCount)
+        XCTAssertEqual(muted.lastReadMessageId, chat.lastReadMessageId)
+        XCTAssertEqual(muted.lastMessage, chat.lastMessage)
+        XCTAssertEqual(muted.mutedUntil, mutedUntil)
+        XCTAssertTrue(muted.archived)
+
+        try await store.unmuteGroup(chatID: "chat")
+        let unmuted = try XCTUnwrap(store.state.chats.first)
+        XCTAssertEqual(unmuted.unreadCount, chat.unreadCount)
+        XCTAssertEqual(unmuted.lastReadMessageId, chat.lastReadMessageId)
+        XCTAssertEqual(unmuted.lastMessage, chat.lastMessage)
+        XCTAssertNil(unmuted.mutedUntil)
+        XCTAssertFalse(unmuted.archived)
+        XCTAssertTrue(store.state.archivedChats.isEmpty)
+    }
+
     func testMarkUnreadRewindsOnlyItsArchivedChatAndPreservesStateOnFailure() async throws {
         let message = try TimelineTestFixtures.message(id: "latest", at: 2)
         let chat = ChatListItem(id: "chat", unreadCount: 0, lastReadMessageId: message.id,
@@ -795,6 +875,8 @@ actor FakeChatAPI: ChahuaAPIClient {
     private var threadResults: [Result<ListThreadsResponse, Error>]
     private var archivedChatResults: [Result<ListChatsResponse, Error>]
     private var archivedThreadResults: [Result<ListThreadsResponse, Error>]
+    private var removeMemberResults: [Result<Void, Error>]
+    private var muteResults: [Result<MuteResponse, Error>]
     private var readResults: [Result<ReadStateResponse, Error>]
     private var unreadResults: [Result<ReadStateResponse, Error>]
     private var archiveResults: [Result<Void, Error>]
@@ -811,6 +893,8 @@ actor FakeChatAPI: ChahuaAPIClient {
         threadResults: [Result<ListThreadsResponse, Error>] = [],
         archivedChatResults: [Result<ListChatsResponse, Error>] = [],
         archivedThreadResults: [Result<ListThreadsResponse, Error>] = [],
+        removeMemberResults: [Result<Void, Error>] = [],
+        muteResults: [Result<MuteResponse, Error>] = [],
         messageResults: [String: [Result<ListMessagesResponse, Error>]] = [:],
         readResults: [Result<ReadStateResponse, Error>] = [],
         unreadResults: [Result<ReadStateResponse, Error>] = [],
@@ -824,6 +908,8 @@ actor FakeChatAPI: ChahuaAPIClient {
         self.threadResults = threadResults
         self.archivedChatResults = archivedChatResults
         self.archivedThreadResults = archivedThreadResults
+        self.removeMemberResults = removeMemberResults
+        self.muteResults = muteResults
         self.messageResults = messageResults
         self.readResults = readResults
         self.unreadResults = unreadResults
@@ -845,6 +931,11 @@ actor FakeChatAPI: ChahuaAPIClient {
     func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
     func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse { throw APIError.unavailable }
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse { throw APIError.unavailable }
+    func removeGroupMember(chatID: String, uid: Int32) async throws {
+        guard !removeMemberResults.isEmpty else { throw APIError.unavailable }
+        try removeMemberResults.removeFirst().get()
+    }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
     func deleteMessage(chatID: String, messageID: String) async throws {
@@ -867,7 +958,10 @@ actor FakeChatAPI: ChahuaAPIClient {
         guard !archiveResults.isEmpty else { throw APIError.unavailable }
         try archiveResults.removeFirst().get()
     }
-    func muteChat(chatID: String) async throws -> MuteResponse { throw APIError.unavailable }
+    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
+        guard !muteResults.isEmpty else { throw APIError.unavailable }
+        return try muteResults.removeFirst().get()
+    }
     func unmuteChat(chatID: String) async throws {
         guard !unmuteResults.isEmpty else { throw APIError.unavailable }
         try unmuteResults.removeFirst().get()

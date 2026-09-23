@@ -343,7 +343,7 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     func unarchiveChat(chatID: String) async throws { throw APIError.unavailable }
     func archiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
     func unarchiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
-    func muteChat(chatID: String) async throws -> MuteResponse { throw APIError.unavailable }
+    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse { throw APIError.unavailable }
     func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
@@ -358,5 +358,7 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
     func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse { throw APIError.unavailable }
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse { throw APIError.unavailable }
+    func removeGroupMember(chatID: String, uid: Int32) async throws { throw APIError.unavailable }
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
 }

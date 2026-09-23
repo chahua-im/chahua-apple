@@ -25,13 +25,17 @@ public struct MemberResponse: Codable, Hashable, Sendable, Identifiable {
     public let uid: Int32
     public let username: String?
     public let avatarUrl: String?
+    public let role: GroupRole
 
     public var id: Int32 { uid }
 
-    public init(uid: Int32, username: String? = nil, avatarUrl: String? = nil) {
+    public init(
+        uid: Int32, username: String? = nil, avatarUrl: String? = nil, role: GroupRole = .member
+    ) {
         self.uid = uid
         self.username = username
         self.avatarUrl = avatarUrl
+        self.role = role
     }
 }
 

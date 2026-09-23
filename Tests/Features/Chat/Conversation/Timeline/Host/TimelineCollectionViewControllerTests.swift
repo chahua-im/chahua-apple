@@ -165,7 +165,7 @@ final class TimelineCollectionViewControllerTests: XCTestCase {
         controller.scrollViewWillBeginDragging(collection)
         collection.setContentOffset(CGPoint(x: 0, y: collection.contentOffset.y - 100), animated: false)
         controller.scrollViewDidEndDragging(collection, willDecelerate: false)
-        await model.revealLatestAfterSend()
+        model.revealLatestAfterSend()
         controller.viewDidLayoutSubviews()
         XCTAssertEqual(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height, 0, accuracy: 1,
                        "Sending must reveal the live edge immediately, without waiting for a scroll animation")
