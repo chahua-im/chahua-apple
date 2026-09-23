@@ -1,11 +1,11 @@
 // Standalone Pipeline from SCM, main branch, script path ci/Jenkinsfile.apple-build.
 // Job: chahua/chahua-apple-build. Only the multibranch main checks job may trigger it.
 // macos-signing must be a dedicated trusted macOS agent/user, never used for PR checks.
-// Install the repository Ruby/Bundler, Xcode, both SDKs and universal native dependencies.
+// Install rbenv/ruby-build, Xcode, both SDKs and native build dependencies on the agent.
 // Credentials: github-app; apple-match-ssh (SSH key); apple-match-password (secret text);
 // asc-api-key (secret .p8 file), asc-key-id and asc-issuer-id (secret text, team API key).
 // Preload github.com known_hosts. Match assets must already exist (read-only CI).
-// Plugins: Git, Credentials Binding, SSH Agent, Copy Artifact, Pipeline.
+// Plugins: Git, Credentials Binding, SSH Agent, Copy Artifact, Lockable Resources, Pipeline.
 // CFBundleVersion uses BUILD_NUMBER directly; initialize/preserve the job counter accordingly.
 pipeline {
   agent none
@@ -63,8 +63,17 @@ pipeline {
 set -euo pipefail
 [[ "$(git rev-parse HEAD)" == "$GIT_COMMIT_SHA" ]]
 git merge-base --is-ancestor HEAD origin/main
-bundle install
 '''
+          }
+        }
+
+        stage('Prepare Ruby') {
+          steps {
+            lock(resource: "ruby-install-${env.NODE_NAME}") {
+              sh 'rbenv install -s'
+            }
+            sh 'ruby --version'
+            sh 'bundle install'
           }
         }
 

@@ -4,8 +4,8 @@ pipeline {
   }
 
   // Jenkins macos agents need macOS 26.5+, Xcode 27 with an iOS 26.5+
-  // simulator runtime, and the Ruby version in .ruby-version. Checks use Xcode tools,
-  // workspace-local output, and no signing or release credentials.
+  // simulator runtime, and rbenv/ruby-build. The pinned Ruby is installed as needed.
+  // Checks use workspace-local output and no signing or release credentials.
   options {
     buildDiscarder(logRotator(numToKeepStr: '30'))
     skipDefaultCheckout()
@@ -13,7 +13,7 @@ pipeline {
   }
 
   stages {
-    stage('Compile') {
+    stage('Checkout') {
       steps {
         script {
           def scmVars = checkout scm
@@ -23,6 +23,20 @@ pipeline {
           }
           env.CHECKED_OUT_COMMIT = checkoutCommit
         }
+      }
+    }
+
+    stage('Prepare Ruby') {
+      steps {
+        lock(resource: "ruby-install-${env.NODE_NAME}") {
+          sh 'rbenv install -s'
+        }
+        sh 'ruby --version'
+      }
+    }
+
+    stage('Compile') {
+      steps {
         sh 'bash ci/check.sh compile'
       }
     }
