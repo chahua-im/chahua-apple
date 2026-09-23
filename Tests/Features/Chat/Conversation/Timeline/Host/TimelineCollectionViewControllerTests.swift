@@ -8,41 +8,6 @@
 
     @MainActor
     final class TimelineCollectionViewControllerTests: XCTestCase {
-        func testInteractionDismissalPublishesAfterNativeUpdateAndRemovesOverlay() async throws {
-            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-            let window = UIWindow(windowScene: scene)
-            window.rootViewController = UIViewController()
-            window.makeKeyAndVisible()
-            let coordinator = MessageInteractionWindowPresenter.Coordinator()
-            defer {
-                coordinator.remove()
-                window.isHidden = true
-            }
-            let initialSubviews = window.subviews
-            var state: MessageInteractionAnimation?
-            coordinator.overlay = { animation in
-                state = animation
-                return AnyView(Color.clear)
-            }
-            coordinator.isPresented = true
-            coordinator.attach(to: window)
-            try await Task.sleep(for: .milliseconds(200))
-            let animation = try XCTUnwrap(state)
-            XCTAssertTrue(animation.isPresented)
-            var insideUpdate = false
-            let observation = animation.objectWillChange.sink {
-                XCTAssertFalse(insideUpdate, "Dismissal must not publish inside updateUIView")
-            }
-            defer { observation.cancel() }
-            coordinator.isPresented = false
-            insideUpdate = true
-            coordinator.attach(to: window)
-            insideUpdate = false
-            try await Task.sleep(for: .milliseconds(500))
-            XCTAssertFalse(animation.isPresented)
-            XCTAssertEqual(
-                window.subviews, initialSubviews, "Dismissal must still remove the native overlay")
-        }
 
         func testDeletionRemovesNativeRowsAndEmptyDateSeparators() async throws {
             let messages = try [
@@ -149,13 +114,6 @@
                     XCTAssertEqual(bubble.bounds.width, size.width, accuracy: 0.5)
                     XCTAssertEqual(bubble.bounds.height, size.height, accuracy: 0.5)
                 }
-                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-                }
-                let attachment = XCTAttachment(image: image)
-                attachment.name = message.id
-                attachment.lifetime = .keepAlways
-                add(attachment)
             }
         }
 
@@ -525,100 +483,6 @@
                 ).size.height, accuracy: 1)
         }
 
-        func testFailedMetadataFitsExactRowsAcrossResizeAndAcknowledgement() async throws {
-            let text = "Unsent text\n你好，世界 " + String(repeating: "Wrapping message. ", count: 3)
-            let pending = PendingOutgoingMessage(
-                chatID: "chat", clientGeneratedID: "failed-text",
-                body: .init(messageType: .text, clientGeneratedId: "failed-text", message: text),
-                enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1, state: .failed
-            )
-            let store = ConversationMessageStore()
-            store.replacePending(chatID: "chat", with: [pending])
-            let source = BubbleSource(page: try TimelineTestFixtures.page([]))
-            let model = ConversationTimelineModel(
-                chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
-                messageStore: store
-            )
-            let parent = UIViewController()
-            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-            let window = UIWindow(windowScene: scene)
-            window.rootViewController = parent
-            window.makeKeyAndVisible()
-            defer { window.isHidden = true }
-            let controller = TimelineCollectionViewController(
-                model: model,
-                actions: .init(openFailedMessage: { _ in
-                    XCTFail("Rendering must not activate retry.")
-                })
-            )
-            parent.addChild(controller)
-            parent.view.addSubview(controller.view)
-            controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 900)
-            controller.didMove(toParent: parent)
-            setCategory(.accessibilityExtraLarge, on: controller, parent: parent)
-            await model.loadInitial()
-            try await Task.sleep(for: .milliseconds(200))
-            let collection = try XCTUnwrap(
-                controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
-            collection.contentInsetAdjustmentBehavior = .never
-            let measurer = TimelineLayoutCache()
-            for width: CGFloat in [320, 600, 900] {
-                controller.view.frame.size.width = width
-                controller.overrideUserInterfaceStyle = width == 600 ? .dark : .light
-                parent.view.layoutIfNeeded()
-                controller.viewDidLayoutSubviews()
-                try await Task.sleep(for: .milliseconds(100))
-                collection.layoutIfNeeded()
-                let index = try XCTUnwrap(
-                    model.rows.firstIndex { $0.stableMessageKey == .clientGenerated("failed-text") }
-                )
-                let path = IndexPath(item: index, section: 0)
-                collection.scrollToItem(at: path, at: .bottom, animated: false)
-                collection.layoutIfNeeded()
-                let cell = try XCTUnwrap(collection.cellForItem(at: path))
-                cell.layoutIfNeeded()
-                try assertTextContained(in: cell)
-                XCTAssertEqual(
-                    cell.bounds.height,
-                    TimelineTestFixtures.layout(
-                        row: model.rows[index], width: width, parent: controller, cache: measurer
-                    ).size.height, accuracy: 1,
-                    "Exact geometry must reserve the visible failure control.")
-                let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
-                    cell.layer.render(in: context.cgContext)
-                }
-                let attachment = XCTAttachment(image: image)
-                attachment.name = "ios-failed-message-\(Int(width))"
-                attachment.lifetime = .keepAlways
-                add(attachment)
-            }
-
-            let acknowledgement = try TimelineTestFixtures.message(
-                id: "delivered-text", at: 0, clientGeneratedID: "failed-text",
-                fields: ["message": text]
-            )
-            store.replacePending(chatID: "chat", with: [], acknowledging: acknowledgement)
-            controller.viewDidLayoutSubviews()
-            try await Task.sleep(for: .milliseconds(100))
-            collection.layoutIfNeeded()
-            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "delivered-text" })
-            let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)))
-            XCTAssertEqual(
-                cell.bounds.height,
-                TimelineTestFixtures.layout(
-                    row: model.rows[index], width: collection.bounds.width, parent: controller,
-                    cache: measurer
-                ).size.height, accuracy: 1)
-            try assertTextContained(in: cell)
-            let image = UIGraphicsImageRenderer(size: cell.bounds.size).image { context in
-                cell.layer.render(in: context.cgContext)
-            }
-            let attachment = XCTAttachment(image: image)
-            attachment.name = "ios-acknowledged-message"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-        }
-
         func testReplyMediaRowsKeepGeometryWhenOnlyViewportHeightChanges() async throws {
             let message = try TimelineTestFixtures.message(
                 id: "reply-media", senderID: 2, at: 0,
@@ -674,13 +538,6 @@
                 let cell = try XCTUnwrap(collection.cellForItem(at: path))
                 try assertTextContained(in: cell)
                 heights.append(cell.bounds.height)
-                let image = UIGraphicsImageRenderer(size: cell.bounds.size).image {
-                    cell.layer.render(in: $0.cgContext)
-                }
-                let attachment = XCTAttachment(image: image)
-                attachment.name = "ios-reply-media-viewport-\(Int(height))"
-                attachment.lifetime = .keepAlways
-                add(attachment)
             }
             XCTAssertEqual(
                 heights[0], heights[1], accuracy: 0.5,

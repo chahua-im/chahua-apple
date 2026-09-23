@@ -581,12 +581,6 @@
                 let textView = try XCTUnwrap(textViews(in: cell).first { $0.string == text })
                 let bitmap = try XCTUnwrap(cell.bitmapImageRepForCachingDisplay(in: cell.bounds))
                 cell.cacheDisplay(in: cell.bounds, to: bitmap)
-                if let png = bitmap.representation(using: .png, properties: [:]) {
-                    let attachment = XCTAttachment(data: png, uniformTypeIdentifier: "public.png")
-                    attachment.name = "native-bubble-\(senderID)-\(Int(width))"
-                    attachment.lifetime = .keepAlways
-                    add(attachment)
-                }
                 check(cell, textView, bitmap)
             }
         }

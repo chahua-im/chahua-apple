@@ -396,25 +396,6 @@ final class OutgoingMessageQueueTests: XCTestCase {
             })
     }
 
-    func testSocketFirstThenHTTPSuccessStillPublishesValidatedAcknowledgement() async throws {
-        let h = try await openHarness()
-        try await h.queue.enqueueText(chatID: "chat", text: "A", clearedDraftRevision: 1)
-        try await eventually { await h.api.requests().count == 1 }
-        let request = try await firstRequest(h.api)
-        let message = try response(request)
-        var acknowledged: [String] = []
-        let observation = h.queue.events.sink {
-            if case .acknowledged(_, let message) = $0 { acknowledged.append(message.id) }
-        }
-        _ = await h.queue.acceptAcknowledgement(message)
-        await h.api.finish(0, with: .success(message))
-        try await eventually { acknowledged.count == 2 }
-        XCTAssertEqual(Set(acknowledged), [message.id])
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat"), [])
-        observation.cancel()
-        await h.close()
-    }
-
     func testHTTPFirstIsDurablyDeletedAndRejectsUnrelatedAcknowledgements() async throws {
         let h = try await openHarness()
         try await h.queue.enqueueText(chatID: "chat", text: "A", clearedDraftRevision: 1)

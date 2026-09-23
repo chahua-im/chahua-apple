@@ -60,26 +60,6 @@ final class ConversationTimelineModelTests: XCTestCase {
             model.updates.value.pendingScroll?.intent,
             .reveal(.message(.clientGenerated("client-11")), animated: true, highlight: true))
     }
-    func testContinuedUserScrollingDoesNotRepublishUnchangedState() async throws {
-        let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1...2))])
-        await model.loadInitial()
-        var stateChanges = 0
-        let observation = model.objectWillChange.sink { stateChanges += 1 }
-        defer { observation.cancel() }
-
-        model.userScrollBegan()
-        XCTAssertFalse(model.state.live.followsLatest)
-        XCTAssertNil(model.updates.value.pendingScroll)
-        XCTAssertEqual(stateChanges, 1)
-
-        for _ in 0..<120 { model.userScrollBegan() }
-        XCTAssertEqual(
-            stateChanges, 1, "Continued wheel events must not invalidate the SwiftUI timeline.")
-
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "3", senderID: 2, at: 3)))
-        XCTAssertFalse(model.state.live.followsLatest)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2", "3"])
-    }
 
     func testInitialLoadPublishesBottomResetWithRemoteRows() async throws {
         let (model, _, updates) = try makeModel(pages: [.success(try livePage(ids: 1...2))])

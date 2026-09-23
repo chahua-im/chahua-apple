@@ -77,9 +77,9 @@ pipeline {
             def allowedCauses = [
               'hudson.triggers.SCMTrigger$SCMTriggerCause',
               'jenkins.branch.BranchEventCause',
+              'hudson.model.Cause$UserIdCause',
             ]
             def excludedCauseSuffixes = [
-              'UserIdCause',
               'ReplayCause',
               'TimerTriggerCause',
               'RebuildCause',

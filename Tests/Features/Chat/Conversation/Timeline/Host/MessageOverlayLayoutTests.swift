@@ -42,11 +42,7 @@
                     host.tearDown()
                     window.close()
                 }
-                let initialDeadline = ContinuousClock.now.advanced(by: .seconds(2))
-                while textViews(in: host.view).isEmpty, ContinuousClock.now < initialDeadline {
-                    host.view.layoutSubtreeIfNeeded()
-                    try await Task.sleep(for: .milliseconds(20))
-                }
+                host.view.layoutSubtreeIfNeeded()
                 let original = try XCTUnwrap(textViews(in: host.view).first)
                 let frameView = try XCTUnwrap(window.contentView?.superview)
                 let originalFrame = original.convert(original.bounds, to: frameView)
@@ -58,17 +54,9 @@
                 let action = try XCTUnwrap(row.accessibilityCustomActions()?.first)
                 XCTAssertTrue(try XCTUnwrap(action.handler)())
                 let copyLabel = MessageMenuAction.copy.label(hasAttachments: false)
-                let menuDeadline = ContinuousClock.now.advanced(by: .seconds(2))
-                var copyCandidate: NSButton?
-                while copyCandidate == nil, ContinuousClock.now < menuDeadline {
-                    frameView.layoutSubtreeIfNeeded()
-                    copyCandidate = buttons(in: frameView).first {
-                        $0.accessibilityLabel() == copyLabel
-                    }
-                    if copyCandidate == nil { try await Task.sleep(for: .milliseconds(20)) }
-                }
+                frameView.layoutSubtreeIfNeeded()
                 let copyAction = try XCTUnwrap(
-                    copyCandidate,
+                    buttons(in: frameView).first { $0.accessibilityLabel() == copyLabel },
                     "Missing Copy action: outgoing=\(outgoing), dark=\(dark), width=\(width)")
                 XCTAssertEqual(
                     textViews(in: frameView).count, 1,
@@ -77,16 +65,6 @@
                     original.convert(original.bounds, to: frameView), originalFrame,
                     "Opening the menu must not move or resize the message.")
                 XCTAssertTrue(copyAction.isEnabled)
-                let bitmap = try XCTUnwrap(
-                    frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds))
-                frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
-                let image = NSImage(size: frameView.bounds.size)
-                image.addRepresentation(bitmap)
-                let attachment = XCTAttachment(image: image)
-                attachment.name =
-                    "overlay-\(dark ? "dark" : "light")-\(outgoing ? "outgoing" : "incoming")-\(Int(width))"
-                attachment.lifetime = .keepAlways
-                add(attachment)
 
                 // A click over native title-bar chrome dismisses the menu,
                 // without also activating the close button.

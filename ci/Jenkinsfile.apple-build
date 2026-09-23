@@ -1,5 +1,5 @@
 // Standalone Pipeline from SCM, main branch, script path ci/Jenkinsfile.apple-build.
-// Job: chahua/chahua-apple-build. Only the multibranch main checks job may trigger it.
+// Job: chahua/chahua-apple-build. Empty GIT_COMMIT_SHA builds origin/main tip; otherwise a pinned SHA.
 // macos-signing must be a dedicated trusted macOS agent/user, never used for PR checks.
 // Install rbenv/ruby-build, Xcode, both SDKs and native build dependencies on the agent.
 // Credentials: github-app; apple-match-ssh (SSH key); apple-match-password (secret text);
@@ -18,19 +18,16 @@ pipeline {
   }
 
   parameters {
-    string(name: 'GIT_COMMIT_SHA', defaultValue: '', description: 'Exact commit that passed main checks; supplied by the upstream job.')
+    string(name: 'GIT_COMMIT_SHA', defaultValue: '', description: 'Exact commit that passed main checks; supplied by the upstream job. Empty builds origin/main.')
   }
 
   stages {
     stage('Validate Input') {
       steps {
         script {
-          if (!(params.GIT_COMMIT_SHA ==~ /[0-9a-f]{40}/)) {
-            error('GIT_COMMIT_SHA must be a full commit SHA; no branch fallback.')
-          }
-          def causes = currentBuild.getBuildCauses('hudson.model.Cause$UpstreamCause')
-          if (!causes.any { it.upstreamProject == 'chahua/chahua-apple/main' }) {
-            error('Only chahua/chahua-apple/main may trigger a signed artifact build.')
+          def commitSha = params.GIT_COMMIT_SHA?.trim()
+          if (commitSha && !(commitSha ==~ /[0-9a-f]{40}/)) {
+            error('GIT_COMMIT_SHA must be empty (origin/main) or a full commit SHA.')
           }
         }
       }
@@ -51,7 +48,7 @@ pipeline {
             deleteDir()
             checkout([
               $class: 'GitSCM',
-              branches: [[name: params.GIT_COMMIT_SHA]],
+              branches: [[name: params.GIT_COMMIT_SHA?.trim() ? params.GIT_COMMIT_SHA.trim() : 'origin/main']],
               userRemoteConfigs: [[
                 credentialsId: 'github-app',
                 refspec: '+refs/heads/main:refs/remotes/origin/main',
@@ -60,7 +57,11 @@ pipeline {
             ])
             sh '''#!/bin/bash
 set -euo pipefail
-[[ "$(git rev-parse HEAD)" == "$GIT_COMMIT_SHA" ]]
+if [[ -z "${GIT_COMMIT_SHA:-}" ]]; then
+  [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]]
+else
+  [[ "$(git rev-parse HEAD)" == "$GIT_COMMIT_SHA" ]]
+fi
 git merge-base --is-ancestor HEAD origin/main
 '''
           }

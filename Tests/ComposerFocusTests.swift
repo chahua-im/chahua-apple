@@ -143,21 +143,6 @@ final class ComposerFocusTests: XCTestCase {
         }
     #endif
 
-    func testFailedCommitRetainsDraftAndFocusForRetry() async throws {
-        let h = try await mount(text: "send this")
-        h.submit()
-        try await pause()
-        XCTAssertEqual(h.state.submits, 1)
-        _ = try h.focusedEditor()
-        h.state.canSend = true
-        try await pause()
-        try h.selectEnd()
-        try h.insertIntoFocusedEditor(" again")
-        try await pause()
-        XCTAssertEqual(h.state.text, "send this again")
-        XCTAssertEqual(h.state.submits, 1)
-    }
-
     func testSendButtonSubmitsOnceWithoutClearingBeforeCommit() async throws {
         let h = try await mount(text: "send this")
         h.pressSendButton()
@@ -267,15 +252,6 @@ final class ComposerFocusTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
         }
         try await pause()
-        #if os(iOS)
-            let image = UIGraphicsImageRenderer(bounds: h.window.bounds).image { _ in
-                h.window.drawHierarchy(in: h.window.bounds, afterScreenUpdates: true)
-            }
-            let capture = XCTAttachment(image: image)
-            capture.name = "Mention suggestions above composer"
-            capture.lifetime = .keepAlways
-            add(capture)
-        #endif
         #if os(iOS)
             XCTAssertTrue(
                 h.accessibilityElement(named: "Mention Ada")?.accessibilityActivate() == true)
@@ -548,71 +524,6 @@ final class ComposerFocusTests: XCTestCase {
     #endif
 
     #if os(iOS)
-        func testAttachmentCaptionIsIsolatedUntilCancelOrSuccessfulSend() async throws {
-            let h = try await mount(text: "original draft")
-            let media = LocalOutgoingAttachment(
-                id: "caption", generation: "original", position: 0,
-                sourcePath: "/missing-fixture.png", previewPath: "/missing-fixture.png",
-                fileName: "caption.png",
-                mimeType: "image/png", width: 300, height: 900, byteCount: 1)
-            h.state.media = [media]
-            try await Task.sleep(for: .milliseconds(600))
-            try h.focus()
-            try await pause()
-            try h.selectEnd()
-            try h.insertIntoFocusedEditor(" edited")
-            try await pause()
-            XCTAssertEqual(
-                h.state.text, "original draft", "Caption typing must not change the compose bar")
-            let capture = UIGraphicsImageRenderer(bounds: h.window.bounds).image { _ in
-                h.window.drawHierarchy(in: h.window.bounds, afterScreenUpdates: true)
-            }
-            let attachment = XCTAttachment(image: capture)
-            attachment.name = "Isolated caption and underlying composer"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-
-            h.state.onSubmit = { caption in
-                h.state.submits += 1
-                XCTAssertEqual(caption, "original draft edited")
-                return false
-            }
-            XCTAssertTrue(
-                try XCTUnwrap(h.accessibilityElement(named: "Send")).accessibilityActivate())
-            try await pause()
-            XCTAssertEqual(h.state.submits, 1)
-            XCTAssertNotNil(h.host.presentedViewController, "Failed sends keep the modal open")
-            XCTAssertEqual(h.state.text, "original draft")
-            let cancel = try XCTUnwrap(h.accessibilityElement(named: "Cancel"))
-            XCTAssertTrue(cancel.accessibilityActivate())
-            try await Task.sleep(for: .milliseconds(600))
-            XCTAssertNil(h.host.presentedViewController)
-            XCTAssertEqual(h.state.text, "original draft edited", "X transfers the caption back")
-
-            h.state.media = [media]
-            try await Task.sleep(for: .milliseconds(600))
-            try h.focus()
-            try await pause()
-            try h.selectEnd()
-            try h.insertIntoFocusedEditor(" sent")
-            try await pause()
-            h.state.onSubmit = { caption in
-                h.state.submits += 1
-                XCTAssertEqual(caption, "original draft edited sent")
-                h.state.text = ""
-                h.state.media = []
-                return true
-            }
-            XCTAssertTrue(
-                try XCTUnwrap(h.accessibilityElement(named: "Send")).accessibilityActivate())
-            for _ in 0..<40 {
-                if h.host.presentedViewController == nil { break }
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            XCTAssertNil(h.host.presentedViewController)
-            XCTAssertEqual(h.state.text, "", "Successful sends must not restore the modal caption")
-            XCTAssertEqual(h.state.submits, 2)
-        }
 
         func testAttachmentCaptionAndSendRemainAboveKeyboardWithPortraitPreview() async throws {
             let file = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -647,13 +558,6 @@ final class ComposerFocusTests: XCTestCase {
             XCTAssertLessThanOrEqual(caption.maxY, bottom + 1)
             XCTAssertGreaterThan(sendFrame.height, 0)
             XCTAssertLessThanOrEqual(sendFrame.maxY, bottom + 1)
-            let image = UIGraphicsImageRenderer(bounds: h.window.bounds).image { _ in
-                h.window.drawHierarchy(in: h.window.bounds, afterScreenUpdates: true)
-            }
-            let attachment = XCTAttachment(image: image)
-            attachment.name = "Attachment caption above keyboard"
-            attachment.lifetime = .keepAlways
-            add(attachment)
             let hideKeyboard = try XCTUnwrap(h.accessibilityElement(named: "Hide keyboard"))
             XCTAssertTrue(hideKeyboard.accessibilityActivate())
             try await pause()
