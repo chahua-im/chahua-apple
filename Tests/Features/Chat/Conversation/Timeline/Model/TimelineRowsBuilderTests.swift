@@ -1,7 +1,8 @@
+import ChahuaAPI
 import Foundation
 import XCTest
+
 @testable import chahua_apple
-import ChahuaAPI
 
 @MainActor
 final class TimelineRowsBuilderTests: XCTestCase {
@@ -31,9 +32,11 @@ final class TimelineRowsBuilderTests: XCTestCase {
         ])
 
         #if os(macOS)
-        XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .middle, .last])
+            XCTAssertEqual(
+                rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .middle, .last])
         #else
-        XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .last, .single])
+            XCTAssertEqual(
+                rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .last, .single])
         #endif
     }
 
@@ -44,7 +47,8 @@ final class TimelineRowsBuilderTests: XCTestCase {
             try TimelineTestFixtures.message(id: "3", senderID: 2, at: 20),
         ])
 
-        XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.single, .single, .single])
+        XCTAssertEqual(
+            rows.compactMap(messageRow).map(\.groupPosition), [.single, .single, .single])
     }
 
     func testBuildShowsSenderNamesAtTheStartOfEveryNonSystemGroup() throws {
@@ -75,7 +79,8 @@ final class TimelineRowsBuilderTests: XCTestCase {
         let pending = PendingOutgoingMessage(
             chatID: "chat",
             clientGeneratedID: "send-10",
-            body: CreateMessageBody(messageType: .text, clientGeneratedId: "send-10", message: "Sending"),
+            body: CreateMessageBody(
+                messageType: .text, clientGeneratedId: "send-10", message: "Sending"),
             enqueuedAt: Date(timeIntervalSince1970: 1_788_220_800),
             senderID: 1,
             state: .sending
@@ -89,13 +94,13 @@ final class TimelineRowsBuilderTests: XCTestCase {
 
     func testDirectMessageSenderMetadataMatchesPlatformContract() throws {
         let rows = builder(isGroupChat: false).build([
-            try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
+            try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0)
         ])
 
         #if os(macOS)
-        XCTAssertFalse(rows.compactMap(messageRow)[0].showsSenderName)
+            XCTAssertFalse(rows.compactMap(messageRow)[0].showsSenderName)
         #else
-        XCTAssertTrue(rows.compactMap(messageRow)[0].showsSenderName)
+            XCTAssertTrue(rows.compactMap(messageRow)[0].showsSenderName)
         #endif
     }
 
@@ -113,7 +118,9 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertNil(rows[separator].messageID)
         XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.single, .first, .last])
         XCTAssertEqual(rows.compactMap(messageRow).map(\.showsSenderName), [true, true, false])
-        XCTAssertEqual(rows.compactMap(\.stableMessageKey), builder().build(messages).compactMap(\.stableMessageKey))
+        XCTAssertEqual(
+            rows.compactMap(\.stableMessageKey),
+            builder().build(messages).compactMap(\.stableMessageKey))
     }
 
     private func builder(isGroupChat: Bool = true) -> TimelineRowsBuilder {

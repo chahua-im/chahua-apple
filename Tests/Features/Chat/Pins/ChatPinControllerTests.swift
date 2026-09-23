@@ -10,7 +10,8 @@ final class ChatPinControllerTests: XCTestCase {
         let controller = ChatPinController(apiClient: HeldPinAPI(), onInvalidToken: {})
         let old = try pin("message", second: 1)
         let replacement = PinResponse(
-            id: "replacement", chatId: old.chatId, message: old.message, pinnedBy: 1, pinnedAt: Date())
+            id: "replacement", chatId: old.chatId, message: old.message, pinnedBy: 1,
+            pinnedAt: Date())
         let removal = RealtimeServerEvent.pinRemoved(
             .init(chatId: old.chatId, pinId: old.id, messageId: old.message.id))
         controller.applyRealtimeEvent(addedEvent(old))
@@ -30,9 +31,12 @@ final class ChatPinControllerTests: XCTestCase {
         let added = try pin("add", second: 4)
         let load = Task { await controller.load(chatID: "chat") }
         await api.waitForRequests(1)
-        controller.applyRealtimeEvent(.messageUpdated(edited.message.replacingMessageText("new preview")))
-        controller.applyRealtimeEvent(.pinRemoved(.init(chatId: "chat", pinId: removed.id, messageId: removed.message.id)))
-        controller.applyRealtimeEvent(.messagesBulkDeleted(.init(chatId: "chat", messageIds: [deleted.message.id])))
+        controller.applyRealtimeEvent(
+            .messageUpdated(edited.message.replacingMessageText("new preview")))
+        controller.applyRealtimeEvent(
+            .pinRemoved(.init(chatId: "chat", pinId: removed.id, messageId: removed.message.id)))
+        controller.applyRealtimeEvent(
+            .messagesBulkDeleted(.init(chatId: "chat", messageIds: [deleted.message.id])))
         controller.applyRealtimeEvent(addedEvent(added))
         await api.finishList(0, with: .success(.init(pins: [edited, removed, deleted])))
         await load.value
@@ -74,7 +78,8 @@ final class ChatPinControllerTests: XCTestCase {
         let edited = try pin("edited", second: 1)
         let first = Task { await controller.pin(edited.message) }
         await api.waitForRequests(1)
-        controller.applyRealtimeEvent(.messageUpdated(edited.message.replacingMessageText("changed")))
+        controller.applyRealtimeEvent(
+            .messageUpdated(edited.message.replacingMessageText("changed")))
         await api.finishCreate(0, with: .success(edited))
         await first.value
         XCTAssertEqual(controller.pinsByChatID["chat"]?.first?.message.message, "changed")
@@ -84,7 +89,8 @@ final class ChatPinControllerTests: XCTestCase {
         let removed = try pin("removed", second: 2)
         let second = Task { await controller.pin(removed.message) }
         await api.waitForRequests(2)
-        controller.applyRealtimeEvent(.pinRemoved(.init(chatId: "chat", pinId: removed.id, messageId: removed.message.id)))
+        controller.applyRealtimeEvent(
+            .pinRemoved(.init(chatId: "chat", pinId: removed.id, messageId: removed.message.id)))
         await api.finishCreate(1, with: .success(removed))
         await second.value
         XCTAssertEqual(controller.pinsByChatID["chat"]?.map(\.id), [edited.id])
@@ -136,7 +142,10 @@ final class ChatPinControllerTests: XCTestCase {
     func testInvalidScopeFailsVisiblyAndRetryInstallsOnlyLivePins() async throws {
         let api = HeldPinAPI()
         let controller = ChatPinController(apiClient: api, onInvalidToken: {})
-        let wrong = PinResponse(id: "wrong", chatId: "another", message: try TimelineTestFixtures.message(id: "wrong", at: 1), pinnedBy: 1, pinnedAt: Date())
+        let wrong = PinResponse(
+            id: "wrong", chatId: "another",
+            message: try TimelineTestFixtures.message(id: "wrong", at: 1), pinnedBy: 1,
+            pinnedAt: Date())
         let load = Task { await controller.load(chatID: "chat") }
         await api.waitForRequests(1)
         await api.finishList(0, with: .success(.init(pins: [wrong])))
@@ -157,7 +166,10 @@ final class ChatPinControllerTests: XCTestCase {
     }
 
     private func pin(_ id: String, second: Int, expiresAt: Date? = nil) throws -> PinResponse {
-        PinResponse(id: "pin-\(id)", chatId: "chat", message: try TimelineTestFixtures.message(id: id, at: second), pinnedBy: 1, pinnedAt: Date(), expiresAt: expiresAt)
+        PinResponse(
+            id: "pin-\(id)", chatId: "chat",
+            message: try TimelineTestFixtures.message(id: id, at: second), pinnedBy: 1,
+            pinnedAt: Date(), expiresAt: expiresAt)
     }
 
     private func addedEvent(_ pin: PinResponse) -> RealtimeServerEvent {
@@ -183,62 +195,124 @@ private actor HeldPinAPI: ChahuaAPIClient {
         waiter.continuation.resume()
     }
 
-    func finishList(_ index: Int, with result: Result<ListPinsResponse, Error>) { lists.removeValue(forKey: index)?.resume(with: result) }
-    func finishCreate(_ index: Int, with result: Result<PinResponse, Error>) { creates.removeValue(forKey: index)?.resume(with: result) }
-    func finishDelete(_ index: Int, with result: Result<Void, Error>) { deletes.removeValue(forKey: index)?.resume(with: result) }
+    func finishList(_ index: Int, with result: Result<ListPinsResponse, Error>) {
+        lists.removeValue(forKey: index)?.resume(with: result)
+    }
+    func finishCreate(_ index: Int, with result: Result<PinResponse, Error>) {
+        creates.removeValue(forKey: index)?.resume(with: result)
+    }
+    func finishDelete(_ index: Int, with result: Result<Void, Error>) {
+        deletes.removeValue(forKey: index)?.resume(with: result)
+    }
 
     // Ignore cancellation deliberately: reset must fence even a transport that returns late.
     func listPins(chatID: String) async throws -> ListPinsResponse {
         let index = requestCount
         requestCount += 1
-        return try await withCheckedThrowingContinuation { lists[index] = $0; notifyWaiter() }
+        return try await withCheckedThrowingContinuation {
+            lists[index] = $0
+            notifyWaiter()
+        }
     }
 
     func createPin(chatID: String, messageID: String) async throws -> PinResponse {
         let index = requestCount
         requestCount += 1
-        return try await withCheckedThrowingContinuation { creates[index] = $0; notifyWaiter() }
+        return try await withCheckedThrowingContinuation {
+            creates[index] = $0
+            notifyWaiter()
+        }
     }
 
     func deletePin(chatID: String, pinID: String) async throws {
         let index = requestCount
         requestCount += 1
-        try await withCheckedThrowingContinuation { deletes[index] = $0; notifyWaiter() }
+        try await withCheckedThrowingContinuation {
+            deletes[index] = $0
+            notifyWaiter()
+        }
     }
 
-    func authenticate(candidateJWT: String) async throws -> MeResponse { throw APIError.unavailable }
-    func createDevSession(uid: Int32, clientID: String) async throws -> String { throw APIError.unavailable }
+    func authenticate(candidateJWT: String) async throws -> MeResponse {
+        throw APIError.unavailable
+    }
+    func createDevSession(uid: Int32, clientID: String) async throws -> String {
+        throw APIError.unavailable
+    }
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
-    func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
+    func requestAttachmentUpload(
+        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+    ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
-    func listSubscribedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
-    func listFavoriteStickers() async throws -> [MessageStickerResponse] { throw APIError.unavailable }
+    func listSubscribedStickerPacks() async throws -> [StickerPackSummary] {
+        throw APIError.unavailable
+    }
+    func listFavoriteStickers() async throws -> [MessageStickerResponse] {
+        throw APIError.unavailable
+    }
     func getSticker(id: String) async throws -> StickerDetailResponse { throw APIError.unavailable }
-    func getStickerPack(id: String) async throws -> StickerPackDetailResponse { throw APIError.unavailable }
+    func getStickerPack(id: String) async throws -> StickerPackDetailResponse {
+        throw APIError.unavailable
+    }
     func setStickerFavorite(id: String, favorite: Bool) async throws { throw APIError.unavailable }
-    func setStickerPackSubscription(id: String, subscribed: Bool) async throws { throw APIError.unavailable }
-    func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
+    func setStickerPackSubscription(id: String, subscribed: Bool) async throws {
+        throw APIError.unavailable
+    }
+    func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
+        throw APIError.unavailable
+    }
     func archiveChat(chatID: String) async throws { throw APIError.unavailable }
     func unarchiveChat(chatID: String) async throws { throw APIError.unavailable }
     func archiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
-    func unarchiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
-    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse { throw APIError.unavailable }
+    func unarchiveThread(chatID: String, threadID: String) async throws {
+        throw APIError.unavailable
+    }
+    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
+        throw APIError.unavailable
+    }
     func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
-    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
-    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
-    func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
-    func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { throw APIError.unavailable }
-    func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse { throw APIError.unavailable }
-    func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws { throw APIError.unavailable }
+    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
+        throw APIError.unavailable
+    }
+    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
+        -> MessageResponse
+    { throw APIError.unavailable }
+    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+        throw APIError.unavailable
+    }
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse {
+        throw APIError.unavailable
+    }
+    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+        -> ReadStateResponse
+    { throw APIError.unavailable }
+    func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
+    { throw APIError.unavailable }
+    func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse {
+        throw APIError.unavailable
+    }
+    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+        throw APIError.unavailable
+    }
+    func deleteMessage(chatID: String, messageID: String) async throws {
+        throw APIError.unavailable
+    }
+    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+        throw APIError.unavailable
+    }
+    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+        throw APIError.unavailable
+    }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
-    func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse { throw APIError.unavailable }
-    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse { throw APIError.unavailable }
+    func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse {
+        throw APIError.unavailable
+    }
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws
+        -> MemberResponse
+    { throw APIError.unavailable }
     func removeGroupMember(chatID: String, uid: Int32) async throws { throw APIError.unavailable }
-    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
+    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
+        throw APIError.unavailable
+    }
 }

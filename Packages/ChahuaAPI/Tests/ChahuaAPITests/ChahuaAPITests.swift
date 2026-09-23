@@ -1,16 +1,23 @@
 import Foundation
 import XCTest
+
 @testable import ChahuaAPI
 
 final class ChahuaAPITests: XCTestCase {
-    override func tearDown() { StubURLProtocol.handler = nil; super.tearDown() }
+    override func tearDown() {
+        StubURLProtocol.handler = nil
+        super.tearDown()
+    }
 
     func testAuthenticateInstallsValidatedTokenForLaterRequests() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
             requests.append(request)
             guard request.url?.path == "/users/me" else { return (404, "") }
-            return (200, #"{"uid":1,"username":"fixture","gender":0,"stickerPackOrder":[],"permissions":[],"avatarUrl":null}"#)
+            return (
+                200,
+                #"{"uid":1,"username":"fixture","gender":0,"stickerPackOrder":[],"permissions":[],"avatarUrl":null}"#
+            )
         }
         let client = ChahuaClient(
             configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
@@ -22,14 +29,20 @@ final class ChahuaAPITests: XCTestCase {
 
         let recorded = requests.values
         XCTAssertEqual(recorded.map { $0.url?.path }, ["/users/me", "/users/me"])
-        XCTAssertTrue(recorded.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer candidate" })
+        XCTAssertTrue(
+            recorded.allSatisfy {
+                $0.value(forHTTPHeaderField: "Authorization") == "Bearer candidate"
+            })
     }
 
     func testRequestsIncludeConfiguredAppVersion() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
             requests.append(request)
-            return (200, #"{"uid":1,"username":"fixture","gender":0,"stickerPackOrder":[],"permissions":[],"avatarUrl":null}"#)
+            return (
+                200,
+                #"{"uid":1,"username":"fixture","gender":0,"stickerPackOrder":[],"permissions":[],"avatarUrl":null}"#
+            )
         }
         let client = ChahuaClient(
             configuration: ChahuaConfiguration(
@@ -53,64 +66,69 @@ final class ChahuaAPITests: XCTestCase {
             session: testSession()
         )
 
-        do { _ = try await client.authenticate(candidateJWT: "candidate"); XCTFail("Expected invalid token") }
-        catch APIError.invalidToken { }
+        do {
+            _ = try await client.authenticate(candidateJWT: "candidate")
+            XCTFail("Expected invalid token")
+        } catch APIError.invalidToken {}
     }
 
     func testListChatsRequestsActiveChatsAndDecodesResponse() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
             requests.append(request)
-            return (200, #"""
-            {
-              "chats": [
+            return (
+                200,
+                #"""
                 {
-                  "id": "10",
-                  "name": "Engineering",
-                  "avatar": "https://cdn.example/group.png",
-                  "lastMessageAt": "2026-08-31T12:34:56Z",
-                  "unreadCount": 3,
-                  "lastReadMessageId": "99",
-                  "lastMessage": {
-                    "id": "100",
-                    "clientGeneratedId": "client-100",
-                    "createdAt": "2026-08-31T12:34:56Z",
-                    "sender": {"uid": 1, "gender": 0, "name": "Ada", "avatarUrl": null, "userGroup": null},
-                    "messageType": "text",
-                    "attachments": [],
-                    "mentions": [],
-                    "isDeleted": false,
-                    "message": "Ship it",
-                    "sticker": null
-                  },
-                  "mutedUntil": null,
-                  "archived": false,
-                  "kind": "group",
-                  "peer": null
-                },
-                {
-                  "id": "11",
-                  "name": null,
-                  "avatar": null,
-                  "lastMessageAt": null,
-                  "unreadCount": 0,
-                  "lastReadMessageId": null,
-                  "lastMessage": null,
-                  "mutedUntil": null,
-                  "archived": false,
-                  "kind": "dm",
-                  "peer": {
-                    "uid": 2,
-                    "username": "Grace",
-                    "avatarUrl": "https://cdn.example/grace.png",
-                    "gender": 1,
-                    "userGroup": {"groupId": 7, "name": "Staff", "chatGroupColor": "#111111", "chatGroupColorDark": "#eeeeee"}
-                  }
+                  "chats": [
+                    {
+                      "id": "10",
+                      "name": "Engineering",
+                      "avatar": "https://cdn.example/group.png",
+                      "lastMessageAt": "2026-08-31T12:34:56Z",
+                      "unreadCount": 3,
+                      "lastReadMessageId": "99",
+                      "lastMessage": {
+                        "id": "100",
+                        "clientGeneratedId": "client-100",
+                        "createdAt": "2026-08-31T12:34:56Z",
+                        "sender": {"uid": 1, "gender": 0, "name": "Ada", "avatarUrl": null, "userGroup": null},
+                        "messageType": "text",
+                        "attachments": [],
+                        "mentions": [],
+                        "isDeleted": false,
+                        "message": "Ship it",
+                        "sticker": null
+                      },
+                      "mutedUntil": null,
+                      "archived": false,
+                      "kind": "group",
+                      "peer": null
+                    },
+                    {
+                      "id": "11",
+                      "name": null,
+                      "avatar": null,
+                      "lastMessageAt": null,
+                      "unreadCount": 0,
+                      "lastReadMessageId": null,
+                      "lastMessage": null,
+                      "mutedUntil": null,
+                      "archived": false,
+                      "kind": "dm",
+                      "peer": {
+                        "uid": 2,
+                        "username": "Grace",
+                        "avatarUrl": "https://cdn.example/grace.png",
+                        "gender": 1,
+                        "userGroup": {"groupId": 7, "name": "Staff", "chatGroupColor": "#111111", "chatGroupColorDark": "#eeeeee"}
+                      }
+                    }
+                  ],
+                  "nextCursor": "11"
                 }
-              ],
-              "nextCursor": "11"
-            }
-            """#)
+                """#
+            )
         }
         let client = ChahuaClient(
             configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
@@ -132,9 +150,12 @@ final class ChahuaAPITests: XCTestCase {
         let request = try XCTUnwrap(requests.values.first)
         XCTAssertEqual(request.httpMethod, "GET")
         XCTAssertEqual(request.url?.path, "/chats")
-        XCTAssertEqual(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems, [
-            URLQueryItem(name: "archived", value: "false"),
-        ])
+        XCTAssertEqual(
+            URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?
+                .queryItems,
+            [
+                URLQueryItem(name: "archived", value: "false")
+            ])
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
     }
 
@@ -145,51 +166,55 @@ final class ChahuaAPITests: XCTestCase {
             requests.append(request)
             // Axum decodes query strings as form data: a literal '+' becomes a space.
             var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
-            components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%20")
+            components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(
+                of: "+", with: "%20")
             let query = components.queryItems ?? []
             if let before = query.first(where: { $0.name == "before" }) {
                 guard before.value == cursor else { return (400, "Invalid datetime cursor") }
                 return (200, #"{"threads":[],"nextCursor":null}"#)
             }
-            return (200, #"""
-            {
-              "threads": [{
-                "chatId": "9007199254740993",
-                "chatName": "Engineering",
-                "chatAvatar": null,
-                "threadRootMessage": {
-                  "id": "9007199254740994",
-                  "clientGeneratedId": "root-attempt",
-                  "createdAt": "2026-09-01T00:00:00Z",
-                  "sender": {"uid": 1, "gender": 0, "name": "Ada"},
-                  "messageType": "text",
-                  "message": "Discuss the release",
-                  "attachments": [],
-                  "mentions": [],
-                  "isDeleted": false
-                },
-                "participants": [{"uid": 2, "gender": 1, "name": null, "avatarUrl": null}],
-                "lastReply": {
-                  "id": "9007199254740995",
-                  "clientGeneratedId": "reply-attempt",
-                  "createdAt": "2026-09-01T01:02:03.456Z",
-                  "sender": {"uid": 2, "gender": 1, "name": null},
-                  "messageType": "text",
-                  "message": null,
-                  "attachments": [],
-                  "mentions": [],
-                  "isDeleted": true
-                },
-                "replyCount": 4,
-                "lastReplyAt": "2026-09-01T01:02:03.456Z",
-                "unreadCount": 2,
-                "lastReadMessageId": null,
-                "subscribedAt": "2026-09-01T00:00:00Z",
-                "archived": false
-              }],
-              "nextCursor": "2026-09-01T01:02:03.456+00:00"
-            }
-            """#)
+            return (
+                200,
+                #"""
+                {
+                  "threads": [{
+                    "chatId": "9007199254740993",
+                    "chatName": "Engineering",
+                    "chatAvatar": null,
+                    "threadRootMessage": {
+                      "id": "9007199254740994",
+                      "clientGeneratedId": "root-attempt",
+                      "createdAt": "2026-09-01T00:00:00Z",
+                      "sender": {"uid": 1, "gender": 0, "name": "Ada"},
+                      "messageType": "text",
+                      "message": "Discuss the release",
+                      "attachments": [],
+                      "mentions": [],
+                      "isDeleted": false
+                    },
+                    "participants": [{"uid": 2, "gender": 1, "name": null, "avatarUrl": null}],
+                    "lastReply": {
+                      "id": "9007199254740995",
+                      "clientGeneratedId": "reply-attempt",
+                      "createdAt": "2026-09-01T01:02:03.456Z",
+                      "sender": {"uid": 2, "gender": 1, "name": null},
+                      "messageType": "text",
+                      "message": null,
+                      "attachments": [],
+                      "mentions": [],
+                      "isDeleted": true
+                    },
+                    "replyCount": 4,
+                    "lastReplyAt": "2026-09-01T01:02:03.456Z",
+                    "unreadCount": 2,
+                    "lastReadMessageId": null,
+                    "subscribedAt": "2026-09-01T00:00:00Z",
+                    "archived": false
+                  }],
+                  "nextCursor": "2026-09-01T01:02:03.456+00:00"
+                }
+                """#
+            )
         }
         let client: any ChahuaAPIClient = ChahuaClient(
             configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
@@ -197,7 +222,8 @@ final class ChahuaAPITests: XCTestCase {
             session: testSession()
         )
 
-        let first = try await client.listThreads(query: ListThreadsQuery(limit: 20, archived: false))
+        let first = try await client.listThreads(
+            query: ListThreadsQuery(limit: 20, archived: false))
         let thread = try XCTUnwrap(first.threads.first)
         XCTAssertEqual(thread.chatId, "9007199254740993")
         XCTAssertEqual(thread.threadRootMessage.id, "9007199254740994")
@@ -210,10 +236,12 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertNil(thread.lastReply?.message)
         XCTAssertEqual(thread.replyCount, 4)
         XCTAssertEqual(thread.unreadCount, 2)
-        XCTAssertEqual(thread.lastReplyAt.timeIntervalSince(thread.subscribedAt), 3723.456, accuracy: 0.0001)
+        XCTAssertEqual(
+            thread.lastReplyAt.timeIntervalSince(thread.subscribedAt), 3723.456, accuracy: 0.0001)
         XCTAssertEqual(first.nextCursor, cursor)
 
-        let second = try await client.listThreads(query: ListThreadsQuery(limit: 20, before: first.nextCursor, archived: false))
+        let second = try await client.listThreads(
+            query: ListThreadsQuery(limit: 20, before: first.nextCursor, archived: false))
         XCTAssertEqual(second.threads, [])
         XCTAssertNil(second.nextCursor)
         XCTAssertEqual(requests.values.count, 2)
@@ -221,7 +249,8 @@ final class ChahuaAPITests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "GET")
             XCTAssertEqual(request.url?.path, "/threads")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
-            let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
+            let query = URLComponents(
+                url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems
             var expected = [URLQueryItem(name: "limit", value: "20")]
             if index == 1 { expected.append(URLQueryItem(name: "before", value: cursor)) }
             expected.append(URLQueryItem(name: "archived", value: "false"))
@@ -232,9 +261,11 @@ final class ChahuaAPITests: XCTestCase {
     func testReadReceiptsUseDistinctChatAndThreadScopesWithOpaqueMessageIDs() async throws {
         StubURLProtocol.handler = { request in
             guard request.httpMethod == "POST",
-                  request.value(forHTTPHeaderField: "Authorization") == "Bearer candidate",
-                  let body = try? JSONSerialization.jsonObject(with: requestBody(request)) as? [String: String],
-                  body["messageId"] == "9007199254740995" else { return (400, "Invalid read request") }
+                request.value(forHTTPHeaderField: "Authorization") == "Bearer candidate",
+                let body = try? JSONSerialization.jsonObject(with: requestBody(request))
+                    as? [String: String],
+                body["messageId"] == "9007199254740995"
+            else { return (400, "Invalid read request") }
             switch request.url?.path {
             case "/chats/chat/read":
                 return (200, #"{"lastReadMessageId":"9007199254740995","unreadCount":3}"#)
@@ -248,23 +279,27 @@ final class ChahuaAPITests: XCTestCase {
             configuration: .init(baseURL: URL(string: "https://api.example")!),
             token: "candidate", session: testSession())
         let chat = try await client.markChatRead(chatID: "chat", messageID: "9007199254740995")
-        let thread = try await client.markThreadRead(chatID: "chat", threadID: "root", messageID: "9007199254740995")
+        let thread = try await client.markThreadRead(
+            chatID: "chat", threadID: "root", messageID: "9007199254740995")
         XCTAssertEqual(chat, .init(lastReadMessageId: "9007199254740995", unreadCount: 3))
         XCTAssertEqual(thread, .init(lastReadMessageId: "9007199254740995", unreadCount: 0))
     }
 
     func testMalformedThreadReportsNestedFieldWithoutLeakingInvalidValue() async throws {
         StubURLProtocol.handler = { _ in
-            (200, #"""
-            {"threads":[{"chatId":"10","chatName":"private chat",
-              "threadRootMessage":{"id":"101","clientGeneratedId":"root",
-                "createdAt":"2026-09-01T00:00:00Z",
-                "sender":{"uid":1,"gender":0},
-                "messageType":{"private-invalid-value":1},"message":"private message",
-                "attachments":[],"mentions":[],"isDeleted":false},
-              "participants":[],"replyCount":0,"lastReplyAt":"2026-09-01T00:00:00Z",
-              "unreadCount":0,"subscribedAt":"2026-09-01T00:00:00Z","archived":false}]}
-            """#)
+            (
+                200,
+                #"""
+                {"threads":[{"chatId":"10","chatName":"private chat",
+                  "threadRootMessage":{"id":"101","clientGeneratedId":"root",
+                    "createdAt":"2026-09-01T00:00:00Z",
+                    "sender":{"uid":1,"gender":0},
+                    "messageType":{"private-invalid-value":1},"message":"private message",
+                    "attachments":[],"mentions":[],"isDeleted":false},
+                  "participants":[],"replyCount":0,"lastReplyAt":"2026-09-01T00:00:00Z",
+                  "unreadCount":0,"subscribedAt":"2026-09-01T00:00:00Z","archived":false}]}
+                """#
+            )
         }
         let client = ChahuaClient(
             configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
@@ -290,16 +325,20 @@ final class ChahuaAPITests: XCTestCase {
             session: testSession()
         )
 
-        _ = try await client.listMessages(chatID: "10", query: ListMessagesQuery(before: "90", max: 30, threadID: "80"))
+        _ = try await client.listMessages(
+            chatID: "10", query: ListMessagesQuery(before: "90", max: 30, threadID: "80"))
         _ = try await client.listMessages(chatID: "10")
 
-        XCTAssertEqual(requests.values.map { $0.url?.path }, ["/chats/10/messages", "/chats/10/messages"])
+        XCTAssertEqual(
+            requests.values.map { $0.url?.path }, ["/chats/10/messages", "/chats/10/messages"])
         let threadURL = try XCTUnwrap(requests.values.first?.url)
-        XCTAssertEqual(URLComponents(url: threadURL, resolvingAgainstBaseURL: false)?.queryItems, [
-            URLQueryItem(name: "before", value: "90"),
-            URLQueryItem(name: "max", value: "30"),
-            URLQueryItem(name: "threadId", value: "80"),
-        ])
+        XCTAssertEqual(
+            URLComponents(url: threadURL, resolvingAgainstBaseURL: false)?.queryItems,
+            [
+                URLQueryItem(name: "before", value: "90"),
+                URLQueryItem(name: "max", value: "30"),
+                URLQueryItem(name: "threadId", value: "80"),
+            ])
         XCTAssertNil(requests.values.last?.url?.query)
     }
 
@@ -307,29 +346,33 @@ final class ChahuaAPITests: XCTestCase {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
             requests.append(request)
-            let body = try? JSONSerialization.jsonObject(with: requestBody(request)) as? [String: Any]
+            let body =
+                try? JSONSerialization.jsonObject(with: requestBody(request)) as? [String: Any]
             XCTAssertEqual(body?["messageType"] as? String, "text")
             XCTAssertEqual(body?["message"] as? String, "Thread reply")
             XCTAssertEqual(body?["clientGeneratedId"] as? String, "reply-attempt")
             XCTAssertEqual(body?["replyToId"] as? String, "previous-reply")
             XCTAssertNil(body?["attachmentIds"])
-            return (200, #"""
-            {
-              "id": "server-reply",
-              "chatId": "chat/one",
-              "clientGeneratedId": "reply-attempt",
-              "messageType": "text",
-              "sender": {"uid": 1, "gender": 0, "name": "Ada"},
-              "createdAt": "2026-09-01T01:02:03Z",
-              "isEdited": false,
-              "isDeleted": false,
-              "hasAttachments": false,
-              "attachments": [],
-              "reactions": [],
-              "message": "Thread reply",
-              "replyRootId": "root#two"
-            }
-            """#)
+            return (
+                200,
+                #"""
+                {
+                  "id": "server-reply",
+                  "chatId": "chat/one",
+                  "clientGeneratedId": "reply-attempt",
+                  "messageType": "text",
+                  "sender": {"uid": 1, "gender": 0, "name": "Ada"},
+                  "createdAt": "2026-09-01T01:02:03Z",
+                  "isEdited": false,
+                  "isDeleted": false,
+                  "hasAttachments": false,
+                  "attachments": [],
+                  "reactions": [],
+                  "message": "Thread reply",
+                  "replyRootId": "root#two"
+                }
+                """#
+            )
         }
         let client: any ChahuaAPIClient = ChahuaClient(
             configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
@@ -352,8 +395,10 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(response.replyRootId, "root#two")
         XCTAssertEqual(response.message, "Thread reply")
         let request = try XCTUnwrap(requests.values.first)
-        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
-        XCTAssertEqual(components.percentEncodedPath, "/chats/chat%2Fone/threads/root%23two/messages")
+        let components = try XCTUnwrap(
+            URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(
+            components.percentEncodedPath, "/chats/chat%2Fone/threads/root%23two/messages")
         XCTAssertNil(components.query)
         XCTAssertNil(components.fragment)
         XCTAssertEqual(request.httpMethod, "POST")
@@ -379,10 +424,12 @@ final class ChahuaAPITests: XCTestCase {
         let components = try requests.values.map {
             try XCTUnwrap(URLComponents(url: try XCTUnwrap($0.url), resolvingAgainstBaseURL: false))
         }
-        XCTAssertEqual(components.map(\.percentEncodedPath), [
-            "/chats/chat%2Fone/archive",
-            "/chats/chat%2Fone/threads/root%23two/archive",
-        ])
+        XCTAssertEqual(
+            components.map(\.percentEncodedPath),
+            [
+                "/chats/chat%2Fone/archive",
+                "/chats/chat%2Fone/threads/root%23two/archive",
+            ])
         for request in requests.values {
             XCTAssertEqual(request.httpMethod, "DELETE")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
@@ -420,19 +467,23 @@ final class ChahuaAPITests: XCTestCase {
     func testGroupMetadataAndMemberMutationsUseDocumentedWireContract() async throws {
         let requests = RequestRecorder()
         let member = #"""
-        {"uid":17,"username":"Ada","avatarUrl":null,"role":"admin",
-         "joinedAt":"2026-09-01T01:02:03Z","gender":0,"userGroup":null}
-        """#
+            {"uid":17,"username":"Ada","avatarUrl":null,"role":"admin",
+             "joinedAt":"2026-09-01T01:02:03Z","gender":0,"userGroup":null}
+            """#
         StubURLProtocol.handler = { request in
             requests.append(request)
-            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.percentEncodedPath
+            let path = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+                .percentEncodedPath
             switch (request.httpMethod, path) {
             case ("GET", "/group/chat%2Fone"):
-                return (200, #"""
-                {"id":"chat/one","name":"Engineering","description":"Release work",
-                 "avatar":null,"mutedUntil":"2026-09-01T02:02:03.250Z",
-                 "myRole":"admin","kind":"group","peer":null}
-                """#)
+                return (
+                    200,
+                    #"""
+                    {"id":"chat/one","name":"Engineering","description":"Release work",
+                     "avatar":null,"mutedUntil":"2026-09-01T02:02:03.250Z",
+                     "myRole":"admin","kind":"group","peer":null}
+                    """#
+                )
             case ("GET", "/group/chat%2Fone/members"):
                 return (200, #"{"members":[\#(member)],"nextCursor":17,"canManageMembers":true}"#)
             case ("PATCH", "/group/chat%2Fone/members/17"):
@@ -452,14 +503,17 @@ final class ChahuaAPITests: XCTestCase {
         let group = try await client.groupInfo(chatID: "chat/one")
         let page = try await client.listMembers(
             chatID: "chat/one", query: .init(q: "ada", mode: "submitted", limit: 20, after: 9))
-        let updated = try await client.updateGroupMemberRole(chatID: "chat/one", uid: 17, role: .admin)
+        let updated = try await client.updateGroupMemberRole(
+            chatID: "chat/one", uid: 17, role: .admin)
         try await client.removeGroupMember(chatID: "chat/one", uid: 17)
         let timedMute = try await client.muteChat(chatID: "chat/one", durationSeconds: 3_600)
         let indefiniteMute = try await client.muteChat(chatID: "chat/one", durationSeconds: nil)
 
         XCTAssertEqual(group.description, "Release work")
         XCTAssertEqual(group.myRole, .admin)
-        XCTAssertEqual(try XCTUnwrap(group.mutedUntil).timeIntervalSince1970, 1_788_228_123.25, accuracy: 0.0001)
+        XCTAssertEqual(
+            try XCTUnwrap(group.mutedUntil).timeIntervalSince1970, 1_788_228_123.25,
+            accuracy: 0.0001)
         XCTAssertEqual(page.members, [.init(uid: 17, username: "Ada", role: .admin)])
         XCTAssertEqual(page.nextCursor, 17)
         XCTAssertTrue(page.canManageMembers)
@@ -471,17 +525,24 @@ final class ChahuaAPITests: XCTestCase {
         let components = try recorded.map {
             try XCTUnwrap(URLComponents(url: try XCTUnwrap($0.url), resolvingAgainstBaseURL: false))
         }
-        XCTAssertEqual(components.map(\.percentEncodedPath), [
-            "/group/chat%2Fone", "/group/chat%2Fone/members", "/group/chat%2Fone/members/17",
-            "/group/chat%2Fone/members/17", "/group/chat%2Fone/mute", "/group/chat%2Fone/mute",
-        ])
-        XCTAssertEqual(components[1].queryItems, [
-            URLQueryItem(name: "q", value: "ada"),
-            URLQueryItem(name: "mode", value: "submitted"),
-            URLQueryItem(name: "limit", value: "20"),
-            URLQueryItem(name: "after", value: "9"),
-        ])
-        XCTAssertTrue(recorded.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer candidate" })
+        XCTAssertEqual(
+            components.map(\.percentEncodedPath),
+            [
+                "/group/chat%2Fone", "/group/chat%2Fone/members", "/group/chat%2Fone/members/17",
+                "/group/chat%2Fone/members/17", "/group/chat%2Fone/mute", "/group/chat%2Fone/mute",
+            ])
+        XCTAssertEqual(
+            components[1].queryItems,
+            [
+                URLQueryItem(name: "q", value: "ada"),
+                URLQueryItem(name: "mode", value: "submitted"),
+                URLQueryItem(name: "limit", value: "20"),
+                URLQueryItem(name: "after", value: "9"),
+            ])
+        XCTAssertTrue(
+            recorded.allSatisfy {
+                $0.value(forHTTPHeaderField: "Authorization") == "Bearer candidate"
+            })
 
         let updateBody = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: requestBody(recorded[2])) as? [String: String])
@@ -494,7 +555,6 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertNil(indefiniteMuteBody["durationSeconds"])
     }
 
-
     func testReactionPathsPreserveEmojiAndReservedCharactersAsSingleSegments() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
@@ -502,22 +562,27 @@ final class ChahuaAPITests: XCTestCase {
             return (204, "")
         }
         let client = ChahuaClient(
-            configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example/base%20path/")!),
+            configuration: ChahuaConfiguration(
+                baseURL: URL(string: "https://api.example/base%20path/")!),
             token: "candidate",
             session: testSession()
         )
         let emojis = ["👩🏽‍💻", "#️⃣", "/", "%2F"]
         for emoji in emojis {
             try await client.putReaction(chatID: "chat/one", messageID: "message#two", emoji: emoji)
-            try await client.deleteReaction(chatID: "chat/one", messageID: "message#two", emoji: emoji)
+            try await client.deleteReaction(
+                chatID: "chat/one", messageID: "message#two", emoji: emoji)
         }
 
         XCTAssertEqual(requests.values.count, emojis.count * 2)
         for (index, request) in requests.values.enumerated() {
-            let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
             let segments = components.percentEncodedPath.split(separator: "/").map(String.init)
             XCTAssertEqual(segments.count, 7)
-            XCTAssertEqual(Array(segments.prefix(6)), ["base%20path", "chats", "chat%2Fone", "messages", "message%23two", "reactions"])
+            XCTAssertEqual(
+                Array(segments.prefix(6)),
+                ["base%20path", "chats", "chat%2Fone", "messages", "message%23two", "reactions"])
             XCTAssertEqual(segments.last?.removingPercentEncoding, emojis[index / 2])
             XCTAssertNil(components.query)
             XCTAssertNil(components.fragment)
@@ -528,21 +593,22 @@ final class ChahuaAPITests: XCTestCase {
 
     func testStickerLibraryAndFlatDetailsDecodeServerResponses() async throws {
         let sticker = #"""
-        {"id":"sticker-one","emoji":":wave:","createdAt":"2026-09-01T01:02:03.456Z","isFavorited":true,
-         "media":{"id":"media-one","url":"https://cdn.example/sticker.webm","contentType":"video/webm","size":4096,"width":320,"height":null}}
-        """#
+            {"id":"sticker-one","emoji":":wave:","createdAt":"2026-09-01T01:02:03.456Z","isFavorited":true,
+             "media":{"id":"media-one","url":"https://cdn.example/sticker.webm","contentType":"video/webm","size":4096,"width":320,"height":null}}
+            """#
         let pack = #"""
-        {"id":"pack-one","ownerUid":42,"ownerName":null,"name":"Greetings","description":"Hello",
-         "createdAt":"2026-09-01T01:02:03Z","updatedAt":"2026-09-01T01:02:04.250Z",
-         "stickerCount":1,"isSubscribed":true,
-         "previewSticker":{"id":"sticker-one","emoji":":wave:",
-           "media":{"id":"media-one","url":"https://cdn.example/sticker.webm","contentType":"video/webm","size":4096}}}
-        """#
+            {"id":"pack-one","ownerUid":42,"ownerName":null,"name":"Greetings","description":"Hello",
+             "createdAt":"2026-09-01T01:02:03Z","updatedAt":"2026-09-01T01:02:04.250Z",
+             "stickerCount":1,"isSubscribed":true,
+             "previewSticker":{"id":"sticker-one","emoji":":wave:",
+               "media":{"id":"media-one","url":"https://cdn.example/sticker.webm","contentType":"video/webm","size":4096}}}
+            """#
         let flatPack = String(pack.dropLast()) + ",\"stickers\":[\(sticker)]}"
         let flatSticker = String(sticker.dropLast()) + ",\"packs\":[\(pack)]}"
         StubURLProtocol.handler = { request in
             guard request.httpMethod == "GET",
-                  request.value(forHTTPHeaderField: "Authorization") == "Bearer candidate" else { return (403, "") }
+                request.value(forHTTPHeaderField: "Authorization") == "Bearer candidate"
+            else { return (403, "") }
             switch request.url?.path {
             case "/stickers/packs/mine/owned", "/stickers/packs/mine/subscribed":
                 return (200, "{\"packs\":[\(pack)]}")
@@ -574,7 +640,9 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(stickerDetail.packs, owned)
         XCTAssertEqual(packDetail.pack.ownerUid, 42)
         XCTAssertNil(packDetail.pack.ownerName)
-        XCTAssertEqual(packDetail.pack.updatedAt.timeIntervalSince(packDetail.pack.createdAt), 1.25, accuracy: 0.0001)
+        XCTAssertEqual(
+            packDetail.pack.updatedAt.timeIntervalSince(packDetail.pack.createdAt), 1.25,
+            accuracy: 0.0001)
         XCTAssertEqual(packDetail.pack.previewSticker?.media.contentType, "video/webm")
         XCTAssertNil(packDetail.pack.previewSticker?.media.width)
         XCTAssertEqual(stickerDetail.sticker.isFavorited, true)
@@ -602,10 +670,13 @@ final class ChahuaAPITests: XCTestCase {
         let components = try requests.values.map {
             try XCTUnwrap(URLComponents(url: try XCTUnwrap($0.url), resolvingAgainstBaseURL: false))
         }
-        XCTAssertEqual(components.map(\.percentEncodedPath), [
-            "/stickers/sticker%2Fone/favorite", "/stickers/sticker%2Fone/favorite",
-            "/stickers/packs/pack%23one/subscription", "/stickers/packs/pack%23one/subscription",
-        ])
+        XCTAssertEqual(
+            components.map(\.percentEncodedPath),
+            [
+                "/stickers/sticker%2Fone/favorite", "/stickers/sticker%2Fone/favorite",
+                "/stickers/packs/pack%23one/subscription",
+                "/stickers/packs/pack%23one/subscription",
+            ])
         XCTAssertEqual(requests.values.map(\.httpMethod), ["PUT", "DELETE", "PUT", "DELETE"])
         for request in requests.values {
             XCTAssertNil(request.httpBody)
@@ -658,10 +729,12 @@ private final class StubURLProtocol: URLProtocol {
     override func startLoading() {
         guard let handler = Self.handler else { fatalError("Missing handler") }
         let result = handler(request)
-        let response = HTTPURLResponse(url: request.url!, statusCode: result.0, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: result.0, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(result.1.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
-    override func stopLoading() { }
+    override func stopLoading() {}
 }

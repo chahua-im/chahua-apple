@@ -56,7 +56,8 @@ public struct StickerPackDetailResponse: Codable, Hashable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         pack = try StickerPackSummary(from: decoder)
-        stickers = try decoder.container(keyedBy: CodingKeys.self).decode([MessageStickerResponse].self, forKey: .stickers)
+        stickers = try decoder.container(keyedBy: CodingKeys.self).decode(
+            [MessageStickerResponse].self, forKey: .stickers)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -80,7 +81,8 @@ public struct StickerDetailResponse: Codable, Hashable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         sticker = try MessageStickerResponse(from: decoder)
-        packs = try decoder.container(keyedBy: CodingKeys.self).decode([StickerPackSummary].self, forKey: .packs)
+        packs = try decoder.container(keyedBy: CodingKeys.self).decode(
+            [StickerPackSummary].self, forKey: .packs)
     }
 
     public func encode(to encoder: any Encoder) throws {

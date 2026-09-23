@@ -1,8 +1,9 @@
 import QuartzCore
+
 #if os(macOS)
-import AppKit
+    import AppKit
 #else
-import UIKit
+    import UIKit
 #endif
 
 /// One replaceable transaction per display tick. The display link never owns its client.
@@ -19,19 +20,19 @@ final class TimelineDisplayScheduler {
     private var pending: (@MainActor () -> Void)?
 
     #if os(macOS)
-    init(view: NSView) {
-        target.owner = self
-        link = view.displayLink(target: target, selector: #selector(Target.tick(_:)))
-        link?.isPaused = true
-        link?.add(to: .main, forMode: .common)
-    }
+        init(view: NSView) {
+            target.owner = self
+            link = view.displayLink(target: target, selector: #selector(Target.tick(_:)))
+            link?.isPaused = true
+            link?.add(to: .main, forMode: .common)
+        }
     #else
-    init(view: UIView) {
-        target.owner = self
-        link = CADisplayLink(target: target, selector: #selector(Target.tick(_:)))
-        link?.isPaused = true
-        link?.add(to: .main, forMode: .common)
-    }
+        init(view: UIView) {
+            target.owner = self
+            link = CADisplayLink(target: target, selector: #selector(Target.tick(_:)))
+            link?.isPaused = true
+            link?.add(to: .main, forMode: .common)
+        }
     #endif
 
     func request(_ action: @escaping @MainActor () -> Void) {

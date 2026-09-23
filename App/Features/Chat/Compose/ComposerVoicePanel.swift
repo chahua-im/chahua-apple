@@ -43,7 +43,8 @@ struct ComposerVoicePanel: View {
                 Circle()
                     .fill(.red)
                     .frame(width: 8, height: 8)
-                    .accessibilityLabel(recorder.isLocked ? Text("Recording locked") : Text("Recording…"))
+                    .accessibilityLabel(
+                        recorder.isLocked ? Text("Recording locked") : Text("Recording…"))
             }
             Text(time(recorder.elapsed))
                 .font(.body.monospacedDigit())
@@ -59,7 +60,7 @@ struct ComposerVoicePanel: View {
         // The left lock target occupies this space during a held iOS recording.
         // Keep the dot and elapsed time to its left, even at narrow widths.
         #if os(iOS)
-        .padding(.trailing, recorder.isLocked ? 0 : 64)
+            .padding(.trailing, recorder.isLocked ? 0 : 64)
         #endif
     }
 
@@ -78,19 +79,32 @@ struct ComposerVoicePanel: View {
                 .frame(width: 36, height: 44)
                 .contentShape(Rectangle())
             }
-            .accessibilityLabel(playback.isPlaying ? Text("Pause voice message") : Text("Play voice message"))
-            .disabled(recorder.phase != .preview || playback.isLoading || playback.error != nil || playback.duration <= 0)
+            .accessibilityLabel(
+                playback.isPlaying ? Text("Pause voice message") : Text("Play voice message")
+            )
+            .disabled(
+                recorder.phase != .preview || playback.isLoading || playback.error != nil
+                    || playback.duration <= 0
+            )
             .modifier(ComposerSendFocus())
-            VoiceWaveformScrubber(controller: playback, isEnabled: recorder.phase == .preview, color: ChahuaTheme.accent, height: 28)
-                .frame(height: 28)
-            Text(verbatim: time(playback.isPlaying || playback.position > 0 ? playback.position : (playback.duration > 0 ? playback.duration : recorder.elapsed)))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .fixedSize()
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
-                .background(.primary.opacity(0.04), in: Capsule())
-                .accessibilityLabel("Recording duration")
+            VoiceWaveformScrubber(
+                controller: playback, isEnabled: recorder.phase == .preview,
+                color: ChahuaTheme.accent, height: 28
+            )
+            .frame(height: 28)
+            Text(
+                verbatim: time(
+                    playback.isPlaying || playback.position > 0
+                        ? playback.position
+                        : (playback.duration > 0 ? playback.duration : recorder.elapsed))
+            )
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(.primary.opacity(0.04), in: Capsule())
+            .accessibilityLabel("Recording duration")
         }
     }
 
@@ -116,7 +130,9 @@ private struct LiveVoiceWaveform: View {
             for (offset, sample) in samples.suffix(visibleCount).enumerated() {
                 let amplitude = sample.isFinite ? min(1, max(0, sample)) : 0
                 let height = max(2, CGFloat(amplitude) * size.height)
-                let rect = CGRect(x: CGFloat(offset) * step, y: (size.height - height) / 2, width: 2, height: height)
+                let rect = CGRect(
+                    x: CGFloat(offset) * step, y: (size.height - height) / 2, width: 2,
+                    height: height)
                 bars.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
             }
             context.fill(bars, with: .color(ChahuaTheme.accent))

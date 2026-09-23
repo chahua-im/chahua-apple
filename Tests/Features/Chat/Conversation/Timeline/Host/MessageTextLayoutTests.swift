@@ -1,156 +1,196 @@
-#if os(macOS)
-import AppKit
-#else
-import UIKit
-#endif
 import SwiftUI
 import XCTest
+
 @testable import chahua_apple
+
+#if os(macOS)
+    import AppKit
+#else
+    import UIKit
+#endif
 
 @MainActor
 final class MessageTextLayoutTests: XCTestCase {
     #if os(macOS)
-    func testNativeTextPreservesSelectionAndUsesCurrentLinkActions() throws {
-        var opened: [String] = []
-        let prepared = try preparedText("Hello https://example.com", width: 340)
-        func content(_ prefix: String?) -> MessageTextContent {
-            MessageTextContent(
-                text: "Hello https://example.com", mentions: [], currentUserID: 1,
-                isOutgoing: false,
-                action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
-                metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
-            )
-        }
-        let text = AppKitMessageTextView(geometry: prepared.geometry)
-        text.frame = NSRect(x: 0, y: 0, width: 340, height: 100)
-        text.apply(content("first:"), resetSelection: true)
-        let link = try XCTUnwrap(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
-        text.setSelectedRange(NSRange(location: 0, length: 5))
-        _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
-        XCTAssertEqual(opened, ["first:https://example.com"])
+        func testNativeTextPreservesSelectionAndUsesCurrentLinkActions() throws {
+            var opened: [String] = []
+            let prepared = try preparedText("Hello https://example.com", width: 340)
+            func content(_ prefix: String?) -> MessageTextContent {
+                MessageTextContent(
+                    text: "Hello https://example.com", mentions: [], currentUserID: 1,
+                    isOutgoing: false,
+                    action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
+                    metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
+                )
+            }
+            let text = AppKitMessageTextView(geometry: prepared.geometry)
+            text.frame = NSRect(x: 0, y: 0, width: 340, height: 100)
+            text.apply(content("first:"), resetSelection: true)
+            let link = try XCTUnwrap(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
+            text.setSelectedRange(NSRange(location: 0, length: 5))
+            _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
+            XCTAssertEqual(opened, ["first:https://example.com"])
 
-        text.apply(content("replacement:"), resetSelection: false)
-        XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 5))
-        _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
-        XCTAssertEqual(opened, ["first:https://example.com", "replacement:https://example.com"])
+            text.apply(content("replacement:"), resetSelection: false)
+            XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 5))
+            _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
+            XCTAssertEqual(
+                opened, ["first:https://example.com", "replacement:https://example.com"])
 
-        text.apply(content(nil), resetSelection: false)
-        XCTAssertNil(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
-        _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
-        XCTAssertEqual(opened, ["first:https://example.com", "replacement:https://example.com"])
-        XCTAssertEqual(text.string, "Hello https://example.com")
-    }
-
-    func testNativeLinkHoverUsesHandWithoutDisablingTextSelection() throws {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 160, height: 100),
-            styleMask: [.borderless], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
-        let previousCursor = NSCursor.current
-        defer {
-            window.close()
-            previousCursor.set()
-        }
-        let prepared = try preparedText("Hello https://example.com", width: 136)
-        let text = AppKitMessageTextView(geometry: prepared.geometry)
-        text.apply(MessageTextContent(
-                text: "Hello https://example.com", mentions: [], currentUserID: 1,
-                isOutgoing: false, action: { _ in },
-                metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
-            ), resetSelection: true)
-        window.contentView = text
-        text.setSelectedRange(NSRange(location: 0, length: 5))
-
-        func hover(_ characterIndex: Int) throws {
-            let layout = text.contentLayout
-            let glyphs = layout.layoutManager.glyphRange(
-                forCharacterRange: NSRange(location: characterIndex, length: 1), actualCharacterRange: nil
-            )
-            let rect = layout.layoutManager.boundingRect(forGlyphRange: glyphs, in: layout.textContainer)
-            let point = text.convert(
-                NSPoint(x: rect.midX + text.textContainerOrigin.x, y: rect.midY + text.textContainerOrigin.y),
-                to: nil
-            )
-            let event = try XCTUnwrap(NSEvent.enterExitEvent(
-                with: .cursorUpdate, location: point, modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
-            ))
-            text.cursorUpdate(with: event)
+            text.apply(content(nil), resetSelection: false)
+            XCTAssertNil(text.textStorage?.attribute(.link, at: 6, effectiveRange: nil))
+            _ = text.delegate?.textView?(text, clickedOnLink: link, at: 6)
+            XCTAssertEqual(
+                opened, ["first:https://example.com", "replacement:https://example.com"])
+            XCTAssertEqual(text.string, "Hello https://example.com")
         }
 
-        try hover(8)
-        XCTAssertEqual(NSCursor.current, .pointingHand)
-        try hover(1)
-        XCTAssertEqual(NSCursor.current, .iBeam)
-        try hover(text.string.utf16.count - 1)
-        XCTAssertEqual(NSCursor.current, .pointingHand)
-        XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 5))
+        func testNativeLinkHoverUsesHandWithoutDisablingTextSelection() throws {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 160, height: 100),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            let previousCursor = NSCursor.current
+            defer {
+                window.close()
+                previousCursor.set()
+            }
+            let prepared = try preparedText("Hello https://example.com", width: 136)
+            let text = AppKitMessageTextView(geometry: prepared.geometry)
+            text.apply(
+                MessageTextContent(
+                    text: "Hello https://example.com", mentions: [], currentUserID: 1,
+                    isOutgoing: false, action: { _ in },
+                    metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
+                ), resetSelection: true)
+            window.contentView = text
+            text.setSelectedRange(NSRange(location: 0, length: 5))
 
-        text.textStorage?.removeAttribute(.link, range: NSRange(location: 0, length: text.string.utf16.count))
-        try hover(8)
-        XCTAssertEqual(NSCursor.current, .iBeam)
-    }
+            func hover(_ characterIndex: Int) throws {
+                let layout = text.contentLayout
+                let glyphs = layout.layoutManager.glyphRange(
+                    forCharacterRange: NSRange(location: characterIndex, length: 1),
+                    actualCharacterRange: nil
+                )
+                let rect = layout.layoutManager.boundingRect(
+                    forGlyphRange: glyphs, in: layout.textContainer)
+                let point = text.convert(
+                    NSPoint(
+                        x: rect.midX + text.textContainerOrigin.x,
+                        y: rect.midY + text.textContainerOrigin.y),
+                    to: nil
+                )
+                let event = try XCTUnwrap(
+                    NSEvent.enterExitEvent(
+                        with: .cursorUpdate, location: point, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
+                    ))
+                text.cursorUpdate(with: event)
+            }
+
+            try hover(8)
+            XCTAssertEqual(NSCursor.current, .pointingHand)
+            try hover(1)
+            XCTAssertEqual(NSCursor.current, .iBeam)
+            try hover(text.string.utf16.count - 1)
+            XCTAssertEqual(NSCursor.current, .pointingHand)
+            XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 5))
+
+            text.textStorage?.removeAttribute(
+                .link, range: NSRange(location: 0, length: text.string.utf16.count))
+            try hover(8)
+            XCTAssertEqual(NSCursor.current, .iBeam)
+        }
     #else
-    func testUIKitSelectionSurvivesActionReplacementAndDisabledLinksCannotEscape() async throws {
-        var opened: [String] = []
-        let prepared = try preparedText("Hello https://example.com @[uid:2]", width: 300)
-        func content(_ prefix: String?) -> MessageTextContent {
-            MessageTextContent(
-                text: "Hello https://example.com @[uid:2]", mentions: [], currentUserID: 1,
-                isOutgoing: false,
-                action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
-                mentionAction: prefix.map { prefix in { opened.append(prefix + "mention:\($0)") } },
-                metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
-            )
-        }
-        let host = UIViewController()
-        let text = UIKitMessageTextView(geometry: prepared.geometry)
-        text.apply(content("first:"), resetSelection: true)
-        host.view.addSubview(text)
-        text.frame = CGRect(origin: .zero, size: prepared.geometry.size)
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-        let window = UIWindow(windowScene: scene)
-        window.rootViewController = host
-        window.makeKeyAndVisible()
-        defer { window.isHidden = true }
-        func settle() async throws {
-            host.view.setNeedsLayout()
-            host.view.layoutIfNeeded()
-            try await Task.sleep(for: .milliseconds(100))
-            host.view.layoutIfNeeded()
-        }
-        try await settle()
-        let link = try XCTUnwrap(URL(string: "https://example.com"))
-        let mention = try XCTUnwrap(URL(string: "chahua-mention://2"))
-        let linkRange = (text.text as NSString).range(of: link.absoluteString)
-        let mentionRange = (text.text as NSString).range(of: "@User 2")
-        let expectedText = "Hello https://example.com \u{2002}@User 2\u{2002}"
-        XCTAssertEqual(text.text, expectedText, "Timestamp metadata must not enter the selectable text.")
-        text.selectedRange = NSRange(location: 0, length: 5)
-        XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: link, in: linkRange, interaction: .presentActions), false)
-        XCTAssertTrue(opened.isEmpty)
-        XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction), false)
-        XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: mention, in: mentionRange, interaction: .invokeDefaultAction), false)
-        XCTAssertEqual(opened, ["first:https://example.com", "first:mention:2"])
+        func testUIKitSelectionSurvivesActionReplacementAndDisabledLinksCannotEscape() async throws
+        {
+            var opened: [String] = []
+            let prepared = try preparedText("Hello https://example.com @[uid:2]", width: 300)
+            func content(_ prefix: String?) -> MessageTextContent {
+                MessageTextContent(
+                    text: "Hello https://example.com @[uid:2]", mentions: [], currentUserID: 1,
+                    isOutgoing: false,
+                    action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
+                    mentionAction: prefix.map { prefix in
+                        { opened.append(prefix + "mention:\($0)") }
+                    },
+                    metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
+                )
+            }
+            let host = UIViewController()
+            let text = UIKitMessageTextView(geometry: prepared.geometry)
+            text.apply(content("first:"), resetSelection: true)
+            host.view.addSubview(text)
+            text.frame = CGRect(origin: .zero, size: prepared.geometry.size)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            func settle() async throws {
+                host.view.setNeedsLayout()
+                host.view.layoutIfNeeded()
+                try await Task.sleep(for: .milliseconds(100))
+                host.view.layoutIfNeeded()
+            }
+            try await settle()
+            let link = try XCTUnwrap(URL(string: "https://example.com"))
+            let mention = try XCTUnwrap(URL(string: "chahua-mention://2"))
+            let linkRange = (text.text as NSString).range(of: link.absoluteString)
+            let mentionRange = (text.text as NSString).range(of: "@User 2")
+            let expectedText = "Hello https://example.com \u{2002}@User 2\u{2002}"
+            XCTAssertEqual(
+                text.text, expectedText, "Timestamp metadata must not enter the selectable text.")
+            text.selectedRange = NSRange(location: 0, length: 5)
+            XCTAssertEqual(
+                text.delegate?.textView?(
+                    text, shouldInteractWith: link, in: linkRange, interaction: .presentActions),
+                false)
+            XCTAssertTrue(opened.isEmpty)
+            XCTAssertEqual(
+                text.delegate?.textView?(
+                    text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction
+                ), false)
+            XCTAssertEqual(
+                text.delegate?.textView?(
+                    text, shouldInteractWith: mention, in: mentionRange,
+                    interaction: .invokeDefaultAction), false)
+            XCTAssertEqual(opened, ["first:https://example.com", "first:mention:2"])
 
-        text.apply(content("replacement:"), resetSelection: false)
-        try await settle()
-        XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
-        XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction), false)
-        XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: mention, in: mentionRange, interaction: .invokeDefaultAction), false)
-        let expectedActions = ["first:https://example.com", "first:mention:2", "replacement:https://example.com", "replacement:mention:2"]
-        XCTAssertEqual(opened, expectedActions)
+            text.apply(content("replacement:"), resetSelection: false)
+            try await settle()
+            XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
+            XCTAssertEqual(
+                text.delegate?.textView?(
+                    text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction
+                ), false)
+            XCTAssertEqual(
+                text.delegate?.textView?(
+                    text, shouldInteractWith: mention, in: mentionRange,
+                    interaction: .invokeDefaultAction), false)
+            let expectedActions = [
+                "first:https://example.com", "first:mention:2", "replacement:https://example.com",
+                "replacement:mention:2",
+            ]
+            XCTAssertEqual(opened, expectedActions)
 
-        text.apply(content(nil), resetSelection: false)
-        try await settle()
-        XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction), false)
-        XCTAssertEqual(text.delegate?.textView?(text, shouldInteractWith: mention, in: mentionRange, interaction: .invokeDefaultAction), false)
-        XCTAssertEqual(opened, expectedActions)
-        XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
-        XCTAssertEqual(text.text, expectedText)
-    }
+            text.apply(content(nil), resetSelection: false)
+            try await settle()
+            XCTAssertEqual(
+                text.delegate?.textView?(
+                    text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction
+                ), false)
+            XCTAssertEqual(
+                text.delegate?.textView?(
+                    text, shouldInteractWith: mention, in: mentionRange,
+                    interaction: .invokeDefaultAction), false)
+            XCTAssertEqual(opened, expectedActions)
+            XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
+            XCTAssertEqual(text.text, expectedText)
+        }
     #endif
 
     func testShortTextHasCompactIdealWidthWithInlineMetadata() {
@@ -186,8 +226,9 @@ final class MessageTextLayoutTests: XCTestCase {
 
     func testSeparateMetadataInkFitsItsAllocatedRowAtFractionalAndDynamicSizes() throws {
         for (fontSize, displayScale) in [(CGFloat(12), CGFloat(2)), (12.5, 1.5), (28, 3)] {
-            let metadata = MessageMetadata(time: "00:17 (Edited)", state: .failed,
-                                           isOutgoing: true, fontSize: fontSize)
+            let metadata = MessageMetadata(
+                time: "00:17 (Edited)", state: .failed,
+                isOutgoing: true, fontSize: fontSize)
             let layout = MessageTextLayout(
                 attributedText: MessageTextContent.attributedText(
                     text: "A crowded final line", mentions: [], currentUserID: 1,
@@ -202,30 +243,35 @@ final class MessageTextLayoutTests: XCTestCase {
             let frame = geometry.metadataFrame.offsetBy(dx: 8.25, dy: 8.25)
             let width = Int(ceil((frame.maxX + 8) * displayScale))
             let height = Int(ceil((frame.maxY + 8) * displayScale))
-            let context = try XCTUnwrap(CGContext(
-                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue))
+            let context = try XCTUnwrap(
+                CGContext(
+                    data: nil, width: width, height: height, bitsPerComponent: 8,
+                    bytesPerRow: width * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                        | CGImageAlphaInfo.premultipliedLast.rawValue))
             context.clear(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
             context.translateBy(x: 0, y: CGFloat(height))
             context.scaleBy(x: displayScale, y: -displayScale)
             #if os(macOS)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-            metadata.draw(in: frame)
-            NSGraphicsContext.restoreGraphicsState()
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+                metadata.draw(in: frame)
+                NSGraphicsContext.restoreGraphicsState()
             #else
-            UIGraphicsPushContext(context)
-            metadata.draw(in: frame)
-            UIGraphicsPopContext()
+                UIGraphicsPushContext(context)
+                metadata.draw(in: frame)
+                UIGraphicsPopContext()
             #endif
             let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
-            let allocation = CGRect(x: frame.minX * displayScale, y: frame.minY * displayScale,
-                                    width: frame.width * displayScale, height: frame.height * displayScale).integral
+            let allocation = CGRect(
+                x: frame.minX * displayScale, y: frame.minY * displayScale,
+                width: frame.width * displayScale, height: frame.height * displayScale
+            ).integral
             var drawnPixels = 0
             var escapedPixels = 0
-            for y in 0 ..< height {
-                for x in 0 ..< width where pixels[y * context.bytesPerRow + x * 4 + 3] > 0 {
+            for y in 0..<height {
+                for x in 0..<width where pixels[y * context.bytesPerRow + x * 4 + 3] > 0 {
                     drawnPixels += 1
                     if !allocation.contains(CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)) {
                         escapedPixels += 1
@@ -233,57 +279,84 @@ final class MessageTextLayoutTests: XCTestCase {
                 }
             }
             XCTAssertGreaterThan(drawnPixels, 0)
-            XCTAssertEqual(escapedPixels, 0, "Timestamp and delivery ink must fit the measured row at \(fontSize) pt, \(displayScale)x.")
+            XCTAssertEqual(
+                escapedPixels, 0,
+                "Timestamp and delivery ink must fit the measured row at \(fontSize) pt, \(displayScale)x."
+            )
         }
     }
 
     func testStandaloneMetadataKeepsItsDrawingHeightWhenSectionEdgesSnapToPixels() throws {
-        let message = try TimelineTestFixtures.message(id: "metadata-only", senderID: 2, at: 0,
-                                                       hour: 0, minute: 17, fields: ["message": ""])
-        let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false,
-                                           groupPosition: .single, showsSenderName: false))
+        let message = try TimelineTestFixtures.message(
+            id: "metadata-only", senderID: 2, at: 0,
+            hour: 0, minute: 17, fields: ["message": ""])
+        let row = TimelineRow.message(
+            .init(
+                entry: .remote(message), isOutgoing: false,
+                groupPosition: .single, showsSenderName: false))
         let environment = TimelineLayoutEnvironment.current(timelineWidth: 320, displayScale: 1.1)
-        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1,
-                                                       isThreadTimeline: false, environment: environment)
+        let presentation = TimelineRowPresentation.make(
+            row: row, currentUserProfile: nil, currentUserID: 1,
+            isThreadTimeline: false, environment: environment)
         let metadata = try XCTUnwrap(presentation.metadata)
         let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
         let frame = try XCTUnwrap(layout.frames[.metadata])
         let drawnHeight = metadata.size.height * min(1, frame.width / metadata.size.width)
-        XCTAssertGreaterThanOrEqual(frame.height + 0.0001, drawnHeight,
-                                   "Pixel alignment must not shorten the native timestamp drawing surface.")
+        XCTAssertGreaterThanOrEqual(
+            frame.height + 0.0001, drawnHeight,
+            "Pixel alignment must not shorten the native timestamp drawing surface.")
     }
     #if os(macOS)
-    func testMetadataAdoptsDarkAppearanceRatherThanItsCreationAppearance() throws {
-        var metadata: MessageMetadata?
-        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
-            metadata = MessageMetadata(time: "12:34", state: nil, isOutgoing: false)
-        }
-        let geometry = MessageTextLayout(attributedText: NSAttributedString(string: ""), metadata: metadata).geometry(for: 80)
-        let view = AppKitMessageTextView(geometry: geometry)
-        view.appearance = NSAppearance(named: .darkAqua)
-        view.drawsBackground = true
-        view.backgroundColor = .black
-        view.contentLayout.update(attributedText: NSAttributedString(string: ""), metadata: metadata)
-        view.contentLayout.install(geometry: geometry)
-        view.frame = CGRect(x: 0, y: 0, width: 80, height: 24)
-        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        var brightest: CGFloat = 0
-        for y in 0 ..< bitmap.pixelsHigh {
-            for x in 0 ..< bitmap.pixelsWide {
-                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                brightest = max(brightest, color.redComponent, color.greenComponent, color.blueComponent)
+        func testMetadataAdoptsDarkAppearanceRatherThanItsCreationAppearance() throws {
+            var metadata: MessageMetadata?
+            NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+                metadata = MessageMetadata(time: "12:34", state: nil, isOutgoing: false)
             }
+            let geometry = MessageTextLayout(
+                attributedText: NSAttributedString(string: ""), metadata: metadata
+            ).geometry(for: 80)
+            let view = AppKitMessageTextView(geometry: geometry)
+            view.appearance = NSAppearance(named: .darkAqua)
+            view.drawsBackground = true
+            view.backgroundColor = .black
+            view.contentLayout.update(
+                attributedText: NSAttributedString(string: ""), metadata: metadata)
+            view.contentLayout.install(geometry: geometry)
+            view.frame = CGRect(x: 0, y: 0, width: 80, height: 24)
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            var brightest: CGFloat = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+                        continue
+                    }
+                    brightest = max(
+                        brightest, color.redComponent, color.greenComponent, color.blueComponent)
+                }
+            }
+            XCTAssertGreaterThan(
+                brightest, 0.4,
+                "Metadata created outside a drawing pass must resolve its color in the displaying view."
+            )
         }
-        XCTAssertGreaterThan(brightest, 0.4, "Metadata created outside a drawing pass must resolve its color in the displaying view.")
-    }
     #endif
 
-    private func preparedText(_ text: String, width: CGFloat) throws -> (geometry: MessageTextGeometry, metadata: MessageMetadata?) {
-        let message = try TimelineTestFixtures.message(id: "selectable", senderID: 2, at: 0, hour: 12, minute: 34, fields: ["message": text])
-        let row = TimelineRow.message(.init(entry: .remote(message), isOutgoing: false, groupPosition: .single, showsSenderName: false))
-        let environment = TimelineLayoutEnvironment.current(timelineWidth: width + 24 + 2 * (36 + 8), bodySize: 14, timeZone: TimeZone(secondsFromGMT: 0)!)
-        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
+    private func preparedText(_ text: String, width: CGFloat) throws -> (
+        geometry: MessageTextGeometry, metadata: MessageMetadata?
+    ) {
+        let message = try TimelineTestFixtures.message(
+            id: "selectable", senderID: 2, at: 0, hour: 12, minute: 34, fields: ["message": text])
+        let row = TimelineRow.message(
+            .init(
+                entry: .remote(message), isOutgoing: false, groupPosition: .single,
+                showsSenderName: false))
+        let environment = TimelineLayoutEnvironment.current(
+            timelineWidth: width + 24 + 2 * (36 + 8), bodySize: 14,
+            timeZone: TimeZone(secondsFromGMT: 0)!)
+        let presentation = TimelineRowPresentation.make(
+            row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
+            environment: environment)
         let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
         return (try XCTUnwrap(layout.textGeometry), presentation.metadata)
     }

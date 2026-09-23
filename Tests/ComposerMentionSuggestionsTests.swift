@@ -1,5 +1,6 @@
 import ChahuaAPI
 import XCTest
+
 @testable import chahua_apple
 
 @MainActor
@@ -15,8 +16,7 @@ final class ComposerMentionSuggestionsTests: XCTestCase {
         var second: CheckedContinuation<[MemberResponse], Error>?
         let search: ComposerMemberSearch = { query in
             defer {
-                if query.q == "a" { firstFinished.fulfill() }
-                else { secondFinished.fulfill() }
+                if query.q == "a" { firstFinished.fulfill() } else { secondFinished.fulfill() }
             }
             return try await withCheckedThrowingContinuation { continuation in
                 if query.q == "a" {
@@ -28,9 +28,11 @@ final class ComposerMentionSuggestionsTests: XCTestCase {
                 }
             }
         }
-        model.update(.init(query: "a", range: NSRange(location: 0, length: 2)), search: search, input: input)
+        model.update(
+            .init(query: "a", range: NSRange(location: 0, length: 2)), search: search, input: input)
         await fulfillment(of: [firstStarted], timeout: 2)
-        model.update(.init(query: "b", range: NSRange(location: 0, length: 2)), search: search, input: input)
+        model.update(
+            .init(query: "b", range: NSRange(location: 0, length: 2)), search: search, input: input)
         await fulfillment(of: [secondStarted], timeout: 2)
         let obsolete = try XCTUnwrap(first)
         let current = try XCTUnwrap(second)

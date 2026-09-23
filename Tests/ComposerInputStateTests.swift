@@ -18,7 +18,8 @@
             XCTAssertEqual(harness.persisted, "draft ")
             XCTAssertEqual(harness.events, ["composing"])
 
-            harness.editor.insertText("你", replacementRange: NSRange(location: NSNotFound, length: 0))
+            harness.editor.insertText(
+                "你", replacementRange: NSRange(location: NSNotFound, length: 0))
             harness.input.receiveEditorText(harness.editor.string)
             harness.input.settleNativeInput()
             XCTAssertEqual(harness.persisted, "draft 你")
@@ -44,7 +45,8 @@
             let canceled = NativeComposerHarness(text: "draft ")
             defer { canceled.input.detach() }
             canceled.mark("ni")
-            canceled.editor.insertText("", replacementRange: NSRange(location: NSNotFound, length: 0))
+            canceled.editor.insertText(
+                "", replacementRange: NSRange(location: NSNotFound, length: 0))
             canceled.editor.unmarkText()
             canceled.input.settleNativeInput()
             XCTAssertEqual(canceled.persisted, "draft ")
@@ -69,8 +71,11 @@
             harness.restore("older server draft")
             var sent: [String] = []
             if harness.input.prepareSubmission() { sent.append(harness.persisted) }
-            harness.editor.insertText("你", replacementRange: NSRange(location: NSNotFound, length: 0))
-            XCTAssertFalse(harness.input.prepareSubmission(), "The candidate-confirmation transaction must not send.")
+            harness.editor.insertText(
+                "你", replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertFalse(
+                harness.input.prepareSubmission(),
+                "The candidate-confirmation transaction must not send.")
             harness.input.settleNativeInput()
             XCTAssertEqual(harness.persisted, "draft 你")
             XCTAssertEqual(sent, [])
@@ -85,12 +90,14 @@
         func testSubmissionUsesOwnedEditingEndSnapshotOnlyWithinItsTransaction() {
             let harness = NativeComposerHarness(text: "draft")
             defer { harness.input.detach() }
-            harness.editor.insertText(" final", replacementRange: NSRange(location: NSNotFound, length: 0))
+            harness.editor.insertText(
+                " final", replacementRange: NSRange(location: NSNotFound, length: 0))
             harness.input.nativeEditingEnded(harness.snapshot())
             harness.input.nativeInput = nil
             XCTAssertTrue(harness.input.prepareSubmission())
             XCTAssertEqual(harness.persisted, "draft final")
-            XCTAssertFalse(harness.input.prepareSubmission(), "Do not reuse a consumed editing-end snapshot.")
+            XCTAssertFalse(
+                harness.input.prepareSubmission(), "Do not reuse a consumed editing-end snapshot.")
         }
 
         func testLatinPreeditUnmarksInReturnTransactionWithoutSending() {
@@ -118,7 +125,8 @@
             let harness = NativeComposerHarness(text: "draft ")
             defer { harness.input.detach() }
             harness.mark("ni")
-            harness.input.nativeEditingEnded(.marked, visibleText: harness.editor.attributedString())
+            harness.input.nativeEditingEnded(
+                .marked, visibleText: harness.editor.attributedString())
             harness.input.nativeInput = nil
             XCTAssertTrue(harness.input.prepareExplicitSubmission())
             XCTAssertEqual(harness.persisted, "draft ni")
@@ -133,7 +141,9 @@
             XCTAssertTrue(harness.input.insertMention(uid: 42, label: "Ada", query: query))
             XCTAssertEqual(harness.editor.string, "@Ada @Ada ")
             XCTAssertEqual(harness.persisted, "@Ada @[uid:42] ")
-            XCTAssertFalse(harness.input.insertMention(uid: 99, label: "Ada", query: query), "Stale result must not replace a new caret position.")
+            XCTAssertFalse(
+                harness.input.insertMention(uid: 99, label: "Ada", query: query),
+                "Stale result must not replace a new caret position.")
         }
 
         func testRestoredMentionLabelsAndQueryRespectSelectionAndIdentity() {
@@ -175,7 +185,9 @@
                         events.append("write:\($0)")
                     }
                 ),
-                onCompositionChanged: { [unowned self] in events.append($0 ? "composing" : "committed") }
+                onCompositionChanged: { [unowned self] in
+                    events.append($0 ? "composing" : "committed")
+                }
             )
             input.nativeInput = self
             input.receiveExternalText(text)
@@ -183,7 +195,8 @@
         }
 
         func snapshot() -> ComposerInputSnapshot {
-            editor.hasMarkedText() ? .marked : .committed(ComposerMentionText.wireText(editor.attributedString()))
+            editor.hasMarkedText()
+                ? .marked : .committed(ComposerMentionText.wireText(editor.attributedString()))
         }
 
         func insertNewline() -> Bool {
@@ -201,7 +214,8 @@
             let range = editor.selectedRange()
             editor.textStorage?.setAttributedString(text)
             let start = min(range.location, text.length)
-            editor.setSelectedRange(NSRange(location: start, length: min(range.length, text.length - start)))
+            editor.setSelectedRange(
+                NSRange(location: start, length: min(range.length, text.length - start)))
         }
 
         func replaceMention(in range: NSRange, with text: NSAttributedString) -> Bool {

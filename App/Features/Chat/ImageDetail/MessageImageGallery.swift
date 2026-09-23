@@ -31,7 +31,9 @@ struct MessageImageGallery: Identifiable {
 
     init?(messageID: String, items: [MessageImageItem], selectedID: String) {
         let images = items.filter { $0.contentType.lowercased().hasPrefix("image/") }
-        guard let selectedIndex = images.firstIndex(where: { $0.id == selectedID }) else { return nil }
+        guard let selectedIndex = images.firstIndex(where: { $0.id == selectedID }) else {
+            return nil
+        }
         self.messageID = messageID
         self.items = images
         self.selectedIndex = selectedIndex
@@ -45,14 +47,17 @@ struct MessageImageGallery: Identifiable {
             guard !message.isDeleted, message.messageType == .text else { return nil }
             messageID = message.id
             items = message.attachments.map {
-                MessageImageItem(id: $0.id, url: URL(string: $0.url), contentType: $0.kind,
-                                 fileName: $0.fileName, width: $0.width.map(Int.init), height: $0.height.map(Int.init))
+                MessageImageItem(
+                    id: $0.id, url: URL(string: $0.url), contentType: $0.kind,
+                    fileName: $0.fileName, width: $0.width.map(Int.init),
+                    height: $0.height.map(Int.init))
             }
         case .pending(let message):
             messageID = message.clientGeneratedID
             items = message.attachments.map {
-                MessageImageItem(id: $0.id, url: URL(fileURLWithPath: $0.uploadPath), contentType: $0.mimeType,
-                                 fileName: $0.fileName, width: $0.width, height: $0.height)
+                MessageImageItem(
+                    id: $0.id, url: URL(fileURLWithPath: $0.uploadPath), contentType: $0.mimeType,
+                    fileName: $0.fileName, width: $0.width, height: $0.height)
             }
         }
         guard items.indices.contains(attachmentIndex) else { return nil }

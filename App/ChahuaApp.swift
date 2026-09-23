@@ -8,9 +8,9 @@ import SwiftUI
 @main
 struct ChahuaApp: App {
     #if os(iOS)
-    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+        @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     #else
-    @NSApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
+        @NSApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     #endif
     private let compositionRoot: AppCompositionRoot?
 
@@ -18,17 +18,19 @@ struct ChahuaApp: App {
         // Hosted tests and SwiftUI previews must not start production services or
         // contend with the running app for its exclusive media-cache lock.
         #if DEBUG || TIMELINE_PROFILING
-        if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
-            || ProcessInfo.processInfo.arguments.contains("-fixture-gallery")
-            || ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
-            compositionRoot = nil
-            return
-        }
+            if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+                || ProcessInfo.processInfo.arguments.contains("-fixture-gallery")
+                || ProcessInfo.processInfo.arguments.contains("-bubble-timeline")
+            {
+                compositionRoot = nil
+                return
+            }
         #endif
         if NSClassFromString("XCTestCase") != nil {
             compositionRoot = nil
         } else {
-            compositionRoot = AppCompositionRoot(apiConfiguration: AppConfiguration.apiConfiguration)
+            compositionRoot = AppCompositionRoot(
+                apiConfiguration: AppConfiguration.apiConfiguration)
         }
         pushDelegate.coordinator = compositionRoot?.notifications
     }
@@ -36,32 +38,32 @@ struct ChahuaApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-fixture-gallery") {
-                FixtureGalleryView()
-            } else {
-                appRoot
-            }
+                if ProcessInfo.processInfo.arguments.contains("-fixture-gallery") {
+                    FixtureGalleryView()
+                } else {
+                    appRoot
+                }
             #else
-            appRoot
+                appRoot
             #endif
         }
         #if os(macOS)
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentMinSize)
+            .windowStyle(.hiddenTitleBar)
+            .windowResizability(.contentMinSize)
         #endif
     }
 
     @ViewBuilder
     private var appRoot: some View {
         #if DEBUG || TIMELINE_PROFILING
-        if ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
-            TimelineBubbleFixtureView()
-                .modifier(ImageDetailPresentation())
-        } else {
-            productionRoot
-        }
+            if ProcessInfo.processInfo.arguments.contains("-bubble-timeline") {
+                TimelineBubbleFixtureView()
+                    .modifier(ImageDetailPresentation())
+            } else {
+                productionRoot
+            }
         #else
-        productionRoot
+            productionRoot
         #endif
     }
 
@@ -75,13 +77,13 @@ struct ChahuaApp: App {
                 realtimeCoordinator: compositionRoot.realtimeCoordinator,
                 notifications: compositionRoot.notifications
             )
-                #if os(macOS)
+            #if os(macOS)
                 .frame(minWidth: ChatSplitMetrics.splitThreshold)
-                #endif
+            #endif
         } else {
             Color.clear
                 #if os(macOS)
-                .frame(minWidth: ChatSplitMetrics.splitThreshold)
+                    .frame(minWidth: ChatSplitMetrics.splitThreshold)
                 #endif
         }
     }

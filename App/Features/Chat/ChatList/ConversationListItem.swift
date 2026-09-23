@@ -15,7 +15,10 @@ struct ConversationTabBadges: Equatable {
     var dms = 0
     var threads = 0
 
-    init(chats: [ChatListItem] = [], threads: [ThreadListItem] = [], archived: Bool = false, now: Date = Date()) {
+    init(
+        chats: [ChatListItem] = [], threads: [ThreadListItem] = [], archived: Bool = false,
+        now: Date = Date()
+    ) {
         for chat in chats where chat.archived == archived && chat.unreadCount > 0 {
             guard archived || chat.mutedUntil.map({ $0 > now }) != true else { continue }
             switch chat.kind {
@@ -23,7 +26,9 @@ struct ConversationTabBadges: Equatable {
             case .dm: dms += 1
             }
         }
-        self.threads = threads.reduce(0) { $0 + ($1.archived == archived && $1.unreadCount > 0 ? 1 : 0) }
+        self.threads = threads.reduce(0) {
+            $0 + ($1.archived == archived && $1.unreadCount > 0 ? 1 : 0)
+        }
     }
 
     subscript(scope: ConversationListScope) -> Int {
@@ -47,7 +52,8 @@ enum ConversationListItem: Hashable, Identifiable {
     var id: ConversationKey {
         switch self {
         case .chat(let chat): .init(chatID: chat.id)
-        case .thread(let thread): .init(chatID: thread.chatId, threadID: thread.threadRootMessage.id)
+        case .thread(let thread):
+            .init(chatID: thread.chatId, threadID: thread.threadRootMessage.id)
         }
     }
 
@@ -109,11 +115,16 @@ enum ConversationListItem: Hashable, Identifiable {
         return (name?.isEmpty == false) ? name : String(localized: "User \(sender.uid)")
     }
 
-    static func entries(chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope, archived: Bool = false, draftUpdatedAt: [ConversationKey: Date] = [:]) -> [Self] {
+    static func entries(
+        chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope,
+        archived: Bool = false, draftUpdatedAt: [ConversationKey: Date] = [:]
+    ) -> [Self] {
         var result: [Self] = []
         if scope.includesChats {
             result += chats.filter {
-                $0.archived == archived && (scope == .messages || (scope == .groups && $0.kind == .group) || (scope == .dms && $0.kind == .dm))
+                $0.archived == archived
+                    && (scope == .messages || (scope == .groups && $0.kind == .group)
+                        || (scope == .dms && $0.kind == .dm))
             }.map(Self.chat)
         }
         if scope.includesThreads {
@@ -133,7 +144,8 @@ extension ChatListItem {
     var chatDisplayName: String {
         switch kind {
         case .dm:
-            return nonEmpty(peer?.username) ?? nonEmpty(name) ?? String(localized: "Direct Message \(id)")
+            return nonEmpty(peer?.username) ?? nonEmpty(name)
+                ?? String(localized: "Direct Message \(id)")
         case .group:
             return nonEmpty(name) ?? String(localized: "Chat \(id)")
         }

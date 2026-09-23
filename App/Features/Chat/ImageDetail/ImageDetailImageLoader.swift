@@ -22,18 +22,25 @@ final class ImageDetailImageLoader: ObservableObject {
         image = nil
         failed = false
         guard let url = item.url,
-              url.isFileURL || ((url.scheme == "https" || url.scheme == "http") && url.host != nil) else {
+            url.isFileURL || ((url.scheme == "https" || url.scheme == "http") && url.host != nil)
+        else {
             failed = true
             return
         }
         isLoading = true
         let current = generation
-        let source: Source = url.isFileURL
-            ? .provider(LocalFileImageDataProvider(fileURL: url)) : .network(KF.ImageResource(downloadURL: url))
-        task = KingfisherManager.shared.retrieveImage(with: source, options: [
-            .targetCache(mediaContext?.cache ?? .default), .downloader(mediaContext?.downloader ?? .default),
-            .cacheOriginalImage, .backgroundDecode, .scaleFactor(1),
-        ]) { [weak self] result in
+        let source: Source =
+            url.isFileURL
+            ? .provider(LocalFileImageDataProvider(fileURL: url))
+            : .network(KF.ImageResource(downloadURL: url))
+        task = KingfisherManager.shared.retrieveImage(
+            with: source,
+            options: [
+                .targetCache(mediaContext?.cache ?? .default),
+                .downloader(mediaContext?.downloader ?? .default),
+                .cacheOriginalImage, .backgroundDecode, .scaleFactor(1),
+            ]
+        ) { [weak self] result in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == current else { return }
                 self.task = nil

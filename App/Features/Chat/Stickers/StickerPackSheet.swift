@@ -28,7 +28,8 @@ struct StickerPackSheet: View {
                         if let pack = packDetail?.pack {
                             VStack(spacing: 4) {
                                 Text(pack.name).font(.headline)
-                                Text("\(pack.stickerCount) stickers").font(.subheadline).foregroundStyle(.secondary)
+                                Text("\(pack.stickerCount) stickers").font(.subheadline)
+                                    .foregroundStyle(.secondary)
                                 if let description = pack.description, !description.isEmpty {
                                     Text(description).font(.subheadline).foregroundStyle(.secondary)
                                 }
@@ -41,13 +42,17 @@ struct StickerPackSheet: View {
                             } label: {
                                 Label(
                                     library.isFavorite(sticker) ? "Unfavorite" : "Favorite",
-                                    systemImage: library.isFavorite(sticker) ? "heart.fill" : "heart"
+                                    systemImage: library.isFavorite(sticker)
+                                        ? "heart.fill" : "heart"
                                 )
                             }
                             .disabled(library.pendingMutationIDs.contains(sticker.id))
                             if let pack = packDetail?.pack, pack.ownerUid != currentUserID {
                                 Button(pack.isSubscribed ? "Unsubscribe" : "Subscribe") {
-                                    Task { _ = await library.setSubscribed(!pack.isSubscribed, pack: pack) }
+                                    Task {
+                                        _ = await library.setSubscribed(
+                                            !pack.isSubscribed, pack: pack)
+                                    }
                                 }
                                 .disabled(library.pendingMutationIDs.contains(pack.id))
                             }
@@ -61,18 +66,27 @@ struct StickerPackSheet: View {
                         }
                         if let detail = packDetail {
                             Divider()
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 4)], spacing: 4) {
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 80), spacing: 4)], spacing: 4
+                            ) {
                                 ForEach(detail.stickers, id: \.id) { item in
-                                    Button { selectedSticker = item } label: {
+                                    Button {
+                                        selectedSticker = item
+                                    } label: {
                                         StickerMediaView(media: item.media, emoji: item.emoji)
                                             .frame(width: 72, height: 72)
                                             .frame(maxWidth: .infinity, minHeight: 80)
-                                            .background(selectedSticker?.id == item.id ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
+                                            .background(
+                                                selectedSticker?.id == item.id
+                                                    ? Color.accentColor.opacity(0.15) : .clear,
+                                                in: RoundedRectangle(cornerRadius: 8)
+                                            )
                                             .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityLabel(item.name ?? item.emoji)
-                                    .accessibilityAddTraits(selectedSticker?.id == item.id ? .isSelected : [])
+                                    .accessibilityAddTraits(
+                                        selectedSticker?.id == item.id ? .isSelected : [])
                                 }
                             }
                         } else if hasLoaded, packID == nil {
@@ -93,7 +107,7 @@ struct StickerPackSheet: View {
             }
             .navigationTitle("Stickers")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -102,10 +116,10 @@ struct StickerPackSheet: View {
             }
         }
         #if os(macOS)
-        .frame(width: 440, height: 620)
+            .frame(width: 440, height: 620)
         #else
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         #endif
         .task(id: stickerID) { await load() }
     }

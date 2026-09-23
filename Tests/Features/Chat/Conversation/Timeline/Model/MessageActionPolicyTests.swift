@@ -15,17 +15,26 @@ final class MessageActionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.availability(of: .thread), .enabled)
         XCTAssertEqual(policy.availability(of: .delete), .hidden)
         XCTAssertEqual(policy.availability(of: .edit), .hidden)
-        XCTAssertEqual(policy.actions.filter { policy.availability(of: $0) == .enabled }, [.reply, .thread, .copy])
+        XCTAssertEqual(
+            policy.actions.filter { policy.availability(of: $0) == .enabled },
+            [.reply, .thread, .copy])
     }
 
     func testWhitespaceAndNonTextMediaCannotBeCopied() {
-        XCTAssertEqual(MessageActionPolicy(messageType: .text, text: " \n\t ").availability(of: .copy), .hidden)
-        XCTAssertEqual(MessageActionPolicy(messageType: .audio, text: "transcript").availability(of: .copy), .hidden)
-        XCTAssertEqual(MessageActionPolicy(messageType: .file, text: "caption").availability(of: .copy), .enabled)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, text: " \n\t ").availability(of: .copy), .hidden
+        )
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .audio, text: "transcript").availability(of: .copy),
+            .hidden)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .file, text: "caption").availability(of: .copy),
+            .enabled)
     }
 
     func testOwnershipAndAdminHaveDifferentEditAndDeletePermissions() {
-        let owner = MessageActionPolicy(messageType: .text, text: "Mine", isOwn: true, context: writable)
+        let owner = MessageActionPolicy(
+            messageType: .text, text: "Mine", isOwn: true, context: writable)
         XCTAssertEqual(owner.availability(of: .edit), .enabled)
         XCTAssertEqual(owner.availability(of: .delete), .enabled)
         XCTAssertEqual(owner.availability(of: .pin), .hidden)
@@ -44,15 +53,23 @@ final class MessageActionPolicyTests: XCTestCase {
 
     func testPinActionsRequireAdminAndParentChatAndNoPendingMutation() {
         let admin = MessageInteractionContext(canWrite: true, isAdmin: true)
-        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: admin).availability(of: .pin), .enabled)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: admin).availability(of: .pin), .enabled
+        )
         var context = admin
         context.isThreadView = true
-        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: context).availability(of: .pin), .hidden)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: context).availability(of: .pin),
+            .hidden)
         context.isThreadView = false
         context.isUpdatingPin = true
-        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: context).availability(of: .pin), .hidden)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: context).availability(of: .pin),
+            .hidden)
         context.isPinned = true
-        XCTAssertEqual(MessageActionPolicy(messageType: .text, context: context).availability(of: .unpin), .hidden)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: context).availability(of: .unpin),
+            .hidden)
     }
 
     func testExistingThreadsAndThreadViewsCannotCreateNestedThreads() {
@@ -60,8 +77,10 @@ final class MessageActionPolicyTests: XCTestCase {
             MessageActionPolicy(messageType: .text, hasThreadInfo: true, context: writable)
                 .availability(of: .thread), .hidden)
         XCTAssertEqual(
-            MessageActionPolicy(messageType: .text, context: .init(canWrite: true, isThreadView: true))
-                .availability(of: .thread), .hidden)
+            MessageActionPolicy(
+                messageType: .text, context: .init(canWrite: true, isThreadView: true)
+            )
+            .availability(of: .thread), .hidden)
         XCTAssertEqual(
             MessageActionPolicy(messageType: .audio, context: writable)
                 .availability(of: .thread), .hidden)
@@ -103,7 +122,8 @@ final class MessageActionPolicyTests: XCTestCase {
             isOwn: true, context: writable)
         XCTAssertEqual(pending.actions, [.copy])
         XCTAssertFalse(pending.canReact)
-        let system = MessageActionPolicy(messageType: .system, text: "Joined", isOwn: true, context: writable)
+        let system = MessageActionPolicy(
+            messageType: .system, text: "Joined", isOwn: true, context: writable)
         XCTAssertEqual(system.actions, [.copy])
         XCTAssertFalse(system.canReact)
         let deleted = MessageActionPolicy(
@@ -143,8 +163,11 @@ final class MessageActionPolicyTests: XCTestCase {
     }
 
     func testDistinctLimitAllowsExistingReactionAndAuthoritativeUnknownOwnership() throws {
-        let reactions = try (0..<50).map { try reaction("emoji-\($0)", mine: $0 == 0 ? nil : false) }
-        let policy = MessageReactionEligibility(canReact: true, isReacting: false, reactions: reactions)
+        let reactions = try (0..<50).map {
+            try reaction("emoji-\($0)", mine: $0 == 0 ? nil : false)
+        }
+        let policy = MessageReactionEligibility(
+            canReact: true, isReacting: false, reactions: reactions)
         XCTAssertTrue(policy.distinctLimitReached)
         XCTAssertTrue(policy.canToggle("emoji-0"))
         XCTAssertFalse(policy.isSelected("emoji-0"))
@@ -156,16 +179,20 @@ final class MessageActionPolicyTests: XCTestCase {
         let reactions =
             try (0..<5).map { try reaction("mine-\($0)", mine: true) }
             + [reaction("unknown", mine: nil)]
-        let policy = MessageReactionEligibility(canReact: true, isReacting: false, reactions: reactions)
+        let policy = MessageReactionEligibility(
+            canReact: true, isReacting: false, reactions: reactions)
         XCTAssertTrue(policy.canToggle("unknown"))
         XCTAssertFalse(policy.isSelected("unknown"))
     }
 
     func testPendingRequestAndReadOnlyConversationDisableEvenRemovals() throws {
         let selected = [try reaction("👍", mine: true)]
-        XCTAssertFalse(MessageReactionEligibility(canReact: true, isReacting: true, reactions: selected).canToggle("👍"))
         XCTAssertFalse(
-            MessageReactionEligibility(canReact: false, isReacting: false, reactions: selected).canToggle("👍"))
+            MessageReactionEligibility(canReact: true, isReacting: true, reactions: selected)
+                .canToggle("👍"))
+        XCTAssertFalse(
+            MessageReactionEligibility(canReact: false, isReacting: false, reactions: selected)
+                .canToggle("👍"))
     }
 
     func testRecordingRecentChoicesPreservesPinnedOrderAndDeduplicates() {
@@ -178,6 +205,7 @@ final class MessageActionPolicyTests: XCTestCase {
     private func reaction(_ emoji: String, mine: Bool?) throws -> ReactionSummary {
         var value: [String: Any] = ["emoji": emoji, "count": 1]
         if let mine { value["reactedByMe"] = mine }
-        return try JSONDecoder().decode(ReactionSummary.self, from: JSONSerialization.data(withJSONObject: value))
+        return try JSONDecoder().decode(
+            ReactionSummary.self, from: JSONSerialization.data(withJSONObject: value))
     }
 }

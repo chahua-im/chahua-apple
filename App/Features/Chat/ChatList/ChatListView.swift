@@ -13,7 +13,7 @@ struct ChatListView: View {
     @State private var isPullRefreshing = false
     @State private var revealedConversationID: ConversationKey?
     #if os(macOS)
-    @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
+        @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
 
     private struct LoadID: Equatable {
@@ -30,9 +30,11 @@ struct ChatListView: View {
     }
 
     private var hasArchivedConversations: Bool {
-        (scope.includesChats && store.state.archivedChats.contains {
-            scope == .messages || (scope == .groups && $0.kind == .group) || (scope == .dms && $0.kind == .dm)
-        }) || (scope.includesThreads && !store.state.archivedThreads.isEmpty)
+        (scope.includesChats
+            && store.state.archivedChats.contains {
+                scope == .messages || (scope == .groups && $0.kind == .group)
+                    || (scope == .dms && $0.kind == .dm)
+            }) || (scope.includesThreads && !store.state.archivedThreads.isEmpty)
             || (scope.includesChats && store.state.archivedChatListLoadPhase == .failed)
             || (scope.includesThreads && store.state.archivedThreadListLoadPhase == .failed)
     }
@@ -45,19 +47,20 @@ struct ChatListView: View {
         List {
             ConversationListLoadStatus(
                 state: store.state, scope: scope, archivedMode: archivedMode,
-                isPullRefreshing: isPullRefreshing, onRetry: { await refreshScope() })
-                #if os(macOS)
+                isPullRefreshing: isPullRefreshing, onRetry: { await refreshScope() }
+            )
+            #if os(macOS)
                 .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                #endif
+            #endif
             if !archivedMode, let onOpenArchived, hasArchivedConversations {
                 Button(action: onOpenArchived) { archivedEntry }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("archived-conversations")
                     #if os(macOS)
-                    .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                    .listRowInsets(EdgeInsets())
+                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                        .listRowInsets(EdgeInsets())
                     #else
-                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     #endif
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -65,34 +68,38 @@ struct ChatListView: View {
             if items.isEmpty && isLoaded {
                 ChahuaEmptyStateView(
                     title: archivedMode ? "No archived conversations" : "No conversations",
-                    message: archivedMode ? "Archived conversations in this category will appear here." : "Conversations in this category will appear here.",
-                    systemImage: scope == .threads ? "text.bubble" : "bubble.left.and.bubble.right")
-                    #if os(macOS)
+                    message: archivedMode
+                        ? "Archived conversations in this category will appear here."
+                        : "Conversations in this category will appear here.",
+                    systemImage: scope == .threads ? "text.bubble" : "bubble.left.and.bubble.right"
+                )
+                #if os(macOS)
                     .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                    #endif
+                #endif
             }
             ForEach(items) { item in
                 swipeRow(for: item)
                     #if os(macOS)
-                    .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
                     #endif
                     #if os(iOS)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+                        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     #else
-                    .listRowInsets(EdgeInsets())
+                        .listRowInsets(EdgeInsets())
                     #endif
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
             #if os(iOS)
-            .listSectionSeparator(.hidden, edges: .top)
+                .listSectionSeparator(.hidden, edges: .top)
             #endif
         }
         .listStyle(.plain)
         .contentMargins(.horizontal, 0, for: .scrollContent)
         .scrollContentBackground(.hidden)
         #if os(macOS)
-        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers, keepsScopeAlive: true))
+            .background(
+                ChatListOverlayScrollerMarker(scope: overlayScrollers, keepsScopeAlive: true))
         #endif
         .onChange(of: scope) { _, _ in revealedConversationID = nil }
         .onChange(of: archivedMode) { _, _ in revealedConversationID = nil }
@@ -118,12 +125,16 @@ struct ChatListView: View {
 
     private var archivedEntry: some View {
         let count = ConversationTabBadges(
-            chats: store.state.archivedChats, threads: store.state.archivedThreads, archived: true)[scope]
+            chats: store.state.archivedChats, threads: store.state.archivedThreads, archived: true)[
+                scope]
         return HStack(spacing: 12) {
             Image(systemName: "archivebox")
                 .font(.title2)
                 .foregroundStyle(.white)
-                .frame(width: ConversationListRow.avatarDiameter, height: ConversationListRow.avatarDiameter)
+                .frame(
+                    width: ConversationListRow.avatarDiameter,
+                    height: ConversationListRow.avatarDiameter
+                )
                 .background(ChahuaTheme.ChatList.primary, in: Circle())
             VStack(alignment: .leading, spacing: 4) {
                 Text("Archived").font(.headline)
@@ -158,18 +169,21 @@ struct ChatListView: View {
             onSelectConversation(item)
         } label: {
             ConversationListRow(
-                item: item, draft: drafts.draftText(chatID: item.id.chatID, threadID: item.id.threadID),
-                store: store, currentUserID: currentUserID, isSelected: selectedConversationID == item.id)
-                .contentShape(Rectangle())
-                .overlay {
-                    if store.pendingListActions.contains(item.id) {
-                        ProgressView()
-                            .padding(10)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                            .accessibilityLabel("Updating conversation")
-                            .allowsHitTesting(false)
-                    }
+                item: item,
+                draft: drafts.draftText(chatID: item.id.chatID, threadID: item.id.threadID),
+                store: store, currentUserID: currentUserID,
+                isSelected: selectedConversationID == item.id
+            )
+            .contentShape(Rectangle())
+            .overlay {
+                if store.pendingListActions.contains(item.id) {
+                    ProgressView()
+                        .padding(10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .accessibilityLabel("Updating conversation")
+                        .allowsHitTesting(false)
                 }
+            }
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selectedConversationID == item.id ? .isSelected : [])
@@ -185,7 +199,9 @@ struct ChatListView: View {
             onAction: { performSwipeAction($0, on: item) }
         ) {
             selectionButton(for: item)
-                .background(selectedConversationID == item.id ? ChahuaTheme.ChatList.primary : Color.clear)
+                .background(
+                    selectedConversationID == item.id ? ChahuaTheme.ChatList.primary : Color.clear
+                )
                 .accessibilityActions {
                     if !isBusy {
                         if let leading {
@@ -208,10 +224,14 @@ struct ChatListView: View {
     private func leadingSwipeAction(for item: ConversationListItem) -> SwipeRowAction? {
         guard item.readThroughMessageID != nil else { return nil }
         if item.unreadCount > 0 {
-            return .init(action: ConversationListAction.markRead.rawValue, title: String(localized: "Mark as Read"), symbol: "checkmark.message", tint: .blue)
+            return .init(
+                action: ConversationListAction.markRead.rawValue,
+                title: String(localized: "Mark as Read"), symbol: "checkmark.message", tint: .blue)
         }
         if case .chat = item {
-            return .init(action: ConversationListAction.markUnread.rawValue, title: String(localized: "Mark as Unread"), symbol: "message.badge", tint: .blue)
+            return .init(
+                action: ConversationListAction.markUnread.rawValue,
+                title: String(localized: "Mark as Unread"), symbol: "message.badge", tint: .blue)
         }
         // Threads have no mark-unread endpoint; do not offer a local-only badge.
         return nil
@@ -248,7 +268,6 @@ struct ChatListView: View {
         revealedConversationID = nil
         Task { await store.performListAction(action, conversation: item.id) }
     }
-
 
     private func loadScope() async {
         async let chats: Void = loadChatsIfNeeded()
@@ -289,15 +308,23 @@ struct ChatListView: View {
     }
 
     private func refreshActiveScope() async {
-        if scope == .messages { await store.refreshActiveConversations() }
-        else if scope == .threads { await store.refreshActiveThreads() }
-        else { await store.refreshActiveChats() }
+        if scope == .messages {
+            await store.refreshActiveConversations()
+        } else if scope == .threads {
+            await store.refreshActiveThreads()
+        } else {
+            await store.refreshActiveChats()
+        }
     }
 
     private func refreshArchivedScope() async {
-        if scope == .messages { await store.refreshArchivedConversations() }
-        else if scope == .threads { await store.refreshArchivedThreads() }
-        else { await store.refreshArchivedChats() }
+        if scope == .messages {
+            await store.refreshArchivedConversations()
+        } else if scope == .threads {
+            await store.refreshArchivedThreads()
+        } else {
+            await store.refreshArchivedChats()
+        }
     }
 }
 
@@ -318,8 +345,14 @@ struct ConversationListLoadStatus: View {
     }
 
     private var hasFailure: Bool {
-        (scope.includesChats && (chatPhase == .failed || (archivedMode ? state.archivedChatListRefreshFailed : state.chatListRefreshFailed)))
-            || (scope.includesThreads && (threadPhase == .failed || (archivedMode ? state.archivedThreadListRefreshFailed : state.threadListRefreshFailed)))
+        (scope.includesChats
+            && (chatPhase == .failed
+                || (archivedMode
+                    ? state.archivedChatListRefreshFailed : state.chatListRefreshFailed)))
+            || (scope.includesThreads
+                && (threadPhase == .failed
+                    || (archivedMode
+                        ? state.archivedThreadListRefreshFailed : state.threadListRefreshFailed)))
     }
 
     private var isLoading: Bool {
@@ -344,5 +377,3 @@ struct ConversationListLoadStatus: View {
         }
     }
 }
-
-

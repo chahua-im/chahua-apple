@@ -46,6 +46,7 @@ struct TimelineViewport: Equatable {
         guard height > 0 else { return false }
         if count == 0 { return firstVisibleIndex == nil && lastVisibleIndex == nil }
         guard let firstVisibleIndex, let lastVisibleIndex else { return false }
-        return firstVisibleIndex >= 0 && firstVisibleIndex <= lastVisibleIndex && lastVisibleIndex < count
+        return firstVisibleIndex >= 0 && firstVisibleIndex <= lastVisibleIndex
+            && lastVisibleIndex < count
     }
 }

@@ -43,7 +43,9 @@ enum BubbleMediaLayout {
         return .init(width: width, height: height)
     }
 
-    static func size<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], availableWidth: CGFloat) -> CGSize? {
+    static func size<Attachment: BubbleMediaAttachment>(
+        for attachments: [Attachment], availableWidth: CGFloat
+    ) -> CGSize? {
         guard let first = attachments.first else { return nil }
         if attachments.count == 1 {
             return singleSize(for: first, availableWidth: availableWidth)
@@ -51,7 +53,9 @@ enum BubbleMediaLayout {
         return gallery(for: attachments, availableWidth: availableWidth)?.size
     }
 
-    static func singleSize<Attachment: BubbleMediaAttachment>(for attachment: Attachment, availableWidth: CGFloat) -> CGSize? {
+    static func singleSize<Attachment: BubbleMediaAttachment>(
+        for attachment: Attachment, availableWidth: CGFloat
+    ) -> CGSize? {
         guard let limits = bounds(availableWidth: availableWidth) else { return nil }
         var width = attachment.mediaDimensions.width
         var height = attachment.mediaDimensions.height
@@ -91,23 +95,31 @@ enum BubbleMediaLayout {
         )
     }
 
-    static func gallery<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], availableWidth: CGFloat) -> Gallery<Attachment>? {
+    static func gallery<Attachment: BubbleMediaAttachment>(
+        for attachments: [Attachment], availableWidth: CGFloat
+    ) -> Gallery<Attachment>? {
         guard let limits = bounds(availableWidth: availableWidth) else { return nil }
         return gallery(for: attachments, resolvedWidth: limits.width)
     }
 
     /// Text may widen a gallery past its preferred 420-point media width.
-    static func gallery<Attachment: BubbleMediaAttachment>(for attachments: [Attachment], resolvedWidth: CGFloat) -> Gallery<Attachment>? {
+    static func gallery<Attachment: BubbleMediaAttachment>(
+        for attachments: [Attachment], resolvedWidth: CGFloat
+    ) -> Gallery<Attachment>? {
         guard resolvedWidth.isFinite, resolvedWidth > 0, attachments.count > 1 else { return nil }
         let limits = CGSize(width: resolvedWidth, height: min(560, resolvedWidth * 4 / 3))
         let items = attachments.prefix(6)
         let ratios = items.map { attachment -> CGFloat in
             let dimensions = attachment.mediaDimensions
             let width = dimensions.width.isFinite && dimensions.width > 0 ? dimensions.width : 100
-            let height = dimensions.height.isFinite && dimensions.height > 0 ? dimensions.height : 100
+            let height =
+                dimensions.height.isFinite && dimensions.height > 0 ? dimensions.height : 100
             return min(2.5, max(0.5, width / height))
         }
-        guard let (partition, rows) = bestRows(ratios: ratios, width: limits.width, height: limits.height) else { return nil }
+        guard
+            let (partition, rows) = bestRows(
+                ratios: ratios, width: limits.width, height: limits.height)
+        else { return nil }
         let interRowGaps = CGFloat(rows.count - 1) * gap
         let contentHeight = rows.reduce(0, +)
         let totalHeight = min(contentHeight + interRowGaps, limits.height)
@@ -120,17 +132,22 @@ enum BubbleMediaLayout {
         for (rowIndex, count) in partition.enumerated() {
             let rowHeight = min(rows[rowIndex] * scale, max(0, totalHeight - y))
             let rowWidth = limits.width - CGFloat(count - 1) * gap
-            let sum = ratios[index ..< index + count].reduce(0, +)
+            let sum = ratios[index..<index + count].reduce(0, +)
             var x: CGFloat = 0
-            for itemIndex in 0 ..< count {
+            for itemIndex in 0..<count {
                 let isLast = itemIndex == count - 1
-                let cellWidth = isLast ? limits.width - x : min(rowWidth * ratios[index + itemIndex] / sum, limits.width - x)
+                let cellWidth =
+                    isLast
+                    ? limits.width - x
+                    : min(rowWidth * ratios[index + itemIndex] / sum, limits.width - x)
                 let item = index + itemIndex
-                cells.append(.init(
-                    attachment: items[item],
-                    frame: .init(x: x, y: y, width: cellWidth, height: rowHeight),
-                    overflowCount: item == 5 && attachments.count > 6 ? attachments.count - 5 : 0
-                ))
+                cells.append(
+                    .init(
+                        attachment: items[item],
+                        frame: .init(x: x, y: y, width: cellWidth, height: rowHeight),
+                        overflowCount: item == 5 && attachments.count > 6
+                            ? attachments.count - 5 : 0
+                    ))
                 x += cellWidth + gap
             }
             y += rowHeight + gap
@@ -139,14 +156,17 @@ enum BubbleMediaLayout {
         return .init(cells: cells, size: .init(width: limits.width, height: totalHeight))
     }
 
-    private static func bestRows(ratios: [CGFloat], width: CGFloat, height: CGFloat) -> (partition: [Int], heights: [CGFloat])? {
-        guard (2 ... 6).contains(ratios.count) else { return nil }
+    private static func bestRows(ratios: [CGFloat], width: CGFloat, height: CGFloat) -> (
+        partition: [Int], heights: [CGFloat]
+    )? {
+        guard (2...6).contains(ratios.count) else { return nil }
         var best: (partition: [Int], heights: [CGFloat])?
         var bestScore = CGFloat.infinity
         for partition in partitions[ratios.count - 2] {
             // Exact gaps are retained; defer layouts that leave no positive cell space.
             guard height > CGFloat(partition.count - 1) * gap,
-                  partition.allSatisfy({ width > CGFloat($0 - 1) * gap }) else { continue }
+                partition.allSatisfy({ width > CGFloat($0 - 1) * gap })
+            else { continue }
             let rows = rowHeights(partition, ratios: ratios, width: width)
             guard rows.allSatisfy({ $0 > 0 }) else { continue }
             let candidateScore = score(rows, width: width, height: height)
@@ -158,11 +178,13 @@ enum BubbleMediaLayout {
         return best
     }
 
-    private static func rowHeights(_ partition: [Int], ratios: [CGFloat], width: CGFloat) -> [CGFloat] {
+    private static func rowHeights(_ partition: [Int], ratios: [CGFloat], width: CGFloat)
+        -> [CGFloat]
+    {
         var offset = 0
         return partition.map { count in
             defer { offset += count }
-            return (width - CGFloat(count - 1) * gap) / ratios[offset ..< offset + count].reduce(0, +)
+            return (width - CGFloat(count - 1) * gap) / ratios[offset..<offset + count].reduce(0, +)
         }
     }
 

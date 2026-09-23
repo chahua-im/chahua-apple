@@ -1,6 +1,6 @@
 import ChahuaAPI
-import SwiftUI
 import PhotosUI
+import SwiftUI
 import UniformTypeIdentifiers
 
 struct MessageComposerView: View {
@@ -52,13 +52,20 @@ struct MessageComposerView: View {
         nonmutating set { attachmentState.error = newValue }
     }
 
-    private var canSubmit: Bool { isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive }
+    private var canSubmit: Bool {
+        isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
+    }
     // The binding intentionally excludes native IME preedit; it still enables
     // explicit Send, which commits the visible marked text before submitting.
     private var hasText: Bool { input.isComposing || !(input.editorText ?? text).isEmpty }
     private var hasContent: Bool { hasText || (editingMessage == nil && !attachments.isEmpty) }
-    private var canAcquire: Bool { isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive && editingMessage == nil && onImportImages != nil }
-    private var canPickSticker: Bool { canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil }
+    private var canAcquire: Bool {
+        isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
+            && editingMessage == nil && onImportImages != nil
+    }
+    private var canPickSticker: Bool {
+        canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil
+    }
     private var showsVoiceButton: Bool { !hasContent && editingMessage == nil }
     private var showsVoiceControl: Bool { showsVoiceButton || voiceRecorder.isActive }
     private var canStartVoice: Bool {
@@ -75,21 +82,25 @@ struct MessageComposerView: View {
     }
 
     private var composerInputBridge: some View {
-        let enabled = isEnabled && !isAcquiring && !voiceRecorder.isActive && !showsAttachmentDialog && !showsStickerPicker
+        let enabled =
+            isEnabled && !isAcquiring && !voiceRecorder.isActive && !showsAttachmentDialog
+            && !showsStickerPicker
         #if os(iOS)
-        let pasteImages: (([NSItemProvider]) -> Void)? = canAcquire ? { importProviders($0) } : nil
-        return ComposerInputBridge(
-            input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
-            onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
-            onPasteImages: pasteImages
-        )
-        .accessibilityHidden(true)
+            let pasteImages: (([NSItemProvider]) -> Void)? =
+                canAcquire ? { importProviders($0) } : nil
+            return ComposerInputBridge(
+                input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
+                onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
+                onPasteImages: pasteImages
+            )
+            .accessibilityHidden(true)
         #else
-        return ComposerInputBridge(
-            input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
-            onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit, focusOnEntry: true
-        )
-        .accessibilityHidden(true)
+            return ComposerInputBridge(
+                input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
+                onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
+                focusOnEntry: true
+            )
+            .accessibilityHidden(true)
         #endif
     }
 
@@ -103,7 +114,9 @@ struct MessageComposerView: View {
             )
             HStack(alignment: .bottom, spacing: 8) {
                 if voiceRecorder.previewURL != nil {
-                    Button { voiceRecorder.discard() } label: {
+                    Button {
+                        voiceRecorder.discard()
+                    } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 20))
                             .frame(width: 44, height: 44)
@@ -114,172 +127,188 @@ struct MessageComposerView: View {
                     .modifier(ChatGlassSurface(cornerRadius: 22))
                     .modifier(ComposerSendFocus())
                 } else if !voiceRecorder.isActive {
-                Menu {
-                    Button("Photos", systemImage: "photo.on.rectangle") {
-                        dismissStickerPicker(restoreFocus: false)
-                        input.settleNativeInput()
-                        isInputFocused = false
-                        showsPhotos = true
-                    }
-                    Button("Files", systemImage: "folder") {
-                        dismissStickerPicker(restoreFocus: false)
-                        input.settleNativeInput()
-                        isInputFocused = false
-                        showsFiles = true
-                    }
-                } label: {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 20))
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
-                }
-                .disabled(!canAcquire)
-                .accessibilityLabel(editingMessage == nil ? "Add media" : "Attachments cannot be changed while editing")
-                .modifier(ChatGlassSurface(cornerRadius: 22))
-                }
-
-            VStack(spacing: 0) {
-                if let editing = editingMessage {
-                    editMarker(editing)
-                } else if let reply = replyToMessage {
-                    replyMarker(reply)
-                }
-
-                if voiceRecorder.isActive {
-                    ComposerVoicePanel(recorder: voiceRecorder)
-                } else {
-                HStack(alignment: .bottom, spacing: 0) {
-                    TextField("Message", text: editorText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: fontSize))
-                        .lineLimit(1...6)
-                        .frame(maxHeight: max(20, maxHeight - 24))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 12)
-                        .padding(.vertical, 12)
-                        .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
-                        .focused($isInputFocused)
-                        #if !os(macOS)
-                        .onSubmit(keyboardSubmit)
-                        .onKeyPress(keys: [.return]) { press in
-                            guard press.modifiers.isEmpty, !input.isComposing,
-                                  case .committed = input.nativeInput?.snapshot() else { return .ignored }
-                            keyboardSubmit()
-                            return .handled
+                    Menu {
+                        Button("Photos", systemImage: "photo.on.rectangle") {
+                            dismissStickerPicker(restoreFocus: false)
+                            input.settleNativeInput()
+                            isInputFocused = false
+                            showsPhotos = true
                         }
-                        #endif
-                        .onKeyPress(.escape) {
-                            guard !input.isComposing else { return .ignored }
-                            if input.onMentionKey?(.dismiss) == true { return .handled }
-                            if let editing = editingMessage, text == editing.message {
-                                onCancelEdit?()
-                            } else if replyToMessage != nil {
-                                onCancelReply?()
-                            } else {
-                                isInputFocused = false
-                            }
-                            return .handled
+                        Button("Files", systemImage: "folder") {
+                            dismissStickerPicker(restoreFocus: false)
+                            input.settleNativeInput()
+                            isInputFocused = false
+                            showsFiles = true
                         }
-                        .onKeyPress(.upArrow) {
-                            guard !input.isComposing else { return .ignored }
-                            if input.onMentionKey?(.up) == true { return .handled }
-                            guard !hasText, attachments.isEmpty, replyToMessage == nil, editingMessage == nil,
-                                onRequestEditLastMessage?() == true
-                            else { return .ignored }
-                            return .handled
-                        }
-                        .onKeyPress(.downArrow) {
-                            guard !input.isComposing else { return .ignored }
-                            return input.onMentionKey?(.down) == true ? .handled : .ignored
-                        }
-                        .background(composerInputBridge)
-                        .accessibilityLabel("Message")
-
-                    Button(action: toggleStickerPicker) {
-                        Image(systemName: showsStickerPicker ? "xmark" : "face.smiling")
+                    } label: {
+                        Image(systemName: "paperclip")
                             .font(.system(size: 20))
-                            .foregroundStyle(showsStickerPicker ? ChahuaTheme.accent : .secondary)
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .disabled(!showsStickerPicker && !canPickSticker)
-                    .accessibilityLabel(showsStickerPicker ? "Close stickers" : "Stickers")
-                    .modifier(ComposerSendFocus())
-                }
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .modifier(ChatGlassSurface(cornerRadius: 22))
-
-            ZStack {
-                // The user-requested touch hold/drag interaction and pointer click
-                // interaction need separate platform controls. Keep either control
-                // mounted here so recording state never replaces an active gesture.
-                #if os(iOS)
-                ComposerVoiceControlIOS(
-                    recorder: voiceRecorder,
-                    isEnabled: isEnabled && canSend && !isSubmitting && onSendVoice != nil,
-                    canStart: canStartVoice,
-                    onStart: startVoiceRecording,
-                    onSendVoice: onSendVoice
-                )
-                .opacity(showsVoiceControl ? 1 : 0)
-                .allowsHitTesting(showsVoiceControl)
-                .accessibilityHidden(!showsVoiceControl)
-                #elseif os(macOS)
-                ComposerVoiceControlMac(
-                    recorder: voiceRecorder,
-                    isEnabled: isEnabled && canSend && !isSubmitting && onSendVoice != nil,
-                    canStart: canStartVoice,
-                    onStart: startVoiceRecording,
-                    onSendVoice: onSendVoice
-                )
-                .opacity(showsVoiceControl ? 1 : 0)
-                .allowsHitTesting(showsVoiceControl)
-                .accessibilityHidden(!showsVoiceControl)
-                #endif
-
-                if !showsVoiceControl {
-                    Button(action: submit) {
-                        Image(systemName: "paperplane.fill")
-                            .font(.system(size: 20))
-                            .foregroundStyle(hasContent && canSubmit ? ChahuaTheme.accent : .secondary)
                             .frame(width: 44, height: 44)
                             .contentShape(Circle())
                     }
-                    .disabled(!hasContent || !canSubmit)
-                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: hasContent && canSubmit))
-                    .accessibilityLabel("Send message")
-                    .modifier(ComposerSendFocus())
+                    .disabled(!canAcquire)
+                    .accessibilityLabel(
+                        editingMessage == nil
+                            ? "Add media" : "Attachments cannot be changed while editing"
+                    )
+                    .modifier(ChatGlassSurface(cornerRadius: 22))
                 }
+
+                VStack(spacing: 0) {
+                    if let editing = editingMessage {
+                        editMarker(editing)
+                    } else if let reply = replyToMessage {
+                        replyMarker(reply)
+                    }
+
+                    if voiceRecorder.isActive {
+                        ComposerVoicePanel(recorder: voiceRecorder)
+                    } else {
+                        HStack(alignment: .bottom, spacing: 0) {
+                            TextField("Message", text: editorText, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: fontSize))
+                                .lineLimit(1...6)
+                                .frame(maxHeight: max(20, maxHeight - 24))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, 12)
+                                .padding(.vertical, 12)
+                                .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
+                                .focused($isInputFocused)
+                                #if !os(macOS)
+                                    .onSubmit(keyboardSubmit)
+                                    .onKeyPress(keys: [.return]) { press in
+                                        guard press.modifiers.isEmpty, !input.isComposing,
+                                            case .committed = input.nativeInput?.snapshot()
+                                        else { return .ignored }
+                                        keyboardSubmit()
+                                        return .handled
+                                    }
+                                #endif
+                                .onKeyPress(.escape) {
+                                    guard !input.isComposing else { return .ignored }
+                                    if input.onMentionKey?(.dismiss) == true { return .handled }
+                                    if let editing = editingMessage, text == editing.message {
+                                        onCancelEdit?()
+                                    } else if replyToMessage != nil {
+                                        onCancelReply?()
+                                    } else {
+                                        isInputFocused = false
+                                    }
+                                    return .handled
+                                }
+                                .onKeyPress(.upArrow) {
+                                    guard !input.isComposing else { return .ignored }
+                                    if input.onMentionKey?(.up) == true { return .handled }
+                                    guard !hasText, attachments.isEmpty, replyToMessage == nil,
+                                        editingMessage == nil,
+                                        onRequestEditLastMessage?() == true
+                                    else { return .ignored }
+                                    return .handled
+                                }
+                                .onKeyPress(.downArrow) {
+                                    guard !input.isComposing else { return .ignored }
+                                    return input.onMentionKey?(.down) == true ? .handled : .ignored
+                                }
+                                .background(composerInputBridge)
+                                .accessibilityLabel("Message")
+
+                            Button(action: toggleStickerPicker) {
+                                Image(systemName: showsStickerPicker ? "xmark" : "face.smiling")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(
+                                        showsStickerPicker ? ChahuaTheme.accent : .secondary
+                                    )
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .disabled(!showsStickerPicker && !canPickSticker)
+                            .accessibilityLabel(showsStickerPicker ? "Close stickers" : "Stickers")
+                            .modifier(ComposerSendFocus())
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .modifier(ChatGlassSurface(cornerRadius: 22))
+
+                ZStack {
+                    // The user-requested touch hold/drag interaction and pointer click
+                    // interaction need separate platform controls. Keep either control
+                    // mounted here so recording state never replaces an active gesture.
+                    #if os(iOS)
+                        ComposerVoiceControlIOS(
+                            recorder: voiceRecorder,
+                            isEnabled: isEnabled && canSend && !isSubmitting && onSendVoice != nil,
+                            canStart: canStartVoice,
+                            onStart: startVoiceRecording,
+                            onSendVoice: onSendVoice
+                        )
+                        .opacity(showsVoiceControl ? 1 : 0)
+                        .allowsHitTesting(showsVoiceControl)
+                        .accessibilityHidden(!showsVoiceControl)
+                    #elseif os(macOS)
+                        ComposerVoiceControlMac(
+                            recorder: voiceRecorder,
+                            isEnabled: isEnabled && canSend && !isSubmitting && onSendVoice != nil,
+                            canStart: canStartVoice,
+                            onStart: startVoiceRecording,
+                            onSendVoice: onSendVoice
+                        )
+                        .opacity(showsVoiceControl ? 1 : 0)
+                        .allowsHitTesting(showsVoiceControl)
+                        .accessibilityHidden(!showsVoiceControl)
+                    #endif
+
+                    if !showsVoiceControl {
+                        Button(action: submit) {
+                            Image(systemName: "paperplane.fill")
+                                .font(.system(size: 20))
+                                .foregroundStyle(
+                                    hasContent && canSubmit ? ChahuaTheme.accent : .secondary
+                                )
+                                .frame(width: 44, height: 44)
+                                .contentShape(Circle())
+                        }
+                        .disabled(!hasContent || !canSubmit)
+                        .modifier(
+                            ChatGlassSurface(
+                                cornerRadius: 22, isInteractive: hasContent && canSubmit)
+                        )
+                        .accessibilityLabel("Send message")
+                        .modifier(ComposerSendFocus())
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .zIndex(1)
             }
-            .frame(width: 44, height: 44)
-            .zIndex(1)
-        }
-        .buttonStyle(.plain)
-        .padding(12)
+            .buttonStyle(.plain)
+            .padding(12)
             if showsStickerPicker, let stickerLibrary {
-                StickerPickerView(library: stickerLibrary, isEnabled: canPickSticker, onSelect: sendSticker)
+                StickerPickerView(
+                    library: stickerLibrary, isEnabled: canPickSticker, onSelect: sendSticker)
             }
         }
         #if os(iOS)
-        .background {
-            ComposerOutsideTapObserver(isFocused: isInputFocused || showsStickerPicker) {
-                dismissStickerPicker(restoreFocus: false)
-                isInputFocused = false
+            .background {
+                ComposerOutsideTapObserver(isFocused: isInputFocused || showsStickerPicker) {
+                    dismissStickerPicker(restoreFocus: false)
+                    isInputFocused = false
+                }
             }
-        }
         #endif
-        .sheet(isPresented: $showsAttachmentDialog, onDismiss: {
-            if !attachmentSubmitted { text = attachmentCaption }
-            attachmentCaption = ""
-            input.receiveExternalText(text)
-            #if os(macOS)
-            if isEnabled { isInputFocused = true }
-            #else
-            isInputFocused = false
-            #endif
-        }) {
+        .sheet(
+            isPresented: $showsAttachmentDialog,
+            onDismiss: {
+                if !attachmentSubmitted { text = attachmentCaption }
+                attachmentCaption = ""
+                input.receiveExternalText(text)
+                #if os(macOS)
+                    if isEnabled { isInputFocused = true }
+                #else
+                    isInputFocused = false
+                #endif
+            }
+        ) {
             ComposerAttachmentDialog(
                 text: $attachmentCaption, attachments: attachments, progress: attachmentProgress,
                 compressionEnabled: compressionEnabled, isEnabled: isEnabled,
@@ -287,8 +316,11 @@ struct MessageComposerView: View {
                 onCompositionChanged: onCompositionChanged,
                 onRemove: { id in performImageOperation { try await onRemoveAttachment?(id) } },
                 onRetry: { id in performImageOperation { try await onRetryAttachment?(id) } },
-                onCompressionChanged: { enabled in performImageOperation { try await onCompressionChanged?(enabled) } },
-                onReorder: { ids in performImageOperation { try await onReorderAttachments?(ids) } },
+                onCompressionChanged: { enabled in
+                    performImageOperation { try await onCompressionChanged?(enabled) }
+                },
+                onReorder: { ids in performImageOperation { try await onReorderAttachments?(ids) }
+                },
                 onImportProviders: importProviders,
                 onSubmit: {
                     let sent = await onSubmit(attachmentCaption)
@@ -307,7 +339,10 @@ struct MessageComposerView: View {
                 onSearchMembers: onSearchMembers
             )
         }
-        .photosPicker(isPresented: $showsPhotos, selection: $selectedPhotos, matching: .any(of: [.images, .videos]))
+        .photosPicker(
+            isPresented: $showsPhotos, selection: $selectedPhotos,
+            matching: .any(of: [.images, .videos])
+        )
         .onChange(of: selectedPhotos) { _, photos in
             guard !photos.isEmpty else { return }
             performImageOperation(opensDialog: true) {
@@ -317,7 +352,10 @@ struct MessageComposerView: View {
                     selectedPhotos = []
                 }
                 for photo in photos {
-                    guard let image = try await photo.loadTransferable(type: ComposerImportedImage.self) else {
+                    guard
+                        let image = try await photo.loadTransferable(
+                            type: ComposerImportedImage.self)
+                    else {
                         throw ComposerImageAcquisition.AcquisitionError.unavailable
                     }
                     urls.append(image.url)
@@ -325,25 +363,38 @@ struct MessageComposerView: View {
                 try await onImportImages?(urls)
             }
         }
-        .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.image, .movie], allowsMultipleSelection: true) { result in
+        .fileImporter(
+            isPresented: $showsFiles, allowedContentTypes: [.image, .movie],
+            allowsMultipleSelection: true
+        ) { result in
             switch result {
-            case .success(let urls): performImageOperation(opensDialog: true) { try await onImportImages?(urls) }
+            case .success(let urls):
+                performImageOperation(opensDialog: true) { try await onImportImages?(urls) }
             case .failure(let error): imageError = error.localizedDescription
             }
         }
         #if os(macOS)
-        .onPasteCommand(of: [.image, .movie, .fileURL]) { importProviders($0) }
+            .onPasteCommand(of: [.image, .movie, .fileURL]) { importProviders($0) }
         #endif
         .onDrop(of: [.image, .movie, .fileURL], isTargeted: nil) { providers in
             guard canAcquire else { return false }
             return attachmentState.acceptDrop(providers)
         }
-        .alert("Couldn’t update attachments", isPresented: Binding(get: { imageError != nil && !showsAttachmentDialog }, set: { if !$0 { imageError = nil } })) {
+        .alert(
+            "Couldn’t update attachments",
+            isPresented: Binding(
+                get: { imageError != nil && !showsAttachmentDialog },
+                set: { if !$0 { imageError = nil } })
+        ) {
             Button("OK") { imageError = nil }
         } message: {
             Text(imageError ?? "")
         }
-        .alert("Voice message", isPresented: Binding(get: { voiceRecorder.error != nil }, set: { if !$0 { voiceRecorder.error = nil } })) {
+        .alert(
+            "Voice message",
+            isPresented: Binding(
+                get: { voiceRecorder.error != nil }, set: { if !$0 { voiceRecorder.error = nil } })
+        ) {
             Button("OK") { voiceRecorder.error = nil }
         } message: {
             Text(voiceRecorder.error ?? "")
@@ -392,7 +443,9 @@ struct MessageComposerView: View {
         }
     }
 
-    private func performImageOperation(opensDialog: Bool = false, _ operation: @escaping @MainActor () async throws -> Void) {
+    private func performImageOperation(
+        opensDialog: Bool = false, _ operation: @escaping @MainActor () async throws -> Void
+    ) {
         guard canAcquire else { return }
         if !showsAttachmentDialog {
             input.settleNativeInput()
@@ -411,8 +464,7 @@ struct MessageComposerView: View {
                     isInputFocused = true
                 }
             }
-            do { try await operation() }
-            catch { imageError = error.localizedDescription }
+            do { try await operation() } catch { imageError = error.localizedDescription }
         }
     }
 
@@ -514,7 +566,6 @@ struct MessageComposerView: View {
         return true
     }
 
-
     private func toggleStickerPicker() {
         guard showsStickerPicker || canPickSticker else { return }
         input.settleNativeInput()
@@ -560,12 +611,18 @@ struct MessageComposerView: View {
     private func keyboardSubmit() {
         guard !input.isComposing else { return }
         if input.onMentionKey?(.accept) == true { return }
-        guard canSubmit, input.prepareSubmission(allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty) else { return }
+        guard canSubmit,
+            input.prepareSubmission(
+                allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty)
+        else { return }
         sendCommittedText()
     }
 
     private func submit() {
-        guard canSubmit, input.prepareExplicitSubmission(allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty) else { return }
+        guard canSubmit,
+            input.prepareExplicitSubmission(
+                allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty)
+        else { return }
         sendCommittedText()
     }
 
@@ -609,7 +666,9 @@ struct ChatComposerOverlay<Composer: View>: ViewModifier {
                         GeometryReader { geometry in
                             Color.clear
                                 .onAppear { composerHeight = geometry.size.height }
-                                .onChange(of: geometry.size.height) { _, height in composerHeight = height }
+                                .onChange(of: geometry.size.height) { _, height in
+                                    composerHeight = height
+                                }
                         }
                     }
             }

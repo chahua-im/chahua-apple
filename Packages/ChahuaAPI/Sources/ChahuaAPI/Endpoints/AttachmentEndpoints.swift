@@ -37,23 +37,25 @@ private struct AttachmentUploadResponse: Decodable {
     let uploadHeaders: [String: String]
 }
 
-public extension ChahuaClient {
-    func attachmentConfig() async throws -> AttachmentConfigResponse {
+extension ChahuaClient {
+    public func attachmentConfig() async throws -> AttachmentConfigResponse {
         try await send(
             HTTPRequestSpec(method: .get, path: ["attachments", "config"]),
             decoding: AttachmentConfigResponse.self
         )
     }
 
-    func requestAttachmentUpload(
+    public func requestAttachmentUpload(
         fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation {
         let response = try await send(
-            HTTPRequestSpec.json(.post, ["attachments", "upload-url"], body: AttachmentUploadBody(
-                filename: fileName, contentType: contentType, size: size,
-                purpose: contentType.lowercased().hasPrefix("audio/") ? "voice" : "media",
-                width: width, height: height, order: order
-            )),
+            HTTPRequestSpec.json(
+                .post, ["attachments", "upload-url"],
+                body: AttachmentUploadBody(
+                    filename: fileName, contentType: contentType, size: size,
+                    purpose: contentType.lowercased().hasPrefix("audio/") ? "voice" : "media",
+                    width: width, height: height, order: order
+                )),
             decoding: AttachmentUploadResponse.self
         )
         return OutgoingUploadAllocation(

@@ -1,10 +1,15 @@
-import os
-import Combine
 import ChahuaAPI
+import Combine
 import SwiftUI
+import os
 
 enum SignedOutReason { case initial, invalidOrRevoked, loggedOut }
-enum AuthSessionState { case bootstrapping, signedOut(SignedOutReason), authenticated(MeResponse), networkUnavailable }
+enum AuthSessionState {
+    case bootstrapping
+    case signedOut(SignedOutReason)
+    case authenticated(MeResponse)
+    case networkUnavailable
+}
 
 @MainActor
 final class AuthSessionModel: ObservableObject {
@@ -81,7 +86,10 @@ final class AuthSessionModel: ObservableObject {
         isSubmitting = true
         defer { isSubmitting = false }
         do {
-            guard let candidate = try await credentialLoginClient.login(username: username, password: password) else {
+            guard
+                let candidate = try await credentialLoginClient.login(
+                    username: username, password: password)
+            else {
                 logger.notice("Credential sign-in returned no candidate")
                 validationMessage = "Invalid credentials."
                 return
@@ -89,16 +97,13 @@ final class AuthSessionModel: ObservableObject {
             let me = try await apiClient.authenticate(candidateJWT: candidate)
             try await tokenStorage.saveToken(candidate)
             state = .authenticated(me)
-        } catch is CancellationError { }
-        catch APIError.invalidToken {
+        } catch is CancellationError {} catch APIError.invalidToken {
             logger.notice("Credential sign-in rejected an invalid credential")
             validationMessage = "Invalid credentials."
-        }
-        catch CredentialLoginError.unavailable {
+        } catch CredentialLoginError.unavailable {
             logger.error("Credential sign-in provider is unavailable")
             validationMessage = "Authentication service is unavailable."
-        }
-        catch {
+        } catch {
             logFailure(operation: "credential sign-in", error: error)
             validationMessage = "Authentication could not be completed."
         }
@@ -130,10 +135,15 @@ final class AuthSessionModel: ObservableObject {
 
     private func logFailure(operation: String, error: Error) {
         switch error {
-        case let APIError.invalidResponse(statusCode):
-            logger.error("\(operation, privacy: .public) failed with HTTP status \(statusCode, privacy: .public)")
-        case let KeychainTokenStorageError.operationFailed(operation: storageOperation, status: status):
-            logger.error("\(operation, privacy: .public) failed while \(storageOperation, privacy: .public) token storage: \(status, privacy: .public)")
+        case APIError.invalidResponse(let statusCode):
+            logger.error(
+                "\(operation, privacy: .public) failed with HTTP status \(statusCode, privacy: .public)"
+            )
+        case KeychainTokenStorageError.operationFailed(
+            operation: let storageOperation, status: let status):
+            logger.error(
+                "\(operation, privacy: .public) failed while \(storageOperation, privacy: .public) token storage: \(status, privacy: .public)"
+            )
         case APIError.unavailable:
             logger.error("\(operation, privacy: .public) is unavailable")
         case APIError.invalidToken:
@@ -143,44 +153,45 @@ final class AuthSessionModel: ObservableObject {
         case CredentialLoginError.unavailable:
             logger.error("\(operation, privacy: .public) provider is unavailable")
         default:
-            logger.error("\(operation, privacy: .public) failed with an unexpected non-secret error")
+            logger.error(
+                "\(operation, privacy: .public) failed with an unexpected non-secret error")
         }
     }
 
     #if DEBUG
-    func signIn(candidateJWT: String) async {
-        isSubmitting = true
-        defer { isSubmitting = false }
-        do {
-            let me = try await apiClient.authenticate(candidateJWT: candidateJWT)
-            try await tokenStorage.saveToken(candidateJWT)
-            state = .authenticated(me)
-        } catch {
-            logFailure(operation: "manual JWT sign-in", error: error)
-            validationMessage = "Invalid credentials."
+        func signIn(candidateJWT: String) async {
+            isSubmitting = true
+            defer { isSubmitting = false }
+            do {
+                let me = try await apiClient.authenticate(candidateJWT: candidateJWT)
+                try await tokenStorage.saveToken(candidateJWT)
+                state = .authenticated(me)
+            } catch {
+                logFailure(operation: "manual JWT sign-in", error: error)
+                validationMessage = "Invalid credentials."
+            }
         }
-    }
 
-    func createDevSession(uid: Int32) async {
-        isSubmitting = true
-        defer { isSubmitting = false }
-        do {
-            let token = try await apiClient.createDevSession(uid: uid, clientID: clientID)
-            let me = try await apiClient.authenticate(candidateJWT: token)
-            try await tokenStorage.saveToken(token)
-            state = .authenticated(me)
-        } catch {
-            logFailure(operation: "development session", error: error)
-            validationMessage = "Authentication could not be completed."
+        func createDevSession(uid: Int32) async {
+            isSubmitting = true
+            defer { isSubmitting = false }
+            do {
+                let token = try await apiClient.createDevSession(uid: uid, clientID: clientID)
+                let me = try await apiClient.authenticate(candidateJWT: token)
+                try await tokenStorage.saveToken(token)
+                state = .authenticated(me)
+            } catch {
+                logFailure(operation: "development session", error: error)
+                validationMessage = "Authentication could not be completed."
+            }
         }
-    }
 
-    private var clientID: String {
-        let key = "AuthenticationClientID"
-        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
-        let identifier = UUID().uuidString
-        UserDefaults.standard.set(identifier, forKey: key)
-        return identifier
-    }
+        private var clientID: String {
+            let key = "AuthenticationClientID"
+            if let existing = UserDefaults.standard.string(forKey: key) { return existing }
+            let identifier = UUID().uuidString
+            UserDefaults.standard.set(identifier, forKey: key)
+            return identifier
+        }
     #endif
 }

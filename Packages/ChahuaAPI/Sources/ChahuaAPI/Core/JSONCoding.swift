@@ -9,7 +9,8 @@ enum JSONCoding {
                 return try Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value)
             } catch {
                 do {
-                    return try Date.ISO8601FormatStyle(includingFractionalSeconds: false).parse(value)
+                    return try Date.ISO8601FormatStyle(includingFractionalSeconds: false).parse(
+                        value)
                 } catch {
                     throw DecodingError.dataCorruptedError(
                         in: try decoder.singleValueContainer(),
@@ -55,7 +56,8 @@ enum JSONCoding {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date))
+            try container.encode(
+                Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date))
         }
         encoder.outputFormatting = [.sortedKeys]
         return encoder

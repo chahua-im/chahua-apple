@@ -11,7 +11,8 @@ struct GroupMembersView: View {
 
     init(chatID: String, currentUserID: Int32, store: ChatStore) {
         _model = StateObject(
-            wrappedValue: GroupMembersModel(chatID: chatID, currentUserID: currentUserID, store: store)
+            wrappedValue: GroupMembersModel(
+                chatID: chatID, currentUserID: currentUserID, store: store)
         )
     }
 
@@ -21,7 +22,9 @@ struct GroupMembersView: View {
                 Text("Members")
                     .font(.headline)
                 Spacer()
-                Button { Task { await model.refresh() } } label: {
+                Button {
+                    Task { await model.refresh() }
+                } label: {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.plain)
@@ -36,11 +39,13 @@ struct GroupMembersView: View {
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
                     #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.search)
+                        .textInputAutocapitalization(.never)
+                        .submitLabel(.search)
                     #endif
                 if !searchText.isEmpty {
-                    Button { searchText = "" } label: {
+                    Button {
+                        searchText = ""
+                    } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
                     }
@@ -69,8 +74,10 @@ struct GroupMembersView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .background(ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
-                        in: RoundedRectangle(cornerRadius: 18))
+            .background(
+                ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: 18)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 18))
         }
         .onSubmit { model.submitSearch(searchText) }
@@ -157,11 +164,11 @@ struct GroupMembersView: View {
                         .padding(.leading, 68)
                 }
             }
-                .onAppear {
-                    if member.uid == model.members.last?.uid {
-                        model.loadMore()
-                    }
+            .onAppear {
+                if member.uid == model.members.last?.uid {
+                    model.loadMore()
                 }
+            }
         }
 
         if model.isLoadingMore {
@@ -198,7 +205,8 @@ struct GroupMembersView: View {
         if model.canManage(member) {
             Menu {
                 Button(member.role == .admin ? "Demote to member" : "Promote to admin") {
-                    pendingAction = .init(member: member, kind: member.role == .admin ? .demote : .promote)
+                    pendingAction = .init(
+                        member: member, kind: member.role == .admin ? .demote : .promote)
                 }
                 .accessibilityIdentifier("group-member-\(member.uid)-toggle-role")
                 Button("Remove from group", role: .destructive) {

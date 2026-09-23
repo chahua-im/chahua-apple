@@ -1,7 +1,6 @@
 import ChahuaAPI
 import SwiftUI
 
-
 /// Authenticated navigation boundary.
 ///
 /// This view owns signed-in navigation state; feature stores own server data.
@@ -23,7 +22,7 @@ struct AuthenticatedShell: View {
     @State private var groupPath: [GroupRoute] = []
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
 
     private enum NavigationRoute: Hashable {
@@ -62,20 +61,23 @@ struct AuthenticatedShell: View {
     var body: some View {
         GeometryReader { geometry in
             #if os(macOS)
-            adaptiveLayout
-            #else
-            if geometry.size.width >= ChatSplitMetrics.splitThreshold {
                 adaptiveLayout
-            } else {
-                listNavigation(includesDetail: true)
-            }
+            #else
+                if geometry.size.width >= ChatSplitMetrics.splitThreshold {
+                    adaptiveLayout
+                } else {
+                    listNavigation(includesDetail: true)
+                }
             #endif
         }
         .onChange(of: chatStore.state) { _, state in
             guard let selectedConversationID, notificationNavigation == nil else { return }
-            let loaded = selectedConversationID.threadID == nil
-                ? (isBrowsingArchived ? state.archivedChatListLoadPhase : state.chatListLoadPhase) == .loaded
-                : (isBrowsingArchived ? state.archivedThreadListLoadPhase : state.threadListLoadPhase) == .loaded
+            let loaded =
+                selectedConversationID.threadID == nil
+                ? (isBrowsingArchived ? state.archivedChatListLoadPhase : state.chatListLoadPhase)
+                    == .loaded
+                : (isBrowsingArchived
+                    ? state.archivedThreadListLoadPhase : state.threadListLoadPhase) == .loaded
             if loaded && selectedConversation == nil { selectConversation(nil) }
         }
         .task(id: notifications.pendingNavigation?.id) { claimNotification() }
@@ -104,31 +106,35 @@ struct AuthenticatedShell: View {
             isVisible = false
             notifications.setVisibleConversation(sceneID: notificationSceneID, conversation: nil)
         }
-        .sheet(isPresented: Binding(
-            get: { showsSettings && !usesFullScreenSettings },
-            set: { showsSettings = $0 }
-        )) {
+        .sheet(
+            isPresented: Binding(
+                get: { showsSettings && !usesFullScreenSettings },
+                set: { showsSettings = $0 }
+            )
+        ) {
             settings
                 .frame(minWidth: 360, idealWidth: 460, minHeight: 420, idealHeight: 540)
         }
         #if os(iOS)
-        .fullScreenCover(isPresented: Binding(
-            get: { showsSettings && usesFullScreenSettings },
-            set: { showsSettings = $0 }
-        )) {
-            settings
-        }
+            .fullScreenCover(
+                isPresented: Binding(
+                    get: { showsSettings && usesFullScreenSettings },
+                    set: { showsSettings = $0 }
+                )
+            ) {
+                settings
+            }
         #endif
     }
 
     private var adaptiveLayout: some View {
         ChatSplitLayout(hasSelection: selectedConversationID != nil) { _ in
             #if os(iOS)
-            // Archive pushes within the sidebar without changing the split detail selection.
-            listNavigation(includesDetail: false)
+                // Archive pushes within the sidebar without changing the split detail selection.
+                listNavigation(includesDetail: false)
             #else
-            // macOS switches list content immediately; only iOS uses a native push.
-            chatList(archived: isBrowsingArchived)
+                // macOS switches list content immediately; only iOS uses a native push.
+                chatList(archived: isBrowsingArchived)
             #endif
         } detail: { isSplit in
             NavigationStack(path: $groupPath) {
@@ -139,20 +145,26 @@ struct AuthenticatedShell: View {
                         detailContent
                     }
                 }
-                .modifier(ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
-                    ChatFloatingHeader(
-                        title: threadPath.isEmpty ? selectedTitle : openedThread?.title ?? String(localized: "Thread"),
-                        onBack: !threadPath.isEmpty ? popThread : isSplit ? nil : { selectConversation(nil) },
-                        onClose: isSplit && threadPath.isEmpty ? { selectConversation(nil) } : nil,
-                        onOpenInfo: infoAction
-                    ) {
-                        selectedAvatar
+                .modifier(
+                    ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
+                        ChatFloatingHeader(
+                            title: threadPath.isEmpty
+                                ? selectedTitle
+                                : openedThread?.title ?? String(localized: "Thread"),
+                            onBack: !threadPath.isEmpty
+                                ? popThread : isSplit ? nil : { selectConversation(nil) },
+                            onClose: isSplit && threadPath.isEmpty
+                                ? { selectConversation(nil) } : nil,
+                            onOpenInfo: infoAction
+                        ) {
+                            selectedAvatar
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 12)
-                })
+                )
                 #if os(iOS)
-                .toolbar(.hidden, for: .navigationBar)
+                    .toolbar(.hidden, for: .navigationBar)
                 #endif
                 .navigationDestination(for: GroupRoute.self) { route in
                     groupDestination(route)
@@ -162,64 +174,68 @@ struct AuthenticatedShell: View {
     }
 
     #if os(iOS)
-    private func listNavigation(includesDetail: Bool) -> some View {
-        NavigationStack(path: includesDetail ? phonePath : $listPath) {
-            // The active root stays active underneath the pushed archive list.
-            chatList(archived: false)
-                .navigationDestination(for: NavigationRoute.self) { route in
-                    switch route {
-                    case .archive:
-                        chatList(archived: true)
-                            .background(ArchiveEdgeBackGesture())
-                    case .conversation(let key):
-                        Group {
-                            if openedThread?.key == key {
-                                threadDestination(key)
-                            } else {
-                                detailContent
+        private func listNavigation(includesDetail: Bool) -> some View {
+            NavigationStack(path: includesDetail ? phonePath : $listPath) {
+                // The active root stays active underneath the pushed archive list.
+                chatList(archived: false)
+                    .navigationDestination(for: NavigationRoute.self) { route in
+                        switch route {
+                        case .archive:
+                            chatList(archived: true)
+                                .background(ArchiveEdgeBackGesture())
+                        case .conversation(let key):
+                            Group {
+                                if openedThread?.key == key {
+                                    threadDestination(key)
+                                } else {
+                                    detailContent
+                                }
                             }
+                            .modifier(
+                                ChatPhoneDetailHeader(
+                                    title: openedThread?.key == key
+                                        ? openedThread?.title ?? String(localized: "Thread")
+                                        : selectedTitle,
+                                    onOpenInfo: key.threadID == nil ? infoAction : nil
+                                ) {
+                                    selectedAvatar
+                                })
+                        case .group(let route):
+                            groupDestination(route)
                         }
-                        .modifier(ChatPhoneDetailHeader(
-                            title: openedThread?.key == key ? openedThread?.title ?? String(localized: "Thread") : selectedTitle,
-                            onOpenInfo: key.threadID == nil ? infoAction : nil
-                        ) {
-                            selectedAvatar
-                        })
-                    case .group(let route):
-                        groupDestination(route)
+                    }
+            }
+        }
+
+        private var phonePath: Binding<[NavigationRoute]> {
+            Binding(
+                get: {
+                    var path = listPath
+                    if let selectedConversationID {
+                        path.append(.conversation(selectedConversationID))
+                        path.append(contentsOf: threadPath.map(NavigationRoute.conversation))
+                        path.append(contentsOf: groupPath.map(NavigationRoute.group))
+                    }
+                    return path
+                },
+                set: { path in
+                    listPath = path.first == .archive ? [.archive] : []
+                    let conversations = path.dropFirst(listPath.count).compactMap {
+                        route -> ConversationKey? in
+                        guard case .conversation(let key) = route else { return nil }
+                        return key
+                    }
+                    if conversations.first != selectedConversationID {
+                        selectConversation(conversations.first)
+                    }
+                    threadPath = Array(conversations.dropFirst())
+                    groupPath = path.compactMap { route in
+                        guard case .group(let group) = route else { return nil }
+                        return group
                     }
                 }
+            )
         }
-    }
-
-    private var phonePath: Binding<[NavigationRoute]> {
-        Binding(
-            get: {
-                var path = listPath
-                if let selectedConversationID {
-                    path.append(.conversation(selectedConversationID))
-                    path.append(contentsOf: threadPath.map(NavigationRoute.conversation))
-                    path.append(contentsOf: groupPath.map(NavigationRoute.group))
-                }
-                return path
-            },
-            set: { path in
-                listPath = path.first == .archive ? [.archive] : []
-                let conversations = path.dropFirst(listPath.count).compactMap { route -> ConversationKey? in
-                    guard case .conversation(let key) = route else { return nil }
-                    return key
-                }
-                if conversations.first != selectedConversationID {
-                    selectConversation(conversations.first)
-                }
-                threadPath = Array(conversations.dropFirst())
-                groupPath = path.compactMap { route in
-                    guard case .group(let group) = route else { return nil }
-                    return group
-                }
-            }
-        )
-    }
     #endif
 
     private func chatList(archived: Bool) -> some View {
@@ -239,53 +255,55 @@ struct AuthenticatedShell: View {
             onSelectConversation: { selectConversation($0.id) }
         )
         #if os(iOS)
-        return GeometryReader { geometry in
-            // One custom toolbar item owns the avatar/picker spacing. Give the
-            // container an explicit width: UIKit otherwise measures its flexible
-            // segmented control at zero inside the horizontal stack.
-            let picker = ConversationScopePicker(selection: scope, badges: badges)
-                .frame(minWidth: 0, maxWidth: max(0, geometry.size.width - (archived ? 96 : accountAvatarDiameter + 40)))
-            let header = HStack(spacing: 8) {
-                accountButton
-                    .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 44)
-                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
-                    .accessibilityLabel("Account")
-                picker
-            }
-            .buttonStyle(.plain)
-            .frame(width: max(0, geometry.size.width - 32))
-            list
-                .navigationTitle("")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar(.visible, for: .navigationBar)
-                .toolbarBackground(.hidden, for: .navigationBar)
-                .toolbar {
-                    // Keep the avatar and picker in one item so native toolbar
-                    // group spacing cannot add an extra gap in split columns.
-                    if #available(iOS 26, *) {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            if archived { picker } else { header }
-                        }
-                        .sharedBackgroundVisibility(.hidden)
-                    } else {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            if archived { picker } else { header }
+            return GeometryReader { geometry in
+                // One custom toolbar item owns the avatar/picker spacing. Give the
+                // container an explicit width: UIKit otherwise measures its flexible
+                // segmented control at zero inside the horizontal stack.
+                let picker = ConversationScopePicker(selection: scope, badges: badges)
+                    .frame(
+                        minWidth: 0,
+                        maxWidth: max(
+                            0, geometry.size.width - (archived ? 96 : accountAvatarDiameter + 40)))
+                let header = HStack(spacing: 8) {
+                    accountButton
+                        .labelStyle(.iconOnly)
+                        .frame(width: 44, height: 44)
+                        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                        .accessibilityLabel("Account")
+                    picker
+                }
+                .buttonStyle(.plain)
+                .frame(width: max(0, geometry.size.width - 32))
+                list
+                    .navigationTitle("")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar(.visible, for: .navigationBar)
+                    .toolbarBackground(.hidden, for: .navigationBar)
+                    .toolbar {
+                        // Keep the avatar and picker in one item so native toolbar
+                        // group spacing cannot add an extra gap in split columns.
+                        if #available(iOS 26, *) {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                if archived { picker } else { header }
+                            }
+                            .sharedBackgroundVisibility(.hidden)
+                        } else {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                if archived { picker } else { header }
+                            }
                         }
                     }
-                }
-        }
+            }
         #else
-        return VStack(spacing: 0) {
-            ConversationListHeader(
-                selection: scope, badges: badges,
-                onBack: archived ? { closeArchived() } : nil
-            ) { accountButton }
-            list
-        }
+            return VStack(spacing: 0) {
+                ConversationListHeader(
+                    selection: scope, badges: badges,
+                    onBack: archived ? { closeArchived() } : nil
+                ) { accountButton }
+                list
+            }
         #endif
     }
-
 
     private func openArchived() {
         guard listPath.isEmpty else { return }
@@ -299,15 +317,17 @@ struct AuthenticatedShell: View {
 
     @ViewBuilder private var detailContent: some View {
         if let navigation = notificationNavigation,
-           navigation.route.conversation == selectedConversationID {
+            navigation.route.conversation == selectedConversationID
+        {
             if let chat = navigation.chat {
                 ChatDetailView(
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     navigationTitle: selectedTitle,
                     threadID: navigation.route.threadID,
                     initialPosition: .message(navigation.route.messageID),
-                    onOpenThread: { openThread($0, in: chat) })
-                    .id(navigation.route.id)
+                    onOpenThread: { openThread($0, in: chat) }
+                )
+                .id(navigation.route.id)
             } else if navigation.failed {
                 ChahuaRecoverableErrorView(
                     title: "Couldn’t open notification",
@@ -332,9 +352,11 @@ struct AuthenticatedShell: View {
     @ViewBuilder private func detailView(_ conversation: ConversationListItem) -> some View {
         switch conversation {
         case .chat(let chat):
-            ChatDetailView(chat: chat, currentUserID: me.uid, store: chatStore,
-                           onOpenThread: { openThread($0, in: chat) })
-                .id(conversation.id)
+            ChatDetailView(
+                chat: chat, currentUserID: me.uid, store: chatStore,
+                onOpenThread: { openThread($0, in: chat) }
+            )
+            .id(conversation.id)
         case .thread(let thread):
             ThreadDetailView(thread: thread, currentUserID: me.uid, store: chatStore)
                 .id(conversation.id)
@@ -346,8 +368,9 @@ struct AuthenticatedShell: View {
             ChatDetailView(
                 chat: thread.chat, currentUserID: me.uid, store: chatStore,
                 navigationTitle: thread.title, threadID: thread.rootMessage.id,
-                initialPosition: .liveEdge)
-                .id(key)
+                initialPosition: .liveEdge
+            )
+            .id(key)
         }
     }
 
@@ -356,20 +379,19 @@ struct AuthenticatedShell: View {
         let thread = ThreadNavigation(chat: chat, rootMessage: message)
         openedThread = thread
         #if os(macOS)
-        withAnimation(nil) { threadPath = [thread.key] }
+            withAnimation(nil) { threadPath = [thread.key] }
         #else
-        withAnimation { threadPath = [thread.key] }
+            withAnimation { threadPath = [thread.key] }
         #endif
     }
 
     private func popThread() {
         #if os(macOS)
-        withAnimation(nil) { threadPath.removeAll() }
+            withAnimation(nil) { threadPath.removeAll() }
         #else
-        withAnimation { threadPath.removeAll() }
+            withAnimation { threadPath.removeAll() }
         #endif
     }
-
 
     private var infoAction: (() -> Void)? {
         guard threadPath.isEmpty, let chat = selectedGroup else { return nil }
@@ -401,15 +423,16 @@ struct AuthenticatedShell: View {
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     onLeave: {
                         if selectedConversationID?.chatID == chat.id { selectConversation(nil) }
-                    })
-                    .id(chat.id)
+                    }
+                )
+                .id(chat.id)
             }
         }
         // Native destinations must not inherit the timeline's floating-header inset.
         .environment(\.chatHeaderInset, 0)
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
         #endif
     }
 
@@ -435,9 +458,9 @@ struct AuthenticatedShell: View {
 
     private var usesFullScreenSettings: Bool {
         #if os(iOS)
-        horizontalSizeClass == .compact
+            horizontalSizeClass == .compact
         #else
-        false
+            false
         #endif
     }
 
@@ -461,7 +484,8 @@ struct AuthenticatedShell: View {
     }
 
     private var visibleConversation: ConversationKey? {
-        guard isVisible, scenePhase == .active, !showsSettings, !isSigningOut, groupPath.isEmpty else { return nil }
+        guard isVisible, scenePhase == .active, !showsSettings, !isSigningOut, groupPath.isEmpty
+        else { return nil }
         if let key = threadPath.last { return key }
         if let navigation = notificationNavigation {
             return navigation.chat == nil ? nil : navigation.route.conversation
@@ -476,7 +500,8 @@ struct AuthenticatedShell: View {
 
     private func claimNotification() {
         guard scenePhase == .active, !isSigningOut,
-              let route = notifications.takeNavigation() else { return }
+            let route = notifications.takeNavigation()
+        else { return }
         // Taking is synchronous across windows; keep the route while the
         // separate metadata task runs, including across cancellation/retry.
         groupPath.removeAll()
@@ -504,8 +529,9 @@ struct AuthenticatedShell: View {
 
     private func resolveNotification() async {
         guard let navigation = notificationNavigation,
-              navigation.userID == me.uid, !isSigningOut,
-              navigation.chat == nil else { return }
+            navigation.userID == me.uid, !isSigningOut,
+            navigation.chat == nil
+        else { return }
         do {
             let chat = try await chatStore.chatForNotification(navigation.route)
             try Task.checkCancellation()
@@ -515,16 +541,17 @@ struct AuthenticatedShell: View {
             // Keep the claimed route so a reappearing shell can resume loading.
         } catch {
             guard !Task.isCancelled,
-                  notificationNavigation?.requestID == navigation.requestID else { return }
+                notificationNavigation?.requestID == navigation.requestID
+            else { return }
             notificationNavigation?.failed = true
         }
     }
 
     private var accountAvatarDiameter: CGFloat {
         #if os(iOS)
-        32
+            32
         #else
-        26
+            26
         #endif
     }
 
@@ -534,11 +561,15 @@ struct AuthenticatedShell: View {
             let matches: (ThreadListItem) -> Bool = {
                 $0.chatId == selectedConversationID.chatID && $0.threadRootMessage.id == threadID
             }
-            return (chatStore.state.threads.first(where: matches)
-                ?? chatStore.state.archivedThreads.first(where: matches)).map(ConversationListItem.thread)
+            return
+                (chatStore.state.threads.first(where: matches)
+                ?? chatStore.state.archivedThreads.first(where: matches)).map(
+                    ConversationListItem.thread)
         }
-        return (chatStore.state.chats.first { $0.id == selectedConversationID.chatID }
-            ?? chatStore.state.archivedChats.first { $0.id == selectedConversationID.chatID }).map(ConversationListItem.chat)
+        return
+            (chatStore.state.chats.first { $0.id == selectedConversationID.chatID }
+            ?? chatStore.state.archivedChats.first { $0.id == selectedConversationID.chatID }).map(
+                ConversationListItem.chat)
     }
 
 }

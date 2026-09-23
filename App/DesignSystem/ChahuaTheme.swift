@@ -16,7 +16,8 @@ enum ChahuaTheme {
     }
 
     enum ChatBubble {
-        static let outgoingBackground = Color(.sRGB, red: 43.0 / 255, green: 122.0 / 255, blue: 205.0 / 255, opacity: 1)
+        static let outgoingBackground = Color(
+            .sRGB, red: 43.0 / 255, green: 122.0 / 255, blue: 205.0 / 255, opacity: 1)
         static let outgoingForeground: Color = .white
 
         static func incomingBackground(for colorScheme: ColorScheme) -> Color {
@@ -25,13 +26,16 @@ enum ChahuaTheme {
         }
 
         static func incomingForeground(for colorScheme: ColorScheme) -> Color {
-            colorScheme == .dark ? .white : Color(.sRGB, red: 26.0 / 255, green: 26.0 / 255, blue: 26.0 / 255, opacity: 1)
+            colorScheme == .dark
+                ? .white
+                : Color(.sRGB, red: 26.0 / 255, green: 26.0 / 255, blue: 26.0 / 255, opacity: 1)
         }
     }
 
     enum ChatList {
         // PWA primary and Ionic medium palette, including its dark-mode variant.
-        static let primary = Color(.sRGB, red: 43.0 / 255, green: 122.0 / 255, blue: 205.0 / 255, opacity: 1)
+        static let primary = Color(
+            .sRGB, red: 43.0 / 255, green: 122.0 / 255, blue: 205.0 / 255, opacity: 1)
 
         static func muted(for colorScheme: ColorScheme) -> Color {
             colorScheme == .dark

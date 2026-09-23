@@ -24,20 +24,26 @@ final class VoicePlaybackController: ObservableObject {
 
     init() {
         #if os(iOS)
-        observers.append(NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
-                == AVAudioSession.InterruptionType.began.rawValue else { return }
-            MainActor.assumeIsolated { self?.pause() }
-        })
-        observers.append(NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            guard (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
-                == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
-            MainActor.assumeIsolated { self?.pause() }
-        })
+            observers.append(
+                NotificationCenter.default.addObserver(
+                    forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+                ) { [weak self] notification in
+                    guard
+                        (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
+                            == AVAudioSession.InterruptionType.began.rawValue
+                    else { return }
+                    MainActor.assumeIsolated { self?.pause() }
+                })
+            observers.append(
+                NotificationCenter.default.addObserver(
+                    forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+                ) { [weak self] notification in
+                    guard
+                        (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                            == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue
+                    else { return }
+                    MainActor.assumeIsolated { self?.pause() }
+                })
         #endif
     }
 
@@ -61,7 +67,9 @@ final class VoicePlaybackController: ObservableObject {
         source = url
         isLoading = true
         let current = generation
-        let work = Task.detached(priority: .userInitiated) { try await PreparedVoice.make(source: url) }
+        let work = Task.detached(priority: .userInitiated) {
+            try await PreparedVoice.make(source: url)
+        }
         preparation = work
         do {
             let prepared = try await withTaskCancellationHandler {
@@ -101,13 +109,16 @@ final class VoicePlaybackController: ObservableObject {
             return
         }
         guard let player, !isLoading else { return }
-        if isPlaying { pause(); return }
+        if isPlaying {
+            pause()
+            return
+        }
         Self.active?.pause()
         do {
             #if os(iOS)
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio)
-            try session.setActive(true)
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .spokenAudio)
+                try session.setActive(true)
             #endif
             if player.currentTime >= duration - 0.02 { player.currentTime = 0 }
             guard player.play() else { throw VoicePlaybackError.unreadable }
@@ -157,7 +168,8 @@ final class VoicePlaybackController: ObservableObject {
         if Self.active === self {
             Self.active = nil
             #if os(iOS)
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                try? AVAudioSession.sharedInstance().setActive(
+                    false, options: .notifyOthersOnDeactivation)
             #endif
         }
     }
@@ -181,20 +193,25 @@ nonisolated private struct PreparedVoice: Sendable {
     let waveform: [Float]
 
     static func make(source: URL) async throws -> Self {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("chahua-voice-\(UUID().uuidString)", isDirectory: true)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "chahua-voice-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         do {
             let original: URL
             if source.isFileURL {
                 original = source
             } else {
-                guard ["https", "http"].contains(source.scheme?.lowercased() ?? "") else { throw VoicePlaybackError.unreadable }
-                let (download, response) = try await URLSession.shared.download(from: source)
-                defer { try? FileManager.default.removeItem(at: download) }
-                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                guard ["https", "http"].contains(source.scheme?.lowercased() ?? "") else {
                     throw VoicePlaybackError.unreadable
                 }
-                original = directory.appendingPathComponent("original").appendingPathExtension(source.pathExtension.isEmpty ? "audio" : source.pathExtension)
+                let (download, response) = try await URLSession.shared.download(from: source)
+                defer { try? FileManager.default.removeItem(at: download) }
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+                else {
+                    throw VoicePlaybackError.unreadable
+                }
+                original = directory.appendingPathComponent("original").appendingPathExtension(
+                    source.pathExtension.isEmpty ? "audio" : source.pathExtension)
                 try FileManager.default.moveItem(at: download, to: original)
             }
             try Task.checkCancellation()

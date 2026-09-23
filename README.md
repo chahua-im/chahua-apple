@@ -5,3 +5,42 @@ See the [setup guide](docs/setup.md) to prepare a development environment and sy
 ## Architecture decisions
 
 - [Why SwiftUI is not ready for this complex chat scroll host](docs/arch/swiftui-scroll-host-evaluation.md)
+
+## Jenkins
+
+| Job | Pipeline definition | Trigger |
+| --- | --- | --- |
+| `chahua/chahua-apple` (multibranch) | `Jenkinsfile` | Branch/PR checks |
+| `chahua/chahua-apple-build` | `ci/Jenkinsfile.apple-build`, SCM branch `main` | Successful main push checks, exact commit SHA |
+| `chahua/deploy/apple-appstore-publish` | Separate inline Jenkins pipeline, not stored here | Manual selection of a successful artifact build |
+
+Keep these job paths synchronized with the trigger, upstream allowlist, artifact-copy permission, and publishing build selector if renamed. Branch indexing, manual checks, replays, and timer runs do not trigger artifact builds.
+
+Agents:
+
+- `macos`: macOS 26.5+, Xcode 27, an available iPhone simulator on iOS 26.5+, and the Ruby from `.ruby-version`. Run the agent in a logged-in GUI session for hosted macOS UI tests. No distribution credentials. macOS checks use ad-hoc signing without provisioning-only push entitlements.
+- `macos-signing`: a separate trusted agent/user with Xcode 27, the repository Ruby and Bundler, and GitHub SSH host keys in `known_hosts`. Never schedule PR code on this agent. Initialize the artifact job's build counter above previously uploaded builds; `CFBundleVersion` uses `BUILD_NUMBER` directly.
+- Jenkins plugins: Pipeline (including Declarative, Multibranch, and Build Step), Git/GitHub Branch Source, Credentials Binding, SSH Agent, Copy Artifact, and Pipeline Utility Steps.
+
+Credentials on the artifact/publishing jobs:
+
+| ID | Type | Purpose |
+| --- | --- | --- |
+| `github-app` | Existing GitHub checkout credential | Apple source checkout |
+| `apple-match-ssh` | SSH private key | Read access to the existing distribution Match repository |
+| `apple-match-password` | Secret text | Match repository decryption |
+| `asc-api-key` | Secret file (`.p8`) | Team App Store Connect API key with upload and notarization access |
+| `asc-key-id` | Secret text | API key ID |
+| `asc-issuer-id` | Secret text | API issuer ID |
+
+Provision the existing iOS App Store and macOS Developer ID Match assets before running CI; the artifact job never creates or repairs them. It archives `Chahua.ipa`, a universal notarized/stapled `Chahua-macOS.zip`, and commit/build/checksum metadata. Artifacts are retained for 90 builds. The publishing job verifies the selected IPA checksum and uploads it without rebuilding; App Review submission and public release remain manual in App Store Connect.
+
+Run the same checks locally with `bash ci/check.sh compile`, `bash ci/check.sh test`, and `bash ci/check.sh style`. Outputs live in ignored `.ci/`. Style checking uses Xcode's `swift-format`, `.swift-format` configuration, and first-party Swift files only. It is strict and read-only: existing violations must be formatted before the gate can pass; CI does not rewrite source files.
+
+To format all first-party Swift files in place, including untracked files, run:
+
+```sh
+./format.sh
+```
+
+Run `./format.sh --check` to check without rewriting files. CI's `bash ci/check.sh style` calls this same check, using `.swift-format` and excluding vendored and generated code. The script also works when invoked from another directory.

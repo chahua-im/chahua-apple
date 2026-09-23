@@ -32,7 +32,8 @@ extension ChahuaClient: PushSubscriptionProviding {
 
     /// Removes only the matching token/environment owned by the authenticated session.
     /// The backend returns an empty 200 response, including when already unsubscribed.
-    public func unsubscribeFromPush(deviceToken: String, environment: APNsEnvironment) async throws {
+    public func unsubscribeFromPush(deviceToken: String, environment: APNsEnvironment) async throws
+    {
         try await send(
             HTTPRequestSpec.json(
                 .post,

@@ -12,22 +12,23 @@ private struct CreatePinBody: Encodable {
     let messageId: String
 }
 
-public extension ChahuaClient {
-    func listPins(chatID: String) async throws -> ListPinsResponse {
+extension ChahuaClient {
+    public func listPins(chatID: String) async throws -> ListPinsResponse {
         try await send(
             HTTPRequestSpec(method: .get, path: ["chats", chatID, "pins"]),
             decoding: ListPinsResponse.self
         )
     }
 
-    func createPin(chatID: String, messageID: String) async throws -> PinResponse {
+    public func createPin(chatID: String, messageID: String) async throws -> PinResponse {
         try await send(
-            HTTPRequestSpec.json(.post, ["chats", chatID, "pins"], body: CreatePinBody(messageId: messageID)),
+            HTTPRequestSpec.json(
+                .post, ["chats", chatID, "pins"], body: CreatePinBody(messageId: messageID)),
             decoding: PinResponse.self
         )
     }
 
-    func deletePin(chatID: String, pinID: String) async throws {
+    public func deletePin(chatID: String, pinID: String) async throws {
         try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "pins", pinID]))
     }
 }

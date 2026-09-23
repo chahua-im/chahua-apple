@@ -45,7 +45,8 @@ struct ComposerImportedImage: Transferable, Sendable {
 
 enum ComposerImageAcquisition {
     nonisolated static func copyTemporary(_ url: URL) throws -> URL {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("composer-\(UUID().uuidString)", isDirectory: true)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "composer-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent(url.lastPathComponent)
         do {
@@ -77,12 +78,17 @@ enum ComposerImageAcquisition {
             }
         }
         return try await withCheckedThrowingContinuation { continuation in
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) {
+                item, error in
                 do {
                     let url: URL?
-                    if let value = item as? URL { url = value }
-                    else if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) }
-                    else { url = nil }
+                    if let value = item as? URL {
+                        url = value
+                    } else if let data = item as? Data {
+                        url = URL(dataRepresentation: data, relativeTo: nil)
+                    } else {
+                        url = nil
+                    }
                     guard let url else { throw error ?? AcquisitionError.unavailable }
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -94,6 +100,8 @@ enum ComposerImageAcquisition {
 
     enum AcquisitionError: LocalizedError {
         case unavailable
-        var errorDescription: String? { "This photo or video couldn’t be read. Try choosing it from Files or Photos again." }
+        var errorDescription: String? {
+            "This photo or video couldn’t be read. Try choosing it from Files or Photos again."
+        }
     }
 }

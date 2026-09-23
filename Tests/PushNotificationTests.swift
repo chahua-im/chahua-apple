@@ -1,6 +1,7 @@
 import ChahuaAPI
-import XCTest
 import UserNotifications
+import XCTest
+
 @testable import chahua_apple
 
 @MainActor
@@ -11,19 +12,28 @@ final class PushNotificationTests: XCTestCase {
         defer { center.delegate = previousDelegate }
         let appDelegate = PushAppDelegate()
         let delegate: any UNUserNotificationCenterDelegate = appDelegate
-        let notification = try makeNotification(userInfo: ["wettyChat": [
-            "type": "reply", "chatId": "42", "messageId": "101", "threadRootId": "100"
-        ]])
-        let response = try XCTUnwrap(UNNotificationResponse(coder: NotificationDecoder([
-            "notification": notification, "actionIdentifier": UNNotificationDefaultActionIdentifier
-        ])))
+        let notification = try makeNotification(userInfo: [
+            "wettyChat": [
+                "type": "reply", "chatId": "42", "messageId": "101", "threadRootId": "100",
+            ]
+        ])
+        let response = try XCTUnwrap(
+            UNNotificationResponse(
+                coder: NotificationDecoder([
+                    "notification": notification,
+                    "actionIdentifier": UNNotificationDefaultActionIdentifier,
+                ])))
         let completed = expectation(description: "Notification launch completion")
         completed.assertForOverFulfill = true
         await Task.detached {
-            delegate.userNotificationCenter?(center, didReceive: response, withCompletionHandler: {
-                XCTAssertTrue(Thread.isMainThread, "UIKit's notification launch completion must run on the main thread.")
-                completed.fulfill()
-            })
+            delegate.userNotificationCenter?(
+                center, didReceive: response,
+                withCompletionHandler: {
+                    XCTAssertTrue(
+                        Thread.isMainThread,
+                        "UIKit's notification launch completion must run on the main thread.")
+                    completed.fulfill()
+                })
         }.value
         await fulfillment(of: [completed], timeout: 2)
 
@@ -44,16 +54,20 @@ final class PushNotificationTests: XCTestCase {
         let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
         appDelegate.coordinator = notifications
         let delegate: any UNUserNotificationCenterDelegate = appDelegate
-        let response = try XCTUnwrap(UNNotificationResponse(coder: NotificationDecoder([
-            "notification": try makeNotification(userInfo: [:]),
-            "actionIdentifier": UNNotificationDefaultActionIdentifier
-        ])))
+        let response = try XCTUnwrap(
+            UNNotificationResponse(
+                coder: NotificationDecoder([
+                    "notification": try makeNotification(userInfo: [:]),
+                    "actionIdentifier": UNNotificationDefaultActionIdentifier,
+                ])))
         let completed = expectation(description: "Ignored notification completion")
         await Task.detached {
-            delegate.userNotificationCenter?(center, didReceive: response, withCompletionHandler: {
-                XCTAssertTrue(Thread.isMainThread)
-                completed.fulfill()
-            })
+            delegate.userNotificationCenter?(
+                center, didReceive: response,
+                withCompletionHandler: {
+                    XCTAssertTrue(Thread.isMainThread)
+                    completed.fulfill()
+                })
         }.value
         await fulfillment(of: [completed], timeout: 2)
         XCTAssertNil(notifications.pendingNavigation)
@@ -62,8 +76,10 @@ final class PushNotificationTests: XCTestCase {
     private func makeNotification(userInfo: [AnyHashable: Any]) throws -> UNNotification {
         let content = UNMutableNotificationContent()
         content.userInfo = userInfo
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        return try XCTUnwrap(UNNotification(coder: NotificationDecoder(["request": request, "date": Date()])))
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString, content: content, trigger: nil)
+        return try XCTUnwrap(
+            UNNotification(coder: NotificationDecoder(["request": request, "date": Date()])))
     }
 
     func testDisablePersistsAcrossRelaunchAndLateTokenCallbacks() async throws {
@@ -71,7 +87,8 @@ final class PushNotificationTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let api = PushSubscriptionStore()
-        let notifications = PushNotificationCoordinator(api: api, namespace: suite, defaults: defaults, environment: "development")
+        let notifications = PushNotificationCoordinator(
+            api: api, namespace: suite, defaults: defaults, environment: "development")
         notifications.setSession(uid: 1)
         notifications.didRegister(deviceToken: Data([1, 2]))
         await notifications.disableNotifications()
@@ -80,7 +97,8 @@ final class PushNotificationTests: XCTestCase {
         let subscribed = await api.isSubscribed
         XCTAssertFalse(subscribed)
 
-        let restored = PushNotificationCoordinator(api: api, namespace: suite, defaults: defaults, environment: "development")
+        let restored = PushNotificationCoordinator(
+            api: api, namespace: suite, defaults: defaults, environment: "development")
         restored.setSession(uid: 1)
         restored.didRegister(deviceToken: Data([1, 2]))
         await restored.refreshAuthorization()
@@ -95,7 +113,8 @@ final class PushNotificationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let api = PushSubscriptionStore()
         await api.setFailUnsubscribe(true)
-        let notifications = PushNotificationCoordinator(api: api, namespace: suite, defaults: defaults, environment: "development")
+        let notifications = PushNotificationCoordinator(
+            api: api, namespace: suite, defaults: defaults, environment: "development")
         notifications.setSession(uid: 1)
         notifications.didRegister(deviceToken: Data([1, 2]))
         await notifications.disableNotifications()
@@ -110,15 +129,26 @@ final class PushNotificationTests: XCTestCase {
     }
 
     func testThreadGroupsRemainSeparateFromParentChatAndOtherThreads() throws {
-        let chat = try XCTUnwrap(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "newMessage", "chatId": "42", "messageId": "9007199254740993"
-        ]]))
-        let reply = try XCTUnwrap(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "reply", "chatId": "42", "messageId": "9007199254740994", "threadRootId": "100"
-        ]]))
-        let mention = try XCTUnwrap(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "mention", "chatId": "42", "messageId": "9007199254740995", "threadRootId": "101"
-        ]]))
+        let chat = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "newMessage", "chatId": "42", "messageId": "9007199254740993",
+                ]
+            ]))
+        let reply = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "reply", "chatId": "42", "messageId": "9007199254740994",
+                    "threadRootId": "100",
+                ]
+            ]))
+        let mention = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "mention", "chatId": "42", "messageId": "9007199254740995",
+                    "threadRootId": "101",
+                ]
+            ]))
         XCTAssertEqual(chat.groupingIdentifier, "chat_42")
         XCTAssertEqual(reply.groupingIdentifier, "chat_42_thread_100")
         XCTAssertEqual(mention.groupingIdentifier, "chat_42_thread_101")
@@ -130,23 +160,37 @@ final class PushNotificationTests: XCTestCase {
     }
 
     func testMalformedPayloadCannotBecomeNavigation() {
-        XCTAssertNil(PushNotificationRoute(userInfo: ["data": ["chatId": "42", "messageId": "100"]]))
-        XCTAssertNil(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "newMessage", "chatId": "42", "messageId": 9007199254740993 as Int64
-        ]]))
-        XCTAssertNil(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "newMessage", "chatId": "42", "messageId": "100", "threadRootId": ""
-        ]]))
-        XCTAssertNil(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "unknown", "chatId": "42", "messageId": "100"
-        ]]))
+        XCTAssertNil(
+            PushNotificationRoute(userInfo: ["data": ["chatId": "42", "messageId": "100"]]))
+        XCTAssertNil(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "newMessage", "chatId": "42",
+                    "messageId": 9_007_199_254_740_993 as Int64,
+                ]
+            ]))
+        XCTAssertNil(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "newMessage", "chatId": "42", "messageId": "100", "threadRootId": "",
+                ]
+            ]))
+        XCTAssertNil(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "unknown", "chatId": "42", "messageId": "100",
+                ]
+            ]))
     }
 
     func testColdLaunchRouteIsClaimedOnceAndAccountSwitchDiscardsOldRoute() throws {
         let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
-        let route = try XCTUnwrap(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "newMessage", "chatId": "42", "messageId": "100"
-        ]]))
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "newMessage", "chatId": "42", "messageId": "100",
+                ]
+            ]))
         notifications.receiveResponse(route)
         XCTAssertNil(notifications.takeNavigation())
         notifications.setSession(uid: 1)
@@ -159,13 +203,17 @@ final class PushNotificationTests: XCTestCase {
 
     func testForegroundSuppressionRequiresSameConversationInActiveScene() throws {
         let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
-        let route = try XCTUnwrap(PushNotificationRoute(userInfo: ["wettyChat": [
-            "type": "reply", "chatId": "42", "messageId": "101", "threadRootId": "100"
-        ]]))
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "reply", "chatId": "42", "messageId": "101", "threadRootId": "100",
+                ]
+            ]))
         notifications.setSession(uid: 1)
         let scene = UUID()
         notifications.setSceneActive(id: scene, active: true)
-        notifications.setVisibleConversation(sceneID: scene, conversation: .init(chatID: "42", threadID: nil))
+        notifications.setVisibleConversation(
+            sceneID: scene, conversation: .init(chatID: "42", threadID: nil))
         XCTAssertTrue(notifications.presentationOptions(for: route).contains(.banner))
         notifications.setVisibleConversation(sceneID: scene, conversation: route.conversation)
         XCTAssertEqual(notifications.presentationOptions(for: route), [])

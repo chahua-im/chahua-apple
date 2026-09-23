@@ -11,7 +11,9 @@ final class TimelineLayoutPreparation {
     private(set) var presentations: [TimelineRowID: TimelineRowPresentation] = [:]
     private(set) var layouts: [TimelineRowID: TimelineRowLayout] = [:]
 
-    init(snapshot: TimelineHostSnapshot, environment: TimelineLayoutEnvironment, profile: MeResponse?) {
+    init(
+        snapshot: TimelineHostSnapshot, environment: TimelineLayoutEnvironment, profile: MeResponse?
+    ) {
         self.snapshot = snapshot
         self.environment = environment
         self.profile = profile
@@ -19,12 +21,15 @@ final class TimelineLayoutPreparation {
         layouts.reserveCapacity(snapshot.rows.count)
     }
 
-    func advance(cache: TimelineLayoutCache, currentUserID: Int32?, isThreadTimeline: Bool) -> Bool {
+    func advance(cache: TimelineLayoutCache, currentUserID: Int32?, isThreadTimeline: Bool) -> Bool
+    {
         let deadline = ProcessInfo.processInfo.systemUptime + 0.004
         let end = min(snapshot.rows.count, nextIndex + 32)
         while nextIndex < end {
             let row = snapshot.rows[nextIndex]
-            let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: profile, currentUserID: currentUserID, isThreadTimeline: isThreadTimeline, environment: environment)
+            let presentation = TimelineRowPresentation.make(
+                row: row, currentUserProfile: profile, currentUserID: currentUserID,
+                isThreadTimeline: isThreadTimeline, environment: environment)
             presentations[row.id] = presentation
             layouts[row.id] = cache.layout(for: presentation, environment: environment)
             nextIndex += 1

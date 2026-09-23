@@ -13,18 +13,21 @@ struct ConversationAvatarView: View {
         Group {
             switch item {
             case .chat(let chat):
-                AvatarView(url: chat.chatAvatarURL, displayName: chat.chatDisplayName, diameter: diameter)
+                AvatarView(
+                    url: chat.chatAvatarURL, displayName: chat.chatDisplayName, diameter: diameter)
             case .thread(let thread):
                 ThreadAvatarView(
                     thread: thread,
-                    parent: store.state.chats.first(where: { $0.id == thread.chatId }) ?? resolvedParent,
+                    parent: store.state.chats.first(where: { $0.id == thread.chatId })
+                        ?? resolvedParent,
                     currentUserID: currentUserID, diameter: diameter, isSelected: isSelected)
             }
         }
         .task(id: item.id.chatID) {
             resolvedParent = nil
             guard case .thread(let thread) = item,
-                  !store.state.chats.contains(where: { $0.id == thread.chatId }) else { return }
+                !store.state.chats.contains(where: { $0.id == thread.chatId })
+            else { return }
             // Archived parents can be absent from the active list. Resolve their kind
             // rather than guessing that every subscribed thread belongs to a group.
             do {
@@ -56,8 +59,10 @@ struct ThreadAvatarView: View {
         return thread.chatName
     }
     private var primaryURL: URL? {
-        let value = isDM
-            ? ((parent?.peer != nil ? parent?.peer?.avatarUrl : participant?.avatarUrl) ?? thread.chatAvatar)
+        let value =
+            isDM
+            ? ((parent?.peer != nil ? parent?.peer?.avatarUrl : participant?.avatarUrl)
+                ?? thread.chatAvatar)
             : thread.chatAvatar
         return value.flatMap(URL.init(string:))
     }
@@ -72,19 +77,25 @@ struct ThreadAvatarView: View {
                             Image(systemName: "bubble.left.and.bubble.right.fill")
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: secondarySize * scale * 2 / 3, height: secondarySize * scale * 2 / 3)
+                                .frame(
+                                    width: secondarySize * scale * 2 / 3,
+                                    height: secondarySize * scale * 2 / 3
+                                )
                                 .foregroundStyle(.white)
                                 .frame(width: secondarySize * scale, height: secondarySize * scale)
                                 .background(ChahuaTheme.accent, in: Circle())
                         } else if let name = thread.threadRootMessage.sender.name {
                             AvatarView(
-                                url: thread.threadRootMessage.sender.avatarUrl.flatMap(URL.init(string:)),
+                                url: thread.threadRootMessage.sender.avatarUrl.flatMap(
+                                    URL.init(string:)),
                                 displayName: name, diameter: secondarySize)
                         }
                     }
                     .background {
                         Circle().fill(.background)
-                            .overlay { Circle().fill(ChahuaTheme.accent.opacity(isSelected ? 0.14 : 0)) }
+                            .overlay {
+                                Circle().fill(ChahuaTheme.accent.opacity(isSelected ? 0.14 : 0))
+                            }
                             .padding(-2)
                     }
                     .offset(x: 2, y: -2)

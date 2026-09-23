@@ -53,7 +53,10 @@ struct VoiceMessageBubbleView: View {
     }
 
     private var accent: Color { isOutgoing ? .white : .accentColor }
-    private var canPlay: Bool { isActive && url != nil && !controller.isLoading && controller.error == nil && controller.duration > 0 }
+    private var canPlay: Bool {
+        isActive && url != nil && !controller.isLoading && controller.error == nil
+            && controller.duration > 0
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -77,12 +80,17 @@ struct VoiceMessageBubbleView: View {
                     .foregroundStyle(accent.opacity(0.8))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .frame(width: metrics.statusWidth(for: geometry.size.width), height: metrics.statusHeight, alignment: .leading)
+                    .frame(
+                        width: metrics.statusWidth(for: geometry.size.width),
+                        height: metrics.statusHeight, alignment: .leading
+                    )
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .environment(\.layoutDirection, .leftToRight)
                     .accessibilityHidden(canPlay)
             }
-            .frame(width: geometry.size.width, height: metrics.height(for: geometry.size.width), alignment: .top)
+            .frame(
+                width: geometry.size.width, height: metrics.height(for: geometry.size.width),
+                alignment: .top)
         }
         .clipped()
         .allowsHitTesting(isActive)
@@ -113,9 +121,15 @@ struct VoiceMessageBubbleView: View {
                         .controlSize(.small)
                         .tint(accent)
                 } else {
-                    Image(systemName: url == nil ? "exclamationmark" : controller.error != nil ? "arrow.clockwise" : controller.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: metrics.bodySize, weight: .semibold))
-                        .foregroundStyle(accent)
+                    Image(
+                        systemName: url == nil
+                            ? "exclamationmark"
+                            : controller.error != nil
+                                ? "arrow.clockwise"
+                                : controller.isPlaying ? "pause.fill" : "play.fill"
+                    )
+                    .font(.system(size: metrics.bodySize, weight: .semibold))
+                    .foregroundStyle(accent)
                 }
             }
             .frame(width: metrics.circleSize, height: metrics.circleSize)
@@ -145,15 +159,15 @@ struct VoiceMessageBubbleView: View {
     private var status: String {
         if url == nil { return String(localized: "Audio unavailable") }
         if !isActive && controller.duration <= 0 { return String(localized: "Voice message") }
-        if controller.isLoading || controller.duration <= 0 && controller.error == nil { return String(localized: "Loading audio…") }
+        if controller.isLoading || controller.duration <= 0 && controller.error == nil {
+            return String(localized: "Loading audio…")
+        }
         if controller.error != nil { return String(localized: "Unable to play audio") }
         return "\(Self.time(controller.position)) / \(Self.time(controller.duration))"
     }
-
 
     private static func time(_ time: TimeInterval) -> String {
         let seconds = time.isFinite ? max(0, Int(time)) : 0
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
-

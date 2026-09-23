@@ -1,13 +1,15 @@
+import ChahuaAPI
 import Foundation
 import XCTest
+
 @testable import chahua_apple
-import ChahuaAPI
 
 @MainActor
 final class TimelineWindowTests: XCTestCase {
     func testReplaceNormalizesDescendingPageToChronologicalOrder() throws {
         var window = TimelineWindow()
-        window.replace(with: try page([message("3", at: 3), message("2", at: 2), message("1", at: 1)]))
+        window.replace(
+            with: try page([message("3", at: 3), message("2", at: 2), message("1", at: 1)]))
 
         XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3"])
         XCTAssertEqual(window.index(ofServerID: "2"), 1)
@@ -15,9 +17,14 @@ final class TimelineWindowTests: XCTestCase {
 
     func testPrependOlderDeduplicatesAndUpdatesCursor() throws {
         var window = TimelineWindow()
-        window.replace(with: try page([message("3", at: 3), message("4", at: 4)], olderCursor: "3", newerCursor: nil))
+        window.replace(
+            with: try page(
+                [message("3", at: 3), message("4", at: 4)], olderCursor: "3", newerCursor: nil))
 
-        let inserted = window.prependOlder(try page([message("3", at: 3), message("2", at: 2), message("1", at: 1)], olderCursor: "1", newerCursor: "3"))
+        let inserted = window.prependOlder(
+            try page(
+                [message("3", at: 3), message("2", at: 2), message("1", at: 1)], olderCursor: "1",
+                newerCursor: "3"))
 
         XCTAssertEqual(inserted, 2)
         XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3", "4"])
@@ -36,9 +43,12 @@ final class TimelineWindowTests: XCTestCase {
 
     func testAppendNewerUpdatesCursorAndDeduplicates() throws {
         var window = TimelineWindow()
-        window.replace(with: try page([message("1", at: 1), message("2", at: 2)], newerCursor: "2"))
+        window.replace(
+            with: try page([message("1", at: 1), message("2", at: 2)], newerCursor: "2"))
 
-        let inserted = window.appendNewer(try page([message("2", at: 2), message("3", at: 3)], olderCursor: "2", newerCursor: "3"))
+        let inserted = window.appendNewer(
+            try page(
+                [message("2", at: 2), message("3", at: 3)], olderCursor: "2", newerCursor: "3"))
 
         XCTAssertEqual(inserted, 1)
         XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3"])
@@ -61,16 +71,18 @@ final class TimelineWindowTests: XCTestCase {
     func testAuthoritativePageReplacesKnownContentAndOrdersEqualTimeMessages() throws {
         var window = TimelineWindow()
         window.replace(with: try page([message("2", at: 2), message("1", at: 1)]))
-        window.appendNewer(try page([
-            message("3b", at: 3), message("2", at: 2, text: "updated"), message("3a", at: 3),
-        ]))
+        window.appendNewer(
+            try page([
+                message("3b", at: 3), message("2", at: 2, text: "updated"), message("3a", at: 3),
+            ]))
         XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3a", "3b"])
         XCTAssertEqual(window.messages[1].message, "updated")
     }
 
     func testClientGeneratedIDKeepsAcknowledgedMessageAtTheSameStableKey() throws {
         let provisional = message("local-1", at: 1, clientGeneratedID: "send-1")
-        let acknowledged = message("server-99", at: 2, text: "delivered", clientGeneratedID: "send-1")
+        let acknowledged = message(
+            "server-99", at: 2, text: "delivered", clientGeneratedID: "send-1")
         var window = TimelineWindow()
         window.replace(with: try page([provisional]))
 
@@ -84,12 +96,15 @@ final class TimelineWindowTests: XCTestCase {
 
     func testServerIdentityWinsWhenClientIdentityChangesAndPagesContainDuplicates() throws {
         var window = TimelineWindow()
-        window.replace(with: try page([
-            message("server", at: 1, clientGeneratedID: ""),
-            message("server", at: 1, text: "current", clientGeneratedID: "send"),
-        ]))
+        window.replace(
+            with: try page([
+                message("server", at: 1, clientGeneratedID: ""),
+                message("server", at: 1, text: "current", clientGeneratedID: "send"),
+            ]))
         XCTAssertEqual(window.messages.map(\.message), ["current"])
-        XCTAssertEqual(window.insertLive(message("server", at: 1, text: "old", clientGeneratedID: "other")), .duplicate)
+        XCTAssertEqual(
+            window.insertLive(message("server", at: 1, text: "old", clientGeneratedID: "other")),
+            .duplicate)
         XCTAssertEqual(window.messages.map(\.message), ["current"])
         XCTAssertEqual(window.index(of: .clientGenerated("send")), 0)
     }
@@ -114,7 +129,7 @@ final class TimelineWindowTests: XCTestCase {
 
     func testTrimNewestCreatesBoundaryCursorAndLeavesLiveEdge() throws {
         var window = TimelineWindow()
-        window.replace(with: try page((1 ... 5).map { message("\($0)", at: $0) }))
+        window.replace(with: try page((1...5).map { message("\($0)", at: $0) }))
 
         XCTAssertEqual(window.trim(.newest, toCount: 3), 2)
         XCTAssertEqual(window.messages.map(\.id), ["1", "2", "3"])
@@ -124,7 +139,7 @@ final class TimelineWindowTests: XCTestCase {
 
     func testTrimOldestCreatesBoundaryCursor() throws {
         var window = TimelineWindow()
-        window.replace(with: try page((1 ... 5).map { message("\($0)", at: $0) }))
+        window.replace(with: try page((1...5).map { message("\($0)", at: $0) }))
 
         XCTAssertEqual(window.trim(.oldest, toCount: 3), 2)
         XCTAssertEqual(window.messages.map(\.id), ["3", "4", "5"])
@@ -139,24 +154,29 @@ final class TimelineWindowTests: XCTestCase {
     ) -> MessageResponse {
         try! JSONDecoder.messageFixtureDecoder.decode(
             MessageResponse.self,
-            from: Data("""
-            {
-              "id": "\(id)", "chatId": "chat", "clientGeneratedId": "\(clientGeneratedID ?? "client-\(id)")", "messageType": "text",
-              "sender": {"uid": 1, "gender": 0, "name": "Ada", "avatarUrl": null, "userGroup": null},
-              "createdAt": "2026-09-01T00:00:\(String(format: "%02d", second))Z", "isEdited": false, "isDeleted": false,
-              "hasAttachments": false, "attachments": [], "reactions": [], "mentions": [], "message": \(jsonString(text ?? "message \(id)"))
-            }
-            """.utf8)
+            from: Data(
+                """
+                {
+                  "id": "\(id)", "chatId": "chat", "clientGeneratedId": "\(clientGeneratedID ?? "client-\(id)")", "messageType": "text",
+                  "sender": {"uid": 1, "gender": 0, "name": "Ada", "avatarUrl": null, "userGroup": null},
+                  "createdAt": "2026-09-01T00:00:\(String(format: "%02d", second))Z", "isEdited": false, "isDeleted": false,
+                  "hasAttachments": false, "attachments": [], "reactions": [], "mentions": [], "message": \(jsonString(text ?? "message \(id)"))
+                }
+                """.utf8)
         )
     }
 
-    private func page(_ messages: [MessageResponse], olderCursor: String? = nil, newerCursor: String? = nil) throws -> ListMessagesResponse {
+    private func page(
+        _ messages: [MessageResponse], olderCursor: String? = nil, newerCursor: String? = nil
+    ) throws -> ListMessagesResponse {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let messagesJSON = try String(decoding: encoder.encode(messages), as: UTF8.self)
         return try JSONDecoder.messageFixtureDecoder.decode(
             ListMessagesResponse.self,
-            from: Data("{\"messages\":\(messagesJSON),\"olderCursor\":\(jsonString(olderCursor)),\"newerCursor\":\(jsonString(newerCursor))}".utf8)
+            from: Data(
+                "{\"messages\":\(messagesJSON),\"olderCursor\":\(jsonString(olderCursor)),\"newerCursor\":\(jsonString(newerCursor))}"
+                    .utf8)
         )
     }
 
@@ -166,8 +186,8 @@ final class TimelineWindowTests: XCTestCase {
     }
 }
 
-private extension JSONDecoder {
-    static var messageFixtureDecoder: JSONDecoder {
+extension JSONDecoder {
+    fileprivate static var messageFixtureDecoder: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder

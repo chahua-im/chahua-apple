@@ -47,7 +47,11 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
     public var isAudio: Bool { mimeType.lowercased().hasPrefix("audio/") }
     public var uploadPath: String { preparedPath ?? sourcePath }
 
-    public init(id: String, generation: String, position: Int, sourcePath: String, preparedPath: String? = nil, previewPath: String, fileName: String, mimeType: String, width: Int, height: Int, byteCount: Int64, attachmentID: String? = nil, error: String? = nil) {
+    public init(
+        id: String, generation: String, position: Int, sourcePath: String,
+        preparedPath: String? = nil, previewPath: String, fileName: String, mimeType: String,
+        width: Int, height: Int, byteCount: Int64, attachmentID: String? = nil, error: String? = nil
+    ) {
         self.id = id
         self.generation = generation
         self.position = position
@@ -79,7 +83,9 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public let clientGeneratedID: String
     public let chatID: String
     public let threadID: String?
-    public var conversationKey: ConversationKey { ConversationKey(chatID: chatID, threadID: threadID) }
+    public var conversationKey: ConversationKey {
+        ConversationKey(chatID: chatID, threadID: threadID)
+    }
     public let senderID: Int32
     public let text: String
     public let replyToMessage: MessagePreview?
@@ -106,11 +112,14 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     }
 
     public var body: CreateMessageBody {
-        precondition(isReadyForDispatch, "An unresolved attachment must never be omitted from a message")
+        precondition(
+            isReadyForDispatch, "An unresolved attachment must never be omitted from a message")
         return CreateMessageBody(
             messageType: messageType, clientGeneratedId: clientGeneratedID,
             message: messageType == .text ? text : nil,
-            attachmentIds: attachments.sorted { $0.position < $1.position }.map { $0.attachmentID! },
+            attachmentIds: attachments.sorted { $0.position < $1.position }.map {
+                $0.attachmentID!
+            },
             replyToId: replyToMessage?.id, stickerId: sticker?.id
         )
     }
@@ -119,7 +128,9 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
 public struct LocalConversationSnapshot: Sendable, Equatable {
     public let chatID: String
     public let threadID: String?
-    public var conversationKey: ConversationKey { ConversationKey(chatID: chatID, threadID: threadID) }
+    public var conversationKey: ConversationKey {
+        ConversationKey(chatID: chatID, threadID: threadID)
+    }
     public let revision: Int64
     public let draft: LocalDraft
     public let outgoing: [LocalOutgoingMessage]

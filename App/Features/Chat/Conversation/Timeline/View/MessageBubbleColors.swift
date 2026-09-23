@@ -14,9 +14,12 @@ func bubbleColorForUser(uid: Int32, dark: Bool) -> Color {
 
 func bubbleColor(hex: String) -> Color? {
     let value = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-    guard value.count == 6 || value.count == 8, let number = UInt64(value, radix: 16) else { return nil }
+    guard value.count == 6 || value.count == 8, let number = UInt64(value, radix: 16) else {
+        return nil
+    }
     let rgb = value.count == 8 ? number >> 8 : number
-    return Color(.sRGB, red: Double((rgb >> 16) & 255) / 255,
-                 green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255,
-                 opacity: value.count == 8 ? Double(number & 255) / 255 : 1)
+    return Color(
+        .sRGB, red: Double((rgb >> 16) & 255) / 255,
+        green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255,
+        opacity: value.count == 8 ? Double(number & 255) / 255 : 1)
 }

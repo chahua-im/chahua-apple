@@ -1,9 +1,10 @@
 import Foundation
 import UserNotifications
+
 #if os(iOS)
-import UIKit
+    import UIKit
 #else
-import AppKit
+    import AppKit
 #endif
 
 /// Installed before launch finishes so notification taps survive cold startup.
@@ -14,7 +15,10 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
     weak var coordinator: PushNotificationCoordinator? {
         didSet {
             if let token { coordinator?.didRegister(deviceToken: token) }
-            if let response { coordinator?.receiveResponse(response); self.response = nil }
+            if let response {
+                coordinator?.receiveResponse(response)
+                self.response = nil
+            }
         }
     }
     private var token: Data?
@@ -30,7 +34,8 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
-        withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
+        withCompletionHandler completionHandler:
+            @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
         let route = PushNotificationRoute(userInfo: notification.request.content.userInfo)
         Task { @MainActor in
@@ -43,7 +48,8 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
-        let route = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+        let route =
+            response.actionIdentifier == UNNotificationDefaultActionIdentifier
             ? PushNotificationRoute(userInfo: response.notification.request.content.userInfo) : nil
         Task { @MainActor in
             if let route { receive(route) }
@@ -52,8 +58,7 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func receive(_ route: PushNotificationRoute) {
-        if let coordinator { coordinator.receiveResponse(route) }
-        else { response = route }
+        if let coordinator { coordinator.receiveResponse(route) } else { response = route }
     }
 
     private func registered(_ token: Data) {
@@ -63,21 +68,33 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
 }
 
 #if os(iOS)
-extension PushAppDelegate: UIApplicationDelegate {
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        registered(deviceToken)
+    extension PushAppDelegate: UIApplicationDelegate {
+        func application(
+            _ application: UIApplication,
+            didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+        ) {
+            registered(deviceToken)
+        }
+        func application(
+            _ application: UIApplication,
+            didFailToRegisterForRemoteNotificationsWithError error: Error
+        ) {
+            coordinator?.didFailRegistration(error)
+        }
     }
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        coordinator?.didFailRegistration(error)
-    }
-}
 #else
-extension PushAppDelegate: NSApplicationDelegate {
-    func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        registered(deviceToken)
+    extension PushAppDelegate: NSApplicationDelegate {
+        func application(
+            _ application: NSApplication,
+            didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+        ) {
+            registered(deviceToken)
+        }
+        func application(
+            _ application: NSApplication,
+            didFailToRegisterForRemoteNotificationsWithError error: Error
+        ) {
+            coordinator?.didFailRegistration(error)
+        }
     }
-    func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        coordinator?.didFailRegistration(error)
-    }
-}
 #endif

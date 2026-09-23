@@ -61,7 +61,8 @@ nonisolated struct OutgoingAttachmentUploader: Sendable {
         onProgress(0)
         do {
             // Foundation's async upload owns cancellation, including cancellation before task registration.
-            let (_, response) = try await session.upload(for: request, fromFile: source, delegate: progress)
+            let (_, response) = try await session.upload(
+                for: request, fromFile: source, delegate: progress)
             try Task.checkCancellation()
             guard let response = response as? HTTPURLResponse else {
                 throw OutgoingAttachmentUploadError.invalidResponse
@@ -71,7 +72,9 @@ nonisolated struct OutgoingAttachmentUploader: Sendable {
             }
             onProgress(1)
         } catch {
-            if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
+            if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                throw CancellationError()
+            }
             throw error
         }
     }

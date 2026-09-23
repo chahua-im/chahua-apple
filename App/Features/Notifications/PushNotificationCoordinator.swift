@@ -3,10 +3,11 @@ import Combine
 import Foundation
 import UserNotifications
 import os
+
 #if os(iOS)
-import UIKit
+    import UIKit
 #else
-import AppKit
+    import AppKit
 #endif
 
 /// One subscription owner per authenticated installation. Notification Center
@@ -43,9 +44,12 @@ final class PushNotificationCoordinator: ObservableObject {
     private var activeScenes: Set<UUID> = []
     private var visibleConversations: [UUID: ConversationKey] = [:]
 
-    init(api: (any PushSubscriptionProviding)?, namespace: String,
-         center: UNUserNotificationCenter = .current(), defaults: UserDefaults = .standard,
-         environment: String? = Bundle.main.object(forInfoDictionaryKey: "ChahuaAPNSEnvironment") as? String) {
+    init(
+        api: (any PushSubscriptionProviding)?, namespace: String,
+        center: UNUserNotificationCenter = .current(), defaults: UserDefaults = .standard,
+        environment: String? = Bundle.main.object(forInfoDictionaryKey: "ChahuaAPNSEnvironment")
+            as? String
+    ) {
         self.api = api
         self.center = center
         self.defaults = defaults
@@ -110,10 +114,13 @@ final class PushNotificationCoordinator: ObservableObject {
         let settings = await center.notificationSettings()
         guard !Task.isCancelled, requestGeneration == generation else { return }
         authorizationStatus = settings.authorizationStatus
-        guard uid != nil, !isSigningOut, !isUnregistering, !notificationsDisabled, api != nil else { return }
+        guard uid != nil, !isSigningOut, !isUnregistering, !notificationsDisabled, api != nil else {
+            return
+        }
         if permitsNotifications {
             guard environment != nil else {
-                registrationError = String(localized: "Push notification environment is not configured.")
+                registrationError = String(
+                    localized: "Push notification environment is not configured.")
                 return
             }
             registerNative()
@@ -126,13 +133,17 @@ final class PushNotificationCoordinator: ObservableObject {
             guard requestGeneration == generation, !Task.isCancelled else { return }
             if let registration, registration.uid == uid, let api {
                 do {
-                    try await api.unsubscribeFromPush(deviceToken: registration.token, environment: registration.environment)
+                    try await api.unsubscribeFromPush(
+                        deviceToken: registration.token, environment: registration.environment)
                     guard requestGeneration == generation else { return }
                     clearRegistration()
                     registrationError = nil
                 } catch {
-                    registrationError = String(localized: "Couldn’t update notification registration. Try again.")
-                    logger.error("Push unsubscribe after permission revocation failed: \(String(describing: error), privacy: .public)")
+                    registrationError = String(
+                        localized: "Couldn’t update notification registration. Try again.")
+                    logger.error(
+                        "Push unsubscribe after permission revocation failed: \(String(describing: error), privacy: .public)"
+                    )
                 }
             }
             unregisterNative()
@@ -153,12 +164,14 @@ final class PushNotificationCoordinator: ObservableObject {
             await refreshAuthorization()
         } catch {
             guard requestGeneration == generation else { return }
-            registrationError = String(localized: "Couldn’t request notification permission. Try again.")
+            registrationError = String(
+                localized: "Couldn’t request notification permission. Try again.")
         }
     }
 
     var canDisableNotifications: Bool {
-        !notificationsDisabled && (permitsNotifications || isRegistered || registration?.uid == uid && uid != nil)
+        !notificationsDisabled
+            && (permitsNotifications || isRegistered || registration?.uid == uid && uid != nil)
     }
 
     func disableNotifications() async {
@@ -184,8 +197,10 @@ final class PushNotificationCoordinator: ObservableObject {
             }
             guard generation == requestGeneration else { return }
             if let previous, previous.uid == uid,
-               previous.token != token || previous.environment != environment {
-                try await api.unsubscribeFromPush(deviceToken: previous.token, environment: previous.environment)
+                previous.token != token || previous.environment != environment
+            {
+                try await api.unsubscribeFromPush(
+                    deviceToken: previous.token, environment: previous.environment)
             }
             guard generation == requestGeneration else { return }
             notificationsDisabled = true
@@ -195,7 +210,8 @@ final class PushNotificationCoordinator: ObservableObject {
             unregisterNative()
         } catch {
             guard generation == requestGeneration else { return }
-            registrationError = String(localized: "Couldn’t update notification registration. Try again.")
+            registrationError = String(
+                localized: "Couldn’t update notification registration. Try again.")
             logger.error("Push disable failed: \(String(describing: error), privacy: .public)")
         }
     }
@@ -209,20 +225,22 @@ final class PushNotificationCoordinator: ObservableObject {
         guard uid != nil, !notificationsDisabled, !isUnregistering else { return }
         isRegistering = false
         isRegistered = false
-        registrationError = String(localized: "Couldn’t register for push notifications. Try again.")
+        registrationError = String(
+            localized: "Couldn’t register for push notifications. Try again.")
         logger.error("APNs registration failed: \(String(describing: error), privacy: .public)")
     }
 
     private var permitsNotifications: Bool {
         #if os(iOS)
-        if authorizationStatus == .ephemeral { return true }
+            if authorizationStatus == .ephemeral { return true }
         #endif
         return authorizationStatus == .authorized || authorizationStatus == .provisional
     }
 
     private func synchronizeRegistration() {
         guard let api, let uid, let deviceToken, let environment,
-              permitsNotifications, !isSigningOut, !isUnregistering, !notificationsDisabled else { return }
+            permitsNotifications, !isSigningOut, !isUnregistering, !notificationsDisabled
+        else { return }
         let desired = Registration(uid: uid, token: deviceToken, environment: environment)
         let requestGeneration = generation
         let priorTask = registrationTask
@@ -232,13 +250,16 @@ final class PushNotificationCoordinator: ObservableObject {
         registrationTask = Task { [weak self] in
             await priorTask?.value
             guard let self, !Task.isCancelled, self.generation == requestGeneration,
-                  self.permitsNotifications, !self.isSigningOut, !self.isUnregistering,
-                  !self.notificationsDisabled else { return }
+                self.permitsNotifications, !self.isSigningOut, !self.isUnregistering,
+                !self.notificationsDisabled
+            else { return }
             self.isRegistering = true
             defer { if self.generation == requestGeneration { self.isRegistering = false } }
             do {
-                try await api.subscribeToPush(deviceToken: desired.token, environment: desired.environment)
-                guard !Task.isCancelled, self.generation == requestGeneration, !self.isSigningOut else { return }
+                try await api.subscribeToPush(
+                    deviceToken: desired.token, environment: desired.environment)
+                guard !Task.isCancelled, self.generation == requestGeneration, !self.isSigningOut
+                else { return }
                 self.registration = desired
                 self.defaults.set(try JSONEncoder().encode(desired), forKey: self.storageKey)
                 self.isRegistered = true
@@ -247,8 +268,10 @@ final class PushNotificationCoordinator: ObservableObject {
             } catch {
                 guard !Task.isCancelled, self.generation == requestGeneration else { return }
                 self.isRegistered = false
-                self.registrationError = String(localized: "Couldn’t update notification registration. Try again.")
-                self.logger.error("Push subscribe failed: \(String(describing: error), privacy: .public)")
+                self.registrationError = String(
+                    localized: "Couldn’t update notification registration. Try again.")
+                self.logger.error(
+                    "Push subscribe failed: \(String(describing: error), privacy: .public)")
             }
         }
     }
@@ -264,11 +287,14 @@ final class PushNotificationCoordinator: ObservableObject {
         do {
             if let api {
                 if let deviceToken, let environment {
-                    try await api.unsubscribeFromPush(deviceToken: deviceToken, environment: environment)
+                    try await api.unsubscribeFromPush(
+                        deviceToken: deviceToken, environment: environment)
                 }
                 if let registration, registration.uid == uid,
-                   registration.token != deviceToken || registration.environment != environment {
-                    try await api.unsubscribeFromPush(deviceToken: registration.token, environment: registration.environment)
+                    registration.token != deviceToken || registration.environment != environment
+                {
+                    try await api.unsubscribeFromPush(
+                        deviceToken: registration.token, environment: registration.environment)
                 }
             }
         } catch APIError.invalidToken {
@@ -276,7 +302,8 @@ final class PushNotificationCoordinator: ObservableObject {
             // delivery and allow local sign-out instead of trapping the user.
         } catch {
             isSigningOut = false
-            registrationError = String(localized: "Couldn’t update notification registration. Try again.")
+            registrationError = String(
+                localized: "Couldn’t update notification registration. Try again.")
             throw error
         }
         clearRegistration()
@@ -298,9 +325,12 @@ final class PushNotificationCoordinator: ObservableObject {
         return pendingNavigation
     }
 
-    func presentationOptions(for route: PushNotificationRoute) -> UNNotificationPresentationOptions {
+    func presentationOptions(for route: PushNotificationRoute) -> UNNotificationPresentationOptions
+    {
         guard uid != nil else { return [] }
-        if activeScenes.contains(where: { visibleConversations[$0] == route.conversation }) { return [] }
+        if activeScenes.contains(where: { visibleConversations[$0] == route.conversation }) {
+            return []
+        }
         return [.banner, .list, .sound, .badge]
     }
 
@@ -311,8 +341,11 @@ final class PushNotificationCoordinator: ObservableObject {
             let delivered = await self.center.deliveredNotifications()
             guard self.generation == requestGeneration else { return }
             let identifiers = delivered.compactMap { notification -> String? in
-                guard let route = PushNotificationRoute(userInfo: notification.request.content.userInfo),
-                      route.isRead(through: messageID, in: conversation) else { return nil }
+                guard
+                    let route = PushNotificationRoute(
+                        userInfo: notification.request.content.userInfo),
+                    route.isRead(through: messageID, in: conversation)
+                else { return nil }
                 return notification.request.identifier
             }
             self.center.removeDeliveredNotifications(withIdentifiers: identifiers)
@@ -329,17 +362,24 @@ final class PushNotificationCoordinator: ObservableObject {
             guard !Task.isCancelled, self.generation == requestGeneration else { return }
             var watermarks: [ConversationKey: String] = [:]
             if state.chatListLoadPhase == .loaded {
-                for chat in state.chats { watermarks[.init(chatID: chat.id, threadID: nil)] = chat.lastReadMessageId }
+                for chat in state.chats {
+                    watermarks[.init(chatID: chat.id, threadID: nil)] = chat.lastReadMessageId
+                }
             }
             if state.threadListLoadPhase == .loaded {
                 for thread in state.threads {
-                    watermarks[.init(chatID: thread.chatId, threadID: thread.threadRootMessage.id)] = thread.lastReadMessageId
+                    watermarks[
+                        .init(chatID: thread.chatId, threadID: thread.threadRootMessage.id)] =
+                        thread.lastReadMessageId
                 }
             }
             let identifiers = delivered.compactMap { notification -> String? in
-                guard let route = PushNotificationRoute(userInfo: notification.request.content.userInfo),
-                      let watermark = watermarks[route.conversation],
-                      route.isRead(through: watermark, in: route.conversation) else { return nil }
+                guard
+                    let route = PushNotificationRoute(
+                        userInfo: notification.request.content.userInfo),
+                    let watermark = watermarks[route.conversation],
+                    route.isRead(through: watermark, in: route.conversation)
+                else { return nil }
                 return notification.request.identifier
             }
             self.center.removeDeliveredNotifications(withIdentifiers: identifiers)
@@ -347,8 +387,12 @@ final class PushNotificationCoordinator: ObservableObject {
             // and archived chats. Thread groups never increment this count.
             if state.chatListLoadPhase == .loaded, !state.isRefreshingChats {
                 let now = Date()
-                let total = state.chats.filter { !$0.archived && ($0.mutedUntil == nil || $0.mutedUntil! <= now) }
-                    .reduce(Int64(0)) { min(Int64(UInt32.max), $0 + max(0, min(Int64(UInt32.max), $1.unreadCount))) }
+                let total = state.chats.filter {
+                    !$0.archived && ($0.mutedUntil == nil || $0.mutedUntil! <= now)
+                }
+                .reduce(Int64(0)) {
+                    min(Int64(UInt32.max), $0 + max(0, min(Int64(UInt32.max), $1.unreadCount)))
+                }
                 try? await self.center.setBadgeCount(Int(total))
             }
         }
@@ -356,28 +400,32 @@ final class PushNotificationCoordinator: ObservableObject {
 
     func openSystemSettings() {
         #if os(iOS)
-        if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
+            if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
         #else
-        if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
-            NSWorkspace.shared.open(url)
-        }
+            if let url = URL(
+                string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")
+            {
+                NSWorkspace.shared.open(url)
+            }
         #endif
     }
 
     private func registerNative() {
         isRegistering = true
         #if os(iOS)
-        UIApplication.shared.registerForRemoteNotifications()
+            UIApplication.shared.registerForRemoteNotifications()
         #else
-        NSApplication.shared.registerForRemoteNotifications()
+            NSApplication.shared.registerForRemoteNotifications()
         #endif
     }
 
     private func unregisterNative() {
         #if os(iOS)
-        UIApplication.shared.unregisterForRemoteNotifications()
+            UIApplication.shared.unregisterForRemoteNotifications()
         #else
-        NSApplication.shared.unregisterForRemoteNotifications()
+            NSApplication.shared.unregisterForRemoteNotifications()
         #endif
     }
 }

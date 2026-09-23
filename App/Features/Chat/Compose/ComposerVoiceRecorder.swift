@@ -32,29 +32,37 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
     private var observations: Set<AnyCancellable> = []
     private var ownsRecordingSession = false
     #if os(iOS)
-    private var ownsAudioSession = false
+        private var ownsAudioSession = false
     #endif
 
     override init() {
         super.init()
         #if os(iOS)
-        NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] notification in
-                guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                      AVAudioSession.InterruptionType(rawValue: rawType) == .began else { return }
-                self?.suspend()
-            }
-            .store(in: &observations)
-        NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] notification in
-                guard let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                      AVAudioSession.RouteChangeReason(rawValue: reason) == .oldDeviceUnavailable else { return }
-                self?.suspend()
-            }
-            .store(in: &observations)
-        NotificationCenter.default.publisher(for: AVAudioSession.mediaServicesWereResetNotification)
+            NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] notification in
+                    guard
+                        let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey]
+                            as? UInt,
+                        AVAudioSession.InterruptionType(rawValue: rawType) == .began
+                    else { return }
+                    self?.suspend()
+                }
+                .store(in: &observations)
+            NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] notification in
+                    guard
+                        let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey]
+                            as? UInt,
+                        AVAudioSession.RouteChangeReason(rawValue: reason) == .oldDeviceUnavailable
+                    else { return }
+                    self?.suspend()
+                }
+                .store(in: &observations)
+            NotificationCenter.default.publisher(
+                for: AVAudioSession.mediaServicesWereResetNotification
+            )
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.suspend() }
             .store(in: &observations)
@@ -89,12 +97,14 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             guard !Task.isCancelled else { return }
             let granted = await Self.requestPermission()
             guard !Task.isCancelled, let self, self.generation == request,
-                  self.phase == .requestingPermission else { return }
+                self.phase == .requestingPermission
+            else { return }
             self.permissionTask = nil
             guard granted else {
                 self.phase = .idle
                 self.isLocked = false
-                self.error = String(localized: "Allow microphone access in Settings to record voice messages.")
+                self.error = String(
+                    localized: "Allow microphone access in Settings to record voice messages.")
                 return
             }
             self.permissionWasGranted = true
@@ -118,7 +128,10 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
     }
 
     func stop() {
-        if phase == .requestingPermission { discard(); return }
+        if phase == .requestingPermission {
+            discard()
+            return
+        }
         guard phase == .recording, let recorder else { return }
         elapsed = max(elapsed, recorder.currentTime)
         finishRecording()
@@ -148,7 +161,9 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
                 self.discard()
             } else {
                 self.phase = .preview
-                self.error = String(localized: "Couldn’t send the voice message. Your recording is ready to try again.")
+                self.error = String(
+                    localized:
+                        "Couldn’t send the voice message. Your recording is ready to try again.")
             }
         }
     }
@@ -189,13 +204,13 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
 
     private static func requestPermission() async -> Bool {
         #if os(iOS)
-        return await withCheckedContinuation { continuation in
-            AVAudioApplication.requestRecordPermission { granted in
-                continuation.resume(returning: granted)
+            return await withCheckedContinuation { continuation in
+                AVAudioApplication.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
             }
-        }
         #else
-        return await AVCaptureDevice.requestAccess(for: .audio)
+            return await AVCaptureDevice.requestAccess(for: .audio)
         #endif
     }
 
@@ -204,19 +219,23 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             VoicePlaybackController.setRecordingActive(true)
             ownsRecordingSession = true
             #if os(iOS)
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
-            try session.setActive(true)
-            ownsAudioSession = true
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(
+                    .playAndRecord, mode: .default,
+                    options: [.defaultToSpeaker, .allowBluetoothHFP])
+                try session.setActive(true)
+                ownsAudioSession = true
             #endif
             let files = try ComposerVoiceFiles()
             self.files = files
-            let recorder = try AVAudioRecorder(url: files.recordingURL, settings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 48_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 64_000,
-            ])
+            let recorder = try AVAudioRecorder(
+                url: files.recordingURL,
+                settings: [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: 48_000,
+                    AVNumberOfChannelsKey: 1,
+                    AVEncoderBitRateKey: 64_000,
+                ])
             self.recorder = recorder
             recorder.delegate = self
             recorder.isMeteringEnabled = true
@@ -227,8 +246,7 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             phase = .recording
             clockTask = Task { [weak self] in
                 while !Task.isCancelled {
-                    do { try await Task.sleep(for: .milliseconds(50)) }
-                    catch { return }
+                    do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
                     guard let self, self.phase == .recording else { return }
                     if let recorder = self.recorder, recorder.isRecording {
                         recorder.updateMeters()
@@ -239,7 +257,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
             }
         } catch {
             discard()
-            self.error = String(localized: "Couldn’t start recording. Check your microphone and try again.")
+            self.error = String(
+                localized: "Couldn’t start recording. Check your microphone and try again.")
         }
     }
 
@@ -250,10 +269,11 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         recorder?.stop()
         recorder = nil
         #if os(iOS)
-        if ownsAudioSession {
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            ownsAudioSession = false
-        }
+            if ownsAudioSession {
+                try? AVAudioSession.sharedInstance().setActive(
+                    false, options: .notifyOthersOnDeactivation)
+                ownsAudioSession = false
+            }
         #endif
         if ownsRecordingSession {
             VoicePlaybackController.setRecordingActive(false)
@@ -261,7 +281,9 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         }
     }
 
-    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+    nonisolated func audioRecorderDidFinishRecording(
+        _ recorder: AVAudioRecorder, successfully flag: Bool
+    ) {
         let url = recorder.url
         Task { @MainActor [weak self] in
             guard let self, self.recorder?.url == url, self.phase == .recording else { return }
@@ -269,17 +291,21 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
                 self.stop()
             } else {
                 self.discard()
-                self.error = String(localized: "Recording was interrupted. Please record your message again.")
+                self.error = String(
+                    localized: "Recording was interrupted. Please record your message again.")
             }
         }
     }
 
-    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: (any Error)?) {
+    nonisolated func audioRecorderEncodeErrorDidOccur(
+        _ recorder: AVAudioRecorder, error: (any Error)?
+    ) {
         let url = recorder.url
         Task { @MainActor [weak self] in
             guard let self, self.recorder?.url == url else { return }
             self.discard()
-            self.error = String(localized: "Recording was interrupted. Please record your message again.")
+            self.error = String(
+                localized: "Recording was interrupted. Please record your message again.")
         }
     }
 }
@@ -290,7 +316,8 @@ private final class ComposerVoiceFiles: Sendable {
     nonisolated let recordingURL: URL
 
     nonisolated init() throws {
-        directory = FileManager.default.temporaryDirectory.appendingPathComponent("voice-\(UUID().uuidString)", isDirectory: true)
+        directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "voice-\(UUID().uuidString)", isDirectory: true)
         recordingURL = directory.appendingPathComponent("recording.m4a")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }

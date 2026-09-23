@@ -1,5 +1,5 @@
-import Combine
 import ChahuaAPI
+import Combine
 import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
@@ -25,7 +25,10 @@ struct LocalOutgoingImagePreview: View {
                         ZStack {
                             Color.black
                             preview.resizable().aspectRatio(contentMode: .fill)
-                                .frame(width: geometry.size.width + 40, height: geometry.size.height + 40)
+                                .frame(
+                                    width: geometry.size.width + 40,
+                                    height: geometry.size.height + 40
+                                )
                                 .blur(radius: 20).opacity(0.8)
                             Color.black.opacity(0.2)
                         }
@@ -45,13 +48,18 @@ struct LocalOutgoingImagePreview: View {
             image = nil
             let sourcePath = path
             let decoded = await Task.detached(priority: .utility) {
-                guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: sourcePath) as CFURL, nil) else { return nil as CGImage? }
-                return CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 640,
-                ] as CFDictionary)
+                guard
+                    let source = CGImageSourceCreateWithURL(
+                        URL(fileURLWithPath: sourcePath) as CFURL, nil)
+                else { return nil as CGImage? }
+                return CGImageSourceCreateThumbnailAtIndex(
+                    source, 0,
+                    [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceShouldCacheImmediately: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 640,
+                    ] as CFDictionary)
             }.value
             guard !Task.isCancelled else { return }
             image = decoded
@@ -111,17 +119,23 @@ struct ComposerMediaGallery: View {
                         let leadingCount = attachments.count.isMultiple(of: 2) ? 0 : 1
                         if leadingCount == 1, let first = attachments.first {
                             if attachments.count == 1 {
-                                let ratio = CGFloat(max(1, first.width)) / CGFloat(max(1, first.height))
+                                let ratio =
+                                    CGFloat(max(1, first.width)) / CGFloat(max(1, first.height))
                                 let previewHeight = min(height, width)
                                 tile(first, index: 0, viewport: geometry.frame(in: .global))
-                                    .frame(width: min(width, previewHeight * ratio),
-                                           height: min(previewHeight, width / ratio))
+                                    .frame(
+                                        width: min(width, previewHeight * ratio),
+                                        height: min(previewHeight, width / ratio)
+                                    )
                                     .id(first.id)
                             } else {
                                 tile(first, index: 0, viewport: geometry.frame(in: .global))
-                                    .frame(width: width, height: attachments.count == 3
-                                           ? max(96, min(width * 0.66, height * 0.66))
-                                           : width * 0.66)
+                                    .frame(
+                                        width: width,
+                                        height: attachments.count == 3
+                                            ? max(96, min(width * 0.66, height * 0.66))
+                                            : width * 0.66
+                                    )
                                     .id(first.id)
                             }
                         }
@@ -130,12 +144,19 @@ struct ComposerMediaGallery: View {
                             HStack(spacing: 4) {
                                 ForEach(0..<2, id: \.self) { column in
                                     let index = leadingCount + row * 2 + column
-                                    tile(attachments[index], index: index, viewport: geometry.frame(in: .global))
-                                        .frame(width: cellWidth, height: attachments.count == 2
-                                               ? max(96, min(cellWidth, height))
-                                               : (attachments.count == 3
-                                                  ? max(96, min(cellWidth, height * 0.34 - 4)) : cellWidth))
-                                        .id(attachments[index].id)
+                                    tile(
+                                        attachments[index], index: index,
+                                        viewport: geometry.frame(in: .global)
+                                    )
+                                    .frame(
+                                        width: cellWidth,
+                                        height: attachments.count == 2
+                                            ? max(96, min(cellWidth, height))
+                                            : (attachments.count == 3
+                                                ? max(96, min(cellWidth, height * 0.34 - 4))
+                                                : cellWidth)
+                                    )
+                                    .id(attachments[index].id)
                                 }
                             }
                         }
@@ -156,21 +177,27 @@ struct ComposerMediaGallery: View {
         .clipped()
         .onAppear { drag.update(ids: attachmentIDs, isEnabled: isEnabled) }
         .onChange(of: attachmentIDs) { _, ids in drag.update(ids: ids, isEnabled: isEnabled) }
-        .onChange(of: isEnabled) { _, enabled in drag.update(ids: attachmentIDs, isEnabled: enabled) }
+        .onChange(of: isEnabled) { _, enabled in drag.update(ids: attachmentIDs, isEnabled: enabled)
+        }
         .onDisappear { drag.update(ids: [], isEnabled: false) }
     }
 
-    private func tile(_ attachment: LocalOutgoingAttachment, index: Int, viewport: CGRect) -> some View {
+    private func tile(_ attachment: LocalOutgoingAttachment, index: Int, viewport: CGRect)
+        -> some View
+    {
         GeometryReader { geometry in
             draggableTile(attachment, index: index)
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .contentShape(Rectangle())
-                .onDrop(of: [Self.slotDragType], delegate: ComposerGalleryDropDelegate(
-                    drag: drag, targetID: attachment.id, size: geometry.size,
-                    frame: geometry.frame(in: .global), viewport: viewport,
-                    usesVerticalInsertion: index == 0 && !attachments.count.isMultiple(of: 2),
-                    onReorder: onReorder
-                ))
+                .onDrop(
+                    of: [Self.slotDragType],
+                    delegate: ComposerGalleryDropDelegate(
+                        drag: drag, targetID: attachment.id, size: geometry.size,
+                        frame: geometry.frame(in: .global), viewport: viewport,
+                        usesVerticalInsertion: index == 0 && !attachments.count.isMultiple(of: 2),
+                        onReorder: onReorder
+                    )
+                )
                 .overlay {
                     if let target = drag.target, target.id == attachment.id {
                         let vertical = index == 0 && !attachments.count.isMultiple(of: 2)
@@ -180,15 +207,21 @@ struct ComposerMediaGallery: View {
                         Rectangle()
                             .fill(Color.accentColor)
                             .frame(width: vertical ? nil : 4, height: vertical ? 4 : nil)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity,
-                                   alignment: vertical ? (target.after ? .bottom : .top) : (target.after ? .trailing : .leading))
+                            .frame(
+                                maxWidth: .infinity, maxHeight: .infinity,
+                                alignment: vertical
+                                    ? (target.after ? .bottom : .top)
+                                    : (target.after ? .trailing : .leading)
+                            )
                             .allowsHitTesting(false)
                     }
                 }
         }
     }
 
-    @ViewBuilder private func draggableTile(_ attachment: LocalOutgoingAttachment, index: Int) -> some View {
+    @ViewBuilder private func draggableTile(_ attachment: LocalOutgoingAttachment, index: Int)
+        -> some View
+    {
         if isEnabled && attachments.count > 1 {
             tileContent(attachment, index: index)
                 .onDrag { drag.provider(for: attachment.id) }
@@ -224,7 +257,8 @@ struct ComposerMediaGallery: View {
                         Button("Retry") { onRetry(attachment.id) }
                     }
                     Button("Move earlier") { move(index, by: -1) }.disabled(index == 0)
-                    Button("Move later") { move(index, by: 1) }.disabled(index == attachments.count - 1)
+                    Button("Move later") { move(index, by: 1) }.disabled(
+                        index == attachments.count - 1)
                     Button("Remove", role: .destructive) { onRemove(attachment.id) }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -281,7 +315,8 @@ private final class ComposerGalleryDragState: ObservableObject {
 
     func matches(_ providers: [NSItemProvider]) -> Bool {
         canDrop && providers.count == 1
-            && providers.first?.hasItemConformingToTypeIdentifier(ComposerMediaGallery.slotDragType.identifier) == true
+            && providers.first?.hasItemConformingToTypeIdentifier(
+                ComposerMediaGallery.slotDragType.identifier) == true
     }
 
     func update(ids: [String], isEnabled: Bool) {
@@ -314,15 +349,22 @@ private final class ComposerGalleryDragState: ObservableObject {
         return provider
     }
 
-    func accept(_ provider: NSItemProvider, target: ComposerGalleryDropTarget, onReorder: @escaping ([String]) -> Void) {
+    func accept(
+        _ provider: NSItemProvider, target: ComposerGalleryDropTarget,
+        onReorder: @escaping ([String]) -> Void
+    ) {
         self.target = nil
         stopScrolling()
-        provider.loadDataRepresentation(forTypeIdentifier: ComposerMediaGallery.slotDragType.identifier) { data, _ in
+        provider.loadDataRepresentation(
+            forTypeIdentifier: ComposerMediaGallery.slotDragType.identifier
+        ) { data, _ in
             Task { @MainActor in
                 guard let data,
-                      let value = try? JSONDecoder().decode(ComposerGalleryDragPayload.self, from: data),
-                      self.canDrop, value == self.payload, value.galleryID == self.galleryID,
-                      self.ids.contains(target.id), self.ids.contains(value.slotID) else { return }
+                    let value = try? JSONDecoder().decode(
+                        ComposerGalleryDragPayload.self, from: data),
+                    self.canDrop, value == self.payload, value.galleryID == self.galleryID,
+                    self.ids.contains(target.id), self.ids.contains(value.slotID)
+                else { return }
                 self.payload = nil
                 guard value.slotID != target.id else { return }
                 var reordered = self.ids
@@ -347,12 +389,12 @@ private final class ComposerGalleryDragState: ObservableObject {
         scrollTask = Task { @MainActor [weak self] in
             var index = start
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .milliseconds(450)) }
-                catch { return }
+                do { try await Task.sleep(for: .milliseconds(450)) } catch { return }
                 guard let self, self.canDrop else { return }
                 index += direction
                 guard self.ids.indices.contains(index) else { return }
-                self.scrollTarget = ComposerGalleryDropTarget(id: self.ids[index], after: direction > 0)
+                self.scrollTarget = ComposerGalleryDropTarget(
+                    id: self.ids[index], after: direction > 0)
             }
         }
     }
@@ -413,7 +455,8 @@ private struct ComposerGalleryDropDelegate: DropDelegate {
     private func target(for info: DropInfo) -> ComposerGalleryDropTarget {
         ComposerGalleryDropTarget(
             id: targetID,
-            after: usesVerticalInsertion ? info.location.y > size.height / 2 : info.location.x > size.width / 2
+            after: usesVerticalInsertion
+                ? info.location.y > size.height / 2 : info.location.x > size.width / 2
         )
     }
 }

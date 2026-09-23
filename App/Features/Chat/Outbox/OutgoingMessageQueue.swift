@@ -34,7 +34,8 @@ final class OutgoingMessageQueue: ObservableObject {
     private let localStoreFactory: @Sendable (Int32) async throws -> ChahuaLocalStore
     private let onInvalidToken: @MainActor @Sendable () async -> Void
     // A narrow fault-injection boundary; all persistence still uses the concrete store.
-    private let beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)?
+    private let beforeStorageOperation:
+        (@MainActor @Sendable (StorageOperation) async throws -> Void)?
     private var store: ChahuaLocalStore?
     private var requestedUID: Int32?
     private var generation: UInt64 = 0
@@ -56,7 +57,8 @@ final class OutgoingMessageQueue: ObservableObject {
         apiClient: any ChahuaAPIClient,
         localStoreFactory: @escaping @Sendable (Int32) async throws -> ChahuaLocalStore,
         onInvalidToken: @escaping @MainActor @Sendable () async -> Void,
-        beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)? = nil
+        beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)? =
+            nil
     ) {
         self.apiClient = apiClient
         self.localStoreFactory = localStoreFactory
@@ -115,11 +117,14 @@ final class OutgoingMessageQueue: ObservableObject {
             guard let self else { return }
             await self.stopWorkers()
             guard self.generation == current, self.transportGeneration == transport,
-                  active, self.storageState == .ready, let store = self.store else { return }
+                active, self.storageState == .ready, let store = self.store
+            else { return }
             do {
                 try await self.checkpoint(.restore, generation: current)
                 let restored = try await store.restore()
-                guard self.generation == current, self.transportGeneration == transport else { return }
+                guard self.generation == current, self.transportGeneration == transport else {
+                    return
+                }
                 for snapshot in restored { self.publish(snapshot) }
                 self.transportReady = true
                 self.wakeWorkers()
@@ -154,20 +159,28 @@ final class OutgoingMessageQueue: ObservableObject {
 
     /// A known acknowledgement is hidden until its durable deletion succeeds.
     func pendingMessages(chatID: String, threadID: String? = nil) -> [LocalOutgoingMessage] {
-        let outgoing = snapshots[ConversationKey(chatID: chatID, threadID: threadID)]?.outgoing ?? []
+        let outgoing =
+            snapshots[ConversationKey(chatID: chatID, threadID: threadID)]?.outgoing ?? []
         guard !acknowledgements.isEmpty else { return outgoing }
         return outgoing.filter { acknowledgements[$0.clientGeneratedID] == nil }
     }
 
-    func saveDraft(chatID: String, threadID: String? = nil, text: String, editRevision: Int64, updatedAt: Date, replyToMessage: MessagePreview? = nil) async throws {
+    func saveDraft(
+        chatID: String, threadID: String? = nil, text: String, editRevision: Int64, updatedAt: Date,
+        replyToMessage: MessagePreview? = nil
+    ) async throws {
         let current = generation
         guard let store, requestedUID != nil else {
-            logStorageError(QueueError.storageUnavailable, operation: "save draft (storage unavailable)", generation: current)
+            logStorageError(
+                QueueError.storageUnavailable, operation: "save draft (storage unavailable)",
+                generation: current)
             throw QueueError.storageUnavailable
         }
         do {
             try await checkpoint(.saveDraft, generation: current)
-            let snapshot = try await store.saveDraft(chatID: chatID, threadID: threadID, text: text, editRevision: editRevision, updatedAt: updatedAt, replyToMessage: replyToMessage)
+            let snapshot = try await store.saveDraft(
+                chatID: chatID, threadID: threadID, text: text, editRevision: editRevision,
+                updatedAt: updatedAt, replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
         } catch {
@@ -177,12 +190,18 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func enqueueText(chatID: String, threadID: String? = nil, text: String, clearedDraftRevision: Int64, replyToMessage: MessagePreview? = nil) async throws {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !draftAttachments(chatID: chatID, threadID: threadID).isEmpty
+    func enqueueText(
+        chatID: String, threadID: String? = nil, text: String, clearedDraftRevision: Int64,
+        replyToMessage: MessagePreview? = nil
+    ) async throws {
+        guard
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !draftAttachments(chatID: chatID, threadID: threadID).isEmpty
         else { throw LocalStorageError.blankMessage }
         guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed,
-            !attachmentMutationConversations.contains(ConversationKey(chatID: chatID, threadID: threadID)) else {
+            !attachmentMutationConversations.contains(
+                ConversationKey(chatID: chatID, threadID: threadID))
+        else {
             throw QueueError.storageUnavailable
         }
         let current = generation
@@ -190,7 +209,10 @@ final class OutgoingMessageQueue: ObservableObject {
         let date = Date()
         do {
             try await checkpoint(.enqueue, generation: current)
-            let snapshot = try await store.enqueueText(chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: id, text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision, replyToMessage: replyToMessage)
+            let snapshot = try await store.enqueueText(
+                chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: id,
+                text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision,
+                replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
             wakeWorker(key: snapshot.conversationKey)
@@ -200,8 +222,12 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func enqueueSticker(chatID: String, threadID: String? = nil, sticker: MessageStickerResponse, replyToMessage: MessagePreview? = nil) async throws {
-        guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed else {
+    func enqueueSticker(
+        chatID: String, threadID: String? = nil, sticker: MessageStickerResponse,
+        replyToMessage: MessagePreview? = nil
+    ) async throws {
+        guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed
+        else {
             throw QueueError.storageUnavailable
         }
         let current = generation
@@ -221,10 +247,13 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func enqueueVoice(chatID: String, threadID: String? = nil, fileURL: URL, replyToMessage: MessagePreview? = nil) async throws {
+    func enqueueVoice(
+        chatID: String, threadID: String? = nil, fileURL: URL, replyToMessage: MessagePreview? = nil
+    ) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed,
-              !attachmentMutationConversations.contains(key) else {
+            !attachmentMutationConversations.contains(key)
+        else {
             throw QueueError.storageUnavailable
         }
         let current = generation
@@ -236,13 +265,15 @@ final class OutgoingMessageQueue: ObservableObject {
             }
         }
         // Keep the recorder's source intact until both the account copy and row are durable.
-        let attachment = try await OutgoingVoiceFiles.importVoice(from: fileURL, directory: store.directory)
+        let attachment = try await OutgoingVoiceFiles.importVoice(
+            from: fileURL, directory: store.directory)
         try checkGeneration(current)
         try Task.checkCancellation()
         do {
             try await checkpoint(.enqueue, generation: current)
             let snapshot = try await store.enqueueVoice(
-                chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: UUID().uuidString,
+                chatID: chatID, threadID: threadID, senderID: uid,
+                clientGeneratedID: UUID().uuidString,
                 attachment: attachment, enqueuedAt: Date(), replyToMessage: replyToMessage)
             try checkGeneration(current)
             publish(snapshot)
@@ -253,12 +284,19 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func retry(chatID: String, threadID: String? = nil, clientGeneratedID: String, scope: OutgoingRetryScope) async throws {
-        guard storageState == .ready, let store, !authenticationFailed else { throw QueueError.storageUnavailable }
+    func retry(
+        chatID: String, threadID: String? = nil, clientGeneratedID: String,
+        scope: OutgoingRetryScope
+    ) async throws {
+        guard storageState == .ready, let store, !authenticationFailed else {
+            throw QueueError.storageUnavailable
+        }
         let current = generation
         do {
             try await checkpoint(.retry, generation: current)
-            let snapshot = try await store.retry(chatID: chatID, threadID: threadID, clientGeneratedID: clientGeneratedID, scope: scope)
+            let snapshot = try await store.retry(
+                chatID: chatID, threadID: threadID, clientGeneratedID: clientGeneratedID,
+                scope: scope)
             try checkGeneration(current)
             publish(snapshot)
             wakeWorker(key: snapshot.conversationKey)
@@ -270,13 +308,19 @@ final class OutgoingMessageQueue: ObservableObject {
 
     func acceptAcknowledgement(_ message: MessageResponse) async -> Bool {
         guard let store, let uid = requestedUID, !message.clientGeneratedId.isEmpty,
-              message.sender.uid == uid else { return false }
+            message.sender.uid == uid
+        else { return false }
         let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
-        let known = snapshots[key]?.outgoing.first { $0.clientGeneratedID == message.clientGeneratedId }
+        let known = snapshots[key]?.outgoing.first {
+            $0.clientGeneratedID == message.clientGeneratedId
+        }
         let retained = acknowledgements[message.clientGeneratedId]
-        guard known.map({ matches(message, pending: $0) }) == true ||
-                (retained?.chatId == message.chatId && retained?.replyRootId == message.replyRootId &&
-                 retained?.sender.uid == message.sender.uid) else { return false }
+        guard
+            known.map({ matches(message, pending: $0) }) == true
+                || (retained?.chatId == message.chatId
+                    && retained?.replyRootId == message.replyRootId
+                    && retained?.sender.uid == message.sender.uid)
+        else { return false }
         let current = generation
         await acknowledge(message, store: store, generation: current)
         return generation == current
@@ -293,7 +337,9 @@ final class OutgoingMessageQueue: ObservableObject {
             for message in Array(acknowledgements.values) {
                 operation = "replay acknowledgement"
                 try await checkpoint(.acknowledge, generation: current)
-                let snapshot = try await local.acknowledge(chatID: message.chatId, threadID: message.replyRootId, clientGeneratedID: message.clientGeneratedId)
+                let snapshot = try await local.acknowledge(
+                    chatID: message.chatId, threadID: message.replyRootId,
+                    clientGeneratedID: message.clientGeneratedId)
                 try checkGeneration(current)
                 publish(snapshot, acknowledging: message)
                 acknowledgements[message.clientGeneratedId] = nil
@@ -302,7 +348,9 @@ final class OutgoingMessageQueue: ObservableObject {
             for pending in Array(uncommittedFailures.values) {
                 operation = "replay send failure"
                 try await checkpoint(.fail, generation: current)
-                let snapshot = try await local.fail(chatID: pending.chatID, threadID: pending.threadID, clientGeneratedID: pending.clientGeneratedID)
+                let snapshot = try await local.fail(
+                    chatID: pending.chatID, threadID: pending.threadID,
+                    clientGeneratedID: pending.clientGeneratedID)
                 try checkGeneration(current)
                 publish(snapshot)
                 uncommittedFailures[pending.clientGeneratedID] = nil
@@ -344,9 +392,12 @@ final class OutgoingMessageQueue: ObservableObject {
 
     private func wakeWorker(key: ConversationKey) {
         guard foregroundActive, transportReady, storageState == .ready, !authenticationFailed,
-              workers[key] == nil, let store,
-              let head = snapshots[key]?.outgoing.first(where: { acknowledgements[$0.clientGeneratedID] == nil }),
-              head.state == .queued, head.attachments.allSatisfy({ $0.isUploaded && $0.error == nil }) else { return }
+            workers[key] == nil, let store,
+            let head = snapshots[key]?.outgoing.first(where: {
+                acknowledgements[$0.clientGeneratedID] == nil
+            }),
+            head.state == .queued, head.attachments.allSatisfy({ $0.isUploaded && $0.error == nil })
+        else { return }
         let current = generation
         let transport = transportGeneration
         let id = UUID()
@@ -362,7 +413,9 @@ final class OutgoingMessageQueue: ObservableObject {
         workers[key] = (id, task)
     }
 
-    private func run(key: ConversationKey, store: ChahuaLocalStore, generation current: UInt64, transport: UInt64) async {
+    private func run(
+        key: ConversationKey, store: ChahuaLocalStore, generation current: UInt64, transport: UInt64
+    ) async {
         while canDispatch(generation: current, transport: transport) {
             let pending: LocalOutgoingMessage
             do {
@@ -371,7 +424,9 @@ final class OutgoingMessageQueue: ObservableObject {
                 let claim = try await store.claimNext(chatID: key.chatID, threadID: key.threadID)
                 guard generation == current else { return }
                 publish(claim.snapshot)
-                guard let message = claim.message, canDispatch(generation: current, transport: transport) else { return }
+                guard let message = claim.message,
+                    canDispatch(generation: current, transport: transport)
+                else { return }
                 pending = message
             } catch {
                 storageFailed(error, operation: "claim message", generation: current)
@@ -381,28 +436,41 @@ final class OutgoingMessageQueue: ObservableObject {
                 let body = pending.body
                 let response: MessageResponse
                 if let threadID = pending.threadID {
-                    response = try await apiClient.sendThreadMessage(chatID: pending.chatID, threadID: threadID, body: body)
+                    response = try await apiClient.sendThreadMessage(
+                        chatID: pending.chatID, threadID: threadID, body: body)
                 } else {
                     response = try await apiClient.sendMessage(chatID: pending.chatID, body: body)
                 }
                 guard generation == current else { return }
-                guard matches(response, pending: pending) else { throw QueueError.invalidAcknowledgement }
+                guard matches(response, pending: pending) else {
+                    throw QueueError.invalidAcknowledgement
+                }
                 // Even a socket-first success must emit this validated HTTP acknowledgement.
                 await acknowledge(response, store: store, generation: current)
             } catch {
-                guard generation == current, !Task.isCancelled, transportGeneration == transport else { return }
+                guard generation == current, !Task.isCancelled, transportGeneration == transport
+                else { return }
                 let invalidToken: Bool
-                if case APIError.invalidToken = error { invalidToken = true } else { invalidToken = false }
+                if case APIError.invalidToken = error {
+                    invalidToken = true
+                } else {
+                    invalidToken = false
+                }
                 if invalidToken {
                     authenticationFailed = true
                     for (otherKey, worker) in workers where otherKey != key { worker.task.cancel() }
                 }
                 if acknowledgements[pending.clientGeneratedID] == nil,
-                   snapshots[key]?.outgoing.contains(where: { $0.clientGeneratedID == pending.clientGeneratedID }) == true {
+                    snapshots[key]?.outgoing.contains(where: {
+                        $0.clientGeneratedID == pending.clientGeneratedID
+                    }) == true
+                {
                     uncommittedFailures[pending.clientGeneratedID] = pending
                     do {
                         try await checkpoint(.fail, generation: current)
-                        let snapshot = try await store.fail(chatID: key.chatID, threadID: key.threadID, clientGeneratedID: pending.clientGeneratedID)
+                        let snapshot = try await store.fail(
+                            chatID: key.chatID, threadID: key.threadID,
+                            clientGeneratedID: pending.clientGeneratedID)
                         try checkGeneration(current)
                         publish(snapshot)
                         uncommittedFailures[pending.clientGeneratedID] = nil
@@ -416,12 +484,18 @@ final class OutgoingMessageQueue: ObservableObject {
                     return
                 }
                 // A socket/history confirmation makes an obsolete HTTP error harmless.
-                if snapshots[key]?.outgoing.contains(where: { $0.clientGeneratedID == pending.clientGeneratedID }) == true { return }
+                if snapshots[key]?.outgoing.contains(where: {
+                    $0.clientGeneratedID == pending.clientGeneratedID
+                }) == true {
+                    return
+                }
             }
         }
     }
 
-    private func acknowledge(_ message: MessageResponse, store: ChahuaLocalStore, generation current: UInt64) async {
+    private func acknowledge(
+        _ message: MessageResponse, store: ChahuaLocalStore, generation current: UInt64
+    ) async {
         acknowledgements[message.clientGeneratedId] = message
         uncommittedFailures[message.clientGeneratedId] = nil
         do {
@@ -443,13 +517,15 @@ final class OutgoingMessageQueue: ObservableObject {
             storageFailed(error, operation: "acknowledge message", generation: current)
             events.send(.acknowledged(snapshot: nil, message: message))
         }
-        if generation == current { wakeWorker(key: ConversationKey(chatID: message.chatId, threadID: message.replyRootId)) }
+        if generation == current {
+            wakeWorker(key: ConversationKey(chatID: message.chatId, threadID: message.replyRootId))
+        }
     }
 
     private func matches(_ message: MessageResponse, pending: LocalOutgoingMessage) -> Bool {
-        !message.clientGeneratedId.isEmpty && message.clientGeneratedId == pending.clientGeneratedID &&
-            message.chatId == pending.chatID && message.replyRootId == pending.threadID &&
-            message.sender.uid == pending.senderID
+        !message.clientGeneratedId.isEmpty && message.clientGeneratedId == pending.clientGeneratedID
+            && message.chatId == pending.chatID && message.replyRootId == pending.threadID
+            && message.sender.uid == pending.senderID
     }
 
     func draftAttachments(chatID: String, threadID: String? = nil) -> [LocalOutgoingAttachment] {
@@ -457,11 +533,14 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     func compressionEnabled(chatID: String, threadID: String? = nil) -> Bool {
-        snapshots[ConversationKey(chatID: chatID, threadID: threadID)]?.draft.compressionEnabled ?? true
+        snapshots[ConversationKey(chatID: chatID, threadID: threadID)]?.draft.compressionEnabled
+            ?? true
     }
 
     func canModifyTail(itemID: String, chatID: String, threadID: String? = nil) -> Bool {
-        guard let snapshot = snapshots[ConversationKey(chatID: chatID, threadID: threadID)] else { return false }
+        guard let snapshot = snapshots[ConversationKey(chatID: chatID, threadID: threadID)] else {
+            return false
+        }
         let tail = snapshot.composingItem ?? snapshot.outgoing.last
         return tail?.clientGeneratedID == itemID && tail?.dispatchClaimed == false
     }
@@ -477,13 +556,15 @@ final class OutgoingMessageQueue: ObservableObject {
         let current = generation
         attachmentMutationConversations.insert(key)
         defer { if generation == current { attachmentMutationConversations.remove(key) } }
-        let snapshot = try await store.beginComposition(chatID: chatID, threadID: threadID, senderID: uid)
+        let snapshot = try await store.beginComposition(
+            chatID: chatID, threadID: threadID, senderID: uid)
         try checkGeneration(current)
         publish(snapshot)
         guard let item = snapshot.composingItem else { throw LocalStorageError.staleDraft }
         let processor = OutgoingImageProcessor(directory: store.directory)
         for url in urls {
-            let imported = try await processor.importImage(from: url, directory: store.directory, position: 0)
+            let imported = try await processor.importImage(
+                from: url, directory: store.directory, position: 0)
             try checkGeneration(current)
             guard let latest = snapshots[key]?.composingItem,
                 latest.clientGeneratedID == item.clientGeneratedID
@@ -492,7 +573,8 @@ final class OutgoingMessageQueue: ObservableObject {
             attachment.position = latest.attachments.count
             let updated = try await store.setCompositionAttachments(
                 chatID: chatID, threadID: threadID, itemID: latest.clientGeneratedID,
-                expectedRevision: latest.editRevision, attachments: latest.attachments + [attachment],
+                expectedRevision: latest.editRevision,
+                attachments: latest.attachments + [attachment],
                 compressionEnabled: latest.compressionEnabled)
             try checkGeneration(current)
             publish(updated)
@@ -524,8 +606,12 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func setCompressionEnabled(_ enabled: Bool, chatID: String, threadID: String? = nil) async throws {
-        try await changeAttachments(chatID: chatID, threadID: threadID, compression: enabled) { $0.attachments }
+    func setCompressionEnabled(_ enabled: Bool, chatID: String, threadID: String? = nil)
+        async throws
+    {
+        try await changeAttachments(chatID: chatID, threadID: threadID, compression: enabled) {
+            $0.attachments
+        }
     }
 
     private func changeAttachments(
@@ -534,7 +620,8 @@ final class OutgoingMessageQueue: ObservableObject {
     ) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard storageState == .ready, let store, let item = snapshots[key]?.composingItem,
-            !attachmentMutationConversations.contains(key) else {
+            !attachmentMutationConversations.contains(key)
+        else {
             throw QueueError.storageUnavailable
         }
         let current = generation
@@ -564,15 +651,20 @@ final class OutgoingMessageQueue: ObservableObject {
         let current = generation
         attachment.error = nil
         let updated = try await store.checkpointAttachment(
-            chatID: chatID, threadID: threadID, itemID: item.clientGeneratedID, attachment: attachment)
+            chatID: chatID, threadID: threadID, itemID: item.clientGeneratedID,
+            attachment: attachment)
         try checkGeneration(current)
         publish(updated)
         if !item.isBlocked, item.state == .failed {
-            try await retry(chatID: chatID, threadID: threadID, clientGeneratedID: item.clientGeneratedID, scope: .message)
+            try await retry(
+                chatID: chatID, threadID: threadID, clientGeneratedID: item.clientGeneratedID,
+                scope: .message)
         }
     }
 
-    func blockTail(chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64) async throws {
+    func blockTail(chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64)
+        async throws
+    {
         guard storageState == .ready, let store else { throw QueueError.storageUnavailable }
         let current = generation
         let snapshot = try await store.blockTail(
@@ -581,7 +673,9 @@ final class OutgoingMessageQueue: ObservableObject {
         publish(snapshot)
     }
 
-    func revokeTail(chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64) async throws {
+    func revokeTail(
+        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64
+    ) async throws {
         guard storageState == .ready, let store else { throw QueueError.storageUnavailable }
         let current = generation
         let snapshot = try await store.revokeTail(
@@ -601,52 +695,77 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    private func currentAttachment(item: LocalOutgoingMessage, attachment: LocalOutgoingAttachment) -> LocalOutgoingAttachment? {
+    private func currentAttachment(item: LocalOutgoingMessage, attachment: LocalOutgoingAttachment)
+        -> LocalOutgoingAttachment?
+    {
         guard let snapshot = snapshots[item.conversationKey],
             let current = (snapshot.outgoing + (snapshot.composingItem.map { [$0] } ?? []))
                 .first(where: { $0.clientGeneratedID == item.clientGeneratedID }),
             !current.dispatchClaimed
         else { return nil }
-        return current.attachments.first { $0.id == attachment.id && $0.generation == attachment.generation }
+        return current.attachments.first {
+            $0.id == attachment.id && $0.generation == attachment.generation
+        }
     }
 
     private func wakeAttachmentWorkers() {
-        guard foregroundActive, transportReady, storageState == .ready, !authenticationFailed, let store else { return }
+        guard foregroundActive, transportReady, storageState == .ready, !authenticationFailed,
+            let store
+        else { return }
         let items = attachmentItems.filter { !$0.dispatchClaimed && $0.state != .failed }
         let current = generation
         let transport = transportGeneration
         if preparationWorker == nil,
-            let item = items.first(where: { $0.attachments.contains { !$0.isAudio && !$0.isUploaded && $0.preparedPath == nil && $0.error == nil } }),
-            let attachment = item.attachments.first(where: { !$0.isAudio && !$0.isUploaded && $0.preparedPath == nil && $0.error == nil })
+            let item = items.first(where: {
+                $0.attachments.contains {
+                    !$0.isAudio && !$0.isUploaded && $0.preparedPath == nil && $0.error == nil
+                }
+            }),
+            let attachment = item.attachments.first(where: {
+                !$0.isAudio && !$0.isUploaded && $0.preparedPath == nil && $0.error == nil
+            })
         {
             let id = UUID()
             preparingAttachmentID = attachment.id
-            preparationWorker = (id, Task { [weak self] in
-                guard let self else { return }
-                await self.prepareAttachment(attachment, item: item, store: store, generation: current, transport: transport)
-                if self.preparationWorker?.id == id {
-                    self.preparationWorker = nil
-                    self.preparingAttachmentID = nil
+            preparationWorker = (
+                id,
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.prepareAttachment(
+                        attachment, item: item, store: store, generation: current,
+                        transport: transport)
+                    if self.preparationWorker?.id == id {
+                        self.preparationWorker = nil
+                        self.preparingAttachmentID = nil
+                    }
+                    self.wakeAttachmentWorkers()
                 }
-                self.wakeAttachmentWorkers()
-            })
+            )
         }
         guard transportReady else { return }
         for item in items {
-            for attachment in item.attachments where !attachment.isUploaded && attachment.preparedPath != nil && attachment.error == nil {
+            for attachment in item.attachments
+            where !attachment.isUploaded && attachment.preparedPath != nil
+                && attachment.error == nil
+            {
                 guard attachmentWorkers.count < 2 else { return }
                 guard attachmentWorkers[attachment.id] == nil else { continue }
                 let id = UUID()
-                attachmentWorkers[attachment.id] = (id, Task { [weak self] in
-                    guard let self else { return }
-                    await self.uploadAttachment(attachment, item: item, store: store, generation: current, transport: transport)
-                    if self.attachmentWorkers[attachment.id]?.id == id {
-                        self.attachmentWorkers[attachment.id] = nil
-                        self.attachmentProgress[attachment.id] = nil
+                attachmentWorkers[attachment.id] = (
+                    id,
+                    Task { [weak self] in
+                        guard let self else { return }
+                        await self.uploadAttachment(
+                            attachment, item: item, store: store, generation: current,
+                            transport: transport)
+                        if self.attachmentWorkers[attachment.id]?.id == id {
+                            self.attachmentWorkers[attachment.id] = nil
+                            self.attachmentProgress[attachment.id] = nil
+                        }
+                        self.wakeAttachmentWorkers()
+                        self.wakeWorker(key: item.conversationKey)
                     }
-                    self.wakeAttachmentWorkers()
-                    self.wakeWorker(key: item.conversationKey)
-                })
+                )
             }
         }
     }
@@ -659,10 +778,13 @@ final class OutgoingMessageQueue: ObservableObject {
             let prepared = try await OutgoingImageProcessor(directory: store.directory)
                 .prepare(attachment, compressionEnabled: item.compressionEnabled)
             guard canDispatch(generation: current, transport: transport),
-                currentAttachment(item: item, attachment: attachment) != nil else { return }
+                currentAttachment(item: item, attachment: attachment) != nil
+            else { return }
             try await persistAttachment(prepared, item: item, store: store, generation: current)
         } catch {
-            await attachmentFailed(error, attachment: attachment, item: item, store: store, generation: current, transport: transport)
+            await attachmentFailed(
+                error, attachment: attachment, item: item, store: store, generation: current,
+                transport: transport)
         }
     }
 
@@ -680,10 +802,12 @@ final class OutgoingMessageQueue: ObservableObject {
             // Allocation order is an initial hint; the final message's attachmentIds
             // sequence is authoritative, so a reorder must not restart this PUT.
             let allocation = try await apiClient.requestAttachmentUpload(
-                fileName: attachment.fileName, contentType: attachment.mimeType, size: attachment.byteCount,
+                fileName: attachment.fileName, contentType: attachment.mimeType,
+                size: attachment.byteCount,
                 width: attachment.width, height: attachment.height, order: attachment.position)
             guard canDispatch(generation: current, transport: transport),
-                currentAttachment(item: item, attachment: attachment) != nil else { return }
+                currentAttachment(item: item, attachment: attachment) != nil
+            else { return }
             let slotID = attachment.id
             let slotGeneration = attachment.generation
             let path = attachment.uploadPath
@@ -692,7 +816,8 @@ final class OutgoingMessageQueue: ObservableObject {
             ) { [weak self] progress in
                 Task { @MainActor [weak self] in
                     guard let self, self.generation == current,
-                        self.currentAttachment(item: item, attachment: original)?.generation == slotGeneration
+                        self.currentAttachment(item: item, attachment: original)?.generation
+                            == slotGeneration
                     else { return }
                     let previous = self.attachmentProgress[slotID] ?? -1
                     if progress == 1 || abs(progress - previous) >= 0.01 {
@@ -701,11 +826,14 @@ final class OutgoingMessageQueue: ObservableObject {
                 }
             }
             guard canDispatch(generation: current, transport: transport),
-                currentAttachment(item: item, attachment: attachment) != nil else { return }
+                currentAttachment(item: item, attachment: attachment) != nil
+            else { return }
             attachment.attachmentID = allocation.attachmentId
             try await persistAttachment(attachment, item: item, store: store, generation: current)
         } catch {
-            await attachmentFailed(error, attachment: attachment, item: item, store: store, generation: current, transport: transport)
+            await attachmentFailed(
+                error, attachment: attachment, item: item, store: store, generation: current,
+                transport: transport)
         }
     }
 
@@ -715,7 +843,8 @@ final class OutgoingMessageQueue: ObservableObject {
     ) async throws {
         do {
             let updated = try await store.checkpointAttachment(
-                chatID: item.chatID, threadID: item.threadID, itemID: item.clientGeneratedID, attachment: attachment)
+                chatID: item.chatID, threadID: item.threadID, itemID: item.clientGeneratedID,
+                attachment: attachment)
             try checkGeneration(current)
             publish(updated)
         } catch {
@@ -725,7 +854,8 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func attachmentFailed(
-        _ error: Error, attachment: LocalOutgoingAttachment, item: LocalOutgoingMessage, store: ChahuaLocalStore,
+        _ error: Error, attachment: LocalOutgoingAttachment, item: LocalOutgoingMessage,
+        store: ChahuaLocalStore,
         generation current: UInt64, transport: UInt64
     ) async {
         guard canDispatch(generation: current, transport: transport),
@@ -748,7 +878,8 @@ final class OutgoingMessageQueue: ObservableObject {
         case tooLarge(Int64)
         var errorDescription: String? {
             switch self {
-            case .tooLarge(let bytes): "Attachment exceeds the server limit of \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))."
+            case .tooLarge(let bytes):
+                "Attachment exceeds the server limit of \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))."
             }
         }
     }
@@ -761,28 +892,38 @@ final class OutgoingMessageQueue: ObservableObject {
             guard let self, self.generation == current else { return }
             self.fileCleanupTask = nil
             guard self.storageState == .ready, self.preparationWorker == nil,
-                self.attachmentWorkers.isEmpty, self.attachmentMutationConversations.isEmpty else {
+                self.attachmentWorkers.isEmpty, self.attachmentMutationConversations.isEmpty
+            else {
                 self.scheduleFileCleanup()
                 return
             }
-            let retained = Set(self.attachmentItems.flatMap(\.attachments).flatMap {
-                [$0.sourcePath, $0.previewPath] + ($0.preparedPath.map { [$0] } ?? [])
-            })
+            let retained = Set(
+                self.attachmentItems.flatMap(\.attachments).flatMap {
+                    [$0.sourcePath, $0.previewPath] + ($0.preparedPath.map { [$0] } ?? [])
+                })
             // A grace period covers hosted pending-to-server preview handoff.
             // A fresh import has a unique path and a newer timestamp.
             try? await OutgoingFileCleanup.reclaim(
-                directory: store.directory, retaining: retained, olderThan: Date().addingTimeInterval(-60))
+                directory: store.directory, retaining: retained,
+                olderThan: Date().addingTimeInterval(-60))
         }
     }
 
-    private func publish(_ snapshot: LocalConversationSnapshot, acknowledging message: MessageResponse? = nil) {
-        let accepted = snapshots[snapshot.conversationKey].map { snapshot.revision >= $0.revision } ?? true
+    private func publish(
+        _ snapshot: LocalConversationSnapshot, acknowledging message: MessageResponse? = nil
+    ) {
+        let accepted =
+            snapshots[snapshot.conversationKey].map { snapshot.revision >= $0.revision } ?? true
         if accepted {
             let previous = snapshots[snapshot.conversationKey]
-            let oldSlots = (previous?.outgoing ?? []).flatMap(\.attachments)
+            let oldSlots =
+                (previous?.outgoing ?? []).flatMap(\.attachments)
                 + (previous?.composingItem?.attachments ?? [])
-            let newSlots = snapshot.outgoing.flatMap(\.attachments) + (snapshot.composingItem?.attachments ?? [])
-            let currentGenerations = Dictionary(uniqueKeysWithValues: newSlots.map { ($0.id, $0.generation) })
+            let newSlots =
+                snapshot.outgoing.flatMap(\.attachments)
+                + (snapshot.composingItem?.attachments ?? [])
+            let currentGenerations = Dictionary(
+                uniqueKeysWithValues: newSlots.map { ($0.id, $0.generation) })
             for slot in oldSlots where currentGenerations[slot.id] != slot.generation {
                 attachmentWorkers[slot.id]?.task.cancel()
                 if preparingAttachmentID == slot.id { preparationWorker?.task.cancel() }
@@ -802,11 +943,12 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func canDispatch(generation current: UInt64, transport: UInt64) -> Bool {
-        generation == current && transportGeneration == transport && !Task.isCancelled &&
-            foregroundActive && transportReady && storageState == .ready && !authenticationFailed
+        generation == current && transportGeneration == transport && !Task.isCancelled
+            && foregroundActive && transportReady && storageState == .ready && !authenticationFailed
     }
 
-    private func checkpoint(_ operation: StorageOperation, generation current: UInt64) async throws {
+    private func checkpoint(_ operation: StorageOperation, generation current: UInt64) async throws
+    {
         try await beforeStorageOperation?(operation)
         try checkGeneration(current)
     }
@@ -819,7 +961,8 @@ final class OutgoingMessageQueue: ObservableObject {
         guard generation == current, !(error is CancellationError) else { return }
         if let error = error as? LocalStorageError {
             switch error {
-            case .blankMessage, .staleDraft, .notTail, .dispatchAlreadyClaimed, .invalidAttachments, .unsupportedMessageType:
+            case .blankMessage, .staleDraft, .notTail, .dispatchAlreadyClaimed, .invalidAttachments,
+                .unsupportedMessageType:
                 logStorageError(error, operation: operation, generation: current, level: .default)
                 return
             case .unsupportedSchema, .corruptRecord:
@@ -830,13 +973,21 @@ final class OutgoingMessageQueue: ObservableObject {
         storageState = .failed
     }
 
-    private func logStorageError(_ error: Error, operation: String, generation current: UInt64, level: OSLogType = .error) {
+    private func logStorageError(
+        _ error: Error, operation: String, generation current: UInt64, level: OSLogType = .error
+    ) {
         guard generation == current, !(error is CancellationError) else { return }
         let error = error as NSError
         // SQLite and file errors can contain SQL values, message content, or paths.
-        Self.logger.log(level: level, "Local persistence failed: operation=\(operation, privacy: .public) domain=\(error.domain, privacy: .public) code=\(error.code, privacy: .public) details=\(error.description, privacy: .private)")
+        Self.logger.log(
+            level: level,
+            "Local persistence failed: operation=\(operation, privacy: .public) domain=\(error.domain, privacy: .public) code=\(error.code, privacy: .public) details=\(error.description, privacy: .private)"
+        )
         if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
-            Self.logger.log(level: level, "Local persistence underlying error: operation=\(operation, privacy: .public) domain=\(underlying.domain, privacy: .public) code=\(underlying.code, privacy: .public) details=\(underlying.description, privacy: .private)")
+            Self.logger.log(
+                level: level,
+                "Local persistence underlying error: operation=\(operation, privacy: .public) domain=\(underlying.domain, privacy: .public) code=\(underlying.code, privacy: .public) details=\(underlying.description, privacy: .private)"
+            )
         }
     }
 }
@@ -846,7 +997,9 @@ final class OutgoingMessageQueue: ObservableObject {
 nonisolated private enum OutgoingVoiceFiles {
     enum ImportError: LocalizedError {
         case invalidAudio
-        var errorDescription: String? { String(localized: "The voice recording is not a valid M4A file.") }
+        var errorDescription: String? {
+            String(localized: "The voice recording is not a valid M4A file.")
+        }
     }
 
     static func importVoice(from url: URL, directory: URL) async throws -> LocalOutgoingAttachment {
@@ -855,30 +1008,39 @@ nonisolated private enum OutgoingVoiceFiles {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             guard url.isFileURL,
-                  try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            else {
                 throw ImportError.invalidAudio
             }
             let root = try OutgoingImageFiles.root(directory)
             let manager = FileManager.default
             let outbox = root.appendingPathComponent("Outbox", isDirectory: true)
-            try manager.createDirectory(at: outbox, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try manager.createDirectory(
+                at: outbox, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
             try OutgoingImageFiles.checkOutbox(outbox, root: root)
             let id = UUID().uuidString
             let staging = outbox.appendingPathComponent(".\(id).import", isDirectory: true)
             let installed = outbox.appendingPathComponent(id, isDirectory: true)
-            try manager.createDirectory(at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            try manager.createDirectory(
+                at: staging, withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700])
             defer { try? manager.removeItem(at: staging) }
             let copied = staging.appendingPathComponent("voice.m4a")
             let input = try FileHandle(forReadingFrom: url)
             defer { try? input.close() }
             // The recorder supplies an M4A container, never an image/video composition.
             guard let header = try input.read(upToCount: 12), header.count == 12,
-                  header[4..<8].elementsEqual("ftyp".utf8),
-                  url.pathExtension.lowercased() == "m4a" else {
+                header[4..<8].elementsEqual("ftyp".utf8),
+                url.pathExtension.lowercased() == "m4a"
+            else {
                 throw ImportError.invalidAudio
             }
             try input.seek(toOffset: 0)
-            guard manager.createFile(atPath: copied.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            guard
+                manager.createFile(
+                    atPath: copied.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            else {
                 throw CocoaError(.fileWriteUnknown)
             }
             let output = try FileHandle(forWritingTo: copied)
@@ -897,7 +1059,8 @@ nonisolated private enum OutgoingVoiceFiles {
             return LocalOutgoingAttachment(
                 id: id, generation: UUID().uuidString, position: 0,
                 sourcePath: path, preparedPath: path, previewPath: path,
-                fileName: "voice.m4a", mimeType: "audio/mp4", width: 0, height: 0, byteCount: byteCount)
+                fileName: "voice.m4a", mimeType: "audio/mp4", width: 0, height: 0,
+                byteCount: byteCount)
         }
         return try await withTaskCancellationHandler {
             try await worker.value

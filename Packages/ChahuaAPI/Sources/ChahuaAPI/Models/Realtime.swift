@@ -29,23 +29,49 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         let type = try container.decode(String.self, forKey: .type)
         switch type {
         case "pong": self = .pong
-        case "message": self = .message(try container.decode(MessageResponse.self, forKey: .payload))
-        case "messageUpdated": self = .messageUpdated(try container.decode(MessageResponse.self, forKey: .payload))
-        case "messageDeleted": self = .messageDeleted(try container.decode(MessageResponse.self, forKey: .payload))
-        case "messagesBulkDeleted": self = .messagesBulkDeleted(try container.decode(BulkDeletedPayload.self, forKey: .payload))
-        case "reactionUpdated": self = .reactionUpdated(try container.decode(ReactionUpdatePayload.self, forKey: .payload))
-        case "presenceUpdate": self = .presenceUpdate(try container.decode(PresenceUpdatePayload.self, forKey: .payload))
-        case "threadUpdate": self = .threadUpdate(try container.decode(ThreadUpdatePayload.self, forKey: .payload))
-        case "threadMembershipChanged": self = .threadMembershipChanged(try container.decode(ThreadMembershipChangedPayload.self, forKey: .payload))
-        case "chatArchiveStateChanged": self = .chatArchiveStateChanged(try container.decode(ChatArchiveStateChangedPayload.self, forKey: .payload))
-        case "pinAdded": self = .pinAdded(try container.decode(PinUpdatePayload.self, forKey: .payload))
-        case "threadPinAdded": self = .threadPinAdded(try container.decode(PinUpdatePayload.self, forKey: .payload))
-        case "pinRemoved": self = .pinRemoved(try container.decode(PinUpdatePayload.self, forKey: .payload))
-        case "threadPinRemoved": self = .threadPinRemoved(try container.decode(PinUpdatePayload.self, forKey: .payload))
-        case "stickerPackOrderUpdated": self = .stickerPackOrderUpdated(try container.decode(StickerPackOrderUpdatePayload.self, forKey: .payload))
-        case "friendRequestReceived": self = .friendRequestReceived(try container.decode(FriendRequestReceivedPayload.self, forKey: .payload))
-        case "friendRequestResolved": self = .friendRequestResolved(try container.decode(FriendRequestResolvedPayload.self, forKey: .payload))
-        case "friendshipRemoved": self = .friendshipRemoved(try container.decode(FriendshipRemovedPayload.self, forKey: .payload))
+        case "message":
+            self = .message(try container.decode(MessageResponse.self, forKey: .payload))
+        case "messageUpdated":
+            self = .messageUpdated(try container.decode(MessageResponse.self, forKey: .payload))
+        case "messageDeleted":
+            self = .messageDeleted(try container.decode(MessageResponse.self, forKey: .payload))
+        case "messagesBulkDeleted":
+            self = .messagesBulkDeleted(
+                try container.decode(BulkDeletedPayload.self, forKey: .payload))
+        case "reactionUpdated":
+            self = .reactionUpdated(
+                try container.decode(ReactionUpdatePayload.self, forKey: .payload))
+        case "presenceUpdate":
+            self = .presenceUpdate(
+                try container.decode(PresenceUpdatePayload.self, forKey: .payload))
+        case "threadUpdate":
+            self = .threadUpdate(try container.decode(ThreadUpdatePayload.self, forKey: .payload))
+        case "threadMembershipChanged":
+            self = .threadMembershipChanged(
+                try container.decode(ThreadMembershipChangedPayload.self, forKey: .payload))
+        case "chatArchiveStateChanged":
+            self = .chatArchiveStateChanged(
+                try container.decode(ChatArchiveStateChangedPayload.self, forKey: .payload))
+        case "pinAdded":
+            self = .pinAdded(try container.decode(PinUpdatePayload.self, forKey: .payload))
+        case "threadPinAdded":
+            self = .threadPinAdded(try container.decode(PinUpdatePayload.self, forKey: .payload))
+        case "pinRemoved":
+            self = .pinRemoved(try container.decode(PinUpdatePayload.self, forKey: .payload))
+        case "threadPinRemoved":
+            self = .threadPinRemoved(try container.decode(PinUpdatePayload.self, forKey: .payload))
+        case "stickerPackOrderUpdated":
+            self = .stickerPackOrderUpdated(
+                try container.decode(StickerPackOrderUpdatePayload.self, forKey: .payload))
+        case "friendRequestReceived":
+            self = .friendRequestReceived(
+                try container.decode(FriendRequestReceivedPayload.self, forKey: .payload))
+        case "friendRequestResolved":
+            self = .friendRequestResolved(
+                try container.decode(FriendRequestResolvedPayload.self, forKey: .payload))
+        case "friendshipRemoved":
+            self = .friendshipRemoved(
+                try container.decode(FriendshipRemovedPayload.self, forKey: .payload))
         default: self = .unknown(type: type)
         }
     }
@@ -124,7 +150,10 @@ public struct PinUpdatePayload: Decodable, Sendable {
     public let threadRootId: String?
     public let pin: PinResponse?
 
-    public init(chatId: String, pinId: String, messageId: String, threadRootId: String? = nil, pin: PinResponse? = nil) {
+    public init(
+        chatId: String, pinId: String, messageId: String, threadRootId: String? = nil,
+        pin: PinResponse? = nil
+    ) {
         self.chatId = chatId
         self.pinId = pinId
         self.messageId = messageId
@@ -142,7 +171,10 @@ public struct PinResponse: Decodable, Sendable {
     public let pinnedAt: Date
     public let expiresAt: Date?
 
-    public init(id: String, chatId: String, threadRootId: String? = nil, message: MessageResponse, pinnedBy: Int32, pinnedAt: Date, expiresAt: Date? = nil) {
+    public init(
+        id: String, chatId: String, threadRootId: String? = nil, message: MessageResponse,
+        pinnedBy: Int32, pinnedAt: Date, expiresAt: Date? = nil
+    ) {
         self.id = id
         self.chatId = chatId
         self.threadRootId = threadRootId

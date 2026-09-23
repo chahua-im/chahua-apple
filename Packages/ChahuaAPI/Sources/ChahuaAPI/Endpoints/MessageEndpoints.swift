@@ -57,16 +57,17 @@ public struct ListMessagesQuery: Sendable, Equatable {
     }
 }
 
-public extension ChahuaClient {
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+extension ChahuaClient {
+    public func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
         try await send(
-            HTTPRequestSpec.json(.post, ["chats", chatID, "read"], body: MarkReadBody(messageId: messageID)),
+            HTTPRequestSpec.json(
+                .post, ["chats", chatID, "read"], body: MarkReadBody(messageId: messageID)),
             decoding: ReadStateResponse.self
         )
     }
 
     /// Fetches a message page with authenticated `GET /chats/{chatID}/messages`.
-    func listMessages(
+    public func listMessages(
         chatID: String,
         query: ListMessagesQuery = .init()
     ) async throws -> ListMessagesResponse {
@@ -81,7 +82,7 @@ public extension ChahuaClient {
     }
 
     /// Sends a message with authenticated JSON `POST /chats/{chatID}/messages`.
-    func sendMessage(
+    public func sendMessage(
         chatID: String,
         body: CreateMessageBody
     ) async throws -> MessageResponse {
@@ -92,7 +93,7 @@ public extension ChahuaClient {
     }
 
     /// Fetches a recipient-personalized, authoritative message snapshot.
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+    public func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
         try await send(
             HTTPRequestSpec(method: .get, path: ["chats", chatID, "messages", messageID]),
             decoding: MessageResponse.self
@@ -100,7 +101,7 @@ public extension ChahuaClient {
     }
 
     /// Replaces the text of an existing message.
-    func updateMessage(
+    public func updateMessage(
         chatID: String,
         messageID: String,
         body: UpdateMessageBody
@@ -112,19 +113,24 @@ public extension ChahuaClient {
     }
 
     /// Recalls a message. Successful deletion returns an empty 204 response.
-    func deleteMessage(chatID: String, messageID: String) async throws {
-        try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "messages", messageID]))
+    public func deleteMessage(chatID: String, messageID: String) async throws {
+        try await send(
+            HTTPRequestSpec(method: .delete, path: ["chats", chatID, "messages", messageID]))
     }
 
-
     /// Adds the current user's reaction. The server returns an empty 204 response.
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
-        try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "messages", messageID, "reactions", emoji]))
+    public func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+        try await send(
+            HTTPRequestSpec(
+                method: .put, path: ["chats", chatID, "messages", messageID, "reactions", emoji]))
     }
 
     /// Removes the current user's reaction. Emoji remains one encoded path segment.
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
-        try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "messages", messageID, "reactions", emoji]))
+    public func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+        try await send(
+            HTTPRequestSpec(
+                method: .delete, path: ["chats", chatID, "messages", messageID, "reactions", emoji])
+        )
     }
 }
 public struct UpdateMessageBody: Codable, Hashable, Sendable {

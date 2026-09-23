@@ -103,7 +103,9 @@ final class StickerLibrary: ObservableObject {
                 return detail
             } catch {
                 if self.packLoadIDs[id] == requestID {
-                    await self.report(error, generation: requestGeneration, message: String(localized: "Couldn’t load sticker pack. Please try again."))
+                    await self.report(
+                        error, generation: requestGeneration,
+                        message: String(localized: "Couldn’t load sticker pack. Please try again."))
                 }
                 return nil
             }
@@ -145,7 +147,9 @@ final class StickerLibrary: ObservableObject {
                 return detail
             } catch {
                 if self.stickerLoadIDs[id] == requestID {
-                    await self.report(error, generation: requestGeneration, message: String(localized: "Couldn’t load sticker. Please try again."))
+                    await self.report(
+                        error, generation: requestGeneration,
+                        message: String(localized: "Couldn’t load sticker. Please try again."))
                 }
                 return nil
             }
@@ -167,7 +171,8 @@ final class StickerLibrary: ObservableObject {
     }
 
     func toggleFavorite(_ sticker: MessageStickerResponse) async {
-        guard !sticker.id.isEmpty, !pendingMutationIDs.contains(sticker.id), !Task.isCancelled else { return }
+        guard !sticker.id.isEmpty, !pendingMutationIDs.contains(sticker.id), !Task.isCancelled
+        else { return }
         let requestGeneration = generation
         let favorite = !isFavorite(sticker)
         pendingMutationIDs.insert(sticker.id)
@@ -183,12 +188,16 @@ final class StickerLibrary: ObservableObject {
             if isLoading { refreshChanges.append(.favorite(sticker, favorite)) }
             normalizeCaches()
         } catch {
-            await report(error, generation: requestGeneration, message: String(localized: "Couldn’t update favorite sticker. Please try again."))
+            await report(
+                error, generation: requestGeneration,
+                message: String(localized: "Couldn’t update favorite sticker. Please try again."))
         }
     }
 
     func setSubscribed(_ subscribed: Bool, pack: StickerPackSummary) async -> Bool {
-        guard !pack.id.isEmpty, !isOwnedPack(pack.id), !pendingMutationIDs.contains(pack.id), !Task.isCancelled else { return false }
+        guard !pack.id.isEmpty, !isOwnedPack(pack.id), !pendingMutationIDs.contains(pack.id),
+            !Task.isCancelled
+        else { return false }
         let requestGeneration = generation
         pendingMutationIDs.insert(pack.id)
         error = nil
@@ -205,7 +214,10 @@ final class StickerLibrary: ObservableObject {
             normalizeCaches()
             return true
         } catch {
-            await report(error, generation: requestGeneration, message: String(localized: "Couldn’t update sticker pack subscription. Please try again."))
+            await report(
+                error, generation: requestGeneration,
+                message: String(
+                    localized: "Couldn’t update sticker pack subscription. Please try again."))
             return false
         }
     }
@@ -249,13 +261,17 @@ final class StickerLibrary: ObservableObject {
             async let ownedRequest = apiClient.listOwnedStickerPacks()
             async let subscribedRequest = apiClient.listSubscribedStickerPacks()
             async let favoritesRequest = apiClient.listFavoriteStickers()
-            let (owned, subscribed, favoriteStickers) = try await (ownedRequest, subscribedRequest, favoritesRequest)
+            let (owned, subscribed, favoriteStickers) = try await (
+                ownedRequest, subscribedRequest, favoritesRequest
+            )
             try checkSession(requestGeneration)
             ownedPackIDs = Set(owned.map(\.id))
             var seen = Set<String>()
             var freshPacks = (owned + subscribed).filter { seen.insert($0.id).inserted }
             seen.removeAll(keepingCapacity: true)
-            var freshFavorites = favoriteStickers.filter { seen.insert($0.id).inserted }.map { withFavorite($0, true) }
+            var freshFavorites = favoriteStickers.filter { seen.insert($0.id).inserted }.map {
+                withFavorite($0, true)
+            }
             for change in refreshChanges {
                 switch change {
                 case .favorite(let sticker, let favorite):
@@ -268,17 +284,22 @@ final class StickerLibrary: ObservableObject {
             }
             serverPacks = freshPacks
             favorites = freshFavorites
-            favoriteOverrides = Dictionary(uniqueKeysWithValues: freshFavorites.map { ($0.id, true) })
+            favoriteOverrides = Dictionary(
+                uniqueKeysWithValues: freshFavorites.map { ($0.id, true) })
             subscriptionOverrides.removeAll()
             hasLoadedLibrary = true
             sortPacks()
             normalizeCaches()
         } catch {
-            await report(error, generation: requestGeneration, message: String(localized: "Couldn’t load stickers. Please try again."))
+            await report(
+                error, generation: requestGeneration,
+                message: String(localized: "Couldn’t load stickers. Please try again."))
         }
     }
 
-    private func updateFavorite(_ sticker: MessageStickerResponse, favorite: Bool, in values: inout [MessageStickerResponse]) {
+    private func updateFavorite(
+        _ sticker: MessageStickerResponse, favorite: Bool, in values: inout [MessageStickerResponse]
+    ) {
         if favorite {
             let updated = withFavorite(sticker, true)
             if let index = values.firstIndex(where: { $0.id == sticker.id }) {
@@ -291,7 +312,9 @@ final class StickerLibrary: ObservableObject {
         }
     }
 
-    private func updateSubscription(_ pack: StickerPackSummary, subscribed: Bool, in values: inout [StickerPackSummary]) {
+    private func updateSubscription(
+        _ pack: StickerPackSummary, subscribed: Bool, in values: inout [StickerPackSummary]
+    ) {
         if subscribed {
             var updated = pack
             updated.isSubscribed = true
@@ -308,7 +331,7 @@ final class StickerLibrary: ObservableObject {
     private func sortPacks() {
         packs = serverPacks.enumerated().sorted { lhs, rhs in
             switch (packOrder[lhs.element.id], packOrder[rhs.element.id]) {
-            case let (left?, right?) where left != right: left > right
+            case (let left?, let right?) where left != right: left > right
             case (_?, nil): true
             case (nil, _?): false
             default: lhs.offset < rhs.offset
@@ -329,17 +352,24 @@ final class StickerLibrary: ObservableObject {
     }
 
     private func normalized(_ detail: StickerPackDetailResponse) -> StickerPackDetailResponse {
-        StickerPackDetailResponse(pack: normalized(detail.pack), stickers: detail.stickers.map { withFavorite($0, isFavorite($0)) })
+        StickerPackDetailResponse(
+            pack: normalized(detail.pack),
+            stickers: detail.stickers.map { withFavorite($0, isFavorite($0)) })
     }
 
     private func normalized(_ detail: StickerDetailResponse) -> StickerDetailResponse {
-        StickerDetailResponse(sticker: withFavorite(detail.sticker, isFavorite(detail.sticker)), packs: detail.packs.map(normalized))
+        StickerDetailResponse(
+            sticker: withFavorite(detail.sticker, isFavorite(detail.sticker)),
+            packs: detail.packs.map(normalized))
     }
 
-    private func withFavorite(_ sticker: MessageStickerResponse, _ favorite: Bool) -> MessageStickerResponse {
+    private func withFavorite(_ sticker: MessageStickerResponse, _ favorite: Bool)
+        -> MessageStickerResponse
+    {
         guard sticker.isFavorited != favorite else { return sticker }
         return MessageStickerResponse(
-            id: sticker.id, emoji: sticker.emoji, createdAt: sticker.createdAt, isFavorited: favorite,
+            id: sticker.id, emoji: sticker.emoji, createdAt: sticker.createdAt,
+            isFavorited: favorite,
             media: sticker.media, name: sticker.name, description: sticker.description
         )
     }
@@ -354,8 +384,10 @@ final class StickerLibrary: ObservableObject {
         guard generation == requestGeneration else { throw CancellationError() }
     }
 
-    private func report(_ failure: Error, generation requestGeneration: Int, message: String) async {
-        guard generation == requestGeneration, !(failure is CancellationError), !Task.isCancelled else { return }
+    private func report(_ failure: Error, generation requestGeneration: Int, message: String) async
+    {
+        guard generation == requestGeneration, !(failure is CancellationError), !Task.isCancelled
+        else { return }
         error = message
         if case APIError.invalidToken = failure { await onInvalidToken() }
     }

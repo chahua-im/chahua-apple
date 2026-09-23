@@ -41,29 +41,38 @@ struct TimelineRowPresentation {
 
     /// Native metadata and the hosted duration label share the audio footer.
     var voiceMetrics: VoiceMessageBubbleMetrics {
-        .init(bodySize: environment.bodySize, captionSize: environment.captionSize, metadataSize: metadata?.size ?? .zero)
+        .init(
+            bodySize: environment.bodySize, captionSize: environment.captionSize,
+            metadataSize: metadata?.size ?? .zero)
     }
 
     /// Resolve only the source identifier here; playback owns all file/network I/O.
     var audioURL: URL? {
         guard case .message(let message) = row, message.entry.messageType == .audio,
-              message.entry.remoteMessage?.isDeleted != true else { return nil }
+            message.entry.remoteMessage?.isDeleted != true
+        else { return nil }
         switch message.entry {
         case .pending(let pending):
             guard pending.attachments.count == 1, let attachment = pending.attachments.first,
-                  attachment.mimeType.lowercased().hasPrefix("audio/"),
-                  !attachment.uploadPath.isEmpty else { return nil }
+                attachment.mimeType.lowercased().hasPrefix("audio/"),
+                !attachment.uploadPath.isEmpty
+            else { return nil }
             return URL(fileURLWithPath: attachment.uploadPath)
         case .remote(let remote):
             guard remote.attachments.count == 1, let attachment = remote.attachments.first,
-                  attachment.kind.lowercased().hasPrefix("audio/"), let url = URL(string: attachment.url),
-                  url.scheme?.lowercased() == "https", url.host?.isEmpty == false else { return nil }
+                attachment.kind.lowercased().hasPrefix("audio/"),
+                let url = URL(string: attachment.url),
+                url.scheme?.lowercased() == "https", url.host?.isEmpty == false
+            else { return nil }
             return url
         }
     }
 
     @MainActor
-    static func make(row: TimelineRow, currentUserProfile: MeResponse?, currentUserID: Int32?, isThreadTimeline: Bool, environment: TimelineLayoutEnvironment) -> Self {
+    static func make(
+        row: TimelineRow, currentUserProfile: MeResponse?, currentUserID: Int32?,
+        isThreadTimeline: Bool, environment: TimelineLayoutEnvironment
+    ) -> Self {
         var title: TitleContent?
         var reply: MessagePreview?
         var metadata: MessageMetadata?
@@ -79,58 +88,114 @@ struct TimelineRowPresentation {
             let sticker = message.entry.messageType == .sticker
             let audio = message.entry.messageType == .audio
             let supported = message.entry.messageType == .text || sticker || audio
-            sections.append(.kind(system ? "system" : deleted ? "deleted" : sticker ? "sticker" : audio ? "audio" : supported ? "text" : "unsupported"))
+            sections.append(
+                .kind(
+                    system
+                        ? "system"
+                        : deleted
+                            ? "deleted"
+                            : sticker
+                                ? "sticker" : audio ? "audio" : supported ? "text" : "unsupported"))
             if system {
                 standaloneText = deleted ? String(localized: "[Deleted]") : message.entry.text ?? ""
-                sections.append(.standalone(standaloneText!, author: remote?.sender.name.flatMap { $0.isEmpty ? nil : $0 }))
+                sections.append(
+                    .standalone(
+                        standaloneText!,
+                        author: remote?.sender.name.flatMap { $0.isEmpty ? nil : $0 }))
             } else {
                 let sender = remote?.sender
-                let profile = remote == nil && message.isOutgoing && currentUserProfile?.uid == message.entry.senderID ? currentUserProfile : nil
-                let name = sender?.name.flatMap { $0.isEmpty ? nil : $0 } ?? profile?.username ?? "User \(message.entry.senderID)"
-                title = message.showsSenderName && !sticker ? .init(name: name, userGroup: sender?.userGroup ?? profile?.userGroup, genderGlyph: (sender?.gender ?? profile?.gender) == 2 ? "♀" : "♂") : nil
-                sections.append(.grouping(outgoing: message.isOutgoing, position: message.groupPosition, title: title != nil, avatar: message.groupPosition == .single || message.groupPosition == .last))
+                let profile =
+                    remote == nil && message.isOutgoing
+                        && currentUserProfile?.uid == message.entry.senderID
+                    ? currentUserProfile : nil
+                let name =
+                    sender?.name.flatMap { $0.isEmpty ? nil : $0 } ?? profile?.username
+                    ?? "User \(message.entry.senderID)"
+                title =
+                    message.showsSenderName && !sticker
+                    ? .init(
+                        name: name, userGroup: sender?.userGroup ?? profile?.userGroup,
+                        genderGlyph: (sender?.gender ?? profile?.gender) == 2 ? "♀" : "♂") : nil
+                sections.append(
+                    .grouping(
+                        outgoing: message.isOutgoing, position: message.groupPosition,
+                        title: title != nil,
+                        avatar: message.groupPosition == .single || message.groupPosition == .last))
                 sections.append(.title(title))
                 if !deleted && supported {
                     reply = message.entry.replyToMessage.flatMap { $0.isDeleted ? nil : $0 }
-                    if let reply { sections.append(.reply(author: reply.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(reply.sender.uid)", preview: messagePreview(reply))) }
+                    if let reply {
+                        sections.append(
+                            .reply(
+                                author: reply.sender.name.flatMap { $0.isEmpty ? nil : $0 }
+                                    ?? "User \(reply.sender.uid)", preview: messagePreview(reply)))
+                    }
                     let text = message.entry.text ?? ""
                     let hasBody = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     let dimensions: [CGSize]
-                    if audio { dimensions = [] }
-                    else if case .pending(let pending) = message.entry { dimensions = pending.attachments.map(\.mediaDimensions) }
-                    else { dimensions = (remote?.attachments ?? []).map(\.mediaDimensions) }
+                    if audio {
+                        dimensions = []
+                    } else if case .pending(let pending) = message.entry {
+                        dimensions = pending.attachments.map(\.mediaDimensions)
+                    } else {
+                        dimensions = (remote?.attachments ?? []).map(\.mediaDimensions)
+                    }
                     overlay = sticker || (!audio && !dimensions.isEmpty && !hasBody)
                     if sticker {
-                        sections.append(.sticker(CGSize(width: Int(message.entry.sticker?.media.width ?? 0), height: Int(message.entry.sticker?.media.height ?? 0))))
+                        sections.append(
+                            .sticker(
+                                CGSize(
+                                    width: Int(message.entry.sticker?.media.width ?? 0),
+                                    height: Int(message.entry.sticker?.media.height ?? 0))))
                     } else if audio {
                         sections.append(.audio)
                     } else {
                         let names = MessageMentions.names(in: remote?.mentions ?? [])
                         let source = text as NSString
-                        let labels = MessageMentions.pattern.matches(in: text, range: NSRange(location: 0, length: source.length)).compactMap { match -> String? in
-                            guard let uid = Int32(source.substring(with: match.range(at: 1))) else { return nil }
+                        let labels = MessageMentions.pattern.matches(
+                            in: text, range: NSRange(location: 0, length: source.length)
+                        ).compactMap { match -> String? in
+                            guard let uid = Int32(source.substring(with: match.range(at: 1))) else {
+                                return nil
+                            }
                             return names[uid] ?? "User \(uid)"
                         }
                         sections.append(.body(hasBody ? text : "", mentionLabels: labels))
-                        sections.append(.media(dimensions, category: dimensions.count > 1 ? "gallery" : "single"))
+                        sections.append(
+                            .media(
+                                dimensions, category: dimensions.count > 1 ? "gallery" : "single"))
                     }
                     let formatter = DateFormatter()
-                    formatter.locale = Locale(identifier: environment.localeIdentifier + "@hours=h23")
+                    formatter.locale = Locale(
+                        identifier: environment.localeIdentifier + "@hours=h23")
                     formatter.timeZone = TimeZone(identifier: environment.timeZoneIdentifier)
                     formatter.dateFormat = "HH:mm"
-                    let time = formatter.string(from: message.entry.createdAt) + (remote?.isEdited == true ? " " + String(localized: "(Edited)") : "")
-                    metadata = MessageMetadata(time: time, state: message.isOutgoing ? message.entry.displayState : nil, isOutgoing: message.isOutgoing, isOverlay: overlay, fontSize: overlay ? environment.caption2Size : environment.captionSize)
+                    let time =
+                        formatter.string(from: message.entry.createdAt)
+                        + (remote?.isEdited == true ? " " + String(localized: "(Edited)") : "")
+                    metadata = MessageMetadata(
+                        time: time, state: message.isOutgoing ? message.entry.displayState : nil,
+                        isOutgoing: message.isOutgoing, isOverlay: overlay,
+                        fontSize: overlay ? environment.caption2Size : environment.captionSize)
                     sections.append(.metadata(metadata!.size, overlay: overlay))
                 } else {
-                    standaloneText = deleted ? String(localized: "Message deleted") : String(localized: "This message type isn’t supported yet")
+                    standaloneText =
+                        deleted
+                        ? String(localized: "Message deleted")
+                        : String(localized: "This message type isn’t supported yet")
                     sections.append(.standalone(standaloneText!, author: nil))
                 }
                 if !deleted {
                     for reaction in (remote?.reactions ?? []).sorted(by: Self.reactionOrder) {
-                        sections.append(.reaction(emoji: reaction.emoji, count: Int64(reaction.count), reactors: min(5, reaction.reactors?.count ?? 0)))
+                        sections.append(
+                            .reaction(
+                                emoji: reaction.emoji, count: Int64(reaction.count),
+                                reactors: min(5, reaction.reactors?.count ?? 0)))
                     }
                     if !isThreadTimeline, let count = remote?.threadInfo?.replyCount {
-                        threadLabel = count == 1 ? String(localized: "1 reply") : String(localized: "\(count) replies")
+                        threadLabel =
+                            count == 1
+                            ? String(localized: "1 reply") : String(localized: "\(count) replies")
                         sections.append(.thread(threadLabel!))
                     }
                 }
@@ -146,7 +211,10 @@ struct TimelineRowPresentation {
             standaloneText = String(localized: "Below are unread messages")
             sections = [.kind("unread"), .standalone(standaloneText!, author: nil)]
         }
-        return .init(row: row, environment: environment, title: title, reply: reply, metadata: metadata, metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText, layoutKey: .init(sections: sections))
+        return .init(
+            row: row, environment: environment, title: title, reply: reply, metadata: metadata,
+            metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText,
+            layoutKey: .init(sections: sections))
     }
 
     static func reactionOrder(_ lhs: ReactionSummary, _ rhs: ReactionSummary) -> Bool {

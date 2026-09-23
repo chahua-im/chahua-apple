@@ -16,7 +16,7 @@ struct MessageInteractionSource {
     let presentation: TimelineRowPresentation
     let layout: TimelineRowLayout
     #if os(iOS)
-    var pressFeedback: MessageBubblePressFeedback? = nil
+        var pressFeedback: MessageBubblePressFeedback? = nil
     #endif
 }
 
@@ -86,7 +86,9 @@ extension TimelineBubbleActions {
             && interactionContext == other.interactionContext
     }
 
-    func pinContext(for row: TimelineMessageRow, base: MessageInteractionContext) -> MessageInteractionContext {
+    func pinContext(for row: TimelineMessageRow, base: MessageInteractionContext)
+        -> MessageInteractionContext
+    {
         var result = base
         let id = row.entry.serverID ?? ""
         result.isPinned = pinnedMessageIDs.contains(id)

@@ -58,7 +58,8 @@ final class RealtimeCoordinator: ObservableObject {
         guard wasActive != isActive else { return }
         store.setForegroundActive(isActive)
         if let connection {
-            enqueuePresence(.appState(appState), on: connection, generation: generation, attempt: attempt)
+            enqueuePresence(
+                .appState(appState), on: connection, generation: generation, attempt: attempt)
         }
         if isActive {
             startIfNeeded()
@@ -97,20 +98,26 @@ final class RealtimeCoordinator: ObservableObject {
                     return
                 }
                 connection = socket
-                enqueuePresence(.appState(appState), on: socket, generation: currentGeneration, attempt: currentAttempt)
+                enqueuePresence(
+                    .appState(appState), on: socket, generation: currentGeneration,
+                    attempt: currentAttempt)
                 startHeartbeat(socket, generation: currentGeneration, attempt: currentAttempt)
                 startStableReset(generation: currentGeneration, attempt: currentAttempt)
                 startRecovery(generation: currentGeneration)
                 while generation == currentGeneration && !Task.isCancelled {
                     let event = try await socket.receive()
-                    guard generation == currentGeneration, attempt == currentAttempt, !Task.isCancelled else { break }
+                    guard generation == currentGeneration, attempt == currentAttempt,
+                        !Task.isCancelled
+                    else { break }
                     if case .pong = event {
                         awaitingPong = false
                         pongDeadline?.cancel()
                         pongDeadline = nil
                     } else {
                         await store.applyRealtimeEvent(event, currentUserID: uid)
-                        guard generation == currentGeneration, attempt == currentAttempt, !Task.isCancelled else { return }
+                        guard generation == currentGeneration, attempt == currentAttempt,
+                            !Task.isCancelled
+                        else { return }
                     }
                 }
             } catch {
@@ -138,8 +145,7 @@ final class RealtimeCoordinator: ObservableObject {
             let seconds = min(30.0, pow(2.0, Double(min(failures, 5))))
             failures += 1
             let delay = min(30.0, seconds * (1 + min(0.2, max(0, jitter()))))
-            do { try await sleep(.seconds(delay)) }
-            catch { return }
+            do { try await sleep(.seconds(delay)) } catch { return }
         }
     }
 
@@ -161,8 +167,9 @@ final class RealtimeCoordinator: ObservableObject {
         let task = Task { [weak self] in
             await previous?.value
             guard let self, !Task.isCancelled,
-                  self.generation == currentGeneration, self.attempt == currentAttempt,
-                  self.connection != nil else { return }
+                self.generation == currentGeneration, self.attempt == currentAttempt,
+                self.connection != nil
+            else { return }
             do {
                 switch frame {
                 case .appState(let state):
@@ -170,8 +177,12 @@ final class RealtimeCoordinator: ObservableObject {
                 case .ping:
                     // A simultaneous heartbeat must never reset an outstanding
                     // deadline; both timers can wake together after suspension.
-                    guard !self.awaitingPong else { await socket.close(); return }
-                    self.armPongDeadline(socket, generation: currentGeneration, attempt: currentAttempt)
+                    guard !self.awaitingPong else {
+                        await socket.close()
+                        return
+                    }
+                    self.armPongDeadline(
+                        socket, generation: currentGeneration, attempt: currentAttempt)
                     try await socket.sendPing(state: self.appState)
                 }
             } catch {
@@ -187,7 +198,8 @@ final class RealtimeCoordinator: ObservableObject {
         recovery?.cancel()
         recovery = Task { [weak self] in
             guard let self, !Task.isCancelled, self.generation == currentGeneration,
-                  !self.activeScenes.isEmpty else { return }
+                !self.activeScenes.isEmpty
+            else { return }
             async let chats: Void = self.store.refreshActiveConversations()
             async let archived: Void = self.store.refreshArchivedConversations()
             async let messages: Void = self.store.reconcileVisibleTimelines()
@@ -200,30 +212,41 @@ final class RealtimeCoordinator: ObservableObject {
         stableConnection = Task { [weak self, sleep] in
             do { try await sleep(.seconds(5)) } catch { return }
             guard let self, !Task.isCancelled,
-                  self.generation == currentGeneration, self.attempt == currentAttempt else { return }
+                self.generation == currentGeneration, self.attempt == currentAttempt
+            else { return }
             self.failures = 0
         }
     }
 
-    private func armPongDeadline(_ socket: any RealtimeConnection, generation currentGeneration: Int, attempt currentAttempt: Int) {
+    private func armPongDeadline(
+        _ socket: any RealtimeConnection, generation currentGeneration: Int,
+        attempt currentAttempt: Int
+    ) {
         awaitingPong = true
         pongDeadline?.cancel()
         pongDeadline = Task { [weak self, sleep] in
             do { try await sleep(.seconds(10)) } catch { return }
             guard let self, !Task.isCancelled, self.generation == currentGeneration,
-                  self.attempt == currentAttempt, self.awaitingPong else { return }
+                self.attempt == currentAttempt, self.awaitingPong
+            else { return }
             await socket.close()
         }
     }
 
-    private func startHeartbeat(_ socket: any RealtimeConnection, generation currentGeneration: Int, attempt currentAttempt: Int) {
+    private func startHeartbeat(
+        _ socket: any RealtimeConnection, generation currentGeneration: Int,
+        attempt currentAttempt: Int
+    ) {
         heartbeat?.cancel()
         heartbeat = Task { [weak self, sleep] in
             while !Task.isCancelled {
                 do { try await sleep(.seconds(10)) } catch { return }
                 guard let self, !Task.isCancelled, self.generation == currentGeneration,
-                      self.attempt == currentAttempt else { return }
-                await self.enqueuePresence(.ping, on: socket, generation: currentGeneration, attempt: currentAttempt).value
+                    self.attempt == currentAttempt
+                else { return }
+                await self.enqueuePresence(
+                    .ping, on: socket, generation: currentGeneration, attempt: currentAttempt
+                ).value
             }
         }
     }

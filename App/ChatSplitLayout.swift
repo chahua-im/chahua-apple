@@ -1,8 +1,8 @@
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
 
+#if os(macOS)
+    import AppKit
+#endif
 
 /// Shared geometry for the adaptive chat shell and its macOS window minimum.
 enum ChatSplitMetrics {
@@ -17,16 +17,16 @@ enum ChatSplitMetrics {
 }
 
 #if os(macOS)
-private struct ChatSplitResizingKey: EnvironmentKey {
-    nonisolated static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    var isChatSplitResizing: Bool {
-        get { self[ChatSplitResizingKey.self] }
-        set { self[ChatSplitResizingKey.self] = newValue }
+    private struct ChatSplitResizingKey: EnvironmentKey {
+        nonisolated static let defaultValue = false
     }
-}
+
+    extension EnvironmentValues {
+        var isChatSplitResizing: Bool {
+            get { self[ChatSplitResizingKey.self] }
+            set { self[ChatSplitResizingKey.self] = newValue }
+        }
+    }
 #endif
 
 struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
@@ -38,7 +38,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     @State private var preferredSidebarWidth = ChatSplitMetrics.initialSidebarWidth
     @State private var dragStartWidth: CGFloat?
     #if os(macOS)
-    @GestureState private var isResizing = false
+        @GestureState private var isResizing = false
     #endif
 
     init(
@@ -62,13 +62,13 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                 pane(
                     VStack(spacing: 0) {
                         #if os(macOS)
-                        SidebarWindowControls()
-                            .frame(height: 52)
+                            SidebarWindowControls()
+                                .frame(height: 52)
                         #endif
                         sidebar(isSplit)
                     }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(.regularMaterial),
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.regularMaterial),
                     width: isSplit ? sidebarWidth : (hasSelection ? 0 : proxy.size.width),
                     isVisible: isSplit || !hasSelection
                 )
@@ -87,23 +87,25 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                 )
             }
             #if os(macOS)
-            .environment(\.isChatSplitResizing, isSplit && isResizing)
-            .onChange(of: isResizing) { _, resizing in
-                // Gesture state also resets when SwiftUI cancels the drag.
-                if !resizing { dragStartWidth = nil }
-            }
+                .environment(\.isChatSplitResizing, isSplit && isResizing)
+                .onChange(of: isResizing) { _, resizing in
+                    // Gesture state also resets when SwiftUI cancels the drag.
+                    if !resizing { dragStartWidth = nil }
+                }
             #endif
             .onChange(of: isSplit) { _, split in
                 if !split { dragStartWidth = nil }
             }
         }
         #if os(macOS)
-        .ignoresSafeArea(.container, edges: .top)
+            .ignoresSafeArea(.container, edges: .top)
         #endif
         .background(ChahuaTheme.conversationBackground(for: colorScheme))
     }
 
-    private func pane<Content: View>(_ content: Content, width: CGFloat, isVisible: Bool) -> some View {
+    private func pane<Content: View>(_ content: Content, width: CGFloat, isVisible: Bool)
+        -> some View
+    {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .frame(width: max(0, width), alignment: .leading)
@@ -120,12 +122,12 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                     .contentShape(Rectangle())
                     .gesture(resizeGesture(availableWidth: availableWidth))
                     #if os(macOS)
-                    // SwiftUI's drag gesture does not expose a cursor affordance.
-                    // AppKit supplies the standard horizontal-resize cursor for this
-                    // macOS-only draggable hit area.
-                    .onHover { hovering in
-                        (hovering ? NSCursor.resizeLeftRight : .arrow).set()
-                    }
+                        // SwiftUI's drag gesture does not expose a cursor affordance.
+                        // AppKit supplies the standard horizontal-resize cursor for this
+                        // macOS-only draggable hit area.
+                        .onHover { hovering in
+                            (hovering ? NSCursor.resizeLeftRight : .arrow).set()
+                        }
                     #endif
                     .accessibilityLabel("Conversation list width")
                     .accessibilityValue("\(Int(effectiveSidebarWidth(for: availableWidth))) points")
@@ -153,12 +155,13 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
         // movement back into translation, so measure the pointer in a fixed space.
         DragGesture(minimumDistance: 0, coordinateSpace: .global)
             #if os(macOS)
-            .updating($isResizing) { _, resizing, _ in resizing = true }
+                .updating($isResizing) { _, resizing, _ in resizing = true }
             #endif
             .onChanged { value in
                 let startWidth = dragStartWidth ?? effectiveSidebarWidth(for: availableWidth)
                 if dragStartWidth == nil { dragStartWidth = startWidth }
-                preferredSidebarWidth = clampedSidebarWidth(startWidth + value.translation.width, availableWidth: availableWidth)
+                preferredSidebarWidth = clampedSidebarWidth(
+                    startWidth + value.translation.width, availableWidth: availableWidth)
             }
             .onEnded { _ in
                 dragStartWidth = nil
@@ -188,22 +191,22 @@ struct ChatFloatingHeader<Avatar: View>: View {
 
     var body: some View {
         #if os(macOS)
-        HStack(spacing: 8) {
-            navigationControl
-            identity
-        }
-        .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                navigationControl
+                identity
+            }
+            .frame(maxWidth: .infinity)
         #else
-        ZStack {
-            identity
-                .padding(.horizontal, onBack != nil || onClose != nil ? 52 : 0)
-            if onBack != nil || onClose != nil {
-                HStack {
-                    navigationControl
-                    Spacer(minLength: 0)
+            ZStack {
+                identity
+                    .padding(.horizontal, onBack != nil || onClose != nil ? 52 : 0)
+                if onBack != nil || onClose != nil {
+                    HStack {
+                        navigationControl
+                        Spacer(minLength: 0)
+                    }
                 }
             }
-        }
         #endif
     }
 
@@ -233,9 +236,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
         .padding(.leading, 6)
         .padding(.trailing, 14)
         #if os(macOS)
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         #else
-        .frame(minHeight: 44)
+            .frame(minHeight: 44)
         #endif
         .contentShape(Capsule())
         .modifier(ChatGlassSurface(cornerRadius: 24, isInteractive: onOpenInfo != nil))
@@ -244,60 +247,64 @@ struct ChatFloatingHeader<Avatar: View>: View {
     @ViewBuilder
     private var navigationControl: some View {
         if let onBack {
-            headerControl(action: onBack, systemImage: "chevron.backward", accessibilityLabel: "Back")
+            headerControl(
+                action: onBack, systemImage: "chevron.backward", accessibilityLabel: "Back")
         } else if let onClose {
-            headerControl(action: onClose, systemImage: "xmark", accessibilityLabel: "Close conversation")
+            headerControl(
+                action: onClose, systemImage: "xmark", accessibilityLabel: "Close conversation")
         }
     }
 
     @ViewBuilder
-    private func headerControl(action: @escaping () -> Void, systemImage: String, accessibilityLabel: String) -> some View {
+    private func headerControl(
+        action: @escaping () -> Void, systemImage: String, accessibilityLabel: String
+    ) -> some View {
         let label = Image(systemName: systemImage)
             .font(.system(size: 20, weight: .semibold))
             .frame(width: 44, height: 44)
             // Plain buttons must hit-test the full control, not just the symbol.
             .contentShape(Rectangle())
         #if os(macOS)
-        if #available(macOS 26, *) {
-            Button(action: action) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 36, height: 36)
-            }
+            if #available(macOS 26, *) {
+                Button(action: action) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .buttonSizing(.flexible)
                 .frame(width: 44, height: 44)
                 .accessibilityLabel(accessibilityLabel)
-        } else {
+            } else {
+                Button(action: action) { label }
+                    .buttonStyle(.plain)
+                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                    .accessibilityLabel(accessibilityLabel)
+            }
+        #else
             Button(action: action) { label }
                 .buttonStyle(.plain)
                 .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
                 .accessibilityLabel(accessibilityLabel)
-        }
-        #else
-        Button(action: action) { label }
-            .buttonStyle(.plain)
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
-            .accessibilityLabel(accessibilityLabel)
         #endif
     }
 }
 
 #if os(iOS)
-/// Keep native back navigation, but let messages scroll beneath the glass controls.
-/// The title bar's safe area becomes scroll breathing room, not an opaque layout band.
-struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
-    let title: String
-    var onOpenInfo: (() -> Void)?
-    @ViewBuilder var avatar: () -> Avatar
+    /// Keep native back navigation, but let messages scroll beneath the glass controls.
+    /// The title bar's safe area becomes scroll breathing room, not an opaque layout band.
+    struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
+        let title: String
+        var onOpenInfo: (() -> Void)?
+        @ViewBuilder var avatar: () -> Avatar
 
-    func body(content: Content) -> some View {
-        GeometryReader { geometry in
-            content
-                .environment(\.chatHeaderInset, geometry.safeAreaInsets.top + 12)
-                .ignoresSafeArea(.container, edges: .top)
-        }
+        func body(content: Content) -> some View {
+            GeometryReader { geometry in
+                content
+                    .environment(\.chatHeaderInset, geometry.safeAreaInsets.top + 12)
+                    .ignoresSafeArea(.container, edges: .top)
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
             .toolbarBackground(.hidden, for: .navigationBar)
@@ -306,8 +313,8 @@ struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
                     ChatFloatingHeader(title: title, onOpenInfo: onOpenInfo, avatar: avatar)
                 }
             }
+        }
     }
-}
 #endif
 
 struct ChatGlassSurface: ViewModifier {
@@ -358,7 +365,9 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
                                 GeometryReader { headerGeometry in
                                     Color.clear
                                         .onAppear { headerHeight = headerGeometry.size.height }
-                                        .onChange(of: headerGeometry.size.height) { _, height in headerHeight = height }
+                                        .onChange(of: headerGeometry.size.height) { _, height in
+                                            headerHeight = height
+                                        }
                                 }
                             }
                             .background(alignment: .top) {

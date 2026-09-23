@@ -1,6 +1,6 @@
+import ChahuaAPI
 import Combine
 import Foundation
-import ChahuaAPI
 import os
 
 @MainActor
@@ -161,7 +161,10 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    init(apiClient: any ChahuaAPIClient, outgoingQueue: OutgoingMessageQueue, onInvalidToken: @escaping @MainActor @Sendable () async -> Void) {
+    init(
+        apiClient: any ChahuaAPIClient, outgoingQueue: OutgoingMessageQueue,
+        onInvalidToken: @escaping @MainActor @Sendable () async -> Void
+    ) {
         self.apiClient = apiClient
         self.onInvalidToken = onInvalidToken
         self.outgoingQueue = outgoingQueue
@@ -183,10 +186,15 @@ final class ChatStore: ObservableObject {
         switch event {
         case .snapshot(let snapshot):
             guard installOutgoingSnapshot(snapshot) else { return }
-            conversationMessages.replacePending(chatID: snapshot.chatID, threadID: snapshot.threadID, with: pendingProjection(chatID: snapshot.chatID, threadID: snapshot.threadID))
+            conversationMessages.replacePending(
+                chatID: snapshot.chatID, threadID: snapshot.threadID,
+                with: pendingProjection(chatID: snapshot.chatID, threadID: snapshot.threadID))
         case .acknowledged(let snapshot, let message):
             if let snapshot { _ = installOutgoingSnapshot(snapshot) }
-            conversationMessages.replacePending(chatID: message.chatId, threadID: message.replyRootId, with: pendingProjection(chatID: message.chatId, threadID: message.replyRootId), acknowledging: message)
+            conversationMessages.replacePending(
+                chatID: message.chatId, threadID: message.replyRootId,
+                with: pendingProjection(chatID: message.chatId, threadID: message.replyRootId),
+                acknowledging: message)
             invalidateChatList()
         }
     }
@@ -201,14 +209,18 @@ final class ChatStore: ObservableObject {
     }
 
     private func pendingProjection(chatID: String, threadID: String?) -> [PendingOutgoingMessage] {
-        outgoingQueue.pendingMessages(chatID: chatID, threadID: threadID).sorted { $0.enqueueSequence < $1.enqueueSequence }.map { message in
-            let state: PendingOutgoingMessage.State = switch message.state {
-            case .queued: .queued
-            case .sending: .sending
-            case .failed: .failed
-            }
+        outgoingQueue.pendingMessages(chatID: chatID, threadID: threadID).sorted {
+            $0.enqueueSequence < $1.enqueueSequence
+        }.map { message in
+            let state: PendingOutgoingMessage.State =
+                switch message.state {
+                case .queued: .queued
+                case .sending: .sending
+                case .failed: .failed
+                }
             return PendingOutgoingMessage(
-                chatID: message.chatID, threadID: message.threadID, clientGeneratedID: message.clientGeneratedID,
+                chatID: message.chatID, threadID: message.threadID,
+                clientGeneratedID: message.clientGeneratedID,
                 body: .init(
                     messageType: message.messageType,
                     clientGeneratedId: message.clientGeneratedID,
@@ -261,9 +273,11 @@ final class ChatStore: ObservableObject {
         let currentRefresh = refreshGeneration
         let task = Task { [weak self] in
             guard let self, self.generation == requestGeneration,
-                  self.refreshGeneration == currentRefresh, !Task.isCancelled else { return }
+                self.refreshGeneration == currentRefresh, !Task.isCancelled
+            else { return }
             defer {
-                if self.generation == requestGeneration && self.refreshGeneration == currentRefresh {
+                if self.generation == requestGeneration && self.refreshGeneration == currentRefresh
+                {
                     self.refreshTasks[list] = nil
                     self.state[keyPath: list.refreshing] = false
                 }
@@ -271,7 +285,8 @@ final class ChatStore: ObservableObject {
             self.state[keyPath: list.refreshing] = true
             repeat {
                 self.dirtyLists.remove(list)
-                await self.refreshSnapshot(list, generation: requestGeneration, refreshGeneration: currentRefresh)
+                await self.refreshSnapshot(
+                    list, generation: requestGeneration, refreshGeneration: currentRefresh)
             } while self.generation == requestGeneration && self.refreshGeneration == currentRefresh
                 && self.dirtyLists.contains(list) && !Task.isCancelled
         }
@@ -279,16 +294,22 @@ final class ChatStore: ObservableObject {
         await task.value
     }
 
-    private func refreshSnapshot(_ list: ListKind, generation requestGeneration: Int, refreshGeneration currentRefresh: Int) async {
+    private func refreshSnapshot(
+        _ list: ListKind, generation requestGeneration: Int, refreshGeneration currentRefresh: Int
+    ) async {
         let initiallyLoaded = state[keyPath: list.phase] == .loaded
         let listRevision = listStateRevision
         if !initiallyLoaded { state[keyPath: list.phase] = .loading }
         do {
             switch list {
             case .chats, .archivedChats:
-                let chats = try await fetchChatList(archived: list.archived, generation: requestGeneration, refreshGeneration: currentRefresh)
+                let chats = try await fetchChatList(
+                    archived: list.archived, generation: requestGeneration,
+                    refreshGeneration: currentRefresh)
                 try Task.checkCancellation()
-                guard generation == requestGeneration, refreshGeneration == currentRefresh else { return }
+                guard generation == requestGeneration, refreshGeneration == currentRefresh else {
+                    return
+                }
                 guard listStateRevision == listRevision else {
                     dirtyLists.insert(list)
                     return
@@ -302,19 +323,30 @@ final class ChatStore: ObservableObject {
                     state.chats = chats
                 }
             case .threads, .archivedThreads:
-                let threads = try await fetchThreadList(archived: list.archived, generation: requestGeneration, refreshGeneration: currentRefresh)
+                let threads = try await fetchThreadList(
+                    archived: list.archived, generation: requestGeneration,
+                    refreshGeneration: currentRefresh)
                 try Task.checkCancellation()
-                guard generation == requestGeneration, refreshGeneration == currentRefresh else { return }
+                guard generation == requestGeneration, refreshGeneration == currentRefresh else {
+                    return
+                }
                 guard listStateRevision == listRevision else {
                     dirtyLists.insert(list)
                     return
                 }
-                let keys = Set(threads.lazy.map { ConversationKey(chatID: $0.chatId, threadID: $0.threadRootMessage.id) })
+                let keys = Set(
+                    threads.lazy.map {
+                        ConversationKey(chatID: $0.chatId, threadID: $0.threadRootMessage.id)
+                    })
                 if list.archived {
-                    state.threads.removeAll { keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id)) }
+                    state.threads.removeAll {
+                        keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id))
+                    }
                     state.archivedThreads = threads
                 } else {
-                    state.archivedThreads.removeAll { keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id)) }
+                    state.archivedThreads.removeAll {
+                        keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id))
+                    }
                     state.threads = threads
                 }
             }
@@ -322,7 +354,9 @@ final class ChatStore: ObservableObject {
             state[keyPath: list.phase] = .loaded
             state[keyPath: list.refreshFailed] = false
         } catch {
-            guard generation == requestGeneration, refreshGeneration == currentRefresh else { return }
+            guard generation == requestGeneration, refreshGeneration == currentRefresh else {
+                return
+            }
             if error is CancellationError {
                 if !initiallyLoaded { state[keyPath: list.phase] = .idle }
                 return
@@ -333,16 +367,22 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    private func fetchChatList(archived: Bool, generation requestGeneration: Int, refreshGeneration currentRefresh: Int) async throws -> [ChatListItem] {
+    private func fetchChatList(
+        archived: Bool, generation requestGeneration: Int, refreshGeneration currentRefresh: Int
+    ) async throws -> [ChatListItem] {
         var chats: [ChatListItem] = []
         var seenIDs = Set<String>()
         var cursors = Set<String>()
         var cursor: String?
         repeat {
-            let response = try await apiClient.listChats(query: ListChatsQuery(after: cursor, archived: archived))
+            let response = try await apiClient.listChats(
+                query: ListChatsQuery(after: cursor, archived: archived))
             try Task.checkCancellation()
-            guard generation == requestGeneration, refreshGeneration == currentRefresh else { throw CancellationError() }
-            for chat in response.chats where chat.archived == archived && seenIDs.insert(chat.id).inserted {
+            guard generation == requestGeneration, refreshGeneration == currentRefresh else {
+                throw CancellationError()
+            }
+            for chat in response.chats
+            where chat.archived == archived && seenIDs.insert(chat.id).inserted {
                 chats.append(chat)
             }
             cursor = response.nextCursor
@@ -351,17 +391,23 @@ final class ChatStore: ObservableObject {
         return chats
     }
 
-    private func fetchThreadList(archived: Bool, generation requestGeneration: Int, refreshGeneration currentRefresh: Int) async throws -> [ThreadListItem] {
+    private func fetchThreadList(
+        archived: Bool, generation requestGeneration: Int, refreshGeneration currentRefresh: Int
+    ) async throws -> [ThreadListItem] {
         var threads: [ThreadListItem] = []
         var seen = Set<ConversationKey>()
         var cursors = Set<String>()
         var cursor: String?
         repeat {
-            let response = try await apiClient.listThreads(query: .init(before: cursor, archived: archived))
+            let response = try await apiClient.listThreads(
+                query: .init(before: cursor, archived: archived))
             try Task.checkCancellation()
-            guard generation == requestGeneration, refreshGeneration == currentRefresh else { throw CancellationError() }
+            guard generation == requestGeneration, refreshGeneration == currentRefresh else {
+                throw CancellationError()
+            }
             for thread in response.threads where thread.archived == archived {
-                let key = ConversationKey(chatID: thread.chatId, threadID: thread.threadRootMessage.id)
+                let key = ConversationKey(
+                    chatID: thread.chatId, threadID: thread.threadRootMessage.id)
                 if seen.insert(key).inserted { threads.append(thread) }
             }
             cursor = response.nextCursor
@@ -409,11 +455,14 @@ final class ChatStore: ObservableObject {
     }
 
     private func performListActionRequest(
-        _ action: ConversationListAction, conversation: ConversationKey, generation requestGeneration: Int
+        _ action: ConversationListAction, conversation: ConversationKey,
+        generation requestGeneration: Int
     ) async {
         let item: ConversationListItem
         if let threadID = conversation.threadID {
-            guard let thread = thread(chatID: conversation.chatID, threadID: threadID) else { return }
+            guard let thread = thread(chatID: conversation.chatID, threadID: threadID) else {
+                return
+            }
             item = .thread(thread)
         } else {
             guard let chat = chat(id: conversation.chatID) else { return }
@@ -427,9 +476,11 @@ final class ChatStore: ObservableObject {
                 let archived = action == .archive
                 if let threadID = conversation.threadID {
                     if archived {
-                        try await apiClient.archiveThread(chatID: conversation.chatID, threadID: threadID)
+                        try await apiClient.archiveThread(
+                            chatID: conversation.chatID, threadID: threadID)
                     } else {
-                        try await apiClient.unarchiveThread(chatID: conversation.chatID, threadID: threadID)
+                        try await apiClient.unarchiveThread(
+                            chatID: conversation.chatID, threadID: threadID)
                     }
                 } else if archived {
                     try await apiClient.archiveChat(chatID: conversation.chatID)
@@ -442,15 +493,23 @@ final class ChatStore: ObservableObject {
                 switch item {
                 case .chat(let original):
                     let latest = chat(id: original.id) ?? original
-                    applyArchiveState(to: latest, archived: archived, mutedUntil: archived ? .distantFuture : nil)
+                    applyArchiveState(
+                        to: latest, archived: archived, mutedUntil: archived ? .distantFuture : nil)
                 case .thread(let original):
-                    let latest = thread(chatID: original.chatId, threadID: original.threadRootMessage.id) ?? original
-                    install(ThreadListItem(
-                        chatId: latest.chatId, chatName: latest.chatName, chatAvatar: latest.chatAvatar,
-                        threadRootMessage: latest.threadRootMessage, participants: latest.participants,
-                        lastReply: latest.lastReply, replyCount: latest.replyCount, lastReplyAt: latest.lastReplyAt,
-                        unreadCount: latest.unreadCount, lastReadMessageId: latest.lastReadMessageId,
-                        subscribedAt: latest.subscribedAt, archived: archived))
+                    let latest =
+                        thread(chatID: original.chatId, threadID: original.threadRootMessage.id)
+                        ?? original
+                    install(
+                        ThreadListItem(
+                            chatId: latest.chatId, chatName: latest.chatName,
+                            chatAvatar: latest.chatAvatar,
+                            threadRootMessage: latest.threadRootMessage,
+                            participants: latest.participants,
+                            lastReply: latest.lastReply, replyCount: latest.replyCount,
+                            lastReplyAt: latest.lastReplyAt,
+                            unreadCount: latest.unreadCount,
+                            lastReadMessageId: latest.lastReadMessageId,
+                            subscribedAt: latest.subscribedAt, archived: archived))
                 }
             case .mute, .unmute:
                 // Threads have no independent mute API. Never mutate their parent.
@@ -458,7 +517,8 @@ final class ChatStore: ObservableObject {
                 let mutedUntil: Date?
                 if action == .mute {
                     mutedUntil = try await apiClient.muteChat(
-                        chatID: conversation.chatID, durationSeconds: nil).mutedUntil
+                        chatID: conversation.chatID, durationSeconds: nil
+                    ).mutedUntil
                 } else {
                     try await apiClient.unmuteChat(chatID: conversation.chatID)
                     mutedUntil = nil
@@ -467,20 +527,27 @@ final class ChatStore: ObservableObject {
                 let latest = chat(id: conversation.chatID) ?? original
                 // DELETE /mute also unarchives the chat.
                 applyArchiveState(
-                    to: latest, archived: action == .unmute ? false : latest.archived, mutedUntil: mutedUntil)
+                    to: latest, archived: action == .unmute ? false : latest.archived,
+                    mutedUntil: mutedUntil)
             case .markRead:
-                guard item.unreadCount > 0, let messageID = item.readThroughMessageID else { return }
-                try await markRead(chatID: conversation.chatID, threadID: conversation.threadID, messageID: messageID)
+                guard item.unreadCount > 0, let messageID = item.readThroughMessageID else {
+                    return
+                }
+                try await markRead(
+                    chatID: conversation.chatID, threadID: conversation.threadID,
+                    messageID: messageID)
                 guard generation == requestGeneration else { return }
             case .markUnread:
-                guard case .chat(let chat) = item, chat.unreadCount == 0, chat.lastMessage != nil else { return }
+                guard case .chat(let chat) = item, chat.unreadCount == 0, chat.lastMessage != nil
+                else { return }
                 let response = try await apiClient.markChatUnread(chatID: conversation.chatID)
                 guard generation == requestGeneration else { return }
                 applyReadState(response, chatID: conversation.chatID, threadID: nil)
             }
             invalidateChatList()
         } catch {
-            guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled else { return }
+            guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled
+            else { return }
             listActionError = String(localized: "Couldn’t update conversation. Please try again.")
             // markRead owns its invalid-token handling, including notification cursors.
             if action != .markRead, case APIError.invalidToken = error { await onInvalidToken() }
@@ -493,12 +560,16 @@ final class ChatStore: ObservableObject {
 
     private func thread(chatID: String, threadID: String) -> ThreadListItem? {
         state.threads.first { $0.chatId == chatID && $0.threadRootMessage.id == threadID }
-            ?? state.archivedThreads.first { $0.chatId == chatID && $0.threadRootMessage.id == threadID }
+            ?? state.archivedThreads.first {
+                $0.chatId == chatID && $0.threadRootMessage.id == threadID
+            }
     }
 
     private func install(_ chat: ChatListItem) {
-        let target: WritableKeyPath<ChatState, [ChatListItem]> = chat.archived ? \.archivedChats : \.chats
-        let other: WritableKeyPath<ChatState, [ChatListItem]> = chat.archived ? \.chats : \.archivedChats
+        let target: WritableKeyPath<ChatState, [ChatListItem]> =
+            chat.archived ? \.archivedChats : \.chats
+        let other: WritableKeyPath<ChatState, [ChatListItem]> =
+            chat.archived ? \.chats : \.archivedChats
         state[keyPath: other].removeAll { $0.id == chat.id }
         if let index = state[keyPath: target].firstIndex(where: { $0.id == chat.id }) {
             state[keyPath: target][index] = chat
@@ -508,9 +579,13 @@ final class ChatStore: ObservableObject {
     }
 
     private func install(_ thread: ThreadListItem) {
-        let target: WritableKeyPath<ChatState, [ThreadListItem]> = thread.archived ? \.archivedThreads : \.threads
-        let other: WritableKeyPath<ChatState, [ThreadListItem]> = thread.archived ? \.threads : \.archivedThreads
-        state[keyPath: other].removeAll { $0.chatId == thread.chatId && $0.threadRootMessage.id == thread.threadRootMessage.id }
+        let target: WritableKeyPath<ChatState, [ThreadListItem]> =
+            thread.archived ? \.archivedThreads : \.threads
+        let other: WritableKeyPath<ChatState, [ThreadListItem]> =
+            thread.archived ? \.threads : \.archivedThreads
+        state[keyPath: other].removeAll {
+            $0.chatId == thread.chatId && $0.threadRootMessage.id == thread.threadRootMessage.id
+        }
         if let index = state[keyPath: target].firstIndex(where: {
             $0.chatId == thread.chatId && $0.threadRootMessage.id == thread.threadRootMessage.id
         }) {
@@ -521,11 +596,13 @@ final class ChatStore: ObservableObject {
     }
 
     private func applyArchiveState(to chat: ChatListItem, archived: Bool, mutedUntil: Date?) {
-        install(ChatListItem(
-            id: chat.id, name: chat.name, avatar: chat.avatar, lastMessageAt: chat.lastMessageAt,
-            unreadCount: chat.unreadCount, lastReadMessageId: chat.lastReadMessageId,
-            lastMessage: chat.lastMessage, mutedUntil: mutedUntil, archived: archived,
-            kind: chat.kind, peer: chat.peer))
+        install(
+            ChatListItem(
+                id: chat.id, name: chat.name, avatar: chat.avatar,
+                lastMessageAt: chat.lastMessageAt,
+                unreadCount: chat.unreadCount, lastReadMessageId: chat.lastReadMessageId,
+                lastMessage: chat.lastMessage, mutedUntil: mutedUntil, archived: archived,
+                kind: chat.kind, peer: chat.peer))
     }
 
     /// Threads may belong to an archived parent absent from the active chat list.
@@ -557,15 +634,19 @@ final class ChatStore: ObservableObject {
         let requestGeneration = generation
         do {
             async let infoRequest = apiClient.groupInfo(chatID: route.chatID)
-            async let messageRequest = apiClient.getMessage(chatID: route.chatID, messageID: route.messageID)
+            async let messageRequest = apiClient.getMessage(
+                chatID: route.chatID, messageID: route.messageID)
             let (info, message) = try await (infoRequest, messageRequest)
             try Task.checkCancellation()
             guard generation == requestGeneration else { throw CancellationError() }
             guard info.id == route.chatID,
-                  message.chatId == route.chatID,
-                  message.id == route.messageID,
-                  message.replyRootId == route.threadID else {
-                Self.logger.error("Notification navigation failed: server returned a different conversation or message")
+                message.chatId == route.chatID,
+                message.id == route.messageID,
+                message.replyRootId == route.threadID
+            else {
+                Self.logger.error(
+                    "Notification navigation failed: server returned a different conversation or message"
+                )
                 throw APIError.unexpectedResponse
             }
             let cached = chat(id: info.id)
@@ -596,7 +677,8 @@ final class ChatStore: ObservableObject {
         invalidationTask = Task { [weak self] in
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             guard let self, self.generation == requestGeneration,
-                  self.refreshGeneration == currentRefresh, !Task.isCancelled else { return }
+                self.refreshGeneration == currentRefresh, !Task.isCancelled
+            else { return }
             self.invalidationTask = nil
             let lists = self.dirtyLists.filter { self.refreshTasks[$0] == nil }
             await withTaskGroup(of: Void.self) { group in
@@ -616,17 +698,25 @@ final class ChatStore: ObservableObject {
             if !handled { conversationMessages.apply(.message(normalized)) }
             invalidateChatList()
         case .messageUpdated(let message):
-            conversationMessages.apply(.messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
+            conversationMessages.apply(
+                .messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
             invalidateChatList()
         case .messageDeleted(let message):
             drafts.redactReplyTargets([message.id], chatID: message.chatId)
-            conversationMessages.apply(.messageDeleted(message.normalizedForRealtime(currentUserID: currentUserID).redactedForDeletion()))
+            conversationMessages.apply(
+                .messageDeleted(
+                    message.normalizedForRealtime(currentUserID: currentUserID)
+                        .redactedForDeletion()))
             invalidateChatList()
         case .reactionUpdated(let payload):
-            conversationMessages.apply(.reactionUpdated(ReactionUpdatePayload(
-                messageId: payload.messageId, chatId: payload.chatId,
-                reactions: payload.reactions.map { $0.normalizedForRealtime(currentUserID: currentUserID) }
-            )))
+            conversationMessages.apply(
+                .reactionUpdated(
+                    ReactionUpdatePayload(
+                        messageId: payload.messageId, chatId: payload.chatId,
+                        reactions: payload.reactions.map {
+                            $0.normalizedForRealtime(currentUserID: currentUserID)
+                        }
+                    )))
         case .messagesBulkDeleted(let payload):
             drafts.redactReplyTargets(Set(payload.messageIds), chatID: payload.chatId)
             conversationMessages.apply(event)
@@ -637,7 +727,8 @@ final class ChatStore: ObservableObject {
             invalidateChatList()
         case .chatArchiveStateChanged(let payload):
             if let chat = chat(id: payload.chatId) {
-                applyArchiveState(to: chat, archived: payload.archived, mutedUntil: payload.mutedUntil)
+                applyArchiveState(
+                    to: chat, archived: payload.archived, mutedUntil: payload.mutedUntil)
             }
             invalidateChatList()
         case .threadMembershipChanged:
@@ -647,7 +738,7 @@ final class ChatStore: ObservableObject {
         case .stickerPackOrderUpdated(let payload):
             stickers.setPackOrder(payload.order)
         case .pong, .presenceUpdate, .pinAdded, .threadPinAdded,
-             .pinRemoved, .threadPinRemoved, .friendRequestReceived:
+            .pinRemoved, .threadPinRemoved, .friendRequestReceived:
             break
         case .unknown:
             break
@@ -656,7 +747,9 @@ final class ChatStore: ObservableObject {
 
     func updateMessage(_ message: MessageResponse, text: String) async -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text != message.message?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+        guard !text.isEmpty,
+            text != message.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else {
             return false
         }
         let requestGeneration = generation
@@ -682,7 +775,8 @@ final class ChatStore: ObservableObject {
 
     func deleteMessage(_ message: MessageResponse) async -> Bool {
         guard !message.isDeleted, message.messageType != .system,
-              deletingMessageIDs.insert(message.id).inserted else { return false }
+            deletingMessageIDs.insert(message.id).inserted
+        else { return false }
         let requestGeneration = generation
         defer { if generation == requestGeneration { deletingMessageIDs.remove(message.id) } }
         do {
@@ -712,10 +806,13 @@ final class ChatStore: ObservableObject {
 
     private func updateReadState(for model: ConversationTimelineModel) {
         if let threadID = model.threadID,
-           let thread = thread(chatID: model.chatID, threadID: threadID) {
-            model.updateReadState(unreadCount: thread.unreadCount, lastReadMessageID: thread.lastReadMessageId)
+            let thread = thread(chatID: model.chatID, threadID: threadID)
+        {
+            model.updateReadState(
+                unreadCount: thread.unreadCount, lastReadMessageID: thread.lastReadMessageId)
         } else if model.threadID == nil, let chat = chat(id: model.chatID) {
-            model.updateReadState(unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
+            model.updateReadState(
+                unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
         }
     }
 
@@ -745,13 +842,17 @@ final class ChatStore: ObservableObject {
         recoveryTasks[chatID] = Task { [weak self] in
             guard let self else { return }
             defer {
-                if self.generation == requestGeneration && self.recoveryGeneration == currentRecovery {
+                if self.generation == requestGeneration
+                    && self.recoveryGeneration == currentRecovery
+                {
                     self.recoveryTasks[chatID] = nil
                 }
             }
             repeat {
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-                guard self.generation == requestGeneration, self.recoveryGeneration == currentRecovery else { return }
+                guard self.generation == requestGeneration,
+                    self.recoveryGeneration == currentRecovery
+                else { return }
                 self.recoveryDirty.remove(chatID)
                 let models = self.visibleTimelines().filter { $0.chatID == chatID }
                 await withTaskGroup(of: Void.self) { group in
@@ -763,7 +864,9 @@ final class ChatStore: ObservableObject {
 
     func groupInfo(chatID: String) async throws -> GroupInfoResponse {
         let requestGeneration = generation
-        let response: GroupInfoResponse = try await performGroupRequest(generation: requestGeneration) {
+        let response: GroupInfoResponse = try await performGroupRequest(
+            generation: requestGeneration
+        ) {
             try await apiClient.groupInfo(chatID: chatID)
         }
         guard response.id == chatID else { throw APIError.unexpectedResponse }
@@ -777,7 +880,9 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse {
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws
+        -> MemberResponse
+    {
         let requestGeneration = generation
         let member: MemberResponse = try await serializeGroupMutation(chatID: chatID) {
             guard self.generation == requestGeneration else { throw CancellationError() }
@@ -818,7 +923,8 @@ final class ChatStore: ObservableObject {
         let mutedUntil: Date = try await serializeGroupMutation(chatID: chatID) {
             guard self.generation == requestGeneration else { throw CancellationError() }
             return try await self.performGroupRequest(generation: requestGeneration) {
-                try await self.apiClient.muteChat(chatID: chatID, durationSeconds: durationSeconds).mutedUntil
+                try await self.apiClient.muteChat(chatID: chatID, durationSeconds: durationSeconds)
+                    .mutedUntil
             }
         }
         guard generation == requestGeneration else { throw CancellationError() }
@@ -861,7 +967,9 @@ final class ChatStore: ObservableObject {
         invalidateChatList()
     }
 
-    func fetchMessages(chatID: String, query: ListMessagesQuery = .init()) async throws -> ListMessagesResponse {
+    func fetchMessages(chatID: String, query: ListMessagesQuery = .init()) async throws
+        -> ListMessagesResponse
+    {
         let requestGeneration = generation
         do {
             let response = try await apiClient.listMessages(chatID: chatID, query: query)
@@ -884,7 +992,8 @@ final class ChatStore: ObservableObject {
         do {
             let response: ReadStateResponse
             if let threadID {
-                response = try await apiClient.markThreadRead(chatID: chatID, threadID: threadID, messageID: messageID)
+                response = try await apiClient.markThreadRead(
+                    chatID: chatID, threadID: threadID, messageID: messageID)
             } else {
                 response = try await apiClient.markChatRead(chatID: chatID, messageID: messageID)
             }
@@ -903,22 +1012,30 @@ final class ChatStore: ObservableObject {
     private func applyReadState(_ response: ReadStateResponse, chatID: String, threadID: String?) {
         listStateRevision += 1
         if let threadID, let thread = thread(chatID: chatID, threadID: threadID) {
-            install(ThreadListItem(
-                chatId: thread.chatId, chatName: thread.chatName, chatAvatar: thread.chatAvatar,
-                threadRootMessage: thread.threadRootMessage, participants: thread.participants,
-                lastReply: thread.lastReply, replyCount: thread.replyCount, lastReplyAt: thread.lastReplyAt,
-                unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
-                subscribedAt: thread.subscribedAt, archived: thread.archived))
+            install(
+                ThreadListItem(
+                    chatId: thread.chatId, chatName: thread.chatName, chatAvatar: thread.chatAvatar,
+                    threadRootMessage: thread.threadRootMessage, participants: thread.participants,
+                    lastReply: thread.lastReply, replyCount: thread.replyCount,
+                    lastReplyAt: thread.lastReplyAt,
+                    unreadCount: response.unreadCount,
+                    lastReadMessageId: response.lastReadMessageId,
+                    subscribedAt: thread.subscribedAt, archived: thread.archived))
         } else if threadID == nil, let chat = chat(id: chatID) {
-            install(ChatListItem(
-                id: chat.id, name: chat.name, avatar: chat.avatar, lastMessageAt: chat.lastMessageAt,
-                unreadCount: response.unreadCount, lastReadMessageId: response.lastReadMessageId,
-                lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil, archived: chat.archived,
-                kind: chat.kind, peer: chat.peer))
+            install(
+                ChatListItem(
+                    id: chat.id, name: chat.name, avatar: chat.avatar,
+                    lastMessageAt: chat.lastMessageAt,
+                    unreadCount: response.unreadCount,
+                    lastReadMessageId: response.lastReadMessageId,
+                    lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil,
+                    archived: chat.archived,
+                    kind: chat.kind, peer: chat.peer))
         }
         // A notification or new thread can be open without an active-list row.
         for model in visibleTimelines() where model.chatID == chatID && model.threadID == threadID {
-            model.updateReadState(unreadCount: response.unreadCount, lastReadMessageID: response.lastReadMessageId)
+            model.updateReadState(
+                unreadCount: response.unreadCount, lastReadMessageID: response.lastReadMessageId)
         }
     }
 

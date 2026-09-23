@@ -1,9 +1,9 @@
 import SwiftUI
 
 #if os(macOS)
-import AppKit
+    import AppKit
 #else
-import UIKit
+    import UIKit
 #endif
 
 struct MessageTextGeometry: Equatable {
@@ -25,7 +25,10 @@ final class MessageTextLayout {
     private var cachedGeometry: MessageTextGeometry?
     private var cachedIdealSize: CGSize?
 
-    init(attributedText: NSAttributedString = NSAttributedString(string: ""), metadata: MessageMetadata? = nil) {
+    init(
+        attributedText: NSAttributedString = NSAttributedString(string: ""),
+        metadata: MessageMetadata? = nil
+    ) {
         textContainer.lineFragmentPadding = 0
         textContainer.widthTracksTextView = false
         textContainer.heightTracksTextView = false
@@ -65,16 +68,23 @@ final class MessageTextLayout {
         return changed
     }
 
-
     private var metadataGap: CGFloat {
-        let font = storage.length > 0 ? storage.attribute(.bubbleBodyFont, at: 0, effectiveRange: nil) as? BubbleNativeFont ?? storage.attribute(.font, at: 0, effectiveRange: nil) as? BubbleNativeFont : nil
-        return ("0" as NSString).size(withAttributes: [.font: font ?? BubbleNativeFont.preferredFont(forTextStyle: .body)]).width * 1.5
+        let font =
+            storage.length > 0
+            ? storage.attribute(.bubbleBodyFont, at: 0, effectiveRange: nil) as? BubbleNativeFont
+                ?? storage.attribute(.font, at: 0, effectiveRange: nil) as? BubbleNativeFont : nil
+        return ("0" as NSString).size(withAttributes: [
+            .font: font ?? BubbleNativeFont.preferredFont(forTextStyle: .body)
+        ]).width * 1.5
     }
 
     var idealSize: CGSize {
         if let cachedIdealSize { return cachedIdealSize }
         let geometry = geometry(for: 1_000_000)
-        let width = max(geometry.bodyBounds.maxX, geometry.lastLineBounds.maxX + (storage.length > 0 && metadata != nil ? metadataGap : 0) + (metadata?.size.width ?? 0))
+        let width = max(
+            geometry.bodyBounds.maxX,
+            geometry.lastLineBounds.maxX + (storage.length > 0 && metadata != nil ? metadataGap : 0)
+                + (metadata?.size.width ?? 0))
         let size = self.geometry(for: max(1, ceil(width))).size
         cachedIdealSize = size
         return size
@@ -89,7 +99,8 @@ final class MessageTextLayout {
         if let cachedGeometry, cachedGeometry.size.width == width { return cachedGeometry }
         textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
-        var bodyBounds = storage.length == 0 ? CGRect.zero : layoutManager.usedRect(for: textContainer)
+        var bodyBounds =
+            storage.length == 0 ? CGRect.zero : layoutManager.usedRect(for: textContainer)
         var lastLine = CGRect.zero
         let glyphs = layoutManager.glyphRange(for: textContainer)
         // Native text views may extend used line fragments to the container edge
@@ -99,13 +110,21 @@ final class MessageTextLayout {
         layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, range, _ in
             var inkRange = range
             while inkRange.length > 0 {
-                let character = text.character(at: self.layoutManager.characterIndexForGlyph(at: NSMaxRange(inkRange) - 1))
-                guard character == 10 || character == 13 || character == 0x2028 || character == 0x2029 else { break }
+                let character = text.character(
+                    at: self.layoutManager.characterIndexForGlyph(at: NSMaxRange(inkRange) - 1))
+                guard
+                    character == 10 || character == 13 || character == 0x2028 || character == 0x2029
+                else { break }
                 inkRange.length -= 1
             }
-            let ink = inkRange.length > 0 ? self.layoutManager.boundingRect(forGlyphRange: inkRange, in: self.textContainer) : .zero
+            let ink =
+                inkRange.length > 0
+                ? self.layoutManager.boundingRect(forGlyphRange: inkRange, in: self.textContainer)
+                : .zero
             maximumGlyphX = max(maximumGlyphX, ink.maxX)
-            lastLine = CGRect(x: used.minX, y: used.minY, width: max(0, ink.maxX - used.minX), height: used.height)
+            lastLine = CGRect(
+                x: used.minX, y: used.minY, width: max(0, ink.maxX - used.minX), height: used.height
+            )
         }
         bodyBounds.size.width = maximumGlyphX
         if storage.string.last == "\n" || storage.string.last == "\r" {
@@ -117,10 +136,19 @@ final class MessageTextLayout {
         }
         let naturalMetadata = metadata?.size ?? .zero
         let scale = naturalMetadata.width > 0 ? min(1, width / naturalMetadata.width) : 1
-        let metadataSize = CGSize(width: naturalMetadata.width * scale, height: naturalMetadata.height * scale)
-        let inline = metadata != nil && storage.length > 0 && lastLine.maxX + metadataGap + metadataSize.width <= width
-        let metadataY = inline ? max(lastLine.minY, lastLine.maxY - metadataSize.height) : ceil(bodyBounds.maxY)
-        let metadataFrame = metadata == nil ? CGRect.zero : CGRect(x: width - metadataSize.width, y: metadataY, width: metadataSize.width, height: metadataSize.height)
+        let metadataSize = CGSize(
+            width: naturalMetadata.width * scale, height: naturalMetadata.height * scale)
+        let inline =
+            metadata != nil && storage.length > 0
+            && lastLine.maxX + metadataGap + metadataSize.width <= width
+        let metadataY =
+            inline ? max(lastLine.minY, lastLine.maxY - metadataSize.height) : ceil(bodyBounds.maxY)
+        let metadataFrame =
+            metadata == nil
+            ? CGRect.zero
+            : CGRect(
+                x: width - metadataSize.width, y: metadataY, width: metadataSize.width,
+                height: metadataSize.height)
         let result = MessageTextGeometry(
             size: CGSize(width: width, height: ceil(max(bodyBounds.maxY, metadataFrame.maxY))),
             bodyBounds: bodyBounds, lastLineBounds: lastLine,
@@ -131,7 +159,6 @@ final class MessageTextLayout {
     }
 }
 
-
 final class MessageMentionLayoutManager: NSLayoutManager {
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
@@ -140,13 +167,16 @@ final class MessageMentionLayoutManager: NSLayoutManager {
         textStorage.enumerateAttribute(.bubbleMentionTint, in: characters) { value, range, _ in
             guard let color = value as? BubbleNativeColor else { return }
             let glyphs = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            self.enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rect, _ in
+            self.enumerateEnclosingRects(
+                forGlyphRange: glyphs,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container
+            ) { rect, _ in
                 color.setFill()
                 let background = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0, dy: 1)
                 #if os(macOS)
-                NSBezierPath(roundedRect: background, xRadius: 4, yRadius: 4).fill()
+                    NSBezierPath(roundedRect: background, xRadius: 4, yRadius: 4).fill()
                 #else
-                UIBezierPath(roundedRect: background, cornerRadius: 4).fill()
+                    UIBezierPath(roundedRect: background, cornerRadius: 4).fill()
                 #endif
             }
         }

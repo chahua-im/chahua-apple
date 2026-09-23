@@ -63,7 +63,9 @@ struct ComposerSendFocus: ViewModifier {
                 focusOnEntry: focusOnEntry)
         }
 
-        static func dismantleNSView(_ marker: ComposerInputMarker, coordinator: ()) { marker.disconnect() }
+        static func dismantleNSView(_ marker: ComposerInputMarker, coordinator: ()) {
+            marker.disconnect()
+        }
     }
 
     // A multiline SwiftUI TextField bounds its height but does not provide a
@@ -89,12 +91,16 @@ struct ComposerSendFocus: ViewModifier {
                 onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
         }
 
-        func sizeThatFits(_ proposal: ProposedViewSize, nsView: ComposerCaptionScrollView, context: Context) -> CGSize? {
+        func sizeThatFits(
+            _ proposal: ProposedViewSize, nsView: ComposerCaptionScrollView, context: Context
+        ) -> CGSize? {
             guard let width = proposal.width, width.isFinite else { return nil }
             return CGSize(width: width, height: nsView.captionHeight(for: width))
         }
 
-        static func dismantleNSView(_ view: ComposerCaptionScrollView, coordinator: ()) { view.disconnect() }
+        static func dismantleNSView(_ view: ComposerCaptionScrollView, coordinator: ()) {
+            view.disconnect()
+        }
     }
 
     final class ComposerCaptionScrollView: NSScrollView, NSTextViewDelegate {
@@ -121,11 +127,13 @@ struct ComposerSendFocus: ViewModifier {
             editor.textContainer?.lineFragmentPadding = 0
             editor.textContainer?.widthTracksTextView = true
             editor.textContainer?.heightTracksTextView = false
-            editor.textContainer?.containerSize = NSSize(width: 300, height: CGFloat.greatestFiniteMagnitude)
+            editor.textContainer?.containerSize = NSSize(
+                width: 300, height: CGFloat.greatestFiniteMagnitude)
             editor.isHorizontallyResizable = false
             editor.isVerticallyResizable = true
             editor.minSize = .zero
-            editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            editor.maxSize = NSSize(
+                width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
             editor.autoresizingMask = [.width]
             editor.delegate = self
             editor.setAccessibilityLabel("Caption")
@@ -146,7 +154,8 @@ struct ComposerSendFocus: ViewModifier {
                 editor.string = text
                 let length = (text as NSString).length
                 let start = min(selection.location, length)
-                editor.setSelectedRange(NSRange(location: start, length: min(selection.length, length - start)))
+                editor.setSelectedRange(
+                    NSRange(location: start, length: min(selection.length, length - start)))
                 invalidateIntrinsicContentSize()
             }
             editor.isEditable = isEnabled
@@ -156,14 +165,17 @@ struct ComposerSendFocus: ViewModifier {
         }
 
         func captionHeight(for width: CGFloat) -> CGFloat {
-            guard let container = editor.textContainer, let layout = editor.layoutManager, let font = editor.font else { return 20 }
+            guard let container = editor.textContainer, let layout = editor.layoutManager,
+                let font = editor.font
+            else { return 20 }
             let width = max(1, width)
             if editor.frame.width != width {
                 editor.setFrameSize(NSSize(width: width, height: editor.frame.height))
             }
             layout.ensureLayout(for: container)
             let lineHeight = layout.defaultLineHeight(for: font)
-            let textHeight = max(layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
+            let textHeight = max(
+                layout.usedRect(for: container).maxY, layout.extraLineFragmentRect.maxY)
             let documentHeight = ceil(max(lineHeight, max(textHeight, contentSize.height)))
             if editor.frame.height != documentHeight {
                 editor.setFrameSize(NSSize(width: width, height: documentHeight))
@@ -172,7 +184,9 @@ struct ComposerSendFocus: ViewModifier {
         }
 
         override var intrinsicContentSize: NSSize {
-            NSSize(width: NSView.noIntrinsicMetric, height: captionHeight(for: max(1, contentSize.width)))
+            NSSize(
+                width: NSView.noIntrinsicMetric,
+                height: captionHeight(for: max(1, contentSize.width)))
         }
 
         override func layout() {
@@ -219,7 +233,9 @@ struct ComposerSendFocus: ViewModifier {
             marker.updateImagePasteSupport()
         }
 
-        static func dismantleUIView(_ marker: ComposerInputMarker, coordinator: ()) { marker.disconnect() }
+        static func dismantleUIView(_ marker: ComposerInputMarker, coordinator: ()) {
+            marker.disconnect()
+        }
     }
 
     typealias ComposerMarkerView = UIView
@@ -338,7 +354,8 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             // publishing so SwiftUI does not replay the binding as another edit,
             // which would discard the native redo transaction.
             if let editor = resolveEditor() {
-                editor.delegate?.textDidChange?(Notification(name: NSText.didChangeNotification, object: editor))
+                editor.delegate?.textDidChange?(
+                    Notification(name: NSText.didChangeNotification, object: editor))
             }
         #endif
         input?.nativeInputChanged(isEdit: true)
@@ -385,15 +402,18 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
     private func observeMentionStorage(_ storage: NSTextStorage?) {
         guard let storage, storage !== mentionStorage else { return }
         if let mentionStorage {
-            NotificationCenter.default.removeObserver(self, name: NSTextStorage.willProcessEditingNotification, object: mentionStorage)
+            NotificationCenter.default.removeObserver(
+                self, name: NSTextStorage.willProcessEditingNotification, object: mentionStorage)
         }
         mentionStorage = storage
         mentionUndoManager = resolveEditor()?.undoManager
         NotificationCenter.default.addObserver(
             self, selector: #selector(mentionStorageChanged(_:)),
             name: NSTextStorage.willProcessEditingNotification, object: storage)
-        if let input, storage.string == input.editorText
-            || storage.string == ComposerMentionText.wireText(input.mentionText) {
+        if let input,
+            storage.string == input.editorText
+                || storage.string == ComposerMentionText.wireText(input.mentionText)
+        {
             installMentionText(input.mentionText)
         } else {
             trackedSpans = []
@@ -403,7 +423,8 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
     func installMentionText(_ text: NSAttributedString) {
         guard !changingMentionStorage, let editor = resolveEditor(),
-              case .committed = snapshot(), let storage = mentionStorage else { return }
+            case .committed = snapshot(), let storage = mentionStorage
+        else { return }
         let oldText = mentionSnapshot(storage.string)
         let oldSelection = selection
         let textChanged = storage.string != text.string
@@ -415,12 +436,15 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 // update. Match the font it already chose for normal typing so a
                 // restored edit does not fall back to NSTextStorage's default.
                 let font = (editor.typingAttributes[.font] as? NSFont) ?? editor.font
-                let replacement = font.map {
-                    NSAttributedString(string: text.string, attributes: [.font: $0])
-                } ?? NSAttributedString(string: text.string)
-                storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: replacement)
+                let replacement =
+                    font.map {
+                        NSAttributedString(string: text.string, attributes: [.font: $0])
+                    } ?? NSAttributedString(string: text.string)
+                storage.replaceCharacters(
+                    in: NSRange(location: 0, length: storage.length), with: replacement)
             #else
-                storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text.string)
+                storage.replaceCharacters(
+                    in: NSRange(location: 0, length: storage.length), with: text.string)
             #endif
         }
         storage.endEditing()
@@ -438,16 +462,21 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         changingMentionStorage = false
     }
 
-    private func mappedSelection(_ selection: NSRange, from old: NSAttributedString, to new: NSAttributedString) -> NSRange {
+    private func mappedSelection(
+        _ selection: NSRange, from old: NSAttributedString, to new: NSAttributedString
+    ) -> NSRange {
         let oldSpans = ComposerMentionText.spans(in: old)
         let newSpans = ComposerMentionText.spans(in: new)
         func offset(_ position: Int) -> Int {
-            guard oldSpans.map({ $0.0.uid }) == newSpans.map({ $0.0.uid }) else { return min(position, new.length) }
+            guard oldSpans.map({ $0.0.uid }) == newSpans.map({ $0.0.uid }) else {
+                return min(position, new.length)
+            }
             var change = 0
             for ((_, before), (_, after)) in zip(oldSpans, newSpans) {
                 if position < before.location { break }
                 if position <= NSMaxRange(before) {
-                    return min(new.length, after.location + min(position - before.location, after.length))
+                    return min(
+                        new.length, after.location + min(position - before.location, after.length))
                 }
                 change += after.length - before.length
             }
@@ -467,7 +496,8 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
     @objc private func mentionStorageChanged(_ notification: Notification) {
         guard !changingMentionStorage, let storage = notification.object as? NSTextStorage,
-              storage === mentionStorage, storage.editedMask.contains(.editedCharacters) else { return }
+            storage === mentionStorage, storage.editedMask.contains(.editedCharacters)
+        else { return }
         // A field editor can outlive its control and be reused. Only its
         // current composer may update mention identities.
         guard input?.nativeInput === self else { return }
@@ -489,28 +519,33 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         // changes. NSTextStorage.editedRange then overstates what was typed.
         var start = 0
         while start < min(previous.length, current.length),
-              previous.character(at: start) == current.character(at: start) { start += 1 }
+            previous.character(at: start) == current.character(at: start)
+        { start += 1 }
         var suffix = 0
         while suffix < min(previous.length, current.length) - start,
-              previous.character(at: previous.length - suffix - 1)
-                == current.character(at: current.length - suffix - 1) { suffix += 1 }
+            previous.character(at: previous.length - suffix - 1)
+                == current.character(at: current.length - suffix - 1)
+        { suffix += 1 }
         let replaced = NSRange(location: start, length: previous.length - start - suffix)
         let delta = current.length - previous.length
         trackedSpans = trackedSpans.compactMap { span, range in
-            let touches = replaced.length == 0
+            let touches =
+                replaced.length == 0
                 ? start > range.location && start < NSMaxRange(range)
                 : NSIntersectionRange(replaced, range).length > 0
             if touches {
                 span.isValid = false
                 return nil
             }
-            let location = range.location >= NSMaxRange(replaced) ? range.location + delta : range.location
+            let location =
+                range.location >= NSMaxRange(replaced) ? range.location + delta : range.location
             return (span, NSRange(location: location, length: range.length))
         }
         trackedText = currentText
         let manager = resolveEditor()?.undoManager
         if manager?.isUndoing != true, manager?.isRedoing != true,
-           !before.spans.isEmpty || !trackedSpans.isEmpty {
+            !before.spans.isEmpty || !trackedSpans.isEmpty
+        {
             let after = MentionUndoState(text: trackedText, spans: trackedSpans)
             manager?.registerUndo(withTarget: self) { marker in
                 marker.restoreMentionUndo(before, inverse: after)
@@ -529,9 +564,10 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
     func replaceMention(in range: NSRange, with text: NSAttributedString) -> Bool {
         guard case .committed = snapshot(), let selection,
-              selection.length == 0, selection.location == NSMaxRange(range),
-              let editor = resolveEditor(), let storage = mentionStorage,
-              NSMaxRange(range) <= storage.length else { return false }
+            selection.length == 0, selection.location == NSMaxRange(range),
+            let editor = resolveEditor(), let storage = mentionStorage,
+            NSMaxRange(range) <= storage.length
+        else { return false }
         let before = MentionUndoState(text: trackedText, spans: trackedSpans)
         changingMentionStorage = true
         #if os(macOS)
@@ -549,12 +585,20 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         // storage directly leaves SwiftUI's field coordinator out of sync.
         let delta = text.length - range.length
         trackedSpans = before.spans.map { span, previous in
-            (span, NSRange(location: previous.location >= NSMaxRange(range)
-                ? previous.location + delta : previous.location, length: previous.length))
+            (
+                span,
+                NSRange(
+                    location: previous.location >= NSMaxRange(range)
+                        ? previous.location + delta : previous.location, length: previous.length)
+            )
         }
-        trackedSpans.append(contentsOf: ComposerMentionText.spans(in: text).map { span, inserted in
-            (span, NSRange(location: range.location + inserted.location, length: inserted.length))
-        })
+        trackedSpans.append(
+            contentsOf: ComposerMentionText.spans(in: text).map { span, inserted in
+                (
+                    span,
+                    NSRange(location: range.location + inserted.location, length: inserted.length)
+                )
+            })
         trackedSpans.sort { $0.1.location < $1.1.location }
         trackedText = storage.string
         let after = MentionUndoState(text: trackedText, spans: trackedSpans)
@@ -584,10 +628,13 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
     #if os(iOS)
         private func observeUIKitSelection() {
-            guard let editor = resolveEditor() as? UITextView, editor.isFirstResponder else { return }
+            guard let editor = resolveEditor() as? UITextView, editor.isFirstResponder else {
+                return
+            }
             let selection = editor.selectedRange
             let marked = editor.markedTextRange.map {
-                NSRange(location: editor.offset(from: editor.beginningOfDocument, to: $0.start),
+                NSRange(
+                    location: editor.offset(from: editor.beginningOfDocument, to: $0.start),
                     length: editor.offset(from: $0.start, to: $0.end))
             }
             guard selection != lastSelection || marked != lastMarkedRange else { return }
@@ -610,7 +657,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         // end in that same native transaction. Later updates never change a user's
         // selection, undo stack, or marked range.
         private func scheduleEntryFocus() {
-            guard entryFocusPending, !entryFocusScheduled, isComposerEnabled, window != nil else { return }
+            guard entryFocusPending, !entryFocusScheduled, isComposerEnabled, window != nil else {
+                return
+            }
             entryFocusScheduled = true
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -621,7 +670,10 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 else { return }
                 self.entryFocusPending = false
                 if let current = window.firstResponder as? NSTextView,
-                    self.scopes(current), current.hasMarkedText() { return }
+                    self.scopes(current), current.hasMarkedText()
+                {
+                    return
+                }
                 // Set this window's editing target without activating the window
                 // or application; a later activation must not replay entry focus.
                 guard window.makeFirstResponder(control),
@@ -644,9 +696,15 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             func editableControl(in view: NSView) -> NSView? {
                 guard !view.isHidden else { return nil }
                 if let field = view as? NSTextField, field.isEditable, field.isEnabled,
-                    surface.intersects(field.convert(field.bounds, to: nil)) { return field }
+                    surface.intersects(field.convert(field.bounds, to: nil))
+                {
+                    return field
+                }
                 if let text = view as? NSTextView, text.isEditable,
-                    surface.intersects(text.convert(text.bounds, to: nil)) { return text }
+                    surface.intersects(text.convert(text.bounds, to: nil))
+                {
+                    return text
+                }
                 for child in view.subviews {
                     if let control = editableControl(in: child) { return control }
                 }
@@ -689,7 +747,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             // ordinary Return here instead, preserving the editing session and
             // selection. Shift-Return uses native insertion outside SwiftUI's
             // update so selection replacement and undo remain native.
-            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [
+                .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            ]) { [weak self] event in
                 guard let self else { return event }
                 // A user action after entry supersedes delayed permission focus.
                 // Do not take focus back from navigation, a dialog, or a selection.
@@ -707,7 +767,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                     return event
                 }
                 if self.input?.isComposing == true { return event }
-                let modifiers = event.modifierFlags.intersection([.shift, .control, .option, .command])
+                let modifiers = event.modifierFlags.intersection([
+                    .shift, .control, .option, .command,
+                ])
                 if modifiers.isEmpty {
                     let key: ComposerMentionKey
                     switch event.keyCode {
@@ -734,7 +796,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 // changes its owner or moves it outside the composer's surface.
                 return owns(editor) && scopes(editor) ? editor : nil
             }
-            guard isComposerFocused, let candidate = window.firstResponder as? NSTextView, scopes(candidate) else {
+            guard isComposerFocused, let candidate = window.firstResponder as? NSTextView,
+                scopes(candidate)
+            else {
                 return nil
             }
             editor = candidate
@@ -762,7 +826,8 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         }
 
         private func snapshot(of editor: NSTextView) -> ComposerInputSnapshot {
-            editor.hasMarkedText() ? .marked : .committed(ComposerMentionText.wireText(mentionSnapshot(editor.string)))
+            editor.hasMarkedText()
+                ? .marked : .committed(ComposerMentionText.wireText(mentionSnapshot(editor.string)))
         }
 
         func insertNewline() -> Bool {
@@ -778,9 +843,12 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             {
                 // Copy before AppKit releases/reuses the shared editor. The queued
                 // settlement can finish after firstResponder has changed.
-                input?.nativeEditingEnded(snapshot(of: ended), visibleText: mentionSnapshot(ended.string))
+                input?.nativeEditingEnded(
+                    snapshot(of: ended), visibleText: mentionSnapshot(ended.string))
                 if let mentionStorage {
-                    NotificationCenter.default.removeObserver(self, name: NSTextStorage.willProcessEditingNotification, object: mentionStorage)
+                    NotificationCenter.default.removeObserver(
+                        self, name: NSTextStorage.willProcessEditingNotification,
+                        object: mentionStorage)
                 }
                 mentionStorage = nil
                 trackedSpans = []
@@ -788,7 +856,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 editorOwner = nil
                 return
             }
-            guard let editor = resolveEditor(), notification.object as? NSTextView === editor else { return }
+            guard let editor = resolveEditor(), notification.object as? NSTextView === editor else {
+                return
+            }
             observeMentionStorage(editor.textStorage)
             input?.nativeInputChanged(isEdit: notification.name == NSText.didChangeNotification)
         }
@@ -819,10 +889,13 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             ) { [weak self] _, _ in
                 MainActor.assumeIsolated { self?.observeUIKitSelection() }
             }
-            if let selectionObserver { CFRunLoopAddObserver(CFRunLoopGetMain(), selectionObserver, .commonModes) }
+            if let selectionObserver {
+                CFRunLoopAddObserver(CFRunLoopGetMain(), selectionObserver, .commonModes)
+            }
             for name in [
                 UITextField.textDidBeginEditingNotification, UITextField.textDidChangeNotification,
-                UITextField.textDidEndEditingNotification, UITextView.textDidBeginEditingNotification,
+                UITextField.textDidEndEditingNotification,
+                UITextView.textDidBeginEditingNotification,
                 UITextView.textDidChangeNotification, UITextView.textDidEndEditingNotification,
             ] {
                 NotificationCenter.default.addObserver(
@@ -833,7 +906,8 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         private func resolveEditor() -> UIView? {
             guard let window else { return nil }
             if let editor { return scopes(editor) ? editor : nil }
-            guard isComposerFocused, let candidate = firstInput(in: window), scopes(candidate) else { return nil }
+            guard isComposerFocused, let candidate = firstInput(in: window), scopes(candidate)
+            else { return nil }
             editor = candidate
             observeMentionStorage((candidate as? UITextView)?.textStorage)
             updateImagePasteSupport(for: candidate)
@@ -862,7 +936,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         private func snapshot(of view: UIView) -> ComposerInputSnapshot {
             guard let editor = view as? any UITextInput else { return .unavailable }
             guard editor.markedTextRange == nil else { return .marked }
-            guard let range = editor.textRange(from: editor.beginningOfDocument, to: editor.endOfDocument),
+            guard
+                let range = editor.textRange(
+                    from: editor.beginningOfDocument, to: editor.endOfDocument),
                 let text = editor.text(in: range)
             else { return .unavailable }
             return .committed(ComposerMentionText.wireText(mentionSnapshot(text)))
@@ -880,7 +956,8 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
         private func updateImagePasteSupport(for view: UIView) {
             guard onPasteImages != nil, isComposerEnabled,
-                  let target = view as? any UITextPasteConfigurationSupporting else {
+                let target = view as? any UITextPasteConfigurationSupporting
+            else {
                 restoreImagePasteSupport()
                 return
             }
@@ -889,8 +966,10 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             pasteEditor = target
             previousPasteDelegate = target.pasteDelegate
             previousPasteConfiguration = target.pasteConfiguration
-            let types = target.pasteConfiguration?.acceptableTypeIdentifiers ?? [UTType.text.identifier]
-            target.pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: types + [UTType.image.identifier])
+            let types =
+                target.pasteConfiguration?.acceptableTypeIdentifiers ?? [UTType.text.identifier]
+            target.pasteConfiguration = UIPasteConfiguration(
+                acceptableTypeIdentifiers: types + [UTType.image.identifier])
             target.pasteDelegate = self
         }
 
@@ -910,10 +989,13 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 || notification.name == UITextView.textDidEndEditingNotification,
                 let ended = notification.object as? UIView, ended === editor
             {
-                input?.nativeEditingEnded(snapshot(of: ended),
+                input?.nativeEditingEnded(
+                    snapshot(of: ended),
                     visibleText: (ended as? UITextView).map { mentionSnapshot($0.text) })
                 if let mentionStorage {
-                    NotificationCenter.default.removeObserver(self, name: NSTextStorage.willProcessEditingNotification, object: mentionStorage)
+                    NotificationCenter.default.removeObserver(
+                        self, name: NSTextStorage.willProcessEditingNotification,
+                        object: mentionStorage)
                 }
                 mentionStorage = nil
                 trackedSpans = []
@@ -921,137 +1003,155 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 editor = nil
                 return
             }
-            guard let editor = resolveEditor(), notification.object as? UIView === editor else { return }
+            guard let editor = resolveEditor(), notification.object as? UIView === editor else {
+                return
+            }
             observeMentionStorage((editor as? UITextView)?.textStorage)
-            input?.nativeInputChanged(isEdit: notification.name == UITextView.textDidChangeNotification
-                || notification.name == UITextField.textDidChangeNotification)
+            input?.nativeInputChanged(
+                isEdit: notification.name == UITextView.textDidChangeNotification
+                    || notification.name == UITextField.textDidChangeNotification)
         }
     #endif
 }
 
 #if os(iOS)
-extension ComposerInputMarker: UITextPasteDelegate {
-    func textPasteConfigurationSupporting(_ textPasteConfigurationSupporting: any UITextPasteConfigurationSupporting, transform item: any UITextPasteItem) {
-        guard item.itemProvider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
-            if previousPasteDelegate?.textPasteConfigurationSupporting?(textPasteConfigurationSupporting, transform: item) == nil {
-                item.setDefaultResult()
+    extension ComposerInputMarker: UITextPasteDelegate {
+        func textPasteConfigurationSupporting(
+            _ textPasteConfigurationSupporting: any UITextPasteConfigurationSupporting,
+            transform item: any UITextPasteItem
+        ) {
+            guard item.itemProvider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+            else {
+                if previousPasteDelegate?.textPasteConfigurationSupporting?(
+                    textPasteConfigurationSupporting, transform: item) == nil
+                {
+                    item.setDefaultResult()
+                }
+                return
             }
-            return
+            item.setNoResult()
+            guard isComposerEnabled, onPasteImages != nil else { return }
+            pendingPastedImages.append(item.itemProvider)
+            guard pendingPastedImages.count == 1 else { return }
+            // Batch images from one paste before opening the attachment dialog.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let providers = self.pendingPastedImages
+                self.pendingPastedImages.removeAll()
+                guard self.isComposerEnabled, !providers.isEmpty else { return }
+                self.onPasteImages?(providers)
+            }
         }
-        item.setNoResult()
-        guard isComposerEnabled, onPasteImages != nil else { return }
-        pendingPastedImages.append(item.itemProvider)
-        guard pendingPastedImages.count == 1 else { return }
-        // Batch images from one paste before opening the attachment dialog.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let providers = self.pendingPastedImages
-            self.pendingPastedImages.removeAll()
-            guard self.isComposerEnabled, !providers.isEmpty else { return }
-            self.onPasteImages?(providers)
+    }
+
+    /// A window observer includes navigation and empty timeline space. SwiftUI's
+    /// ancestor tap gestures cannot exclude the composer's bounds without competing
+    /// with native row gestures, so this recognizer observes without preventing them.
+    struct ComposerOutsideTapObserver: UIViewRepresentable {
+        var isFocused: Bool
+        var dismiss: () -> Void
+
+        func makeUIView(context: Context) -> ComposerOutsideTapView { ComposerOutsideTapView() }
+        func updateUIView(_ view: ComposerOutsideTapView, context: Context) {
+            view.isComposerFocused = isFocused
+            view.dismiss = dismiss
+        }
+        static func dismantleUIView(_ view: ComposerOutsideTapView, coordinator: ()) {
+            view.detach()
         }
     }
-}
 
-/// A window observer includes navigation and empty timeline space. SwiftUI's
-/// ancestor tap gestures cannot exclude the composer's bounds without competing
-/// with native row gestures, so this recognizer observes without preventing them.
-struct ComposerOutsideTapObserver: UIViewRepresentable {
-    var isFocused: Bool
-    var dismiss: () -> Void
+    final class ComposerOutsideTapView: UIView, UIGestureRecognizerDelegate {
+        var isComposerFocused = false
+        var dismiss: (() -> Void)?
+        private lazy var tap: UITapGestureRecognizer = {
+            let tap = ComposerOutsideTapRecognizer(target: self, action: #selector(tapped))
+            tap.cancelsTouchesInView = false
+            tap.delaysTouchesBegan = false
+            tap.delaysTouchesEnded = false
+            tap.delegate = self
+            return tap
+        }()
 
-    func makeUIView(context: Context) -> ComposerOutsideTapView { ComposerOutsideTapView() }
-    func updateUIView(_ view: ComposerOutsideTapView, context: Context) {
-        view.isComposerFocused = isFocused
-        view.dismiss = dismiss
-    }
-    static func dismantleUIView(_ view: ComposerOutsideTapView, coordinator: ()) {
-        view.detach()
-    }
-}
-
-final class ComposerOutsideTapView: UIView, UIGestureRecognizerDelegate {
-    var isComposerFocused = false
-    var dismiss: (() -> Void)?
-    private lazy var tap: UITapGestureRecognizer = {
-        let tap = ComposerOutsideTapRecognizer(target: self, action: #selector(tapped))
-        tap.cancelsTouchesInView = false
-        tap.delaysTouchesBegan = false
-        tap.delaysTouchesEnded = false
-        tap.delegate = self
-        return tap
-    }()
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
-    override func willMove(toWindow newWindow: UIWindow?) {
-        detach()
-        super.willMove(toWindow: newWindow)
-        newWindow?.addGestureRecognizer(tap)
-    }
-    func detach() { tap.view?.removeGestureRecognizer(tap) }
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        isComposerFocused && !bounds.contains(touch.location(in: self))
-    }
-    @objc private func tapped() {
-        guard isComposerFocused else { return }
-        dismiss?()
-    }
-}
-
-private final class ComposerOutsideTapRecognizer: UITapGestureRecognizer {
-    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
-    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
-}
-
-/// A presented iPad sheet can overlap the keyboard without receiving a reduced
-/// SwiftUI proposal. This background measures the keyboard in the already-proposed
-/// dialog bounds, so only residual overlap is reserved, including IME candidates
-/// and floating keyboards. It never owns focus or changes the text editor.
-struct ComposerKeyboardAvoidance: UIViewRepresentable {
-    var onOverlapChange: (CGFloat) -> Void
-
-    func makeUIView(context: Context) -> KeyboardView { KeyboardView() }
-    func updateUIView(_ view: KeyboardView, context: Context) {
-        view.onOverlapChange = onOverlapChange
-    }
-
-    final class KeyboardView: UIView {
-        var onOverlapChange: ((CGFloat) -> Void)?
-        private let keyboardFrame = UIView()
-        private var reportedOverlap: CGFloat = -1
-
-        init() {
-            super.init(frame: .zero)
-            keyboardLayoutGuide.followsUndockedKeyboard = true
-            // SwiftUI already accounts for container safe areas. When dismissed,
-            // the guide must collapse at our bounds bottom, not above it.
-            keyboardLayoutGuide.usesBottomSafeArea = false
-            keyboardFrame.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(keyboardFrame)
-            NSLayoutConstraint.activate([
-                keyboardFrame.topAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor),
-                keyboardFrame.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.bottomAnchor),
-                keyboardFrame.leadingAnchor.constraint(equalTo: keyboardLayoutGuide.leadingAnchor),
-                keyboardFrame.trailingAnchor.constraint(equalTo: keyboardLayoutGuide.trailingAnchor),
-            ])
-        }
-
-        required init?(coder: NSCoder) { nil }
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            guard window != nil else { return }
-            let intersection = bounds.intersection(keyboardFrame.frame)
-            // Both rectangles are local to this view. Subtracting safeAreaInsets
-            // here would leave that strip of the caption behind the keyboard.
-            // An empty intersection also covers dismissal and floating keyboards
-            // outside the sheet; neither should reserve any bottom space.
-            let overlap = intersection.isEmpty ? 0 : max(0, bounds.maxY - intersection.minY)
-            guard abs(overlap - reportedOverlap) > 0.5 else { return }
-            reportedOverlap = overlap
-            DispatchQueue.main.async { [weak self] in self?.onOverlapChange?(overlap) }
+        override func willMove(toWindow newWindow: UIWindow?) {
+            detach()
+            super.willMove(toWindow: newWindow)
+            newWindow?.addGestureRecognizer(tap)
+        }
+        func detach() { tap.view?.removeGestureRecognizer(tap) }
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch
+        ) -> Bool {
+            isComposerFocused && !bounds.contains(touch.location(in: self))
+        }
+        @objc private func tapped() {
+            guard isComposerFocused else { return }
+            dismiss?()
         }
     }
-}
+
+    private final class ComposerOutsideTapRecognizer: UITapGestureRecognizer {
+        override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
+        override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
+    }
+
+    /// A presented iPad sheet can overlap the keyboard without receiving a reduced
+    /// SwiftUI proposal. This background measures the keyboard in the already-proposed
+    /// dialog bounds, so only residual overlap is reserved, including IME candidates
+    /// and floating keyboards. It never owns focus or changes the text editor.
+    struct ComposerKeyboardAvoidance: UIViewRepresentable {
+        var onOverlapChange: (CGFloat) -> Void
+
+        func makeUIView(context: Context) -> KeyboardView { KeyboardView() }
+        func updateUIView(_ view: KeyboardView, context: Context) {
+            view.onOverlapChange = onOverlapChange
+        }
+
+        final class KeyboardView: UIView {
+            var onOverlapChange: ((CGFloat) -> Void)?
+            private let keyboardFrame = UIView()
+            private var reportedOverlap: CGFloat = -1
+
+            init() {
+                super.init(frame: .zero)
+                keyboardLayoutGuide.followsUndockedKeyboard = true
+                // SwiftUI already accounts for container safe areas. When dismissed,
+                // the guide must collapse at our bounds bottom, not above it.
+                keyboardLayoutGuide.usesBottomSafeArea = false
+                keyboardFrame.translatesAutoresizingMaskIntoConstraints = false
+                addSubview(keyboardFrame)
+                NSLayoutConstraint.activate([
+                    keyboardFrame.topAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor),
+                    keyboardFrame.bottomAnchor.constraint(
+                        equalTo: keyboardLayoutGuide.bottomAnchor),
+                    keyboardFrame.leadingAnchor.constraint(
+                        equalTo: keyboardLayoutGuide.leadingAnchor),
+                    keyboardFrame.trailingAnchor.constraint(
+                        equalTo: keyboardLayoutGuide.trailingAnchor),
+                ])
+            }
+
+            required init?(coder: NSCoder) { nil }
+            override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+
+            override func layoutSubviews() {
+                super.layoutSubviews()
+                guard window != nil else { return }
+                let intersection = bounds.intersection(keyboardFrame.frame)
+                // Both rectangles are local to this view. Subtracting safeAreaInsets
+                // here would leave that strip of the caption behind the keyboard.
+                // An empty intersection also covers dismissal and floating keyboards
+                // outside the sheet; neither should reserve any bottom space.
+                let overlap = intersection.isEmpty ? 0 : max(0, bounds.maxY - intersection.minY)
+                guard abs(overlap - reportedOverlap) > 0.5 else { return }
+                reportedOverlap = overlap
+                DispatchQueue.main.async { [weak self] in self?.onOverlapChange?(overlap) }
+            }
+        }
+    }
 #endif

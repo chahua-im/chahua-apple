@@ -56,7 +56,9 @@ final class ChatPinController: ObservableObject {
             await task.value
             return
         }
-        guard force || !loadedChatIDs.contains(chatID) || failedChatIDs.contains(chatID) else { return }
+        guard force || !loadedChatIDs.contains(chatID) || failedChatIDs.contains(chatID) else {
+            return
+        }
         let requestGeneration = generation
         let requestID = UUID()
         loadIDs[chatID] = requestID
@@ -74,7 +76,8 @@ final class ChatPinController: ObservableObject {
             }
             repeat {
                 self.refreshDirty.remove(chatID)
-                await self.loadSnapshot(chatID: chatID, generation: requestGeneration, requestID: requestID)
+                await self.loadSnapshot(
+                    chatID: chatID, generation: requestGeneration, requestID: requestID)
             } while self.generation == requestGeneration && self.loadIDs[chatID] == requestID
                 && self.refreshDirty.contains(chatID) && !Task.isCancelled
         }
@@ -83,11 +86,14 @@ final class ChatPinController: ObservableObject {
     }
 
     func pin(_ message: MessageResponse) async {
-        guard !message.chatId.isEmpty, !message.id.isEmpty, message.replyRootId == nil, !message.isDeleted,
-              !pendingMessageIDs.contains(message.id), !Task.isCancelled else { return }
+        guard !message.chatId.isEmpty, !message.id.isEmpty, message.replyRootId == nil,
+            !message.isDeleted,
+            !pendingMessageIDs.contains(message.id), !Task.isCancelled
+        else { return }
         pruneExpired()
         guard !deletedMessageIDs[message.chatId, default: []].contains(message.id),
-              !(pinsByChatID[message.chatId] ?? []).contains(where: { $0.message.id == message.id }) else { return }
+            !(pinsByChatID[message.chatId] ?? []).contains(where: { $0.message.id == message.id })
+        else { return }
         knownChatIDs.insert(message.chatId)
         let requestGeneration = generation
         let token = beginSnapshot(chatID: message.chatId)
@@ -98,24 +104,31 @@ final class ChatPinController: ObservableObject {
             if generation == requestGeneration { pendingMessageIDs.remove(message.id) }
         }
         do {
-            let response = try await apiClient.createPin(chatID: message.chatId, messageID: message.id)
+            let response = try await apiClient.createPin(
+                chatID: message.chatId, messageID: message.id)
             try checkSession(requestGeneration)
-            guard validScope(response, chatID: message.chatId), response.message.id == message.id else {
+            guard validScope(response, chatID: message.chatId), response.message.id == message.id
+            else {
                 throw APIError.unexpectedResponse
             }
             var candidate = [response]
             for change in snapshots[token]?.changes ?? [] { reduce(change, into: &candidate) }
-            if let pin = normalized(candidate, chatID: message.chatId).first(where: { $0.id == response.id }) {
+            if let pin = normalized(candidate, chatID: message.chatId).first(where: {
+                $0.id == response.id
+            }) {
                 apply(.add(pin), chatID: message.chatId)
             }
         } catch {
-            await report(error, generation: requestGeneration, message: String(localized: "Couldn’t pin message. Please try again."))
+            await report(
+                error, generation: requestGeneration,
+                message: String(localized: "Couldn’t pin message. Please try again."))
         }
     }
 
     func unpin(_ pin: PinResponse) async {
         guard validScope(pin, chatID: pin.chatId), !pendingMessageIDs.contains(pin.message.id),
-              !Task.isCancelled else { return }
+            !Task.isCancelled
+        else { return }
         let requestGeneration = generation
         knownChatIDs.insert(pin.chatId)
         pendingMessageIDs.insert(pin.message.id)
@@ -130,11 +143,14 @@ final class ChatPinController: ObservableObject {
         } catch {
             // Another member (or our websocket echo) can remove it before DELETE returns.
             if generation == requestGeneration, !Task.isCancelled,
-               case APIError.http(status: 404, body: _) = error {
+                case APIError.http(status: 404, body: _) = error
+            {
                 apply(.remove(pin.id), chatID: pin.chatId)
                 return
             }
-            await report(error, generation: requestGeneration, message: String(localized: "Couldn’t unpin message. Please try again."))
+            await report(
+                error, generation: requestGeneration,
+                message: String(localized: "Couldn’t unpin message. Please try again."))
         }
     }
 
@@ -142,19 +158,27 @@ final class ChatPinController: ObservableObject {
         switch event {
         case .pinAdded(let payload):
             guard payload.threadRootId == nil, let pin = payload.pin,
-                  validScope(pin, chatID: payload.chatId), pin.id == payload.pinId,
-                  pin.message.id == payload.messageId else { return }
+                validScope(pin, chatID: payload.chatId), pin.id == payload.pinId,
+                pin.message.id == payload.messageId
+            else { return }
             knownChatIDs.insert(payload.chatId)
             apply(.add(pin), chatID: payload.chatId)
         case .pinRemoved(let payload):
             guard payload.threadRootId == nil, !payload.chatId.isEmpty, !payload.pinId.isEmpty,
-                  !payload.messageId.isEmpty else { return }
-            if let existing = pinsByChatID[payload.chatId]?.first(where: { $0.id == payload.pinId }),
-               existing.message.id != payload.messageId { return }
+                !payload.messageId.isEmpty
+            else { return }
+            if let existing = pinsByChatID[payload.chatId]?.first(where: { $0.id == payload.pinId }
+            ),
+                existing.message.id != payload.messageId
+            {
+                return
+            }
             knownChatIDs.insert(payload.chatId)
             apply(.remove(payload.pinId), chatID: payload.chatId)
         case .messageUpdated(let message):
-            apply(message.isDeleted ? .delete([message.id]) : .update(message), chatID: message.chatId)
+            apply(
+                message.isDeleted ? .delete([message.id]) : .update(message), chatID: message.chatId
+            )
         case .messageDeleted(let message):
             apply(.delete([message.id]), chatID: message.chatId)
         case .messagesBulkDeleted(let payload):
@@ -196,7 +220,9 @@ final class ChatPinController: ObservableObject {
         error = nil
     }
 
-    private func loadSnapshot(chatID: String, generation requestGeneration: Int, requestID: UUID) async {
+    private func loadSnapshot(chatID: String, generation requestGeneration: Int, requestID: UUID)
+        async
+    {
         let token = beginSnapshot(chatID: chatID)
         defer { snapshots.removeValue(forKey: token) }
         do {
@@ -215,9 +241,12 @@ final class ChatPinController: ObservableObject {
             scheduleExpiry()
         } catch {
             guard generation == requestGeneration, loadIDs[chatID] == requestID,
-                  !(error is CancellationError), !Task.isCancelled else { return }
+                !(error is CancellationError), !Task.isCancelled
+            else { return }
             failedChatIDs.insert(chatID)
-            await report(error, generation: requestGeneration, message: String(localized: "Couldn’t load pinned messages. Please try again."))
+            await report(
+                error, generation: requestGeneration,
+                message: String(localized: "Couldn’t load pinned messages. Please try again."))
         }
     }
 
@@ -248,7 +277,8 @@ final class ChatPinController: ObservableObject {
         case .add(let pin):
             // Duplicate broadcasts must not replace an already updated message preview.
             guard isLive(pin, chatID: pin.chatId, now: Date()),
-                  !pins.contains(where: { $0.id == pin.id }) else { return }
+                !pins.contains(where: { $0.id == pin.id })
+            else { return }
             pins.removeAll { $0.message.id == pin.message.id }
             pins.append(pin)
         case .remove(let id):
@@ -258,7 +288,8 @@ final class ChatPinController: ObservableObject {
                 let pin = pins[index]
                 pins[index] = PinResponse(
                     id: pin.id, chatId: pin.chatId, threadRootId: pin.threadRootId,
-                    message: message, pinnedBy: pin.pinnedBy, pinnedAt: pin.pinnedAt, expiresAt: pin.expiresAt)
+                    message: message, pinnedBy: pin.pinnedBy, pinnedAt: pin.pinnedAt,
+                    expiresAt: pin.expiresAt)
             }
         case .delete(let ids):
             pins.removeAll { ids.contains($0.message.id) }
@@ -284,9 +315,13 @@ final class ChatPinController: ObservableObject {
         return pins.filter {
             isLive($0, chatID: chatID, now: now)
         }.sorted {
-            if $0.message.createdAt != $1.message.createdAt { return $0.message.createdAt > $1.message.createdAt }
+            if $0.message.createdAt != $1.message.createdAt {
+                return $0.message.createdAt > $1.message.createdAt
+            }
             return $0.id > $1.id
-        }.filter { seenPinIDs.insert($0.id).inserted && seenMessageIDs.insert($0.message.id).inserted }
+        }.filter {
+            seenPinIDs.insert($0.id).inserted && seenMessageIDs.insert($0.message.id).inserted
+        }
     }
 
     private func pruneExpired() {
@@ -300,7 +335,8 @@ final class ChatPinController: ObservableObject {
     private func scheduleExpiry() {
         expiryTask?.cancel()
         expiryTask = nil
-        guard let next = pinsByChatID.values.lazy.flatMap({ $0 }).compactMap(\.expiresAt).min() else { return }
+        guard let next = pinsByChatID.values.lazy.flatMap({ $0 }).compactMap(\.expiresAt).min()
+        else { return }
         let delay = max(0, next.timeIntervalSinceNow)
         expiryTask = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(delay)) } catch { return }
@@ -314,8 +350,10 @@ final class ChatPinController: ObservableObject {
         guard generation == requestGeneration else { throw CancellationError() }
     }
 
-    private func report(_ failure: Error, generation requestGeneration: Int, message: String) async {
-        guard generation == requestGeneration, !(failure is CancellationError), !Task.isCancelled else { return }
+    private func report(_ failure: Error, generation requestGeneration: Int, message: String) async
+    {
+        guard generation == requestGeneration, !(failure is CancellationError), !Task.isCancelled
+        else { return }
         error = message
         if case APIError.invalidToken = failure { await onInvalidToken() }
     }

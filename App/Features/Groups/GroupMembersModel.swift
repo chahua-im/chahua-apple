@@ -1,5 +1,5 @@
-import Combine
 import ChahuaAPI
+import Combine
 import Foundation
 
 @MainActor
@@ -51,22 +51,28 @@ final class GroupMembersModel: ObservableObject {
 
     func loadIfNeeded() async {
         guard loadPhase == .idle else { return }
-        await startFirstPage(query: query, mode: searchMode, preservingMembers: false, debounce: false).value
+        await startFirstPage(
+            query: query, mode: searchMode, preservingMembers: false, debounce: false
+        ).value
     }
 
     func refresh() async {
-        await startFirstPage(query: query, mode: searchMode, preservingMembers: !members.isEmpty, debounce: false).value
+        await startFirstPage(
+            query: query, mode: searchMode, preservingMembers: !members.isEmpty, debounce: false
+        ).value
     }
 
     func updateSearchQuery(_ value: String) {
         let normalized = normalizedQuery(value)
         guard normalized != query || searchMode != "autocomplete" else { return }
-        _ = startFirstPage(query: normalized, mode: "autocomplete", preservingMembers: false, debounce: true)
+        _ = startFirstPage(
+            query: normalized, mode: "autocomplete", preservingMembers: false, debounce: true)
     }
 
     func submitSearch(_ value: String) {
         let normalized = normalizedQuery(value)
-        _ = startFirstPage(query: normalized, mode: "submitted", preservingMembers: false, debounce: false)
+        _ = startFirstPage(
+            query: normalized, mode: "submitted", preservingMembers: false, debounce: false)
     }
 
     func loadMore() {
@@ -264,7 +270,9 @@ final class GroupMembersModel: ObservableObject {
         merging([], with: candidates)
     }
 
-    private func merging(_ existing: [MemberResponse], with incoming: [MemberResponse]) -> [MemberResponse] {
+    private func merging(_ existing: [MemberResponse], with incoming: [MemberResponse])
+        -> [MemberResponse]
+    {
         var knownIDs = Set<Int32>()
         var result: [MemberResponse] = []
         result.reserveCapacity(existing.count + incoming.count)

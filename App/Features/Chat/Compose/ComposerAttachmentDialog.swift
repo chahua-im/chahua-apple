@@ -30,7 +30,7 @@ struct ComposerAttachmentDialog: View {
     @StateObject private var input = ComposerInputState()
     @FocusState private var isCaptionFocused: Bool
     #if os(macOS)
-    @FocusState private var isCancelFocused: Bool
+        @FocusState private var isCancelFocused: Bool
     #endif
     @State private var isSubmitting = false
     @State private var isCancelling = false
@@ -38,7 +38,7 @@ struct ComposerAttachmentDialog: View {
     @State private var sendFailed = false
     @State private var isMediaDropTargeted = false
     #if os(iOS)
-    @State private var keyboardOverlap: CGFloat = 0
+        @State private var keyboardOverlap: CGFloat = 0
     #endif
 
     private var canInteract: Bool { isEnabled && !isAcquiring && !isSubmitting && !isCancelling }
@@ -55,7 +55,11 @@ struct ComposerAttachmentDialog: View {
             GeometryReader { geometry in
                 Group {
                     if attachments.isEmpty {
-                        ContentUnavailableView("No attachments", systemImage: "photo.on.rectangle", description: Text("Drop media here or close to choose more. Your caption will be kept."))
+                        ContentUnavailableView(
+                            "No attachments", systemImage: "photo.on.rectangle",
+                            description: Text(
+                                "Drop media here or close to choose more. Your caption will be kept."
+                            ))
                     } else {
                         ComposerMediaGallery(
                             attachments: attachments, progress: progress, isEnabled: canInteract,
@@ -76,9 +80,11 @@ struct ComposerAttachmentDialog: View {
                     ProgressView("Updating attachments…").controlSize(.small)
                 }
                 if sendFailed {
-                    Text("Couldn’t send. Your caption and attachments are still here. Retry when local storage is available.")
-                        .font(.callout).foregroundStyle(.red)
-                        .lineLimit(2)
+                    Text(
+                        "Couldn’t send. Your caption and attachments are still here. Retry when local storage is available."
+                    )
+                    .font(.callout).foregroundStyle(.red)
+                    .lineLimit(2)
                 }
                 if let attachmentError {
                     Text(attachmentError).font(.callout).foregroundStyle(.red)
@@ -96,22 +102,24 @@ struct ComposerAttachmentDialog: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         #if os(iOS)
-        .padding(.bottom, keyboardOverlap)
-        // Measure outside the padding so reserving overlap cannot move the probe
-        // and feed the same keyboard space back into the next layout pass.
-        .background {
-            ComposerKeyboardAvoidance { keyboardOverlap = $0 }
-        }
+            .padding(.bottom, keyboardOverlap)
+            // Measure outside the padding so reserving overlap cannot move the probe
+            // and feed the same keyboard space back into the next layout pass.
+            .background {
+                ComposerKeyboardAvoidance { keyboardOverlap = $0 }
+            }
         #endif
         .buttonStyle(.plain)
         .background(.regularMaterial)
         #if os(macOS)
-        .frame(width: 520, height: attachments.count > 1 ? 620 : 520)
-        // AppKit otherwise chooses the native caption as its initial key view.
-        .defaultFocus($isCancelFocused, true)
+            .frame(width: 520, height: attachments.count > 1 ? 620 : 520)
+            // AppKit otherwise chooses the native caption as its initial key view.
+            .defaultFocus($isCancelFocused, true)
         #endif
         .contentShape(Rectangle())
-        .onDrop(of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted, perform: importDrop)
+        .onDrop(
+            of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted, perform: importDrop
+        )
         .overlay {
             if isMediaDropTargeted && canInteract {
                 RoundedRectangle(cornerRadius: 28)
@@ -123,10 +131,13 @@ struct ComposerAttachmentDialog: View {
         .presentationDetents([.large])
         .presentationCornerRadius(28)
         .interactiveDismissDisabled()
-        .alert("Couldn’t discard attachments", isPresented: Binding(
-            get: { cancellationError != nil },
-            set: { if !$0 { cancellationError = nil } }
-        )) {
+        .alert(
+            "Couldn’t discard attachments",
+            isPresented: Binding(
+                get: { cancellationError != nil },
+                set: { if !$0 { cancellationError = nil } }
+            )
+        ) {
             Button("OK") { cancellationError = nil }
         } message: {
             Text("Your caption and attachments are still here. \(cancellationError ?? "")")
@@ -149,8 +160,8 @@ struct ComposerAttachmentDialog: View {
             .accessibilityLabel("Cancel")
             .disabled(isAcquiring || isSubmitting || isCancelling)
             #if os(macOS)
-            .focusable()
-            .focused($isCancelFocused)
+                .focusable()
+                .focused($isCancelFocused)
             #endif
             Spacer()
             Text("\(attachments.count) Media")
@@ -158,23 +169,25 @@ struct ComposerAttachmentDialog: View {
                 .accessibilityLabel("\(attachments.count) attachments")
             Spacer()
             #if os(iOS)
-            if isCaptionFocused {
-                Button(action: dismissKeyboard) {
-                    Image(systemName: "keyboard.chevron.compact.down")
-                        .font(.title3)
-                        .frame(width: 44, height: 44)
-                        .background(.background.opacity(0.8), in: Circle())
+                if isCaptionFocused {
+                    Button(action: dismissKeyboard) {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.title3)
+                            .frame(width: 44, height: 44)
+                            .background(.background.opacity(0.8), in: Circle())
+                    }
+                    .disabled(isSubmitting || isCancelling)
+                    .accessibilityLabel("Hide keyboard")
                 }
-                .disabled(isSubmitting || isCancelling)
-                .accessibilityLabel("Hide keyboard")
-            }
             #endif
             Menu {
                 if attachments.contains(where: { $0.mimeType.hasPrefix("image/") }) {
-                    Toggle("Compress images", isOn: Binding(
-                        get: { compressionEnabled },
-                        set: { enabled in changeAttachments { onCompressionChanged(enabled) } }
-                    ))
+                    Toggle(
+                        "Compress images",
+                        isOn: Binding(
+                            get: { compressionEnabled },
+                            set: { enabled in changeAttachments { onCompressionChanged(enabled) } }
+                        ))
                 }
                 if attachments.contains(where: { $0.mimeType.hasPrefix("video/") }) {
                     Text("Videos are sent in original quality.")
@@ -237,7 +250,8 @@ struct ComposerAttachmentDialog: View {
                 .onSubmit(keyboardSubmit)
                 .onKeyPress(keys: [.return]) { press in
                     guard press.modifiers.isEmpty, !input.isComposing,
-                          case .committed = input.nativeInput?.snapshot() else { return .ignored }
+                        case .committed = input.nativeInput?.snapshot()
+                    else { return .ignored }
                     keyboardSubmit()
                     return .handled
                 }
@@ -266,7 +280,8 @@ struct ComposerAttachmentDialog: View {
     private func importDrop(_ providers: [NSItemProvider]) -> Bool {
         guard canInteract else { return false }
         let mediaProviders = providers.filter { provider in
-            !provider.hasItemConformingToTypeIdentifier(ComposerMediaGallery.slotDragType.identifier)
+            !provider.hasItemConformingToTypeIdentifier(
+                ComposerMediaGallery.slotDragType.identifier)
                 && [UTType.image, .movie, .fileURL].contains {
                     provider.hasItemConformingToTypeIdentifier($0.identifier)
                 }
@@ -284,7 +299,8 @@ struct ComposerAttachmentDialog: View {
             input.settleNativeInput()
             // FocusState applies on the next view update. Native resignation is
             // synchronous, so IME commits reach the draft before an awaited abort.
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             isCaptionFocused = false
             input.settleNativeInput()
         }
@@ -335,8 +351,12 @@ struct ComposerAttachmentDialog: View {
         Task {
             let sent = await onSubmit()
             isSubmitting = false
-            if sent { dismiss() }
-            else { sendFailed = true; isCaptionFocused = true }
+            if sent {
+                dismiss()
+            } else {
+                sendFailed = true
+                isCaptionFocused = true
+            }
         }
     }
 }

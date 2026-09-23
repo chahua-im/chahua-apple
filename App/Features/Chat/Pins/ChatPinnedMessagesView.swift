@@ -92,7 +92,9 @@ struct ChatPinnedBarOverlay<Bar: View>: ViewModifier {
                             GeometryReader { geometry in
                                 Color.clear
                                     .onAppear { barHeight = geometry.size.height }
-                                    .onChange(of: geometry.size.height) { _, height in barHeight = height }
+                                    .onChange(of: geometry.size.height) { _, height in
+                                        barHeight = height
+                                    }
                             }
                         }
                         .padding(.horizontal, 12)
@@ -135,11 +137,15 @@ struct ChatPinnedMessagesSheet: View {
                             onSelect(pin.message)
                         } label: {
                             HStack(spacing: 12) {
-                                AvatarView(url: pin.message.sender.avatarUrl.flatMap(URL.init(string:)),
-                                           displayName: pin.message.sender.name ?? "User \(pin.message.sender.uid)", diameter: 36)
+                                AvatarView(
+                                    url: pin.message.sender.avatarUrl.flatMap(URL.init(string:)),
+                                    displayName: pin.message.sender.name
+                                        ?? "User \(pin.message.sender.uid)", diameter: 36)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(pin.message.sender.name ?? "User \(pin.message.sender.uid)")
-                                        .font(.subheadline.weight(.semibold))
+                                    Text(
+                                        pin.message.sender.name ?? "User \(pin.message.sender.uid)"
+                                    )
+                                    .font(.subheadline.weight(.semibold))
                                     Text(messagePreview(pin.message.replyPreview))
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
@@ -169,7 +175,7 @@ struct ChatPinnedMessagesSheet: View {
             }
             .navigationTitle("Pinned Messages")
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+                .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -177,9 +183,12 @@ struct ChatPinnedMessagesSheet: View {
                 }
             }
             .refreshable { await controller.load(chatID: chatID, force: true) }
-            .alert("Unpin Message", isPresented: Binding(
-                get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
-            )) {
+            .alert(
+                "Unpin Message",
+                isPresented: Binding(
+                    get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
+                )
+            ) {
                 if let pin = pinToUnpin {
                     Button("Unpin", role: .destructive) { Task { await controller.unpin(pin) } }
                 }
@@ -187,19 +196,22 @@ struct ChatPinnedMessagesSheet: View {
             } message: {
                 Text("Would you like to unpin this message?")
             }
-            .alert("Pinned messages", isPresented: Binding(
-                get: { controller.error != nil }, set: { if !$0 { controller.error = nil } }
-            )) {
+            .alert(
+                "Pinned messages",
+                isPresented: Binding(
+                    get: { controller.error != nil }, set: { if !$0 { controller.error = nil } }
+                )
+            ) {
                 Button("OK") { controller.error = nil }
             } message: {
                 Text(controller.error ?? "")
             }
         }
         #if os(iOS)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         #else
-        .frame(minWidth: 420, minHeight: 360)
+            .frame(minWidth: 420, minHeight: 360)
         #endif
     }
 }

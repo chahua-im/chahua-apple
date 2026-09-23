@@ -1,40 +1,61 @@
-import Foundation
 import ChahuaAPI
+import Foundation
 import SwiftUI
+
 @testable import chahua_apple
 
 @MainActor
 enum TimelineTestFixtures {
     #if os(macOS)
-    static func environment(width: CGFloat, parent: NSViewController) -> TimelineLayoutEnvironment {
-        .current(timelineWidth: width, displayScale: parent.view.window?.backingScaleFactor ?? 2,
-                 bodySize: NSFont.preferredFont(forTextStyle: .body).pointSize,
-                 captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
-                 caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
-                 layoutDirection: parent.view.userInterfaceLayoutDirection == .rightToLeft ? .rightToLeft : .leftToRight)
-    }
+        static func environment(width: CGFloat, parent: NSViewController)
+            -> TimelineLayoutEnvironment
+        {
+            .current(
+                timelineWidth: width, displayScale: parent.view.window?.backingScaleFactor ?? 2,
+                bodySize: NSFont.preferredFont(forTextStyle: .body).pointSize,
+                captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
+                caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
+                layoutDirection: parent.view.userInterfaceLayoutDirection == .rightToLeft
+                    ? .rightToLeft : .leftToRight)
+        }
 
-    static func layout(row: TimelineRow, width: CGFloat, parent: NSViewController, cache: TimelineLayoutCache) -> TimelineRowLayout {
-        let environment = environment(width: width, parent: parent)
-        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
-        return cache.layout(for: presentation, environment: environment)
-    }
+        static func layout(
+            row: TimelineRow, width: CGFloat, parent: NSViewController, cache: TimelineLayoutCache
+        ) -> TimelineRowLayout {
+            let environment = environment(width: width, parent: parent)
+            let presentation = TimelineRowPresentation.make(
+                row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
+                environment: environment)
+            return cache.layout(for: presentation, environment: environment)
+        }
     #else
-    static func environment(width: CGFloat, parent: UIViewController) -> TimelineLayoutEnvironment {
-        let traits = parent.traitCollection
-        return .current(timelineWidth: width, displayScale: traits.displayScale,
-                        bodySize: UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize,
-                        captionSize: UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits).pointSize,
-                        caption2Size: UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits).pointSize,
-                        avatarSize: UIFontMetrics(forTextStyle: .body).scaledValue(for: 36, compatibleWith: traits),
-                        layoutDirection: parent.view.effectiveUserInterfaceLayoutDirection == .rightToLeft ? .rightToLeft : .leftToRight)
-    }
+        static func environment(width: CGFloat, parent: UIViewController)
+            -> TimelineLayoutEnvironment
+        {
+            let traits = parent.traitCollection
+            return .current(
+                timelineWidth: width, displayScale: traits.displayScale,
+                bodySize: UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits)
+                    .pointSize,
+                captionSize: UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits)
+                    .pointSize,
+                caption2Size: UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits)
+                    .pointSize,
+                avatarSize: UIFontMetrics(forTextStyle: .body).scaledValue(
+                    for: 36, compatibleWith: traits),
+                layoutDirection: parent.view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+                    ? .rightToLeft : .leftToRight)
+        }
 
-    static func layout(row: TimelineRow, width: CGFloat, parent: UIViewController, cache: TimelineLayoutCache) -> TimelineRowLayout {
-        let environment = environment(width: width, parent: parent)
-        let presentation = TimelineRowPresentation.make(row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false, environment: environment)
-        return cache.layout(for: presentation, environment: environment)
-    }
+        static func layout(
+            row: TimelineRow, width: CGFloat, parent: UIViewController, cache: TimelineLayoutCache
+        ) -> TimelineRowLayout {
+            let environment = environment(width: width, parent: parent)
+            let presentation = TimelineRowPresentation.make(
+                row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
+                environment: environment)
+            return cache.layout(for: presentation, environment: environment)
+        }
     #endif
 
     static func message(
@@ -52,18 +73,20 @@ enum TimelineTestFixtures {
         clientGeneratedID: String? = nil,
         fields: [String: Any] = [:]
     ) throws -> MessageResponse {
-        let data = Data("""
-        {
-          "id": "\(id)", "chatId": "\(chatID)", "clientGeneratedId": "\(clientGeneratedID ?? "client-\(id)")", "messageType": "\(type.rawValue)",
-          "sender": {"uid": \(senderID), "gender": 0, "name": \(jsonString(senderName)), "avatarUrl": null, "userGroup": null},
-          "createdAt": "2026-09-\(String(format: "%02d", 1 + dayOffset))T\(String(format: "%02d", hour)):\(String(format: "%02d", minute)):\(String(format: "%02d", second))Z", "isEdited": false, "isDeleted": \(isDeleted),
-          "hasAttachments": false, "attachments": [], "reactions": [], "mentions": [], "message": \(jsonString(text ?? "message \(id)"))
-        }
-        """.utf8)
+        let data = Data(
+            """
+            {
+              "id": "\(id)", "chatId": "\(chatID)", "clientGeneratedId": "\(clientGeneratedID ?? "client-\(id)")", "messageType": "\(type.rawValue)",
+              "sender": {"uid": \(senderID), "gender": 0, "name": \(jsonString(senderName)), "avatarUrl": null, "userGroup": null},
+              "createdAt": "2026-09-\(String(format: "%02d", 1 + dayOffset))T\(String(format: "%02d", hour)):\(String(format: "%02d", minute)):\(String(format: "%02d", second))Z", "isEdited": false, "isDeleted": \(isDeleted),
+              "hasAttachments": false, "attachments": [], "reactions": [], "mentions": [], "message": \(jsonString(text ?? "message \(id)"))
+            }
+            """.utf8)
         guard !fields.isEmpty else { return try decoder.decode(MessageResponse.self, from: data) }
         var object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         object.merge(fields) { _, new in new }
-        return try decoder.decode(MessageResponse.self, from: JSONSerialization.data(withJSONObject: object))
+        return try decoder.decode(
+            MessageResponse.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
     static func page(
@@ -76,12 +99,15 @@ enum TimelineTestFixtures {
         let messagesJSON = try String(decoding: encoder.encode(messages), as: UTF8.self)
         return try decoder.decode(
             ListMessagesResponse.self,
-            from: Data("{\"messages\":\(messagesJSON),\"olderCursor\":\(jsonString(olderCursor)),\"newerCursor\":\(jsonString(newerCursor))}".utf8)
+            from: Data(
+                "{\"messages\":\(messagesJSON),\"olderCursor\":\(jsonString(olderCursor)),\"newerCursor\":\(jsonString(newerCursor))}"
+                    .utf8)
         )
     }
 
     static func date(dayOffset: Int = 0, second: Int) -> Date {
-        Calendar(identifier: .gregorian).date(byAdding: .day, value: dayOffset, to: Date(timeIntervalSince1970: 1_788_220_800))!
+        Calendar(identifier: .gregorian).date(
+            byAdding: .day, value: dayOffset, to: Date(timeIntervalSince1970: 1_788_220_800))!
             .addingTimeInterval(TimeInterval(second))
     }
 

@@ -8,7 +8,8 @@ final class ImageDetailPresenter: ObservableObject {
     func present(_ gallery: MessageImageGallery) {
         guard self.gallery == nil else { return }
         #if os(iOS)
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         #endif
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
@@ -41,27 +42,35 @@ struct ImageDetailPresentation: ViewModifier {
 
     func body(content: Content) -> some View {
         #if os(iOS)
-        content
-            .environment(\.imageDetailPresenter, presenter)
-            .fullScreenCover(item: Binding(get: { presenter.gallery }, set: { if $0 == nil { presenter.dismiss() } })) { gallery in
-                ImageDetailPlatformView(gallery: gallery, mediaContext: mediaContext, onDismiss: presenter.dismiss)
+            content
+                .environment(\.imageDetailPresenter, presenter)
+                .fullScreenCover(
+                    item: Binding(
+                        get: { presenter.gallery }, set: { if $0 == nil { presenter.dismiss() } })
+                ) { gallery in
+                    ImageDetailPlatformView(
+                        gallery: gallery, mediaContext: mediaContext, onDismiss: presenter.dismiss
+                    )
                     .ignoresSafeArea()
                     .presentationBackground(.clear)
                     .interactiveDismissDisabled()
                     .statusBarHidden()
-            }
+                }
         #else
-        content
-            .environment(\.imageDetailPresenter, presenter)
-            .allowsHitTesting(presenter.gallery == nil)
-            .accessibilityHidden(presenter.gallery != nil)
-            .overlay {
-                if let gallery = presenter.gallery {
-                    ImageDetailPlatformView(gallery: gallery, mediaContext: mediaContext, onDismiss: presenter.dismiss)
+            content
+                .environment(\.imageDetailPresenter, presenter)
+                .allowsHitTesting(presenter.gallery == nil)
+                .accessibilityHidden(presenter.gallery != nil)
+                .overlay {
+                    if let gallery = presenter.gallery {
+                        ImageDetailPlatformView(
+                            gallery: gallery, mediaContext: mediaContext,
+                            onDismiss: presenter.dismiss
+                        )
                         .id(gallery.id)
                         .ignoresSafeArea()
+                    }
                 }
-            }
         #endif
     }
 }

@@ -25,14 +25,17 @@ final class MessageReactionController: ObservableObject {
     }
 
     func toggle(message: MessageResponse, emoji: String, currentUserID: Int32) async {
-        guard !message.isDeleted, !emoji.isEmpty, !pendingMessageIDs.contains(message.id) else { return }
+        guard !message.isDeleted, !emoji.isEmpty, !pendingMessageIDs.contains(message.id) else {
+            return
+        }
         let requestGeneration = generation
         pendingMessageIDs.insert(message.id)
         error = nil
         let task = Task { [weak self] in
             guard let self else { return }
             await self.performToggle(
-                message: message, emoji: emoji, currentUserID: currentUserID, generation: requestGeneration)
+                message: message, emoji: emoji, currentUserID: currentUserID,
+                generation: requestGeneration)
         }
         tasks[message.id] = task
         await withTaskCancellationHandler {
@@ -62,13 +65,16 @@ final class MessageReactionController: ObservableObject {
                 if let peer = group.peer {
                     let relationship = try await apiClient.friendRelationship(peerUID: peer.uid)
                     try checkSession(requestGeneration)
-                    guard relationship.peerUid == peer.uid else { throw APIError.unexpectedResponse }
+                    guard relationship.peerUid == peer.uid else {
+                        throw APIError.unexpectedResponse
+                    }
                     context.canWrite = group.myRole != nil && relationship.canDm
                 }
             }
             return context
         } catch {
-            guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled else { return nil }
+            guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled
+            else { return nil }
             self.error = String(localized: "Couldn’t load message permissions. Please try again.")
             if case APIError.invalidToken = error { await onInvalidToken() }
             return nil
@@ -84,7 +90,8 @@ final class MessageReactionController: ObservableObject {
     }
 
     private func performToggle(
-        message: MessageResponse, emoji: String, currentUserID: Int32, generation requestGeneration: Int
+        message: MessageResponse, emoji: String, currentUserID: Int32,
+        generation requestGeneration: Int
     ) async {
         do {
             try checkSession(requestGeneration)
@@ -103,39 +110,50 @@ final class MessageReactionController: ObservableObject {
                     if isMine { ownCount += 1 }
                 }
                 guard ownCount < 5 else { throw Failure.userLimit }
-                guard target != nil || authoritative.reactions.count < 50 else { throw Failure.distinctLimit }
+                guard target != nil || authoritative.reactions.count < 50 else {
+                    throw Failure.distinctLimit
+                }
             }
 
             if removing == true {
-                try await apiClient.deleteReaction(chatID: message.chatId, messageID: message.id, emoji: emoji)
+                try await apiClient.deleteReaction(
+                    chatID: message.chatId, messageID: message.id, emoji: emoji)
             } else {
-                try await apiClient.putReaction(chatID: message.chatId, messageID: message.id, emoji: emoji)
+                try await apiClient.putReaction(
+                    chatID: message.chatId, messageID: message.id, emoji: emoji)
             }
             try checkSession(requestGeneration)
             // Broadcasts received before this GET are older than its authoritative
             // personalized snapshot. Only ingress during the read wins over HTTP.
             let token = messageStore.beginSnapshot(chatID: message.chatId)
             defer { messageStore.endSnapshot(token) }
-            let updated = try await apiClient.getMessage(chatID: message.chatId, messageID: message.id)
+            let updated = try await apiClient.getMessage(
+                chatID: message.chatId, messageID: message.id)
             try checkSession(requestGeneration)
-            guard updated.id == message.id, updated.chatId == message.chatId else { throw APIError.unexpectedResponse }
+            guard updated.id == message.id, updated.chatId == message.chatId else {
+                throw APIError.unexpectedResponse
+            }
             if !hasNewerState(for: message, token: token) {
                 publishReactions(updated)
             }
         } catch {
-            guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled else { return }
+            guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled
+            else { return }
             self.error =
-                (error as? Failure)?.message ?? String(localized: "Couldn’t update reaction. Please try again.")
+                (error as? Failure)?.message
+                ?? String(localized: "Couldn’t update reaction. Please try again.")
             if case APIError.invalidToken = error { await onInvalidToken() }
         }
     }
 
-    private func readBeforeMutation(_ message: MessageResponse, generation requestGeneration: Int) async throws
+    private func readBeforeMutation(_ message: MessageResponse, generation requestGeneration: Int)
+        async throws
         -> MessageResponse
     {
         let token = messageStore.beginSnapshot(chatID: message.chatId)
         defer { messageStore.endSnapshot(token) }
-        let authoritative = try await apiClient.getMessage(chatID: message.chatId, messageID: message.id)
+        let authoritative = try await apiClient.getMessage(
+            chatID: message.chatId, messageID: message.id)
         try checkSession(requestGeneration)
         guard authoritative.id == message.id, authoritative.chatId == message.chatId else {
             throw APIError.unexpectedResponse
@@ -173,7 +191,10 @@ final class MessageReactionController: ObservableObject {
             messageStore.apply(.messageDeleted(message.redactedForDeletion()))
         } else {
             messageStore.apply(
-                .reactionUpdated(.init(messageId: message.id, chatId: message.chatId, reactions: message.reactions)))
+                .reactionUpdated(
+                    .init(
+                        messageId: message.id, chatId: message.chatId, reactions: message.reactions)
+                ))
         }
     }
 
@@ -187,11 +208,13 @@ final class MessageReactionController: ObservableObject {
 
         var message: String {
             switch self {
-            case .unknownOwnership: String(localized: "Couldn’t determine your reactions. Please try again.")
+            case .unknownOwnership:
+                String(localized: "Couldn’t determine your reactions. Please try again.")
             case .changed: String(localized: "This message’s reactions changed. Please try again.")
             case .deleted: String(localized: "This message has been deleted.")
             case .userLimit: String(localized: "You can add up to 5 reactions to a message.")
-            case .distinctLimit: String(localized: "A message can have up to 50 different reactions.")
+            case .distinctLimit:
+                String(localized: "A message can have up to 50 different reactions.")
             }
         }
     }

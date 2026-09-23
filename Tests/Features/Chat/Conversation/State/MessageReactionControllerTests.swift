@@ -12,7 +12,9 @@ final class MessageReactionControllerTests: XCTestCase {
         let removed = try message(reactions: [["emoji": "👍", "count": 5, "reactedByMe": false]])
         let (controller, api, store) = makeController()
         let timeline = try await timeline(message: broadcast, store: store)
-        let operation = Task { await controller.toggle(message: broadcast, emoji: "👍", currentUserID: 1) }
+        let operation = Task {
+            await controller.toggle(message: broadcast, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         await controller.toggle(message: broadcast, emoji: "❤️", currentUserID: 1)
         XCTAssertEqual(controller.pendingMessageIDs, [broadcast.id])
@@ -33,7 +35,9 @@ final class MessageReactionControllerTests: XCTestCase {
     func testMissingPersonalizationAfterAuthoritativeReadNeverBecomesAnAdd() async throws {
         let unknown = try message(reactions: [["emoji": "👍", "count": 8, "reactors": [["uid": 2]]]])
         let (controller, api, _) = makeController()
-        let operation = Task { await controller.toggle(message: unknown, emoji: "👍", currentUserID: 1) }
+        let operation = Task {
+            await controller.toggle(message: unknown, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         await api.finishRead(0, with: .success(unknown))
         await operation.value
@@ -51,7 +55,9 @@ final class MessageReactionControllerTests: XCTestCase {
         let afterHTTP = try message(reactions: [["emoji": "👍", "count": 4]])
         let (controller, api, store) = makeController()
         let timeline = try await timeline(message: original, store: store)
-        let operation = Task { await controller.toggle(message: original, emoji: "👍", currentUserID: 1) }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         await api.finishRead(0, with: .success(original))
         await api.waitForRequests(2)
@@ -68,13 +74,18 @@ final class MessageReactionControllerTests: XCTestCase {
         XCTAssertNil(controller.error)
     }
 
-    func testOwnBroadcastDuringMutationDoesNotPreventAuthoritativeOwnershipHydration() async throws {
+    func testOwnBroadcastDuringMutationDoesNotPreventAuthoritativeOwnershipHydration() async throws
+    {
         let original = try message(reactions: [["emoji": "👍", "count": 5, "reactedByMe": false]])
-        let broadcast = try message(reactions: [["emoji": "👍", "count": 6, "reactors": [["uid": 2]]]])
+        let broadcast = try message(reactions: [
+            ["emoji": "👍", "count": 6, "reactors": [["uid": 2]]]
+        ])
         let personalized = try message(reactions: [["emoji": "👍", "count": 6, "reactedByMe": true]])
         let (controller, api, store) = makeController()
         let timeline = try await timeline(message: original, store: store)
-        let operation = Task { await controller.toggle(message: original, emoji: "👍", currentUserID: 1) }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         await api.finishRead(0, with: .success(original))
         await api.waitForRequests(2)
@@ -94,7 +105,9 @@ final class MessageReactionControllerTests: XCTestCase {
         let remote = try message(reactions: [["emoji": "❤️", "count": 2]])
         let (controller, api, store) = makeController()
         let timeline = try await timeline(message: original, store: store)
-        let operation = Task { await controller.toggle(message: original, emoji: "👍", currentUserID: 1) }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         await api.finishRead(0, with: .success(original))
         await api.waitForRequests(2)
@@ -112,7 +125,9 @@ final class MessageReactionControllerTests: XCTestCase {
         let remote = try message(reactions: [["emoji": "👍", "count": 2]])
         let (controller, api, store) = makeController()
         let timeline = try await timeline(message: original, store: store)
-        let operation = Task { await controller.toggle(message: original, emoji: "👍", currentUserID: 1) }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         store.apply(reactionEvent(remote))
         await api.finishRead(0, with: .success(original))
@@ -129,7 +144,9 @@ final class MessageReactionControllerTests: XCTestCase {
         let stale = try message(reactions: [["emoji": "👍", "count": 1, "reactedByMe": true]])
         let (controller, api, store) = makeController()
         let timeline = try await timeline(message: original, store: store)
-        let operation = Task { await controller.toggle(message: original, emoji: "👍", currentUserID: 1) }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         await api.finishRead(0, with: .success(original))
         await api.waitForRequests(2)
@@ -144,7 +161,8 @@ final class MessageReactionControllerTests: XCTestCase {
     }
 
     func testFiveOwnedReactionsBlocksAdditionButAllowsRemoval() async throws {
-        let full = try message(reactions: (0..<5).map { ["emoji": "reaction-\($0)", "count": 1, "reactedByMe": true] })
+        let full = try message(
+            reactions: (0..<5).map { ["emoji": "reaction-\($0)", "count": 1, "reactedByMe": true] })
         let (controller, api, _) = makeController()
         let adding = Task { await controller.toggle(message: full, emoji: "👍", currentUserID: 1) }
         await api.waitForRequests(1)
@@ -154,13 +172,16 @@ final class MessageReactionControllerTests: XCTestCase {
         XCTAssertEqual(blockedRequests, [.get])
         XCTAssertNotNil(controller.error)
 
-        let removing = Task { await controller.toggle(message: full, emoji: "reaction-0", currentUserID: 1) }
+        let removing = Task {
+            await controller.toggle(message: full, emoji: "reaction-0", currentUserID: 1)
+        }
         await api.waitForRequests(2)
         await api.finishRead(1, with: .success(full))
         await api.waitForRequests(3)
         await api.finishMutation(2, with: .success(()))
         await api.waitForRequests(4)
-        await api.finishRead(3, with: .success(full.replacingReactions(Array(full.reactions.dropFirst()))))
+        await api.finishRead(
+            3, with: .success(full.replacingReactions(Array(full.reactions.dropFirst()))))
         await removing.value
         let requests = await api.requests()
         XCTAssertEqual(requests, [.get, .get, .delete("reaction-0"), .get])
@@ -169,7 +190,9 @@ final class MessageReactionControllerTests: XCTestCase {
 
     func testFiftyDistinctReactionsBlocksNewEmojiButAllowsJoiningExistingEmoji() async throws {
         let full = try message(
-            reactions: (0..<50).map { ["emoji": "reaction-\($0)", "count": 1, "reactedByMe": false] })
+            reactions: (0..<50).map {
+                ["emoji": "reaction-\($0)", "count": 1, "reactedByMe": false]
+            })
         let (controller, api, _) = makeController()
         let adding = Task { await controller.toggle(message: full, emoji: "👍", currentUserID: 1) }
         await api.waitForRequests(1)
@@ -179,7 +202,9 @@ final class MessageReactionControllerTests: XCTestCase {
         XCTAssertEqual(blockedRequests, [.get])
         XCTAssertNotNil(controller.error)
 
-        let joining = Task { await controller.toggle(message: full, emoji: "reaction-0", currentUserID: 1) }
+        let joining = Task {
+            await controller.toggle(message: full, emoji: "reaction-0", currentUserID: 1)
+        }
         await api.waitForRequests(2)
         await api.finishRead(1, with: .success(full))
         await api.waitForRequests(3)
@@ -194,7 +219,8 @@ final class MessageReactionControllerTests: XCTestCase {
 
     func testResetDiscardsLateResponseWithoutClearingNewSessionPendingIntent() async throws {
         let original = try message()
-        let full = try message(reactions: (0..<5).map { ["emoji": "reaction-\($0)", "count": 1, "reactedByMe": true] })
+        let full = try message(
+            reactions: (0..<5).map { ["emoji": "reaction-\($0)", "count": 1, "reactedByMe": true] })
         let (controller, api, store) = makeController()
         let old = Task { await controller.toggle(message: original, emoji: "👍", currentUserID: 1) }
         await api.waitForRequests(1)
@@ -216,8 +242,12 @@ final class MessageReactionControllerTests: XCTestCase {
         let api = HeldReactionAPI()
         let store = ConversationMessageStore()
         var invalidations = 0
-        let controller = MessageReactionController(apiClient: api, messageStore: store) { invalidations += 1 }
-        let operation = Task { await controller.toggle(message: original, emoji: "👍", currentUserID: 1) }
+        let controller = MessageReactionController(apiClient: api, messageStore: store) {
+            invalidations += 1
+        }
+        let operation = Task {
+            await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
+        }
         await api.waitForRequests(1)
         await api.finishRead(0, with: .failure(APIError.invalidToken))
         await operation.value
@@ -226,10 +256,15 @@ final class MessageReactionControllerTests: XCTestCase {
         XCTAssertNotNil(controller.error)
     }
 
-    private func makeController() -> (MessageReactionController, HeldReactionAPI, ConversationMessageStore) {
+    private func makeController() -> (
+        MessageReactionController, HeldReactionAPI, ConversationMessageStore
+    ) {
         let api = HeldReactionAPI()
         let store = ConversationMessageStore()
-        return (MessageReactionController(apiClient: api, messageStore: store, onInvalidToken: {}), api, store)
+        return (
+            MessageReactionController(apiClient: api, messageStore: store, onInvalidToken: {}), api,
+            store
+        )
     }
 
     private func message(reactions: [[String: Any]] = []) throws -> MessageResponse {
@@ -237,7 +272,8 @@ final class MessageReactionControllerTests: XCTestCase {
     }
 
     private func reactionEvent(_ message: MessageResponse) -> RealtimeServerEvent {
-        .reactionUpdated(.init(messageId: message.id, chatId: message.chatId, reactions: message.reactions))
+        .reactionUpdated(
+            .init(messageId: message.id, chatId: message.chatId, reactions: message.reactions))
     }
 
     private func timeline(message: MessageResponse, store: ConversationMessageStore) async throws
@@ -245,7 +281,8 @@ final class MessageReactionControllerTests: XCTestCase {
     {
         let source = ReactionTimelineSource(page: try TimelineTestFixtures.page([message]))
         let model = ConversationTimelineModel(
-            chatID: message.chatId, currentUserID: 1, isGroupChat: true, source: source, messageStore: store)
+            chatID: message.chatId, currentUserID: 1, isGroupChat: true, source: source,
+            messageStore: store)
         await model.loadInitial()
         return model
     }
@@ -262,7 +299,9 @@ final class MessageReactionControllerTests: XCTestCase {
 private final class ReactionTimelineSource: TimelineMessageSource {
     let page: ListMessagesResponse
     init(page: ListMessagesResponse) { self.page = page }
-    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse { page }
+    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
+        -> ListMessagesResponse
+    { page }
 }
 
 private actor HeldReactionAPI: ChahuaAPIClient {
@@ -297,7 +336,9 @@ private actor HeldReactionAPI: ChahuaAPIClient {
         mutations.removeValue(forKey: index)?.resume(with: result)
     }
 
-    func deleteMessage(chatID: String, messageID: String) async throws { throw APIError.unavailable }
+    func deleteMessage(chatID: String, messageID: String) async throws {
+        throw APIError.unavailable
+    }
 
     // Deliberately completes even after cancellation to exercise session fencing.
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
@@ -326,39 +367,76 @@ private actor HeldReactionAPI: ChahuaAPIClient {
         }
     }
 
-    func authenticate(candidateJWT: String) async throws -> MeResponse { throw APIError.unavailable }
-    func createDevSession(uid: Int32, clientID: String) async throws -> String { throw APIError.unavailable }
+    func authenticate(candidateJWT: String) async throws -> MeResponse {
+        throw APIError.unavailable
+    }
+    func createDevSession(uid: Int32, clientID: String) async throws -> String {
+        throw APIError.unavailable
+    }
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
-    func requestAttachmentUpload(fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
+    func requestAttachmentUpload(
+        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+    ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
-    func listSubscribedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
-    func listFavoriteStickers() async throws -> [MessageStickerResponse] { throw APIError.unavailable }
+    func listSubscribedStickerPacks() async throws -> [StickerPackSummary] {
+        throw APIError.unavailable
+    }
+    func listFavoriteStickers() async throws -> [MessageStickerResponse] {
+        throw APIError.unavailable
+    }
     func getSticker(id: String) async throws -> StickerDetailResponse { throw APIError.unavailable }
-    func getStickerPack(id: String) async throws -> StickerPackDetailResponse { throw APIError.unavailable }
+    func getStickerPack(id: String) async throws -> StickerPackDetailResponse {
+        throw APIError.unavailable
+    }
     func setStickerFavorite(id: String, favorite: Bool) async throws { throw APIError.unavailable }
-    func setStickerPackSubscription(id: String, subscribed: Bool) async throws { throw APIError.unavailable }
-    func listChats(query: ListChatsQuery) async throws -> ListChatsResponse { throw APIError.unavailable }
+    func setStickerPackSubscription(id: String, subscribed: Bool) async throws {
+        throw APIError.unavailable
+    }
+    func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
+        throw APIError.unavailable
+    }
     func archiveChat(chatID: String) async throws { throw APIError.unavailable }
     func unarchiveChat(chatID: String) async throws { throw APIError.unavailable }
     func archiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
-    func unarchiveThread(chatID: String, threadID: String) async throws { throw APIError.unavailable }
-    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse { throw APIError.unavailable }
+    func unarchiveThread(chatID: String, threadID: String) async throws {
+        throw APIError.unavailable
+    }
+    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
+        throw APIError.unavailable
+    }
     func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
-    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse { throw APIError.unavailable }
-    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse { throw APIError.unavailable }
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
-    func markChatUnread(chatID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse { throw APIError.unavailable }
-    func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse {
+    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
+        throw APIError.unavailable
+    }
+    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
+        -> MessageResponse
+    { throw APIError.unavailable }
+    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+        throw APIError.unavailable
+    }
+    func markChatUnread(chatID: String) async throws -> ReadStateResponse {
+        throw APIError.unavailable
+    }
+    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+        -> ReadStateResponse
+    { throw APIError.unavailable }
+    func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
+    {
         throw APIError.unavailable
     }
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse {
         throw APIError.unavailable
     }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
-    func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse { throw APIError.unavailable }
-    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse { throw APIError.unavailable }
+    func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse {
+        throw APIError.unavailable
+    }
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws
+        -> MemberResponse
+    { throw APIError.unavailable }
     func removeGroupMember(chatID: String, uid: Int32) async throws { throw APIError.unavailable }
-    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse { throw APIError.unavailable }
+    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
+        throw APIError.unavailable
+    }
 }

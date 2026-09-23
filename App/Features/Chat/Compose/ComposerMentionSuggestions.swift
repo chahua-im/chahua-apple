@@ -15,9 +15,12 @@ struct ComposerMentionSuggestions: View {
 
     private var mentionedIDs: [Int32] {
         let source = wireText as NSString
-        return Array(Set(MessageMentions.pattern.matches(
-            in: wireText, range: NSRange(location: 0, length: source.length)
-        ).compactMap { Int32(source.substring(with: $0.range(at: 1))) })).sorted()
+        return Array(
+            Set(
+                MessageMentions.pattern.matches(
+                    in: wireText, range: NSRange(location: 0, length: source.length)
+                ).compactMap { Int32(source.substring(with: $0.range(at: 1))) })
+        ).sorted()
     }
 
     var body: some View {
@@ -101,8 +104,11 @@ struct ComposerMentionSuggestions: View {
             suggestions.select(member, input: input)
         } label: {
             HStack(spacing: 10) {
-                AvatarView(url: member.avatarUrl.flatMap(URL.init(string:)), displayName: name, diameter: 28)
-                    .accessibilityHidden(true)
+                AvatarView(
+                    url: member.avatarUrl.flatMap(URL.init(string:)), displayName: name,
+                    diameter: 28
+                )
+                .accessibilityHidden(true)
                 Text(name).lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -138,7 +144,10 @@ final class ComposerMentionSuggestionsModel: ObservableObject {
         member.username.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(member.uid)"
     }
 
-    func update(_ next: ComposerMentionQuery?, search: ComposerMemberSearch?, input: ComposerInputState, enabled: Bool = true, force: Bool = false) {
+    func update(
+        _ next: ComposerMentionQuery?, search: ComposerMemberSearch?, input: ComposerInputState,
+        enabled: Bool = true, force: Bool = false
+    ) {
         guard enabled else {
             clear()
             return
@@ -221,15 +230,17 @@ final class ComposerMentionSuggestionsModel: ObservableObject {
 
     /// Drafts already persist stable UID tokens. Resolve only their display
     /// labels; an unavailable/departed member keeps the native @User N fallback.
-    func resolveNames(_ ids: [Int32], input: ComposerInputState, search: ComposerMemberSearch) async {
+    func resolveNames(_ ids: [Int32], input: ComposerInputState, search: ComposerMemberSearch) async
+    {
         for uid in ids where !resolvedIDs.contains(uid) {
             do {
                 // Submitted search includes exact UID, ordered by UID. Starting
                 // immediately before it avoids collisions with numeric names.
-                let members = try await search(.init(
-                    q: String(uid), mode: "submitted", limit: 1,
-                    after: uid == .min ? nil : uid - 1
-                ))
+                let members = try await search(
+                    .init(
+                        q: String(uid), mode: "submitted", limit: 1,
+                        after: uid == .min ? nil : uid - 1
+                    ))
                 guard !Task.isCancelled else { return }
                 resolvedIDs.insert(uid)
                 remember(members.filter { $0.uid == uid }, input: input)

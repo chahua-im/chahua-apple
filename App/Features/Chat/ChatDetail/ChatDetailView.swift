@@ -54,13 +54,16 @@ struct ChatDetailView: View {
         self.navigationTitle = navigationTitle
         self.threadID = threadID
         self.onOpenThread = onOpenThread
-        self.initialPosition = initialPosition ?? (chat.unreadCount > 0 ? .unread(after: chat.lastReadMessageId) : .liveEdge)
+        self.initialPosition =
+            initialPosition
+            ?? (chat.unreadCount > 0 ? .unread(after: chat.lastReadMessageId) : .liveEdge)
         self.store = store
         self.reactions = store.reactions
         self.pins = store.pins
         self.drafts = store.drafts
         self.outgoingQueue = store.outgoingQueue
-        _interactionContext = State(initialValue: .init(isDM: chat.kind == .dm, isThreadView: threadID != nil))
+        _interactionContext = State(
+            initialValue: .init(isDM: chat.kind == .dm, isThreadView: threadID != nil))
         _model = StateObject(
             wrappedValue: ConversationTimelineModel(
                 chatID: chat.id,
@@ -70,141 +73,166 @@ struct ChatDetailView: View {
                 messageStore: store.conversationMessages,
                 threadID: threadID,
                 markRead: { messageID in
-                    try await store.markRead(chatID: chat.id, threadID: threadID, messageID: messageID)
+                    try await store.markRead(
+                        chatID: chat.id, threadID: threadID, messageID: messageID)
                 }
             ))
     }
 
     var body: some View {
         deletionSurface
-        .navigationTitle(navigationTitle ?? chat.chatDisplayName)
-        .onAppear {
-            if threadID == nil {
-                model.updateReadState(unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
+            .navigationTitle(navigationTitle ?? chat.chatDisplayName)
+            .onAppear {
+                if threadID == nil {
+                    model.updateReadState(
+                        unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
+                }
+                store.registerTimeline(model)
+                model.setReadTrackingActive(scenePhase == .active)
             }
-            store.registerTimeline(model)
-            model.setReadTrackingActive(scenePhase == .active)
-        }
-        .task { await model.open(position: initialPosition) }
-        .task { await loadInteractionPermissions() }
-        .task {
-            if threadID == nil { await pins.load(chatID: chat.id, force: true) }
-        }
-        .sheet(item: $stickerToView) { selection in
-            StickerPackSheet(stickerID: selection.id, library: store.stickers, currentUserID: model.currentUserID)
-        }
-        .alert("Unpin Message", isPresented: Binding(
-            get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
-        )) {
-            if let pin = pinToUnpin {
-                Button("Unpin", role: .destructive) {
-                    guard interactionContext.isAdmin, interactionContext.canWrite, threadID == nil else { return }
-                    Task { await pins.unpin(pin) }
+            .task { await model.open(position: initialPosition) }
+            .task { await loadInteractionPermissions() }
+            .task {
+                if threadID == nil { await pins.load(chatID: chat.id, force: true) }
+            }
+            .sheet(item: $stickerToView) { selection in
+                StickerPackSheet(
+                    stickerID: selection.id, library: store.stickers,
+                    currentUserID: model.currentUserID)
+            }
+            .alert(
+                "Unpin Message",
+                isPresented: Binding(
+                    get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
+                )
+            ) {
+                if let pin = pinToUnpin {
+                    Button("Unpin", role: .destructive) {
+                        guard interactionContext.isAdmin, interactionContext.canWrite,
+                            threadID == nil
+                        else { return }
+                        Task { await pins.unpin(pin) }
+                    }
+                }
+                Button("Cancel", role: .cancel) { pinToUnpin = nil }
+            } message: {
+                Text("Would you like to unpin this message?")
+            }
+            .alert(
+                "Pinned messages",
+                isPresented: Binding(
+                    get: { pins.error != nil && !showsPinnedMessages },
+                    set: { if !$0 { pins.error = nil } }
+                )
+            ) {
+                Button("OK") { pins.error = nil }
+            } message: {
+                Text(pins.error ?? "")
+            }
+            .onChange(of: scenePhase) { _, phase in
+                model.setReadTrackingActive(phase == .active)
+            }
+            .alert(
+                "Message actions",
+                isPresented: Binding(
+                    get: { reactions.error != nil },
+                    set: { if !$0 { reactions.error = nil } }
+                )
+            ) {
+                if !hasLoadedInteractionPermissions {
+                    Button("Retry") { Task { await loadInteractionPermissions() } }
+                }
+                Button("OK") { reactions.error = nil }
+            } message: {
+                Text(reactions.error ?? "")
+            }
+            .confirmationDialog(
+                "Message not sent", isPresented: $showsRetryOptions, titleVisibility: .visible
+            ) {
+                Button("Resend this message") { retry(.message) }
+                Button("Retry this and subsequent messages") { retry(.messageAndSubsequent) }
+                Button("Cancel", role: .cancel) { failedMessageID = nil }
+            }
+            .alert(
+                "Couldn’t edit message",
+                isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })
+            ) {
+                Button("OK") { editError = nil }
+            } message: {
+                Text(editError ?? "")
+            }
+            .alert(
+                "Couldn’t update outbox",
+                isPresented: Binding(
+                    get: { outboxError != nil }, set: { if !$0 { outboxError = nil } })
+            ) {
+                Button("OK") { outboxError = nil }
+            } message: {
+                Text(outboxError ?? "")
+            }
+            .onReceive(store.outgoingQueue.events) { _ in
+                guard let failedMessageID else { return }
+                if !store.outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID)
+                    .contains(where: {
+                        $0.clientGeneratedID == failedMessageID && $0.state == .failed
+                    })
+                {
+                    showsRetryOptions = false
+                    self.failedMessageID = nil
                 }
             }
-            Button("Cancel", role: .cancel) { pinToUnpin = nil }
-        } message: {
-            Text("Would you like to unpin this message?")
-        }
-        .alert("Pinned messages", isPresented: Binding(
-            get: { pins.error != nil && !showsPinnedMessages },
-            set: { if !$0 { pins.error = nil } }
-        )) {
-            Button("OK") { pins.error = nil }
-        } message: {
-            Text(pins.error ?? "")
-        }
-        .onChange(of: scenePhase) { _, phase in
-            model.setReadTrackingActive(phase == .active)
-        }
-        .alert(
-            "Message actions",
-            isPresented: Binding(
-                get: { reactions.error != nil },
-                set: { if !$0 { reactions.error = nil } }
-            )
-        ) {
-            if !hasLoadedInteractionPermissions {
-                Button("Retry") { Task { await loadInteractionPermissions() } }
+            .onDisappear {
+                model.setReadTrackingActive(false)
+                store.unregisterTimeline(model)
+                model.close()
+                Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
             }
-            Button("OK") { reactions.error = nil }
-        } message: {
-            Text(reactions.error ?? "")
-        }
-        .confirmationDialog("Message not sent", isPresented: $showsRetryOptions, titleVisibility: .visible) {
-            Button("Resend this message") { retry(.message) }
-            Button("Retry this and subsequent messages") { retry(.messageAndSubsequent) }
-            Button("Cancel", role: .cancel) { failedMessageID = nil }
-        }
-        .alert(
-            "Couldn’t edit message",
-            isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })
-        ) {
-            Button("OK") { editError = nil }
-        } message: {
-            Text(editError ?? "")
-        }
-        .alert("Couldn’t update outbox", isPresented: Binding(get: { outboxError != nil }, set: { if !$0 { outboxError = nil } })) {
-            Button("OK") { outboxError = nil }
-        } message: {
-            Text(outboxError ?? "")
-        }
-        .onReceive(store.outgoingQueue.events) { _ in
-            guard let failedMessageID else { return }
-            if !store.outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID).contains(where: {
-                $0.clientGeneratedID == failedMessageID && $0.state == .failed
-            }) {
-                showsRetryOptions = false
-                self.failedMessageID = nil
-            }
-        }
-        .onDisappear {
-            model.setReadTrackingActive(false)
-            store.unregisterTimeline(model)
-            model.close()
-            Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
-        }
     }
 
     private var deletionSurface: some View {
         conversationDropSurface
-        .confirmationDialog(
-            String(localized: "Delete Message"),
-            isPresented: Binding(get: { messageToDelete != nil }, set: { if !$0 { messageToDelete = nil } }),
-            titleVisibility: .visible,
-            presenting: messageToDelete
-        ) { message in
-            Button("Delete", role: .destructive) {
-                Task {
-                    let deleted = await store.deleteMessage(message)
-                    if deleted {
-                        if editingMessage?.id == message.id { cancelEditing() }
-                    } else {
-                        deleteError = true
+            .confirmationDialog(
+                String(localized: "Delete Message"),
+                isPresented: Binding(
+                    get: { messageToDelete != nil }, set: { if !$0 { messageToDelete = nil } }),
+                titleVisibility: .visible,
+                presenting: messageToDelete
+            ) { message in
+                Button("Delete", role: .destructive) {
+                    Task {
+                        let deleted = await store.deleteMessage(message)
+                        if deleted {
+                            if editingMessage?.id == message.id { cancelEditing() }
+                        } else {
+                            deleteError = true
+                        }
                     }
                 }
+                Button("Cancel", role: .cancel) {}
+            } message: { message in
+                if message.sender.uid == model.currentUserID {
+                    Text("Are you sure you want to delete this message?")
+                } else {
+                    Text(
+                        "Are you sure you want to delete this message from \(message.sender.name ?? String(localized: "this user"))?"
+                    )
+                }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: { message in
-            if message.sender.uid == model.currentUserID {
-                Text("Are you sure you want to delete this message?")
-            } else {
-                Text("Are you sure you want to delete this message from \(message.sender.name ?? String(localized: "this user"))?")
+            .alert("Failed to delete message", isPresented: $deleteError) {
+                Button("OK") {}
             }
-        }
-        .alert("Failed to delete message", isPresented: $deleteError) {
-            Button("OK") {}
-        }
     }
 
     private var conversationDropSurface: some View {
         Group {
             #if os(macOS)
-            conversationBody(actions: bubbleActions)
+                conversationBody(actions: bubbleActions)
             #else
-            MessageInteractionHost(model: model, context: interactionContext, actions: bubbleActions) { actions in
-                conversationBody(actions: actions)
-            }
+                MessageInteractionHost(
+                    model: model, context: interactionContext, actions: bubbleActions
+                ) { actions in
+                    conversationBody(actions: actions)
+                }
             #endif
         }
         .contentShape(Rectangle())
@@ -217,7 +245,8 @@ struct ChatDetailView: View {
         }
         .overlay {
             if isMediaDropTargeted, interactionContext.canWrite, editingMessage == nil,
-                !composerAttachments.isAcquiring {
+                !composerAttachments.isAcquiring
+            {
                 RoundedRectangle(cornerRadius: 12)
                     .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8]))
                     .padding(6)
@@ -227,93 +256,119 @@ struct ChatDetailView: View {
     }
 
     private func conversationBody(actions interactiveActions: TimelineBubbleActions) -> some View {
-            GeometryReader { geometry in
-                timelineSurface(actions: interactiveActions)
-                    .modifier(ChatPinnedBarOverlay(isVisible: showsPinBar) {
+        GeometryReader { geometry in
+            timelineSurface(actions: interactiveActions)
+                .modifier(
+                    ChatPinnedBarOverlay(isVisible: showsPinBar) {
                         pinnedMessageBar
-                    })
-                    .modifier(
-                        ChatComposerOverlay {
-                            VStack(spacing: 0) {
-                                if store.outgoingQueue.storageState == .failed || drafts.draftSaveFailed {
-                                    HStack {
-                                        Text("Couldn’t save messages on this device.")
-                                            .font(.caption)
-                                        Spacer(minLength: 8)
-                                        Button("Retry") { Task { await store.retryLocalStorage() } }
-                                    }
-                                    .padding(12)
-                                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                                    .padding(.horizontal, 12)
-                                } else if store.outgoingQueue.storageState == .loading {
-                                    ProgressView("Loading saved messages…")
-                                        .controlSize(.small)
-                                        .padding(12)
-                                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                )
+                .modifier(
+                    ChatComposerOverlay {
+                        VStack(spacing: 0) {
+                            if store.outgoingQueue.storageState == .failed || drafts.draftSaveFailed
+                            {
+                                HStack {
+                                    Text("Couldn’t save messages on this device.")
+                                        .font(.caption)
+                                    Spacer(minLength: 8)
+                                    Button("Retry") { Task { await store.retryLocalStorage() } }
                                 }
-                                MessageComposerView(
-                                    text: composerText,
-                                    attachmentState: composerAttachments,
-                                    maxHeight: max(36, geometry.size.height / 3),
-                                    isEnabled: interactionContext.canWrite,
-                                    canSend: canSubmitComposer,
-                                    onSubmit: submitComposer,
-                                    onCompositionChanged: { composing in
-                                        isComposerComposing = composing
-                                        guard editingMessage == nil else { return }
-                                        drafts.setDraftComposing(composing, chatID: chat.id, threadID: threadID)
-                                    },
-                                    replyToMessage: drafts.draftReply(chatID: chat.id, threadID: threadID),
-                                    replyFocusRequest: replyFocusRequest,
-                                    onCancelReply: { drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID) },
-                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } },
-                                    editingMessage: editingMessage,
-                                    onCancelEdit: cancelEditing,
-                                    onRequestEditLastMessage: requestEditLastOwnMessage,
-                                    attachments: outgoingQueue.draftAttachments(chatID: chat.id, threadID: threadID),
-                                    attachmentProgress: outgoingQueue.attachmentProgress,
-                                    compressionEnabled: outgoingQueue.compressionEnabled(chatID: chat.id, threadID: threadID),
-                                    onImportImages: { urls in
-                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.importImages(urls: urls, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onRemoveAttachment: { id in
-                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.removeAttachment(id: id, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onRetryAttachment: { id in
-                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.retryAttachment(id: id, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onCompressionChanged: { enabled in
-                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.setCompressionEnabled(enabled, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onReorderAttachments: { ids in
-                                        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.reorderAttachments(ids: ids, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onDiscardAttachments: {
-                                        try await drafts.discardAttachments(chatID: chat.id, threadID: threadID)
-                                    },
-                                    stickerLibrary: store.stickers,
-                                    onSendSticker: sendSticker,
-                                    onSendVoice: sendVoice,
-                                    onSearchMembers: { query in
-                                        try await store.searchMembers(chatID: chat.id, query: query)
-                                    }
+                                .padding(12)
+                                .background(
+                                    .regularMaterial, in: RoundedRectangle(cornerRadius: 16)
                                 )
+                                .padding(.horizontal, 12)
+                            } else if store.outgoingQueue.storageState == .loading {
+                                ProgressView("Loading saved messages…")
+                                    .controlSize(.small)
+                                    .padding(12)
+                                    .background(
+                                        .regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                             }
-                        })
-            }
+                            MessageComposerView(
+                                text: composerText,
+                                attachmentState: composerAttachments,
+                                maxHeight: max(36, geometry.size.height / 3),
+                                isEnabled: interactionContext.canWrite,
+                                canSend: canSubmitComposer,
+                                onSubmit: submitComposer,
+                                onCompositionChanged: { composing in
+                                    isComposerComposing = composing
+                                    guard editingMessage == nil else { return }
+                                    drafts.setDraftComposing(
+                                        composing, chatID: chat.id, threadID: threadID)
+                                },
+                                replyToMessage: drafts.draftReply(
+                                    chatID: chat.id, threadID: threadID),
+                                replyFocusRequest: replyFocusRequest,
+                                onCancelReply: {
+                                    drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID)
+                                },
+                                onOpenReply: { id in Task { await model.jumpToMessage(id) } },
+                                editingMessage: editingMessage,
+                                onCancelEdit: cancelEditing,
+                                onRequestEditLastMessage: requestEditLastOwnMessage,
+                                attachments: outgoingQueue.draftAttachments(
+                                    chatID: chat.id, threadID: threadID),
+                                attachmentProgress: outgoingQueue.attachmentProgress,
+                                compressionEnabled: outgoingQueue.compressionEnabled(
+                                    chatID: chat.id, threadID: threadID),
+                                onImportImages: { urls in
+                                    try await drafts.flushForAttachmentChange(
+                                        chatID: chat.id, threadID: threadID)
+                                    try await outgoingQueue.importImages(
+                                        urls: urls, chatID: chat.id, threadID: threadID)
+                                },
+                                onRemoveAttachment: { id in
+                                    try await drafts.flushForAttachmentChange(
+                                        chatID: chat.id, threadID: threadID)
+                                    try await outgoingQueue.removeAttachment(
+                                        id: id, chatID: chat.id, threadID: threadID)
+                                },
+                                onRetryAttachment: { id in
+                                    try await drafts.flushForAttachmentChange(
+                                        chatID: chat.id, threadID: threadID)
+                                    try await outgoingQueue.retryAttachment(
+                                        id: id, chatID: chat.id, threadID: threadID)
+                                },
+                                onCompressionChanged: { enabled in
+                                    try await drafts.flushForAttachmentChange(
+                                        chatID: chat.id, threadID: threadID)
+                                    try await outgoingQueue.setCompressionEnabled(
+                                        enabled, chatID: chat.id, threadID: threadID)
+                                },
+                                onReorderAttachments: { ids in
+                                    try await drafts.flushForAttachmentChange(
+                                        chatID: chat.id, threadID: threadID)
+                                    try await outgoingQueue.reorderAttachments(
+                                        ids: ids, chatID: chat.id, threadID: threadID)
+                                },
+                                onDiscardAttachments: {
+                                    try await drafts.discardAttachments(
+                                        chatID: chat.id, threadID: threadID)
+                                },
+                                stickerLibrary: store.stickers,
+                                onSendSticker: sendSticker,
+                                onSendVoice: sendVoice,
+                                onSearchMembers: { query in
+                                    try await store.searchMembers(chatID: chat.id, query: query)
+                                }
+                            )
+                        }
+                    })
+        }
     }
 
     @ViewBuilder
     private func timelineSurface(actions: TimelineBubbleActions) -> some View {
         #if os(macOS)
-        ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: actions, interactionContext: interactionContext)
+            ConversationTimelineView(
+                model: model, loadsInitialAutomatically: false, actions: actions,
+                interactionContext: interactionContext)
         #else
-        ConversationTimelineView(model: model, loadsInitialAutomatically: false, actions: actions)
+            ConversationTimelineView(
+                model: model, loadsInitialAutomatically: false, actions: actions)
         #endif
     }
 
@@ -334,11 +389,13 @@ struct ChatDetailView: View {
         actions.pinnedMessageIDs = Set(chatPins.map { $0.message.id })
         actions.pendingPinMessageIDs = pins.pendingMessageIDs
         if threadID == nil, interactionContext.isAdmin, interactionContext.canWrite,
-           pins.pinsByChatID[chat.id] != nil, !pins.failedChatIDs.contains(chat.id) {
+            pins.pinsByChatID[chat.id] != nil, !pins.failedChatIDs.contains(chat.id)
+        {
             actions.togglePin = requestPinChange
         }
         if let tail = outgoingQueue.snapshots[conversationKey]?.outgoing.last,
-           outgoingQueue.snapshots[conversationKey]?.composingItem == nil, !tail.dispatchClaimed {
+            outgoingQueue.snapshots[conversationKey]?.composingItem == nil, !tail.dispatchClaimed
+        {
             actions.modifiablePendingMessageIDs = [tail.clientGeneratedID]
         }
         actions.blockPendingMessage = { pending in changePending(pending, revoke: false) }
@@ -348,9 +405,10 @@ struct ChatDetailView: View {
         }
         if threadID == nil, onOpenThread != nil {
             actions.openThread = { id in
-                for case let .message(row) in model.rows {
+                for case .message(let row) in model.rows {
                     guard let message = row.entry.remoteMessage,
-                          message.id == id, !message.isDeleted else { continue }
+                        message.id == id, !message.isDeleted
+                    else { continue }
                     onOpenThread?(message)
                     return
                 }
@@ -365,16 +423,20 @@ struct ChatDetailView: View {
             actions.editMessage = startEditing
             actions.deleteMessage = { message in
                 guard !store.deletingMessageIDs.contains(message.id),
-                      MessageActionPolicy(
+                    MessageActionPolicy(
                         messageType: message.messageType, isDeleted: message.isDeleted,
                         isOwn: message.sender.uid == model.currentUserID,
                         context: interactionContext
-                      ).availability(of: .delete) == .enabled else { return }
+                    ).availability(of: .delete) == .enabled
+                else { return }
                 messageToDelete = message
             }
             actions.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage, !message.isDeleted else { return }
-                Task { await reactions.toggle(message: message, emoji: emoji, currentUserID: model.currentUserID) }
+                Task {
+                    await reactions.toggle(
+                        message: message, emoji: emoji, currentUserID: model.currentUserID)
+                }
             }
         }
         actions.openReply = { id in Task { await model.jumpToMessage(id) } }
@@ -388,7 +450,8 @@ struct ChatDetailView: View {
     private var chatPins: [PinResponse] { pins.pinsByChatID[chat.id] ?? [] }
 
     private var activePin: PinResponse? {
-        ChatPinSelection.activePin(in: chatPins, bottomVisibleMessageDate: model.bottomVisibleMessageDate)
+        ChatPinSelection.activePin(
+            in: chatPins, bottomVisibleMessageDate: model.bottomVisibleMessageDate)
     }
 
     private var showsPinBar: Bool {
@@ -403,14 +466,20 @@ struct ChatDetailView: View {
                 onShowAll: { showsPinnedMessages = true },
                 onOpenThread: pin.message.threadInfo != nil && onOpenThread != nil
                     ? { onOpenThread?(pin.message) } : nil,
-                onUnpin: interactionContext.isAdmin && interactionContext.canWrite && !pins.pendingMessageIDs.contains(pin.message.id)
-                    ? { requestPinChange(pin.message) } : nil)
-                .popover(isPresented: $showsPinnedMessages, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
-                    ChatPinnedMessagesSheet(
-                        chatID: chat.id, controller: pins, canManage: interactionContext.isAdmin && interactionContext.canWrite,
-                        onSelect: jumpToPinnedMessage, onOpenThread: onOpenThread)
-                        .frame(width: 420, height: 420)
-                }
+                onUnpin: interactionContext.isAdmin && interactionContext.canWrite
+                    && !pins.pendingMessageIDs.contains(pin.message.id)
+                    ? { requestPinChange(pin.message) } : nil
+            )
+            .popover(
+                isPresented: $showsPinnedMessages, attachmentAnchor: .rect(.bounds), arrowEdge: .top
+            ) {
+                ChatPinnedMessagesSheet(
+                    chatID: chat.id, controller: pins,
+                    canManage: interactionContext.isAdmin && interactionContext.canWrite,
+                    onSelect: jumpToPinnedMessage, onOpenThread: onOpenThread
+                )
+                .frame(width: 420, height: 420)
+            }
         } else if pins.failedChatIDs.contains(chat.id) {
             Button {
                 Task { await pins.load(chatID: chat.id, force: true) }
@@ -430,8 +499,10 @@ struct ChatDetailView: View {
     }
 
     private func requestPinChange(_ message: MessageResponse) {
-        guard threadID == nil, interactionContext.isAdmin, interactionContext.canWrite, !message.isDeleted,
-              !pins.pendingMessageIDs.contains(message.id) else { return }
+        guard threadID == nil, interactionContext.isAdmin, interactionContext.canWrite,
+            !message.isDeleted,
+            !pins.pendingMessageIDs.contains(message.id)
+        else { return }
         if let pin = chatPins.first(where: { $0.message.id == message.id }) {
             pinToUnpin = pin
         } else {
@@ -441,7 +512,10 @@ struct ChatDetailView: View {
 
     private var composerText: Binding<String> {
         Binding(
-            get: { editingMessage == nil ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText },
+            get: {
+                editingMessage == nil
+                    ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText
+            },
             set: {
                 if editingMessage == nil {
                     drafts.setDraftText($0, chatID: chat.id, threadID: threadID)
@@ -453,19 +527,26 @@ struct ChatDetailView: View {
     }
 
     private var canSubmitComposer: Bool {
-        let text = (editingMessage == nil ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText)
+        let text =
+            (editingMessage == nil
+            ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard interactionContext.canWrite else { return false }
         if let editingMessage {
-            return !isUpdatingMessage && (isComposerComposing
-                || (!text.isEmpty && text != editingMessage.message?.trimmingCharacters(in: .whitespacesAndNewlines)))
+            return !isUpdatingMessage
+                && (isComposerComposing
+                    || (!text.isEmpty
+                        && text
+                            != editingMessage.message?.trimmingCharacters(
+                                in: .whitespacesAndNewlines)))
         }
-        return outgoingQueue.storageState == .ready && !drafts.committingDrafts.contains(conversationKey)
+        return outgoingQueue.storageState == .ready
+            && !drafts.committingDrafts.contains(conversationKey)
     }
 
     private func sendSticker(_ sticker: MessageStickerResponse) async -> Bool {
         guard interactionContext.canWrite, editingMessage == nil,
-              outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
+            outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
         else { return false }
         do {
             let sent = try await drafts.submitSticker(sticker, chatID: chat.id, threadID: threadID)
@@ -479,10 +560,11 @@ struct ChatDetailView: View {
 
     private func sendVoice(_ fileURL: URL) async -> Bool {
         guard interactionContext.canWrite, editingMessage == nil,
-              outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
+            outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
         else { return false }
         do {
-            let sent = try await drafts.submitVoice(fileURL: fileURL, chatID: chat.id, threadID: threadID)
+            let sent = try await drafts.submitVoice(
+                fileURL: fileURL, chatID: chat.id, threadID: threadID)
             if sent { model.revealLatestAfterSend() }
             return sent
         } catch {
@@ -549,15 +631,20 @@ struct ChatDetailView: View {
     }
 
     private func changePending(_ pending: PendingOutgoingMessage, revoke: Bool) {
-        guard !pending.dispatchClaimed, (revoke || pending.messageType == .text),
-              !drafts.committingDrafts.contains(conversationKey), editingMessage == nil else { return }
+        guard !pending.dispatchClaimed, revoke || pending.messageType == .text,
+            !drafts.committingDrafts.contains(conversationKey), editingMessage == nil
+        else { return }
         Task {
             do {
                 try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
                 if revoke {
-                    try await outgoingQueue.revokeTail(chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID, expectedRevision: pending.editRevision)
+                    try await outgoingQueue.revokeTail(
+                        chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID,
+                        expectedRevision: pending.editRevision)
                 } else {
-                    try await outgoingQueue.blockTail(chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID, expectedRevision: pending.editRevision)
+                    try await outgoingQueue.blockTail(
+                        chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID,
+                        expectedRevision: pending.editRevision)
                     replyFocusRequest &+= 1
                 }
             } catch { outboxError = error.localizedDescription }
@@ -569,7 +656,8 @@ struct ChatDetailView: View {
         failedMessageID = nil
         Task {
             do {
-                try await outgoingQueue.retry(chatID: chat.id, threadID: threadID, clientGeneratedID: id, scope: scope)
+                try await outgoingQueue.retry(
+                    chatID: chat.id, threadID: threadID, clientGeneratedID: id, scope: scope)
             } catch { outboxError = error.localizedDescription }
         }
     }

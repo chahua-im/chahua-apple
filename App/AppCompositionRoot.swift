@@ -22,8 +22,12 @@ final class AppCompositionRoot {
             mediaNamespace: apiConfiguration.baseURL.absoluteString,
             localStoreFactory: { uid in
                 try await Task.detached {
-                    let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                    let directory = LocalStorageScope(apiBaseURL: apiConfiguration.baseURL, userID: uid).directory(under: root)
+                    let root = try FileManager.default.url(
+                        for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil,
+                        create: true)
+                    let directory = LocalStorageScope(
+                        apiBaseURL: apiConfiguration.baseURL, userID: uid
+                    ).directory(under: root)
                     return try ChahuaLocalStore(directory: directory)
                 }.value
             }
@@ -47,11 +51,16 @@ final class AppCompositionRoot {
         let invalidToken: @MainActor @Sendable () async -> Void = { [weak sessionModel] in
             await sessionModel?.sessionDidExpire()
         }
-        let outgoingQueue = OutgoingMessageQueue(apiClient: apiClient, localStoreFactory: localStoreFactory, onInvalidToken: invalidToken)
-        chatStore = ChatStore(apiClient: apiClient, outgoingQueue: outgoingQueue, onInvalidToken: invalidToken)
+        let outgoingQueue = OutgoingMessageQueue(
+            apiClient: apiClient, localStoreFactory: localStoreFactory, onInvalidToken: invalidToken
+        )
+        chatStore = ChatStore(
+            apiClient: apiClient, outgoingQueue: outgoingQueue, onInvalidToken: invalidToken)
         mediaContext = AppMediaContext(namespace: mediaNamespace)
-        realtimeCoordinator = RealtimeCoordinator(provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
-        notifications = PushNotificationCoordinator(api: apiClient as? any PushSubscriptionProviding, namespace: mediaNamespace)
+        realtimeCoordinator = RealtimeCoordinator(
+            provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
+        notifications = PushNotificationCoordinator(
+            api: apiClient as? any PushSubscriptionProviding, namespace: mediaNamespace)
         sessionModel.prepareForSignOut = { [weak notifications] in
             try await notifications?.prepareForSignOut()
         }

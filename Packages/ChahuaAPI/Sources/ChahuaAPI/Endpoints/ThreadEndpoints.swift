@@ -24,24 +24,31 @@ public struct ListThreadsQuery: Sendable, Equatable {
     }
 }
 
-public extension ChahuaClient {
-    func archiveThread(chatID: String, threadID: String) async throws {
-        try await send(HTTPRequestSpec(method: .put, path: ["chats", chatID, "threads", threadID, "archive"]))
-    }
-
-    func unarchiveThread(chatID: String, threadID: String) async throws {
-        try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "threads", threadID, "archive"]))
-    }
-
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse {
+extension ChahuaClient {
+    public func archiveThread(chatID: String, threadID: String) async throws {
         try await send(
-            HTTPRequestSpec.json(.post, ["chats", chatID, "threads", threadID, "read"], body: MarkReadBody(messageId: messageID)),
+            HTTPRequestSpec(method: .put, path: ["chats", chatID, "threads", threadID, "archive"]))
+    }
+
+    public func unarchiveThread(chatID: String, threadID: String) async throws {
+        try await send(
+            HTTPRequestSpec(
+                method: .delete, path: ["chats", chatID, "threads", threadID, "archive"]))
+    }
+
+    public func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+        -> ReadStateResponse
+    {
+        try await send(
+            HTTPRequestSpec.json(
+                .post, ["chats", chatID, "threads", threadID, "read"],
+                body: MarkReadBody(messageId: messageID)),
             decoding: ReadStateResponse.self
         )
     }
 
     /// Fetches one subscribed thread page with authenticated `GET /threads`.
-    func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
+    public func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
         try await send(
             HTTPRequestSpec(method: .get, path: ["threads"], query: query.queryItems),
             decoding: ListThreadsResponse.self
@@ -49,13 +56,14 @@ public extension ChahuaClient {
     }
 
     /// Sends a reply with JSON `POST /chats/{chatID}/threads/{threadID}/messages`.
-    func sendThreadMessage(
+    public func sendThreadMessage(
         chatID: String,
         threadID: String,
         body: CreateMessageBody
     ) async throws -> MessageResponse {
         try await send(
-            HTTPRequestSpec.json(.post, ["chats", chatID, "threads", threadID, "messages"], body: body),
+            HTTPRequestSpec.json(
+                .post, ["chats", chatID, "threads", threadID, "messages"], body: body),
             decoding: MessageResponse.self
         )
     }

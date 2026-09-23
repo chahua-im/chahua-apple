@@ -20,7 +20,7 @@ public enum APIError: Error, Sendable {
 
     /// UTF-8 response body for an `http` error, when the server returned one.
     public var bodyText: String? {
-        guard case let .http(_, body) = self else {
+        guard case .http(_, let body) = self else {
             return nil
         }
         return String(data: body, encoding: .utf8)

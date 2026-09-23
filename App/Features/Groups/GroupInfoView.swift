@@ -58,7 +58,7 @@ struct GroupInfoView: View {
         .background(ChahuaTheme.conversationBackground(for: colorScheme))
         .navigationTitle("Group Info")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: chat.id) { await loadInfo() }
         .onChange(of: listedChat?.mutedUntil) { _, value in
@@ -144,7 +144,9 @@ struct GroupInfoView: View {
                 .disabled(isLeaving || isUpdatingMute)
 
                 Menu {
-                    Button(role: .destructive) { showsLeaveConfirmation = true } label: {
+                    Button(role: .destructive) {
+                        showsLeaveConfirmation = true
+                    } label: {
                         Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
                     }
                     .accessibilityIdentifier("leave-group-button")
@@ -234,7 +236,8 @@ struct GroupInfoView: View {
         }
 
         do {
-            let nextMutedUntil = try await store.muteGroup(chatID: chat.id, durationSeconds: durationSeconds)
+            let nextMutedUntil = try await store.muteGroup(
+                chatID: chat.id, durationSeconds: durationSeconds)
             try Task.checkCancellation()
             guard infoRevision == revision else { return }
             mutedUntil = nextMutedUntil
@@ -334,10 +337,11 @@ private struct GroupInfoActionLabel: View {
         // The requested iOS controls use Liquid Glass; desktop uses quieter,
         // flat action tiles. Both are SwiftUI, without custom native wrappers.
         #if os(iOS)
-        .modifier(ChatGlassSurface(cornerRadius: 18, isInteractive: true))
+            .modifier(ChatGlassSurface(cornerRadius: 18, isInteractive: true))
         #else
-        .background(ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
-                    in: RoundedRectangle(cornerRadius: 18))
+            .background(
+                ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+                in: RoundedRectangle(cornerRadius: 18))
         #endif
     }
 }

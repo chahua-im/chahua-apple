@@ -4,10 +4,11 @@ import ImageIO
 import Kingfisher
 import SwiftUI
 import WebKit
+
 #if os(macOS)
-import AppKit
+    import AppKit
 #else
-import UIKit
+    import UIKit
 #endif
 
 @MainActor
@@ -53,19 +54,20 @@ enum TimelineImageMemory {
 
     nonisolated static func cgImage(_ image: KFCrossPlatformImage) -> CGImage? {
         #if os(macOS)
-        var rect = CGRect(origin: .zero, size: image.size)
-        return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
-            ?? image.kf.frameSource?.frame(at: 0)
+            var rect = CGRect(origin: .zero, size: image.size)
+            return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+                ?? image.kf.frameSource?.frame(at: 0)
         #else
-        return image.cgImage ?? image.images?.first?.cgImage ?? image.kf.frameSource?.frame(at: 0)
+            return image.cgImage ?? image.images?.first?.cgImage
+                ?? image.kf.frameSource?.frame(at: 0)
         #endif
     }
 
     nonisolated static func image(_ pixels: CGImage) -> KFCrossPlatformImage {
         #if os(macOS)
-        NSImage(cgImage: pixels, size: CGSize(width: pixels.width, height: pixels.height))
+            NSImage(cgImage: pixels, size: CGSize(width: pixels.width, height: pixels.height))
         #else
-        UIImage(cgImage: pixels)
+            UIImage(cgImage: pixels)
         #endif
     }
 }
@@ -77,7 +79,9 @@ enum TimelineImageMemory {
 nonisolated struct TimelineAnimatedImageProcessor: ImageProcessor, CacheSerializer {
     let identifier = "app.chahua.timeline.imageio-animation"
 
-    func process(item: ImageProcessItem, options: KingfisherParsedOptionsInfo) -> KFCrossPlatformImage? {
+    func process(item: ImageProcessItem, options: KingfisherParsedOptionsInfo)
+        -> KFCrossPlatformImage?
+    {
         switch item {
         case .data(let data):
             guard let source = TimelineImageFrameSource(data: data) else { return nil }
@@ -87,11 +91,12 @@ nonisolated struct TimelineAnimatedImageProcessor: ImageProcessor, CacheSerializ
             // On AppKit Kingfisher otherwise eagerly decodes every frame, even
             // with preloadAll=false. onlyFirstFrame retains the lazy source there.
             #if os(macOS)
-            let creation = ImageCreatingOptions(scale: 1, onlyFirstFrame: true)
+                let creation = ImageCreatingOptions(scale: 1, onlyFirstFrame: true)
             #else
-            let creation = ImageCreatingOptions(scale: 1)
+                let creation = ImageCreatingOptions(scale: 1)
             #endif
-            return KingfisherWrapper<KFCrossPlatformImage>.animatedImage(source: source, options: creation)
+            return KingfisherWrapper<KFCrossPlatformImage>.animatedImage(
+                source: source, options: creation)
         case .image(let image):
             if image.kf.frameSource is TimelineImageFrameSource { return image }
             if let data = image.kf.frameSource?.data ?? image.kf.gifRepresentation() {
@@ -102,7 +107,8 @@ nonisolated struct TimelineAnimatedImageProcessor: ImageProcessor, CacheSerializ
     }
 
     func data(with image: KFCrossPlatformImage, original: Data?) -> Data? {
-        original ?? image.kf.frameSource?.data ?? DefaultCacheSerializer.default.data(with: image, original: nil)
+        original ?? image.kf.frameSource?.data
+            ?? DefaultCacheSerializer.default.data(with: image, original: nil)
     }
 
     func image(with data: Data, options: KingfisherParsedOptionsInfo) -> KFCrossPlatformImage? {
@@ -115,9 +121,13 @@ nonisolated private struct TimelineImageFrameSource: ImageFrameSource {
     private let source: CGImageSource
 
     init?(data: Data) {
-        guard let source = CGImageSourceCreateWithData(data as CFData, [
-            kCGImageSourceShouldCache: false,
-        ] as CFDictionary), CGImageSourceGetCount(source) > 0 else { return nil }
+        guard
+            let source = CGImageSourceCreateWithData(
+                data as CFData,
+                [
+                    kCGImageSourceShouldCache: false
+                ] as CFDictionary), CGImageSourceGetCount(source) > 0
+        else { return nil }
         self.data = data
         self.source = source
     }
@@ -127,20 +137,27 @@ nonisolated private struct TimelineImageFrameSource: ImageFrameSource {
     func frame(at index: Int, maxSize: CGSize?) -> CGImage? {
         guard index >= 0, index < frameCount else { return nil }
         if let maxSize, maxSize.width > 0, maxSize.height > 0 {
-            return CGImageSourceCreateThumbnailAtIndex(source, index, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: max(maxSize.width, maxSize.height),
-                kCGImageSourceShouldCacheImmediately: true,
-            ] as CFDictionary)
+            return CGImageSourceCreateThumbnailAtIndex(
+                source, index,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: max(maxSize.width, maxSize.height),
+                    kCGImageSourceShouldCacheImmediately: true,
+                ] as CFDictionary)
         }
-        return CGImageSourceCreateImageAtIndex(source, index, [
-            kCGImageSourceShouldCache: false,
-        ] as CFDictionary)
+        return CGImageSourceCreateImageAtIndex(
+            source, index,
+            [
+                kCGImageSourceShouldCache: false
+            ] as CFDictionary)
     }
 
     func duration(at index: Int) -> TimeInterval {
-        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] else {
+        guard
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil)
+                as? [CFString: Any]
+        else {
             return 0.1
         }
         let metadata: [CFString: Any]?
@@ -155,7 +172,9 @@ nonisolated private struct TimelineImageFrameSource: ImageFrameSource {
             unclamped = kCGImagePropertyGIFUnclampedDelayTime
             clamped = kCGImagePropertyGIFDelayTime
         }
-        let delay = (metadata?[unclamped] as? NSNumber ?? metadata?[clamped] as? NSNumber)?.doubleValue ?? 0.1
+        let delay =
+            (metadata?[unclamped] as? NSNumber ?? metadata?[clamped] as? NSNumber)?.doubleValue
+            ?? 0.1
         return delay > 0.011 ? delay : 0.1
     }
 

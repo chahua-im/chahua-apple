@@ -35,8 +35,11 @@ struct StickerPickerView: View {
                         if isLoading {
                             ProgressView("Loading stickers…")
                         } else {
-                            Text(selectedPackID == nil ? "No favorite stickers yet" : "No stickers in this pack")
-                                .foregroundStyle(.secondary)
+                            Text(
+                                selectedPackID == nil
+                                    ? "No favorite stickers yet" : "No stickers in this pack"
+                            )
+                            .foregroundStyle(.secondary)
                         }
                     }
                     .font(.subheadline)
@@ -64,7 +67,8 @@ struct StickerPickerView: View {
                             .contextMenu {
                                 Button(
                                     library.isFavorite(sticker) ? "Unfavorite" : "Favorite",
-                                    systemImage: library.isFavorite(sticker) ? "heart.slash" : "heart"
+                                    systemImage: library.isFavorite(sticker)
+                                        ? "heart.slash" : "heart"
                                 ) { Task { await library.toggleFavorite(sticker) } }
                                 .disabled(library.pendingMutationIDs.contains(sticker.id))
                             }
@@ -108,11 +112,18 @@ struct StickerPickerView: View {
         }
     }
 
-    private func packTab<Content: View>(id: String?, name: String, @ViewBuilder content: () -> Content) -> some View {
-        Button { selectedPackID = id } label: {
+    private func packTab<Content: View>(
+        id: String?, name: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        Button {
+            selectedPackID = id
+        } label: {
             content()
                 .frame(width: 44, height: 44)
-                .background(selectedPackID == id ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 8))
+                .background(
+                    selectedPackID == id ? Color.accentColor.opacity(0.15) : .clear,
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

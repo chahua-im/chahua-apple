@@ -25,7 +25,9 @@ nonisolated enum OutgoingImageError: LocalizedError {
 nonisolated struct OutgoingImageProcessor: Sendable {
     let directory: URL
 
-    func importImage(from url: URL, directory: URL, position: Int) async throws -> LocalOutgoingAttachment {
+    func importImage(from url: URL, directory: URL, position: Int) async throws
+        -> LocalOutgoingAttachment
+    {
         let worker = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
             let root = try OutgoingImageFiles.root(self.directory)
@@ -36,7 +38,9 @@ nonisolated struct OutgoingImageProcessor: Sendable {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             guard url.isFileURL else { throw OutgoingImageError.unsupportedImage }
             let inputValues = try url.resourceValues(forKeys: [.isRegularFileKey])
-            guard inputValues.isRegularFile == true else { throw OutgoingImageError.unsupportedImage }
+            guard inputValues.isRegularFile == true else {
+                throw OutgoingImageError.unsupportedImage
+            }
             let manager = FileManager.default
             let outbox = root.appendingPathComponent("Outbox", isDirectory: true)
             try manager.createDirectory(at: outbox, withIntermediateDirectories: true)
@@ -70,7 +74,8 @@ nonisolated struct OutgoingImageProcessor: Sendable {
             let previewType: UTType = Self.hasAlpha(image) ? .png : .jpeg
             let previewName = "preview.\(previewType.preferredFilenameExtension!)"
             try autoreleasepool {
-                try Self.encode(image, type: previewType, to: staging.appendingPathComponent(previewName))
+                try Self.encode(
+                    image, type: previewType, to: staging.appendingPathComponent(previewName))
             }
             try Task.checkCancellation()
             try manager.moveItem(at: staging, to: installed)
@@ -79,7 +84,9 @@ nonisolated struct OutgoingImageProcessor: Sendable {
                 id: id, generation: UUID().uuidString, position: position,
                 sourcePath: installed.appendingPathComponent(sourceName).path,
                 previewPath: installed.appendingPathComponent(previewName).path,
-                fileName: Self.fileName(url.deletingPathExtension().lastPathComponent, extensionName: metadata.extensionName),
+                fileName: Self.fileName(
+                    url.deletingPathExtension().lastPathComponent,
+                    extensionName: metadata.extensionName),
                 mimeType: metadata.mimeType, width: metadata.width, height: metadata.height,
                 byteCount: metadata.byteCount
             )
@@ -91,17 +98,23 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         }
     }
 
-    func prepare(_ attachment: LocalOutgoingAttachment, compressionEnabled: Bool) async throws -> LocalOutgoingAttachment {
+    func prepare(_ attachment: LocalOutgoingAttachment, compressionEnabled: Bool) async throws
+        -> LocalOutgoingAttachment
+    {
         let worker = Task.detached(priority: .utility) {
             try Task.checkCancellation()
-            let source = try OutgoingImageFiles.file(URL(fileURLWithPath: attachment.sourcePath), directory: directory)
-            let preview = try OutgoingImageFiles.file(URL(fileURLWithPath: attachment.previewPath), directory: directory)
+            let source = try OutgoingImageFiles.file(
+                URL(fileURLWithPath: attachment.sourcePath), directory: directory)
+            let preview = try OutgoingImageFiles.file(
+                URL(fileURLWithPath: attachment.previewPath), directory: directory)
             guard source.deletingLastPathComponent() == preview.deletingLastPathComponent() else {
                 throw OutgoingImageError.outsideAccountDirectory
             }
             if let preparedPath = attachment.preparedPath {
-                let prepared = try OutgoingImageFiles.file(URL(fileURLWithPath: preparedPath), directory: directory)
-                guard prepared.deletingLastPathComponent() == source.deletingLastPathComponent() else {
+                let prepared = try OutgoingImageFiles.file(
+                    URL(fileURLWithPath: preparedPath), directory: directory)
+                guard prepared.deletingLastPathComponent() == source.deletingLastPathComponent()
+                else {
                     throw OutgoingImageError.outsideAccountDirectory
                 }
             }
@@ -137,7 +150,9 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         }
     }
 
-    private static func prepareImage(_ attachment: LocalOutgoingAttachment, source: CGImageSource) throws -> LocalOutgoingAttachment {
+    private static func prepareImage(_ attachment: LocalOutgoingAttachment, source: CGImageSource)
+        throws -> LocalOutgoingAttachment
+    {
         // Preserve every frame and its timing by sending animated/multi-image originals unchanged.
         guard CGImageSourceGetCount(source) == 1 else { return attachment }
         let image = try thumbnail(source, maximum: 1920)
@@ -151,7 +166,8 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         try Task.checkCancellation()
         // The original remains authoritative unless the complete result saves at least 25%.
         guard Double(bytes) < Double(attachment.byteCount) * 0.75 else { return attachment }
-        let output = folder.appendingPathComponent("prepared.\(name).\(type.preferredFilenameExtension!)")
+        let output = folder.appendingPathComponent(
+            "prepared.\(name).\(type.preferredFilenameExtension!)")
         try FileManager.default.moveItem(at: staging, to: output)
         var result = attachment
         result.preparedPath = output.path
@@ -180,7 +196,9 @@ nonisolated struct OutgoingImageProcessor: Sendable {
     }
 
     private static func imageMetadata(_ url: URL) throws -> Metadata {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+        guard
+            let source = CGImageSourceCreateWithURL(
+                url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
             CGImageSourceGetCount(source) > 0,
             let identifier = CGImageSourceGetType(source),
             let type = UTType(identifier as String), type.conforms(to: .image),
@@ -203,7 +221,9 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         try Task.checkCancellation()
         if let image = try? autoreleasepool(invoking: { try imageMetadata(url) }) { return image }
         let type = try videoType(url)
-        guard let mimeType = type.preferredMIMEType, let extensionName = type.preferredFilenameExtension else {
+        guard let mimeType = type.preferredMIMEType,
+            let extensionName = type.preferredFilenameExtension
+        else {
             throw OutgoingImageError.unsupportedImage
         }
         let asset = AVURLAsset(url: url)
@@ -224,7 +244,8 @@ nonisolated struct OutgoingImageProcessor: Sendable {
             try Task.checkCancellation()
             return Metadata(
                 content: .video(asset), mimeType: mimeType, extensionName: extensionName,
-                width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()), byteCount: try fileSize(url)
+                width: Int(bounds.width.rounded()), height: Int(bounds.height.rounded()),
+                byteCount: try fileSize(url)
             )
         } onCancel: {
             asset.cancelLoading()
@@ -248,10 +269,13 @@ nonisolated struct OutgoingImageProcessor: Sendable {
         }
         if ["moov", "mdat", "wide", "free", "skip"].contains(box) { return .quickTimeMovie }
         if header.starts(with: [0x52, 0x49, 0x46, 0x46]),
-            String(decoding: header[8..<12], as: UTF8.self) == "AVI " {
+            String(decoding: header[8..<12], as: UTF8.self) == "AVI "
+        {
             return .avi
         }
-        if header.starts(with: [0, 0, 1, 0xBA]) || header.starts(with: [0, 0, 1, 0xB3]) { return .mpeg }
+        if header.starts(with: [0, 0, 1, 0xBA]) || header.starts(with: [0, 0, 1, 0xB3]) {
+            return .mpeg
+        }
         throw OutgoingImageError.unsupportedImage
     }
 
@@ -276,12 +300,16 @@ nonisolated struct OutgoingImageProcessor: Sendable {
 
     private static func thumbnail(_ source: CGImageSource, maximum: Int) throws -> CGImage {
         try Task.checkCancellation()
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maximum,
-            kCGImageSourceShouldCacheImmediately: true,
-        ] as CFDictionary) else { throw OutgoingImageError.invalidImage }
+        guard
+            let image = CGImageSourceCreateThumbnailAtIndex(
+                source, 0,
+                [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maximum,
+                    kCGImageSourceShouldCacheImmediately: true,
+                ] as CFDictionary)
+        else { throw OutgoingImageError.invalidImage }
         try Task.checkCancellation()
         return image
     }
@@ -295,15 +323,22 @@ nonisolated struct OutgoingImageProcessor: Sendable {
 
     private static func encode(_ image: CGImage, type: UTType, to url: URL) throws {
         try Task.checkCancellation()
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else {
+        guard
+            let destination = CGImageDestinationCreateWithURL(
+                url as CFURL, type.identifier as CFString, 1, nil)
+        else {
             throw OutgoingImageError.encodingFailed
         }
         // Thumbnail transforms have already baked EXIF orientation into the pixels.
-        CGImageDestinationAddImage(destination, image, [
-            kCGImageDestinationLossyCompressionQuality: 0.82,
-            kCGImagePropertyOrientation: 1,
-        ] as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { throw OutgoingImageError.encodingFailed }
+        CGImageDestinationAddImage(
+            destination, image,
+            [
+                kCGImageDestinationLossyCompressionQuality: 0.82,
+                kCGImagePropertyOrientation: 1,
+            ] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw OutgoingImageError.encodingFailed
+        }
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         try handle.synchronize()
@@ -346,7 +381,8 @@ nonisolated enum OutgoingImageFiles {
     }
 
     static func checkOutbox(_ outbox: URL, root: URL) throws {
-        guard outbox.standardizedFileURL == root.appendingPathComponent("Outbox", isDirectory: true),
+        guard
+            outbox.standardizedFileURL == root.appendingPathComponent("Outbox", isDirectory: true),
             outbox.resolvingSymlinksInPath() == outbox.standardizedFileURL
         else { throw OutgoingImageError.outsideAccountDirectory }
     }

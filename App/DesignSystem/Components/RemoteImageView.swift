@@ -7,7 +7,6 @@ enum RemoteImagePhase {
     case failure
 }
 
-
 struct RemoteImageView: View {
     let url: URL?
     let phaseOverride: RemoteImagePhase?
@@ -87,9 +86,11 @@ struct RemoteImageView: View {
                 .onFailureView { Color.clear }
                 .configure { view in
                     #if os(macOS)
-                    view.imageScaling = contentMode == .fit ? .scaleProportionallyUpOrDown : .scaleAxesIndependently
+                        view.imageScaling =
+                            contentMode == .fit
+                            ? .scaleProportionallyUpOrDown : .scaleAxesIndependently
                     #else
-                    view.contentMode = contentMode == .fit ? .scaleAspectFit : .scaleAspectFill
+                        view.contentMode = contentMode == .fit ? .scaleAspectFit : .scaleAspectFill
                     #endif
                 }
                 .aspectRatio(contentMode: contentMode)
@@ -97,7 +98,6 @@ struct RemoteImageView: View {
         }
         .clipped()
     }
-
 
     @ViewBuilder private func imageContent<Foreground: View>(
         backdrop: Image,

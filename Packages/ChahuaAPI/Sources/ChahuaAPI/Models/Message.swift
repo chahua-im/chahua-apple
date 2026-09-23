@@ -53,7 +53,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         MessagePreview(
             id: id, clientGeneratedId: clientGeneratedId, createdAt: createdAt,
             sender: sender, messageType: messageType,
-            attachments: isDeleted ? [] : attachments.map { MessagePreviewAttachment(kind: $0.kind) },
+            attachments: isDeleted
+                ? [] : attachments.map { MessagePreviewAttachment(kind: $0.kind) },
             mentions: isDeleted ? [] : mentions, isDeleted: isDeleted,
             message: isDeleted ? nil : message,
             sticker: isDeleted ? nil : sticker.map { MessagePreviewSticker(emoji: $0.emoji) }
@@ -96,7 +97,9 @@ public struct MessageResponse: Codable, Hashable, Sendable {
 
     public func normalizedForRealtime(currentUserID: Int32) -> Self {
         var copy = isDeleted ? redactedForDeletion() : self
-        copy.reactions = copy.reactions.map { $0.normalizedForRealtime(currentUserID: currentUserID) }
+        copy.reactions = copy.reactions.map {
+            $0.normalizedForRealtime(currentUserID: currentUserID)
+        }
         copy.sticker = copy.sticker?.normalizedForRealtime()
         return copy
     }
@@ -200,7 +203,8 @@ public struct MessageStickerMediaResponse: Codable, Hashable, Sendable {
     public let height: Int32?
 
     public init(
-        id: String, url: String, contentType: String, size: Int64, width: Int32? = nil, height: Int32? = nil
+        id: String, url: String, contentType: String, size: Int64, width: Int32? = nil,
+        height: Int32? = nil
     ) {
         self.id = id
         self.url = url

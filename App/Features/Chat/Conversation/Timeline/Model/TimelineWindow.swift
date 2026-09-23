@@ -19,10 +19,14 @@ struct TimelineWindow: Equatable {
     func index(ofServerID id: String) -> Int? { indexByServerID[id] }
 
     func index(matching message: MessageResponse) -> Int? {
-        indexByServerID[message.id] ?? (message.clientGeneratedId.isEmpty ? nil : indexByStableKey[message.timelineStableKey])
+        indexByServerID[message.id]
+            ?? (message.clientGeneratedId.isEmpty
+                ? nil : indexByStableKey[message.timelineStableKey])
     }
 
-    mutating func replace(with page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }) {
+    mutating func replace(
+        with page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }
+    ) {
         messages = []
         rebuildIndexes()
         mergeAuthoritative(page.messages.filter(accepting))
@@ -31,7 +35,9 @@ struct TimelineWindow: Equatable {
     }
 
     @discardableResult
-    mutating func prependOlder(_ page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }) -> Int {
+    mutating func prependOlder(
+        _ page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }
+    ) -> Int {
         let previousCount = count
         mergeAuthoritative(page.messages.filter(accepting))
         olderCursor = page.messages.isEmpty ? nil : page.olderCursor
@@ -39,7 +45,9 @@ struct TimelineWindow: Equatable {
     }
 
     @discardableResult
-    mutating func appendNewer(_ page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }) -> Int {
+    mutating func appendNewer(
+        _ page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }
+    ) -> Int {
         let previousCount = count
         mergeAuthoritative(page.messages.filter(accepting))
         newerCursor = page.messages.isEmpty ? nil : page.newerCursor
@@ -148,7 +156,11 @@ struct TimelineWindow: Equatable {
     }
 
     private mutating func rebuildIndexes() {
-        indexByStableKey = Dictionary(uniqueKeysWithValues: messages.enumerated().map { ($0.element.timelineStableKey, $0.offset) })
-        indexByServerID = Dictionary(uniqueKeysWithValues: messages.enumerated().map { ($0.element.id, $0.offset) })
+        indexByStableKey = Dictionary(
+            uniqueKeysWithValues: messages.enumerated().map {
+                ($0.element.timelineStableKey, $0.offset)
+            })
+        indexByServerID = Dictionary(
+            uniqueKeysWithValues: messages.enumerated().map { ($0.element.id, $0.offset) })
     }
 }

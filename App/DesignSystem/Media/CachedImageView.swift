@@ -48,9 +48,9 @@ struct CachedImageView<Content: View>: View {
 }
 
 func swiftUIImage(_ image: KFCrossPlatformImage) -> Image {
-#if os(macOS)
-    Image(nsImage: image)
-#else
-    Image(uiImage: image)
-#endif
+    #if os(macOS)
+        Image(nsImage: image)
+    #else
+        Image(uiImage: image)
+    #endif
 }

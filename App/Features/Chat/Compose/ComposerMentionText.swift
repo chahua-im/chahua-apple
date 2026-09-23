@@ -31,9 +31,14 @@ enum ComposerMentionText {
         let text = wireText as NSString
         let result = NSMutableAttributedString(string: "")
         var cursor = 0
-        for match in MessageMentions.pattern.matches(in: wireText, range: NSRange(location: 0, length: text.length)) {
+        for match in MessageMentions.pattern.matches(
+            in: wireText, range: NSRange(location: 0, length: text.length))
+        {
             guard let uid = Int32(text.substring(with: match.range(at: 1))) else { continue }
-            result.append(NSAttributedString(string: text.substring(with: NSRange(location: cursor, length: match.range.location - cursor))))
+            result.append(
+                NSAttributedString(
+                    string: text.substring(
+                        with: NSRange(location: cursor, length: match.range.location - cursor))))
             result.append(mention(uid: uid, label: names[uid] ?? "User \(uid)"))
             cursor = NSMaxRange(match.range)
         }
@@ -48,9 +53,11 @@ enum ComposerMentionText {
 
     static func spans(in text: NSAttributedString) -> [(ComposerMentionSpan, NSRange)] {
         var spans: [(ComposerMentionSpan, NSRange)] = []
-        text.enumerateAttribute(attribute, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+        text.enumerateAttribute(attribute, in: NSRange(location: 0, length: text.length)) {
+            value, range, _ in
             if let span = value as? ComposerMentionSpan, span.isValid,
-               (text.string as NSString).substring(with: range) == span.text {
+                (text.string as NSString).substring(with: range) == span.text
+            {
                 spans.append((span, range))
             }
         }
@@ -68,17 +75,28 @@ enum ComposerMentionText {
     static func query(in text: NSAttributedString, selection: NSRange) -> ComposerMentionQuery? {
         guard selection.length == 0, selection.location <= text.length else { return nil }
         let caret = selection.location
-        guard !spans(in: text).contains(where: { _, range in caret > range.location && caret <= NSMaxRange(range) }) else { return nil }
+        guard
+            !spans(in: text).contains(where: { _, range in
+                caret > range.location && caret <= NSMaxRange(range)
+            })
+        else { return nil }
         let string = text.string as NSString
         var start = caret
         while start > 0 {
             let range = string.rangeOfComposedCharacterSequence(at: start - 1)
             let character = string.substring(with: range)
-            if character.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.contains) { break }
+            if character.unicodeScalars.contains(
+                where: CharacterSet.whitespacesAndNewlines.contains)
+            {
+                break
+            }
             start = range.location
         }
-        guard start < caret, string.substring(with: NSRange(location: start, length: 1)) == "@" else { return nil }
+        guard start < caret, string.substring(with: NSRange(location: start, length: 1)) == "@"
+        else { return nil }
         let range = NSRange(location: start, length: caret - start)
-        return ComposerMentionQuery(query: string.substring(with: NSRange(location: start + 1, length: range.length - 1)), range: range)
+        return ComposerMentionQuery(
+            query: string.substring(with: NSRange(location: start + 1, length: range.length - 1)),
+            range: range)
     }
 }

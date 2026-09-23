@@ -44,11 +44,13 @@ final class ComposerInputState: ObservableObject {
 
     private func hydrateMentionNames() {
         guard !isComposing, !hasPendingEdit,
-              nativeInput?.canHydrateMentionLabels != false else { return }
+            nativeInput?.canHydrateMentionLabels != false
+        else { return }
         let hydrated = NSMutableAttributedString(attributedString: mentionText)
         for (span, range) in ComposerMentionText.spans(in: mentionText).reversed() {
             guard let name = mentionNames[span.uid], span.text != "@" + name else { continue }
-            hydrated.replaceCharacters(in: range, with: ComposerMentionText.mention(uid: span.uid, label: name))
+            hydrated.replaceCharacters(
+                in: range, with: ComposerMentionText.mention(uid: span.uid, label: name))
         }
         guard hydrated.string != mentionText.string else { return }
         mentionText = hydrated
@@ -73,7 +75,9 @@ final class ComposerInputState: ObservableObject {
         scheduleSettlement()
     }
 
-    func nativeEditingEnded(_ snapshot: ComposerInputSnapshot, visibleText: NSAttributedString? = nil) {
+    func nativeEditingEnded(
+        _ snapshot: ComposerInputSnapshot, visibleText: NSAttributedString? = nil
+    ) {
         endingSnapshot = snapshot
         endingMentionText = visibleText ?? nativeInput?.attributedText
         if case .marked = snapshot { beginComposition() }
@@ -83,8 +87,9 @@ final class ComposerInputState: ObservableObject {
 
     func refreshMentionQuery() {
         guard !isComposing, let nativeInput,
-              case .committed = nativeInput.snapshot(),
-              let text = nativeInput.attributedText, let selection = nativeInput.selection else {
+            case .committed = nativeInput.snapshot(),
+            let text = nativeInput.attributedText, let selection = nativeInput.selection
+        else {
             if mentionQuery != nil { mentionQuery = nil }
             return
         }
@@ -95,7 +100,8 @@ final class ComposerInputState: ObservableObject {
     func insertMention(uid: Int32, label: String, query: ComposerMentionQuery) -> Bool {
         refreshMentionQuery()
         guard !isComposing, mentionQuery == query, let nativeInput else { return false }
-        let replacement = NSMutableAttributedString(attributedString: ComposerMentionText.mention(uid: uid, label: label))
+        let replacement = NSMutableAttributedString(
+            attributedString: ComposerMentionText.mention(uid: uid, label: label))
         replacement.append(NSAttributedString(string: " "))
         guard nativeInput.replaceMention(in: query.range, with: replacement) else { return false }
         mentionNames[uid] = label
@@ -114,7 +120,8 @@ final class ComposerInputState: ObservableObject {
         // A candidate-confirmation Return never sends, including Latin preedit
         // which unmarks without changing its string in this same transaction.
         if allowEmptyUnfocused, !isComposing, !hasPendingEdit,
-           (editorText ?? draft?.wrappedValue ?? "").isEmpty, case .unavailable = snapshot {
+            (editorText ?? draft?.wrappedValue ?? "").isEmpty, case .unavailable = snapshot
+        {
             return true
         }
         guard !isComposing, case .committed = snapshot else { return false }
@@ -136,7 +143,8 @@ final class ComposerInputState: ObservableObject {
             }
         }
         if allowEmptyUnfocused, !isComposing, !hasPendingEdit,
-           (editorText ?? draft?.wrappedValue ?? "").isEmpty, case .unavailable = snapshot {
+            (editorText ?? draft?.wrappedValue ?? "").isEmpty, case .unavailable = snapshot
+        {
             return true
         }
         guard case .committed = snapshot else { return false }

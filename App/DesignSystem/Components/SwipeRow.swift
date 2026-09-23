@@ -19,21 +19,20 @@ struct SwipeRow<ID: Hashable, Content: View>: View {
 
     var body: some View {
         #if os(iOS)
-        SwipeRowUIKit(
-            id: AnyHashable(id), isRevealed: revealedID == id,
-            leadingAction: leadingAction, trailingActions: trailingActions,
-            isBusy: isBusy, onRevealChanged: setRevealed, onAction: onAction, content: content)
+            SwipeRowUIKit(
+                id: AnyHashable(id), isRevealed: revealedID == id,
+                leadingAction: leadingAction, trailingActions: trailingActions,
+                isBusy: isBusy, onRevealChanged: setRevealed, onAction: onAction, content: content)
         #else
-        SwipeRowAppKit(
-            id: AnyHashable(id), isRevealed: revealedID == id,
-            leadingAction: leadingAction, trailingActions: trailingActions,
-            isBusy: isBusy, onRevealChanged: setRevealed, onAction: onAction, content: content)
+            SwipeRowAppKit(
+                id: AnyHashable(id), isRevealed: revealedID == id,
+                leadingAction: leadingAction, trailingActions: trailingActions,
+                isBusy: isBusy, onRevealChanged: setRevealed, onAction: onAction, content: content)
         #endif
     }
 
     private func setRevealed(_ revealed: Bool) {
-        if revealed { revealedID = id }
-        else if revealedID == id { revealedID = nil }
+        if revealed { revealedID = id } else if revealedID == id { revealedID = nil }
     }
 }
 
@@ -54,7 +53,9 @@ enum SwipeRowMetrics {
         min(max(leadingReveal + 64, width * 0.56), width - edgeInset * 2)
     }
 
-    static func dragOffset(proposed: CGFloat, width: CGFloat, hasLeading: Bool, trailingCount: Int) -> CGFloat {
+    static func dragOffset(proposed: CGFloat, width: CGFloat, hasLeading: Bool, trailingCount: Int)
+        -> CGFloat
+    {
         if proposed > 0, hasLeading {
             return min(proposed, max(leadingReveal, width - edgeInset))
         }

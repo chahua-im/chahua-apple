@@ -109,14 +109,18 @@ struct MessageActionPolicy {
         case .reply:
             return context.canWrite ? .enabled : .hidden
         case .thread:
-            return context.canWrite && messageType == .text && !context.isThreadView && !hasThreadInfo
+            return context.canWrite && messageType == .text && !context.isThreadView
+                && !hasThreadInfo
                 ? .enabled : .hidden
         case .pin:
-            return context.canWrite && context.isAdmin && !context.isThreadView && !context.isPinned && !context.isUpdatingPin ? .enabled : .hidden
+            return context.canWrite && context.isAdmin && !context.isThreadView && !context.isPinned
+                && !context.isUpdatingPin ? .enabled : .hidden
         case .unpin:
-            return context.canWrite && context.isAdmin && !context.isThreadView && context.isPinned && !context.isUpdatingPin ? .enabled : .hidden
+            return context.canWrite && context.isAdmin && !context.isThreadView && context.isPinned
+                && !context.isUpdatingPin ? .enabled : .hidden
         case .edit:
-            return context.canWrite && isOwn && messageType == .text && hasCopyableText ? .enabled : .hidden
+            return context.canWrite && isOwn && messageType == .text && hasCopyableText
+                ? .enabled : .hidden
         case .delete:
             return context.canWrite && (isOwn || context.isAdmin) ? .enabled : .hidden
         case .favorite:
@@ -144,7 +148,8 @@ struct MessageReactionEligibility {
     let reactions: [ReactionSummary]
 
     var personalLimitReached: Bool {
-        reactions.lazy.filter { $0.count > 0 && $0.reactedByMe == true }.count >= Self.maximumPerUser
+        reactions.lazy.filter { $0.count > 0 && $0.reactedByMe == true }.count
+            >= Self.maximumPerUser
     }
 
     var distinctLimitReached: Bool {

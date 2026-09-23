@@ -1,5 +1,5 @@
-import Foundation
 import ChahuaAPI
+import Foundation
 
 enum AppConfiguration {
     static let apiConfiguration: ChahuaConfiguration = {
@@ -18,15 +18,16 @@ enum AppConfiguration {
 
     private static var appVersionHeader: String {
         #if os(iOS)
-        let platform = "ios"
+            let platform = "ios"
         #elseif os(macOS)
-        let platform = "macos"
+            let platform = "macos"
         #else
-        #error("Unsupported Chahua platform")
+            #error("Unsupported Chahua platform")
         #endif
 
         guard
-            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                as? String,
             !version.isEmpty,
             let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
             !build.isEmpty

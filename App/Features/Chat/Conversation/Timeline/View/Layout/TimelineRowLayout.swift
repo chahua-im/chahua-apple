@@ -19,7 +19,8 @@ struct TimelineRowLayout {
     /// Footer-local icon, reply label and trailing chevron rectangles.
     var threadContentFrames: [CGRect] = []
 
-    static let empty = TimelineRowLayout(size: .zero, frames: [:], textGeometry: nil, mediaFrames: [], reactionFrames: [])
+    static let empty = TimelineRowLayout(
+        size: .zero, frames: [:], textGeometry: nil, mediaFrames: [], reactionFrames: [])
 
     func frame(for section: TimelineSectionID) -> CGRect? { frames[section] }
 }
@@ -32,4 +33,3 @@ enum TimelineRowMetrics {
     static let textHorizontalInset: CGFloat = 12
     static let textVerticalInset: CGFloat = 8
 }
-

@@ -1,7 +1,6 @@
 import ChahuaAPI
 import Foundation
 
-
 enum ConversationTimelineEntry: Hashable {
     case remote(MessageResponse)
     case pending(PendingOutgoingMessage)

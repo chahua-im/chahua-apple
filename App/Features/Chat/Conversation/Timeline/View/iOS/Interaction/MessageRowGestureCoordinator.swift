@@ -1,573 +1,618 @@
 #if os(iOS)
-import Foundation
-import UIKit
-import UIKit.UIGestureRecognizerSubclass
+    import Foundation
+    import UIKit
+    import UIKit.UIGestureRecognizerSubclass
 
-/// One native row recognizer arbitrates finger/pointer taps, holds and swipes
-/// before controls activate. Non-hit-testing markers supply native target geometry.
-@MainActor
-final class MessageRowGestureCoordinator {
-    private weak var view: UIView?
-    private var markers: [ObjectIdentifier: Registration] = [:]
-    private var nextOrder = 0
-    private let recognizer = MessageRowTouchRecognizer(target: nil, action: nil)
-    private var pressFeedback: MessageBubblePressFeedback?
+    /// One native row recognizer arbitrates finger/pointer taps, holds and swipes
+    /// before controls activate. Non-hit-testing markers supply native target geometry.
+    @MainActor
+    final class MessageRowGestureCoordinator {
+        private weak var view: UIView?
+        private var markers: [ObjectIdentifier: Registration] = [:]
+        private var nextOrder = 0
+        private let recognizer = MessageRowTouchRecognizer(target: nil, action: nil)
+        private var pressFeedback: MessageBubblePressFeedback?
 
-    init(view: UIView) {
-        self.view = view
-        recognizer.coordinator = self
-        view.addGestureRecognizer(recognizer)
-    }
+        init(view: UIView) {
+            self.view = view
+            recognizer.coordinator = self
+            view.addGestureRecognizer(recognizer)
+        }
 
-    /// Cancel before message replacement, reuse, or detachment.
-    func cancel() {
-        pressFeedback?.restore()
-        pressFeedback = nil
-        recognizer.cancelSession()
-    }
+        /// Cancel before message replacement, reuse, or detachment.
+        func cancel() {
+            pressFeedback?.restore()
+            pressFeedback = nil
+            recognizer.cancelSession()
+        }
 
-    fileprivate func beginPress(for session: MessageRowTouchSession) {
-        guard let bubbleView = session.bubbleView else { return }
-        pressFeedback?.restore()
-        let feedback = MessageBubblePressFeedback(view: bubbleView)
-        pressFeedback = feedback
-        session.pressFeedback = feedback
-    }
+        fileprivate func beginPress(for session: MessageRowTouchSession) {
+            guard let bubbleView = session.bubbleView else { return }
+            pressFeedback?.restore()
+            let feedback = MessageBubblePressFeedback(view: bubbleView)
+            pressFeedback = feedback
+            session.pressFeedback = feedback
+        }
 
-    fileprivate func register(_ marker: MessageRowGestureMarker) {
-        let id = ObjectIdentifier(marker)
-        guard markers[id] == nil else { return }
-        if case .row = marker.role { cancel() }
-        nextOrder += 1
-        markers[id] = Registration(marker: marker, order: nextOrder)
-    }
+        fileprivate func register(_ marker: MessageRowGestureMarker) {
+            let id = ObjectIdentifier(marker)
+            guard markers[id] == nil else { return }
+            if case .row = marker.role { cancel() }
+            nextOrder += 1
+            markers[id] = Registration(marker: marker, order: nextOrder)
+        }
 
-    fileprivate func unregister(_ marker: MessageRowGestureMarker) {
-        let id = ObjectIdentifier(marker)
-        markers.removeValue(forKey: id)
-        if recognizer.session?.references(id) == true { recognizer.cancelSession() }
-    }
+        fileprivate func unregister(_ marker: MessageRowGestureMarker) {
+            let id = ObjectIdentifier(marker)
+            markers.removeValue(forKey: id)
+            if recognizer.session?.references(id) == true { recognizer.cancelSession() }
+        }
 
-    fileprivate func disabled(_ marker: MessageRowGestureMarker) {
-        if recognizer.session?.references(ObjectIdentifier(marker)) == true { recognizer.cancelSession() }
-    }
+        fileprivate func disabled(_ marker: MessageRowGestureMarker) {
+            if recognizer.session?.references(ObjectIdentifier(marker)) == true {
+                recognizer.cancelSession()
+            }
+        }
 
-    fileprivate func capture(touch: UITouch, event: UIEvent) -> MessageRowTouchSession? {
-        guard let view, view.window != nil,
-              !nativeControlOwnsTouch(touch, in: view, allowsVoiceContextMenu: event.buttonMask.contains(.secondary)) else { return nil }
-        let input: MessageRowTouchSession.Input
-        switch touch.type {
-        case .direct:
-            input = .finger
-        case .indirectPointer:
-            if event.buttonMask.contains(.secondary) {
-                input = .secondaryPointer
-            } else if event.buttonMask.contains(.primary) {
-                input = .primaryPointer
-            } else {
+        fileprivate func capture(touch: UITouch, event: UIEvent) -> MessageRowTouchSession? {
+            guard let view, view.window != nil,
+                !nativeControlOwnsTouch(
+                    touch, in: view, allowsVoiceContextMenu: event.buttonMask.contains(.secondary))
+            else { return nil }
+            let input: MessageRowTouchSession.Input
+            switch touch.type {
+            case .direct:
+                input = .finger
+            case .indirectPointer:
+                if event.buttonMask.contains(.secondary) {
+                    input = .secondaryPointer
+                } else if event.buttonMask.contains(.primary) {
+                    input = .primaryPointer
+                } else {
+                    return nil
+                }
+            default:
                 return nil
             }
-        default:
-            return nil
-        }
 
-        let point = touch.location(in: view)
-        var row: (id: ObjectIdentifier, configuration: MessageRowSwipeConfiguration, order: Int)?
-        var bubble: (id: ObjectIdentifier, rect: CGRect, configuration: MessageRowBubbleConfiguration, order: Int)?
-        var tap: (id: ObjectIdentifier, rect: CGRect, action: () -> Void, order: Int)?
-        for (id, registration) in markers {
-            guard let marker = registration.marker, let rect = marker.region(containing: point, in: view) else { continue }
-            switch marker.role {
-            case .row(let configuration):
-                if row == nil || registration.order > row!.order {
-                    row = (id, configuration, registration.order)
+            let point = touch.location(in: view)
+            var row:
+                (id: ObjectIdentifier, configuration: MessageRowSwipeConfiguration, order: Int)?
+            var bubble:
+                (
+                    id: ObjectIdentifier, rect: CGRect,
+                    configuration: MessageRowBubbleConfiguration, order: Int
+                )?
+            var tap: (id: ObjectIdentifier, rect: CGRect, action: () -> Void, order: Int)?
+            for (id, registration) in markers {
+                guard let marker = registration.marker,
+                    let rect = marker.region(containing: point, in: view)
+                else { continue }
+                switch marker.role {
+                case .row(let configuration):
+                    if row == nil || registration.order > row!.order {
+                        row = (id, configuration, registration.order)
+                    }
+                case .bubble(let configuration):
+                    if bubble == nil
+                        || prefers(
+                            rect, order: registration.order, over: bubble!.rect,
+                            order: bubble!.order)
+                    {
+                        bubble = (id, rect, configuration, registration.order)
+                    }
+                case .tap(let action):
+                    if let action,
+                        tap == nil
+                            || prefers(
+                                rect, order: registration.order, over: tap!.rect, order: tap!.order)
+                    {
+                        tap = (id, rect, action, registration.order)
+                    }
+                case nil:
+                    break
                 }
-            case .bubble(let configuration):
-                if bubble == nil || prefers(rect, order: registration.order, over: bubble!.rect, order: bubble!.order) {
-                    bubble = (id, rect, configuration, registration.order)
+            }
+            // A disabled reply action still registers a row: read-only conversations
+            // retain bubble menus and navigation through quote/media/reaction targets.
+            guard let row else { return nil }
+            switch input {
+            case .finger:
+                guard row.configuration.isEnabled || bubble != nil || tap != nil else { return nil }
+            case .primaryPointer:
+                guard tap != nil else { return nil }
+            case .secondaryPointer:
+                guard bubble != nil else { return nil }
+            }
+            return MessageRowTouchSession(
+                touch: touch, input: input, origin: point, rowID: row.id, swipe: row.configuration,
+                bubbleID: bubble?.id, bubbleRect: bubble?.rect,
+                bubbleView: bubble?.configuration.view, open: bubble?.configuration.open,
+                tapID: tap?.id, tapRect: tap?.rect, action: tap?.action
+            )
+        }
+
+        fileprivate func nativeControlOwnsTouch(
+            _ touch: UITouch, in root: UIView, allowsVoiceContextMenu: Bool = false
+        ) -> Bool {
+            var ancestor = touch.view
+            while let current = ancestor {
+                if current is UITextField { return true }
+                if !allowsVoiceContextMenu, let bubble = current as? TimelineBubbleContentView,
+                    bubble.ownsVoiceTouch(touch)
+                {
+                    return true
                 }
-            case .tap(let action):
-                if let action, tap == nil || prefers(rect, order: registration.order, over: tap!.rect, order: tap!.order) {
-                    tap = (id, rect, action, registration.order)
-                }
-            case nil:
-                break
+                if current === root { break }
+                ancestor = current.superview
             }
+            // Selection handles need not be descendants of the UITextView itself.
+            // Yield the entire row while it contains an editable/selected text view,
+            // using public text state rather than UIKit's private handle class names.
+            return containsNativeTextOwnership(root)
         }
-        // A disabled reply action still registers a row: read-only conversations
-        // retain bubble menus and navigation through quote/media/reaction targets.
-        guard let row else { return nil }
-        switch input {
-        case .finger:
-            guard row.configuration.isEnabled || bubble != nil || tap != nil else { return nil }
-        case .primaryPointer:
-            guard tap != nil else { return nil }
-        case .secondaryPointer:
-            guard bubble != nil else { return nil }
-        }
-        return MessageRowTouchSession(
-            touch: touch, input: input, origin: point, rowID: row.id, swipe: row.configuration,
-            bubbleID: bubble?.id, bubbleRect: bubble?.rect, bubbleView: bubble?.configuration.view, open: bubble?.configuration.open,
-            tapID: tap?.id, tapRect: tap?.rect, action: tap?.action
-        )
-    }
 
-    fileprivate func nativeControlOwnsTouch(_ touch: UITouch, in root: UIView, allowsVoiceContextMenu: Bool = false) -> Bool {
-        var ancestor = touch.view
-        while let current = ancestor {
-            if current is UITextField { return true }
-            if !allowsVoiceContextMenu, let bubble = current as? TimelineBubbleContentView, bubble.ownsVoiceTouch(touch) { return true }
-            if current === root { break }
-            ancestor = current.superview
-        }
-        // Selection handles need not be descendants of the UITextView itself.
-        // Yield the entire row while it contains an editable/selected text view,
-        // using public text state rather than UIKit's private handle class names.
-        return containsNativeTextOwnership(root)
-    }
-
-    fileprivate func canContinue(_ session: MessageRowTouchSession) -> Bool {
-        guard let view, view.window != nil, markers[session.rowID]?.marker != nil else { return false }
-        return !nativeControlOwnsTouch(session.touch, in: view, allowsVoiceContextMenu: session.input == .secondaryPointer)
-    }
-
-    fileprivate func windowRect(for rect: CGRect) -> CGRect? {
-        guard let view, let window = view.window else { return nil }
-        return view.convert(rect, to: window)
-    }
-
-    private func containsNativeTextOwnership(_ view: UIView) -> Bool {
-        if let text = view as? UITextView, text.isEditable || text.selectedRange.length > 0 { return true }
-        for child in view.subviews where !child.isHidden && child.alpha > 0 {
-            if containsNativeTextOwnership(child) { return true }
-        }
-        return false
-    }
-
-    private func prefers(_ rect: CGRect, order: Int, over other: CGRect, order otherOrder: Int) -> Bool {
-        let area = rect.width * rect.height
-        let otherArea = other.width * other.height
-        return area < otherArea || (area == otherArea && order > otherOrder)
-    }
-
-    private struct Registration {
-        weak var marker: MessageRowGestureMarker?
-        let order: Int
-    }
-}
-
-
-final class MessageRowGestureMarker: UIView {
-    enum Role {
-        case row(MessageRowSwipeConfiguration)
-        case bubble(MessageRowBubbleConfiguration)
-        case tap((() -> Void)?)
-    }
-
-    fileprivate private(set) var role: Role?
-    private weak var coordinator: MessageRowGestureCoordinator?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        isAccessibilityElement = false
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        refreshRegistration()
-    }
-
-    override func didMoveToSuperview() {
-        super.didMoveToSuperview()
-        refreshRegistration()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        refreshRegistration()
-    }
-
-    func configure(_ role: Role) {
-        let previous = self.role
-        self.role = role
-        refreshRegistration()
-        switch (previous, role) {
-        case (.row(let old), .row(let new)) where old.isEnabled && !new.isEnabled:
-            coordinator?.disabled(self)
-        case (.tap(.some), .tap(nil)):
-            coordinator?.disabled(self)
-        default:
-            break
-        }
-    }
-
-    func stop() {
-        role = nil
-        detach()
-    }
-
-    fileprivate func region(containing point: CGPoint, in host: UIView) -> CGRect? {
-        guard role != nil, window != nil, isDescendant(of: host), bounds.contains(convert(point, from: host)) else { return nil }
-        var ancestor: UIView? = self
-        while let current = ancestor {
-            guard !current.isHidden, current.alpha > 0 else { return nil }
-            if current.clipsToBounds && !current.bounds.contains(current.convert(point, from: host)) { return nil }
-            if current === host { return convert(bounds, to: host) }
-            ancestor = current.superview
-        }
-        return nil
-    }
-
-    private func refreshRegistration() {
-        guard role != nil, window != nil else {
-            detach()
-            return
-        }
-        var responder: UIResponder? = self
-        var owner: TimelineRowView?
-        while let current = responder {
-            if let host = current as? TimelineRowView {
-                owner = host
-                break
+        fileprivate func canContinue(_ session: MessageRowTouchSession) -> Bool {
+            guard let view, view.window != nil, markers[session.rowID]?.marker != nil else {
+                return false
             }
-            responder = current.next
+            return !nativeControlOwnsTouch(
+                session.touch, in: view, allowsVoiceContextMenu: session.input == .secondaryPointer)
         }
-        let next = owner?.rowGestures
-        guard coordinator !== next else { return }
-        detach()
-        coordinator = next
-        next?.register(self)
-    }
 
-    private func detach() {
-        let previous = coordinator
-        coordinator = nil
-        previous?.unregister(self)
-    }
-}
-
-struct MessageRowSwipeConfiguration {
-    let isEnabled: Bool
-    let onChange: (CGFloat) -> Void
-    let onFinish: () -> Void
-    let onReply: () -> Void
-}
-
-struct MessageRowBubbleConfiguration {
-    weak var view: UIView?
-    let open: (CGRect, MessageBubblePressFeedback?) -> Void
-}
-
-fileprivate final class MessageRowTouchSession {
-    enum Input { case finger, primaryPointer, secondaryPointer }
-    enum Owner { case undecided, swipe, contextMenu, tap, scroll, native, cancelled }
-
-    let touch: UITouch
-    let input: Input
-    let origin: CGPoint
-    let rowID: ObjectIdentifier
-    let swipe: MessageRowSwipeConfiguration
-    let bubbleID: ObjectIdentifier?
-    let bubbleRect: CGRect?
-    weak var bubbleView: UIView?
-    let open: ((CGRect, MessageBubblePressFeedback?) -> Void)?
-    let tapID: ObjectIdentifier?
-    let tapRect: CGRect?
-    let action: (() -> Void)?
-    var owner = Owner.undecided
-    var displacement: CGFloat = 0
-    var deliveredContext = false
-    var pressFeedback: MessageBubblePressFeedback?
-
-    init(
-        touch: UITouch, input: Input, origin: CGPoint, rowID: ObjectIdentifier, swipe: MessageRowSwipeConfiguration,
-        bubbleID: ObjectIdentifier?, bubbleRect: CGRect?, bubbleView: UIView?,
-        open: ((CGRect, MessageBubblePressFeedback?) -> Void)?,
-        tapID: ObjectIdentifier?, tapRect: CGRect?, action: (() -> Void)?
-    ) {
-        self.touch = touch
-        self.input = input
-        self.origin = origin
-        self.rowID = rowID
-        self.swipe = swipe
-        self.bubbleID = bubbleID
-        self.bubbleRect = bubbleRect
-        self.bubbleView = bubbleView
-        self.open = open
-        self.tapID = tapID
-        self.tapRect = tapRect
-        self.action = action
-    }
-
-    func references(_ id: ObjectIdentifier) -> Bool { rowID == id || bubbleID == id || tapID == id }
-}
-
-fileprivate final class MessageRowTouchRecognizer: UIGestureRecognizer {
-    weak var coordinator: MessageRowGestureCoordinator?
-    private(set) var session: MessageRowTouchSession?
-    private var holdTimer: Timer?
-    private var holdFeedback: UIImpactFeedbackGenerator?
-
-    override init(target: Any?, action: Selector?) {
-        super.init(target: target, action: action)
-        addTarget(self, action: #selector(deliverRecognition))
-        allowedTouchTypes = [
-            NSNumber(value: UITouch.TouchType.direct.rawValue),
-            NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)
-        ]
-        requiresExclusiveTouchType = true
-        cancelsTouchesInView = true
-        delaysTouchesBegan = false
-        delaysTouchesEnded = false
-    }
-
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesBegan(touches, with: event)
-        guard session == nil, touches.count == 1, let touch = touches.first,
-            let captured = coordinator?.capture(touch: touch, event: event)
-        else {
-            cancelSession()
-            return
+        fileprivate func windowRect(for rect: CGRect) -> CGRect? {
+            guard let view, let window = view.window else { return nil }
+            return view.convert(rect, to: window)
         }
-        session = captured
-        guard captured.input == .finger, captured.open != nil else { return }
-        coordinator?.beginPress(for: captured)
-        let feedback = UIImpactFeedbackGenerator(style: .light)
-        feedback.prepare()
-        holdFeedback = feedback
-        let timer = Timer(timeInterval: MessageBubblePressFeedback.holdDuration, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.holdDeadline() }
-        }
-        holdTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
 
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesMoved(touches, with: event)
-        guard let session, touches.contains(session.touch) else { return }
-        move(to: session.touch.location(in: view))
-    }
-
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesEnded(touches, with: event)
-        guard let captured = session, touches.contains(captured.touch) else { return }
-        let point = captured.touch.location(in: view)
-        // Release position is authoritative even if UIKit omitted a final move:
-        // crossing then retreating below 60 must never send a reply.
-        move(to: point)
-        guard session === captured else { return }
-        invalidateHold()
-        if captured.owner != .contextMenu { cancelPress(captured) }
-        switch captured.owner {
-        case .swipe, .contextMenu:
-            state = .ended
-        case .undecided:
-            if captured.input == .secondaryPointer, let rect = captured.bubbleRect, rect.contains(point), captured.open != nil {
-                captured.owner = .contextMenu
-                state = .recognized
-            } else if captured.input != .secondaryPointer, let rect = captured.tapRect, rect.contains(point), captured.action != nil {
-                captured.owner = .tap
-                state = .recognized
-            } else {
-                // A stationary, unregistered text/control tap is not a row
-                // gesture. Failing without delaying delivery preserves native
-                // links, double-tap selection and the pending-message retry UI.
-                abandon(.native)
+        private func containsNativeTextOwnership(_ view: UIView) -> Bool {
+            if let text = view as? UITextView, text.isEditable || text.selectedRange.length > 0 {
+                return true
             }
-        case .tap, .scroll, .native, .cancelled:
-            break
-        }
-    }
-
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesCancelled(touches, with: event)
-        cancelSession()
-    }
-
-    override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let session else { return super.canPrevent(preventedGestureRecognizer) }
-        switch session.owner {
-        case .swipe, .contextMenu, .tap:
-            return super.canPrevent(preventedGestureRecognizer)
-        default:
+            for child in view.subviews where !child.isHidden && child.alpha > 0 {
+                if containsNativeTextOwnership(child) { return true }
+            }
             return false
         }
-    }
 
-    override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
-        if state == .began || state == .changed || state == .ended { return false }
-        guard let session else { return super.canBePrevented(by: preventingGestureRecognizer) }
-        switch session.owner {
-        case .undecided:
-            if let scroll = preventingGestureRecognizer.view as? UIScrollView,
-                preventingGestureRecognizer === scroll.panGestureRecognizer
-            {
-                let point = session.touch.location(in: view)
-                let dx = point.x - session.origin.x
-                let dy = point.y - session.origin.y
-                // No failure dependency or simultaneous-recognition blanket:
-                // native scrolling may win immediately on vertical movement.
-                // Horizontal pans must wait for this row's >5pt intent decision.
-                // Use the touch itself: UIScrollView may reset its pan's
-                // translation when beginning, before this recognizer is called.
-                return abs(dy) >= abs(dx)
-            }
-            // Eager SwiftUI/native button tracking must not kill an undecided
-            // swipe. Native stationary text gestures still finish when this
-            // recognizer fails on release; active selection is excluded above.
-            return false
-        case .swipe, .contextMenu, .tap:
-            return false
-        default:
-            return super.canBePrevented(by: preventingGestureRecognizer)
+        private func prefers(_ rect: CGRect, order: Int, over other: CGRect, order otherOrder: Int)
+            -> Bool
+        {
+            let area = rect.width * rect.height
+            let otherArea = other.width * other.height
+            return area < otherArea || (area == otherArea && order > otherOrder)
+        }
+
+        private struct Registration {
+            weak var marker: MessageRowGestureMarker?
+            let order: Int
         }
     }
 
-    override func reset() {
-        let interrupted = session
-        session = nil
-        invalidateHold()
-        if let interrupted { cancelPress(interrupted) }
-        super.reset()
-        if interrupted?.owner == .swipe { interrupted?.swipe.onFinish() }
-    }
+    final class MessageRowGestureMarker: UIView {
+        enum Role {
+            case row(MessageRowSwipeConfiguration)
+            case bubble(MessageRowBubbleConfiguration)
+            case tap((() -> Void)?)
+        }
 
-    func cancelSession() {
-        abandon(.cancelled)
-    }
+        fileprivate private(set) var role: Role?
+        private weak var coordinator: MessageRowGestureCoordinator?
 
-    /// UIKit delivers actions after it has resolved recognition and cancelled
-    /// native tracking. Calling row actions directly from touchesEnded would run
-    /// them before that arbitration, or even after another recognizer won.
-    @objc private func deliverRecognition() {
-        guard let captured = session else { return }
-        switch state {
-        case .began, .changed:
-            if captured.owner == .swipe {
-                captured.swipe.onChange(captured.displacement)
-            } else if captured.owner == .contextMenu {
-                deliverContext(captured)
-            }
-        case .ended:
-            session = nil
-            invalidateHold()
-            if captured.owner != .contextMenu { cancelPress(captured) }
-            switch captured.owner {
-            case .swipe:
-                let reply = captured.displacement >= 60 ? captured.swipe.onReply : nil
-                captured.swipe.onFinish()
-                reply?()
-            case .contextMenu:
-                deliverContext(captured)
-            case .tap:
-                captured.action?()
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            isAccessibilityElement = false
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            refreshRegistration()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            refreshRegistration()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            refreshRegistration()
+        }
+
+        func configure(_ role: Role) {
+            let previous = self.role
+            self.role = role
+            refreshRegistration()
+            switch (previous, role) {
+            case (.row(let old), .row(let new)) where old.isEnabled && !new.isEnabled:
+                coordinator?.disabled(self)
+            case (.tap(.some), .tap(nil)):
+                coordinator?.disabled(self)
             default:
                 break
             }
-        case .cancelled, .failed:
-            abandon(.cancelled)
-        default:
-            break
         }
-    }
 
-    private func deliverContext(_ captured: MessageRowTouchSession) {
-        guard !captured.deliveredContext, let rect = captured.bubbleRect,
-            coordinator?.canContinue(captured) == true,
-            let windowRect = coordinator?.windowRect(for: rect)
-        else {
-            if !captured.deliveredContext { cancelPress(captured) }
-            return
+        func stop() {
+            role = nil
+            detach()
         }
-        captured.deliveredContext = true
-        captured.pressFeedback?.commit()
-        if captured.input == .finger {
-            holdFeedback?.impactOccurred(intensity: 0.8)
-        }
-        holdFeedback = nil
-        captured.open?(windowRect, captured.pressFeedback)
-    }
 
-    private func move(to point: CGPoint) {
-        guard let captured = session else { return }
-        if captured.owner == .undecided {
-            guard coordinator?.canContinue(captured) == true else {
-                abandon(.native)
+        fileprivate func region(containing point: CGPoint, in host: UIView) -> CGRect? {
+            guard role != nil, window != nil, isDescendant(of: host),
+                bounds.contains(convert(point, from: host))
+            else { return nil }
+            var ancestor: UIView? = self
+            while let current = ancestor {
+                guard !current.isHidden, current.alpha > 0 else { return nil }
+                if current.clipsToBounds
+                    && !current.bounds.contains(current.convert(point, from: host))
+                {
+                    return nil
+                }
+                if current === host { return convert(bounds, to: host) }
+                ancestor = current.superview
+            }
+            return nil
+        }
+
+        private func refreshRegistration() {
+            guard role != nil, window != nil else {
+                detach()
                 return
             }
-            let dx = point.x - captured.origin.x
-            let dy = point.y - captured.origin.y
-            guard abs(dx) > 5 || abs(dy) > 5 else { return }
+            var responder: UIResponder? = self
+            var owner: TimelineRowView?
+            while let current = responder {
+                if let host = current as? TimelineRowView {
+                    owner = host
+                    break
+                }
+                responder = current.next
+            }
+            let next = owner?.rowGestures
+            guard coordinator !== next else { return }
+            detach()
+            coordinator = next
+            next?.register(self)
+        }
+
+        private func detach() {
+            let previous = coordinator
+            coordinator = nil
+            previous?.unregister(self)
+        }
+    }
+
+    struct MessageRowSwipeConfiguration {
+        let isEnabled: Bool
+        let onChange: (CGFloat) -> Void
+        let onFinish: () -> Void
+        let onReply: () -> Void
+    }
+
+    struct MessageRowBubbleConfiguration {
+        weak var view: UIView?
+        let open: (CGRect, MessageBubblePressFeedback?) -> Void
+    }
+
+    private final class MessageRowTouchSession {
+        enum Input { case finger, primaryPointer, secondaryPointer }
+        enum Owner { case undecided, swipe, contextMenu, tap, scroll, native, cancelled }
+
+        let touch: UITouch
+        let input: Input
+        let origin: CGPoint
+        let rowID: ObjectIdentifier
+        let swipe: MessageRowSwipeConfiguration
+        let bubbleID: ObjectIdentifier?
+        let bubbleRect: CGRect?
+        weak var bubbleView: UIView?
+        let open: ((CGRect, MessageBubblePressFeedback?) -> Void)?
+        let tapID: ObjectIdentifier?
+        let tapRect: CGRect?
+        let action: (() -> Void)?
+        var owner = Owner.undecided
+        var displacement: CGFloat = 0
+        var deliveredContext = false
+        var pressFeedback: MessageBubblePressFeedback?
+
+        init(
+            touch: UITouch, input: Input, origin: CGPoint, rowID: ObjectIdentifier,
+            swipe: MessageRowSwipeConfiguration,
+            bubbleID: ObjectIdentifier?, bubbleRect: CGRect?, bubbleView: UIView?,
+            open: ((CGRect, MessageBubblePressFeedback?) -> Void)?,
+            tapID: ObjectIdentifier?, tapRect: CGRect?, action: (() -> Void)?
+        ) {
+            self.touch = touch
+            self.input = input
+            self.origin = origin
+            self.rowID = rowID
+            self.swipe = swipe
+            self.bubbleID = bubbleID
+            self.bubbleRect = bubbleRect
+            self.bubbleView = bubbleView
+            self.open = open
+            self.tapID = tapID
+            self.tapRect = tapRect
+            self.action = action
+        }
+
+        func references(_ id: ObjectIdentifier) -> Bool {
+            rowID == id || bubbleID == id || tapID == id
+        }
+    }
+
+    private final class MessageRowTouchRecognizer: UIGestureRecognizer {
+        weak var coordinator: MessageRowGestureCoordinator?
+        private(set) var session: MessageRowTouchSession?
+        private var holdTimer: Timer?
+        private var holdFeedback: UIImpactFeedbackGenerator?
+
+        override init(target: Any?, action: Selector?) {
+            super.init(target: target, action: action)
+            addTarget(self, action: #selector(deliverRecognition))
+            allowedTouchTypes = [
+                NSNumber(value: UITouch.TouchType.direct.rawValue),
+                NSNumber(value: UITouch.TouchType.indirectPointer.rawValue),
+            ]
+            requiresExclusiveTouchType = true
+            cancelsTouchesInView = true
+            delaysTouchesBegan = false
+            delaysTouchesEnded = false
+        }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesBegan(touches, with: event)
+            guard session == nil, touches.count == 1, let touch = touches.first,
+                let captured = coordinator?.capture(touch: touch, event: event)
+            else {
+                cancelSession()
+                return
+            }
+            session = captured
+            guard captured.input == .finger, captured.open != nil else { return }
+            coordinator?.beginPress(for: captured)
+            let feedback = UIImpactFeedbackGenerator(style: .light)
+            feedback.prepare()
+            holdFeedback = feedback
+            let timer = Timer(timeInterval: MessageBubblePressFeedback.holdDuration, repeats: false)
+            { [weak self] _ in
+                MainActor.assumeIsolated { self?.holdDeadline() }
+            }
+            holdTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesMoved(touches, with: event)
+            guard let session, touches.contains(session.touch) else { return }
+            move(to: session.touch.location(in: view))
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesEnded(touches, with: event)
+            guard let captured = session, touches.contains(captured.touch) else { return }
+            let point = captured.touch.location(in: view)
+            // Release position is authoritative even if UIKit omitted a final move:
+            // crossing then retreating below 60 must never send a reply.
+            move(to: point)
+            guard session === captured else { return }
             invalidateHold()
-            cancelPress(captured)
-            guard abs(dx) > abs(dy) else {
-                abandon(.scroll)
-                return
+            if captured.owner != .contextMenu { cancelPress(captured) }
+            switch captured.owner {
+            case .swipe, .contextMenu:
+                state = .ended
+            case .undecided:
+                if captured.input == .secondaryPointer, let rect = captured.bubbleRect,
+                    rect.contains(point), captured.open != nil
+                {
+                    captured.owner = .contextMenu
+                    state = .recognized
+                } else if captured.input != .secondaryPointer, let rect = captured.tapRect,
+                    rect.contains(point), captured.action != nil
+                {
+                    captured.owner = .tap
+                    state = .recognized
+                } else {
+                    // A stationary, unregistered text/control tap is not a row
+                    // gesture. Failing without delaying delivery preserves native
+                    // links, double-tap selection and the pending-message retry UI.
+                    abandon(.native)
+                }
+            case .tap, .scroll, .native, .cancelled:
+                break
             }
-            guard captured.input == .finger, captured.swipe.isEnabled else {
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesCancelled(touches, with: event)
+            cancelSession()
+        }
+
+        override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let session else { return super.canPrevent(preventedGestureRecognizer) }
+            switch session.owner {
+            case .swipe, .contextMenu, .tap:
+                return super.canPrevent(preventedGestureRecognizer)
+            default:
+                return false
+            }
+        }
+
+        override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool {
+            if state == .began || state == .changed || state == .ended { return false }
+            guard let session else { return super.canBePrevented(by: preventingGestureRecognizer) }
+            switch session.owner {
+            case .undecided:
+                if let scroll = preventingGestureRecognizer.view as? UIScrollView,
+                    preventingGestureRecognizer === scroll.panGestureRecognizer
+                {
+                    let point = session.touch.location(in: view)
+                    let dx = point.x - session.origin.x
+                    let dy = point.y - session.origin.y
+                    // No failure dependency or simultaneous-recognition blanket:
+                    // native scrolling may win immediately on vertical movement.
+                    // Horizontal pans must wait for this row's >5pt intent decision.
+                    // Use the touch itself: UIScrollView may reset its pan's
+                    // translation when beginning, before this recognizer is called.
+                    return abs(dy) >= abs(dx)
+                }
+                // Eager SwiftUI/native button tracking must not kill an undecided
+                // swipe. Native stationary text gestures still finish when this
+                // recognizer fails on release; active selection is excluded above.
+                return false
+            case .swipe, .contextMenu, .tap:
+                return false
+            default:
+                return super.canBePrevented(by: preventingGestureRecognizer)
+            }
+        }
+
+        override func reset() {
+            let interrupted = session
+            session = nil
+            invalidateHold()
+            if let interrupted { cancelPress(interrupted) }
+            super.reset()
+            if interrupted?.owner == .swipe { interrupted?.swipe.onFinish() }
+        }
+
+        func cancelSession() {
+            abandon(.cancelled)
+        }
+
+        /// UIKit delivers actions after it has resolved recognition and cancelled
+        /// native tracking. Calling row actions directly from touchesEnded would run
+        /// them before that arbitration, or even after another recognizer won.
+        @objc private func deliverRecognition() {
+            guard let captured = session else { return }
+            switch state {
+            case .began, .changed:
+                if captured.owner == .swipe {
+                    captured.swipe.onChange(captured.displacement)
+                } else if captured.owner == .contextMenu {
+                    deliverContext(captured)
+                }
+            case .ended:
+                session = nil
+                invalidateHold()
+                if captured.owner != .contextMenu { cancelPress(captured) }
+                switch captured.owner {
+                case .swipe:
+                    let reply = captured.displacement >= 60 ? captured.swipe.onReply : nil
+                    captured.swipe.onFinish()
+                    reply?()
+                case .contextMenu:
+                    deliverContext(captured)
+                case .tap:
+                    captured.action?()
+                default:
+                    break
+                }
+            case .cancelled, .failed:
                 abandon(.cancelled)
+            default:
+                break
+            }
+        }
+
+        private func deliverContext(_ captured: MessageRowTouchSession) {
+            guard !captured.deliveredContext, let rect = captured.bubbleRect,
+                coordinator?.canContinue(captured) == true,
+                let windowRect = coordinator?.windowRect(for: rect)
+            else {
+                if !captured.deliveredContext { cancelPress(captured) }
                 return
             }
-            // Lock even a rightward drag at zero displacement: retreating or
-            // pausing can never resurrect this touch's tap/hold eligibility.
-            captured.owner = .swipe
-            captured.displacement = min(max(-dx, 0), 80)
+            captured.deliveredContext = true
+            captured.pressFeedback?.commit()
+            if captured.input == .finger {
+                holdFeedback?.impactOccurred(intensity: 0.8)
+            }
+            holdFeedback = nil
+            captured.open?(windowRect, captured.pressFeedback)
+        }
+
+        private func move(to point: CGPoint) {
+            guard let captured = session else { return }
+            if captured.owner == .undecided {
+                guard coordinator?.canContinue(captured) == true else {
+                    abandon(.native)
+                    return
+                }
+                let dx = point.x - captured.origin.x
+                let dy = point.y - captured.origin.y
+                guard abs(dx) > 5 || abs(dy) > 5 else { return }
+                invalidateHold()
+                cancelPress(captured)
+                guard abs(dx) > abs(dy) else {
+                    abandon(.scroll)
+                    return
+                }
+                guard captured.input == .finger, captured.swipe.isEnabled else {
+                    abandon(.cancelled)
+                    return
+                }
+                // Lock even a rightward drag at zero displacement: retreating or
+                // pausing can never resurrect this touch's tap/hold eligibility.
+                captured.owner = .swipe
+                captured.displacement = min(max(-dx, 0), 80)
+                state = .began
+            } else if captured.owner == .swipe {
+                captured.displacement = min(max(captured.origin.x - point.x, 0), 80)
+                state = .changed
+            } else {
+                return
+            }
+        }
+
+        private func holdDeadline() {
+            invalidateHold()
+            guard state == .possible, let captured = session, captured.owner == .undecided,
+                captured.input == .finger
+            else { return }
+            let point = captured.touch.location(in: view)
+            move(to: point)
+            guard session === captured, captured.owner == .undecided,
+                let rect = captured.bubbleRect, rect.contains(point), captured.open != nil
+            else {
+                if session === captured, captured.owner == .undecided { abandon(.cancelled) }
+                return
+            }
+            captured.owner = .contextMenu
             state = .began
-        } else if captured.owner == .swipe {
-            captured.displacement = min(max(captured.origin.x - point.x, 0), 80)
-            state = .changed
-        } else {
-            return
+        }
+
+        private func abandon(_ owner: MessageRowTouchSession.Owner) {
+            let interrupted = session
+            let wasSwiping = interrupted?.owner == .swipe
+            interrupted?.owner = owner
+            session = nil
+            invalidateHold()
+            if let interrupted { cancelPress(interrupted) }
+            if state == .began || state == .changed {
+                state = .cancelled
+            } else if state == .possible {
+                state = .failed
+            }
+            if wasSwiping { interrupted?.swipe.onFinish() }
+        }
+
+        private func cancelPress(_ captured: MessageRowTouchSession) {
+            captured.pressFeedback?.cancelPending(animated: true)
+            holdFeedback = nil
+        }
+
+        private func invalidateHold() {
+            holdTimer?.invalidate()
+            holdTimer = nil
         }
     }
-
-    private func holdDeadline() {
-        invalidateHold()
-        guard state == .possible, let captured = session, captured.owner == .undecided,
-            captured.input == .finger
-        else { return }
-        let point = captured.touch.location(in: view)
-        move(to: point)
-        guard session === captured, captured.owner == .undecided,
-            let rect = captured.bubbleRect, rect.contains(point), captured.open != nil
-        else {
-            if session === captured, captured.owner == .undecided { abandon(.cancelled) }
-            return
-        }
-        captured.owner = .contextMenu
-        state = .began
-    }
-
-    private func abandon(_ owner: MessageRowTouchSession.Owner) {
-        let interrupted = session
-        let wasSwiping = interrupted?.owner == .swipe
-        interrupted?.owner = owner
-        session = nil
-        invalidateHold()
-        if let interrupted { cancelPress(interrupted) }
-        if state == .began || state == .changed {
-            state = .cancelled
-        } else if state == .possible {
-            state = .failed
-        }
-        if wasSwiping { interrupted?.swipe.onFinish() }
-    }
-
-    private func cancelPress(_ captured: MessageRowTouchSession) {
-        captured.pressFeedback?.cancelPending(animated: true)
-        holdFeedback = nil
-    }
-
-    private func invalidateHold() {
-        holdTimer?.invalidate()
-        holdTimer = nil
-    }
-}
-
 
 #endif

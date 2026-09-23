@@ -18,9 +18,10 @@ public enum VoiceAudioCodec {
     /// Reads bounded PCM chunks rather than retaining a second full decoded clip.
     public static func waveform(input: URL, count: Int = 35) throws -> [Float] {
         guard count > 0 else { return [] }
-        let file = try AVAudioFile(forReading: input, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let file = try AVAudioFile(
+            forReading: input, commonFormat: .pcmFormatFloat32, interleaved: false)
         guard file.length > 0,
-              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096)
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 4096)
         else { return [] }
         var peaks = [Float](repeating: 0, count: count)
         while file.framePosition < file.length {

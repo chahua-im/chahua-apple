@@ -126,7 +126,8 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
 
     public init(
         id: String, name: String? = nil, description: String? = nil, avatar: String? = nil,
-        mutedUntil: Date? = nil, myRole: GroupRole? = nil, kind: ChatKind, peer: MemberSummary? = nil
+        mutedUntil: Date? = nil, myRole: GroupRole? = nil, kind: ChatKind,
+        peer: MemberSummary? = nil
     ) {
         self.id = id
         self.name = name

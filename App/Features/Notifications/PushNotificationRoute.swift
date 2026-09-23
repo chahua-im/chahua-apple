@@ -14,10 +14,10 @@ struct PushNotificationRoute: Identifiable, Equatable, Sendable {
     }
     nonisolated init?(userInfo: [AnyHashable: Any]) {
         guard let data = userInfo["wettyChat"] as? [String: Any],
-              let type = data["type"] as? String,
-              ["newMessage", "mention", "reply"].contains(type),
-              let chatID = data["chatId"] as? String, Self.validID(chatID),
-              let messageID = data["messageId"] as? String, Self.validID(messageID)
+            let type = data["type"] as? String,
+            ["newMessage", "mention", "reply"].contains(type),
+            let chatID = data["chatId"] as? String, Self.validID(chatID),
+            let messageID = data["messageId"] as? String, Self.validID(messageID)
         else { return nil }
         let threadID: String?
         if let value = data["threadRootId"], !(value is NSNull) {
@@ -41,7 +41,8 @@ struct PushNotificationRoute: Identifiable, Equatable, Sendable {
 
     func isRead(through messageID: String, in conversation: ConversationKey) -> Bool {
         guard self.conversation == conversation,
-              let watermark = Int64(messageID), let message = Int64(self.messageID) else { return false }
+            let watermark = Int64(messageID), let message = Int64(self.messageID)
+        else { return false }
         return message <= watermark
     }
 }

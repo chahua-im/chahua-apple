@@ -44,9 +44,11 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
             guard !isClosed else { throw CancellationError() }
             let data: Data
             switch frame {
-            case let .string(text): data = Data(text.utf8)
-            case let .data(bytes):
-                guard String(data: bytes, encoding: .utf8) != nil else { throw APIError.unexpectedResponse }
+            case .string(let text): data = Data(text.utf8)
+            case .data(let bytes):
+                guard String(data: bytes, encoding: .utf8) != nil else {
+                    throw APIError.unexpectedResponse
+                }
                 data = bytes
             @unknown default: throw APIError.unexpectedResponse
             }

@@ -68,7 +68,8 @@ public protocol ChahuaAPIClient: Sendable {
     func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse
 
     /// Changes a group member's server-authorized role with `PATCH /group/{chatID}/members/{uid}`.
-    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws -> MemberResponse
+    func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws
+        -> MemberResponse
 
     /// Removes a member with `DELETE /group/{chatID}/members/{uid}`.
     func removeGroupMember(chatID: String, uid: Int32) async throws
@@ -86,7 +87,8 @@ public protocol ChahuaAPIClient: Sendable {
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse
 
     /// Replaces the text of an existing message with `PATCH /chats/{chatID}/messages/{messageID}`.
-    func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws -> MessageResponse
+    func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws
+        -> MessageResponse
 
     /// Recalls a published message for all participants with `DELETE /chats/{chatID}/messages/{messageID}`.
     func deleteMessage(chatID: String, messageID: String) async throws
@@ -121,7 +123,8 @@ public protocol ChahuaAPIClient: Sendable {
     ///
     /// `threadID` is the root message identifier within `chatID`; the body uses
     /// the same client-generated idempotency identifier as a parent-chat send.
-    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws -> MessageResponse
+    func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
+        -> MessageResponse
 
     /// Advances the current member's read cursor with `POST /chats/{chatID}/read`.
     func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse
@@ -130,23 +133,26 @@ public protocol ChahuaAPIClient: Sendable {
     func markChatUnread(chatID: String) async throws -> ReadStateResponse
 
     /// Advances a subscribed thread's read cursor without marking its parent chat read.
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws -> ReadStateResponse
+    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+        -> ReadStateResponse
 }
 
-public extension ChahuaAPIClient {
-    func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws -> MessageResponse {
+extension ChahuaAPIClient {
+    public func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody)
+        async throws -> MessageResponse
+    {
         throw APIError.unavailable
     }
 
-    func listPins(chatID: String) async throws -> ListPinsResponse {
+    public func listPins(chatID: String) async throws -> ListPinsResponse {
         throw APIError.unavailable
     }
 
-    func createPin(chatID: String, messageID: String) async throws -> PinResponse {
+    public func createPin(chatID: String, messageID: String) async throws -> PinResponse {
         throw APIError.unavailable
     }
 
-    func deletePin(chatID: String, pinID: String) async throws {
+    public func deletePin(chatID: String, pinID: String) async throws {
         throw APIError.unavailable
     }
 }

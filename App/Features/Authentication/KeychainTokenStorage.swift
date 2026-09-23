@@ -48,7 +48,8 @@ struct KeychainTokenStorage: SessionTokenStorage {
 
     func saveToken(_ token: String) throws {
         let data = Data(token.utf8)
-        let updateStatus = SecItemUpdate(baseQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        let updateStatus = SecItemUpdate(
+            baseQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if updateStatus == errSecSuccess { return }
         guard updateStatus == errSecItemNotFound else { throw failure("save", updateStatus) }
         var item = baseQuery
@@ -60,7 +61,9 @@ struct KeychainTokenStorage: SessionTokenStorage {
 
     func deleteToken() throws {
         let status = SecItemDelete(baseQuery as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw failure("delete", status) }
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw failure("delete", status)
+        }
     }
 
     private var baseQuery: [String: Any] {

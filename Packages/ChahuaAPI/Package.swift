@@ -9,10 +9,10 @@ let package = Package(
         .macOS(.v13),
     ],
     products: [
-        .library(name: "ChahuaAPI", targets: ["ChahuaAPI"]),
+        .library(name: "ChahuaAPI", targets: ["ChahuaAPI"])
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1"),
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1")
     ],
     targets: [
         .target(name: "ChahuaAPI", dependencies: [.product(name: "GRDB", package: "GRDB.swift")]),

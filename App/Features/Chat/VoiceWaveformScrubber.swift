@@ -33,12 +33,14 @@ struct VoiceWaveformScrubber: View {
                     }
                     .onEnded { value in
                         guard canInteract else { return }
-                        controller.seek(to: seekPosition(x: value.location.x, width: geometry.size.width))
+                        controller.seek(
+                            to: seekPosition(x: value.location.x, width: geometry.size.width))
                     }
-                    .exclusively(before: TapGesture().onEnded {
-                        guard canInteract else { return }
-                        controller.toggle()
-                    })
+                    .exclusively(
+                        before: TapGesture().onEnded {
+                            guard canInteract else { return }
+                            controller.toggle()
+                        })
             )
         }
         .accessibilityElement()
@@ -82,7 +84,9 @@ private struct VoiceWaveformShape: View {
             guard !samples.isEmpty else {
                 // No fabricated peaks while loading or when the source is missing.
                 let baseline = CGRect(x: 0, y: size.height / 2 - 1, width: size.width, height: 2)
-                context.fill(Path(roundedRect: baseline, cornerRadius: 1), with: .color(accent.opacity(0.28)))
+                context.fill(
+                    Path(roundedRect: baseline, cornerRadius: 1), with: .color(accent.opacity(0.28))
+                )
                 return
             }
             // Density follows display width, not the stored envelope's sample
@@ -100,11 +104,15 @@ private struct VoiceWaveformShape: View {
                     peak = max(peak, min(1, max(0, samples[index])))
                 }
                 let height = max(2, CGFloat(peak) * min(waveformHeight, size.height))
-                let rect = CGRect(x: CGFloat(bar) * step, y: (size.height - height) / 2, width: barWidth, height: height)
+                let rect = CGRect(
+                    x: CGFloat(bar) * step, y: (size.height - height) / 2, width: barWidth,
+                    height: height)
                 if Double(bar) / Double(count) < progress {
-                    played.addRoundedRect(in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
+                    played.addRoundedRect(
+                        in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
                 } else {
-                    remaining.addRoundedRect(in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
+                    remaining.addRoundedRect(
+                        in: rect, cornerSize: CGSize(width: barWidth / 2, height: barWidth / 2))
                 }
             }
             context.fill(remaining, with: .color(accent.opacity(0.3)))

@@ -49,10 +49,11 @@ public enum MessagePreviewRenderer {
             }
 
             guard let message = preview.message,
-                  !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return prefix }
 
-            let renderedMessage = singleLine(expandingMentions(in: message, mentions: preview.mentions))
+            let renderedMessage = singleLine(
+                expandingMentions(in: message, mentions: preview.mentions))
             return prefix.isEmpty ? renderedMessage : "\(prefix) \(renderedMessage)"
         }
     }
@@ -78,7 +79,8 @@ public enum MessagePreviewRenderer {
 
     private static func expandingMentions(in text: String, mentions: [MentionInfo]) -> String {
         let source = text as NSString
-        let matches = mentionPattern.matches(in: text, range: NSRange(location: 0, length: source.length))
+        let matches = mentionPattern.matches(
+            in: text, range: NSRange(location: 0, length: source.length))
         guard !matches.isEmpty else { return text }
 
         var names: [Int32: String] = [:]

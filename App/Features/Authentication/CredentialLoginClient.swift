@@ -7,12 +7,14 @@ protocol CredentialLoginProviding: Sendable {
 enum CredentialLoginError: Error, Sendable { case unavailable }
 
 struct PrototypeCredentialLoginClient: CredentialLoginProviding {
-    private static let endpoint = URL(string: "https://chahui.app/main/shireyishunjian-telegram-api/chahua_login.php")!
+    private static let endpoint = URL(
+        string: "https://chahui.app/main/shireyishunjian-telegram-api/chahua_login.php")!
     private let session: URLSession
 
     init(session: URLSession? = nil) {
-        if let session { self.session = session }
-        else {
+        if let session {
+            self.session = session
+        } else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.urlCache = nil
             self.session = URLSession(configuration: configuration)
@@ -29,14 +31,16 @@ struct PrototypeCredentialLoginClient: CredentialLoginProviding {
         do {
             let (data, response) = try await session.data(for: request)
             guard response is HTTPURLResponse else { throw CredentialLoginError.unavailable }
-            let candidate = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let candidate = String(data: data, encoding: .utf8)?.trimmingCharacters(
+                in: .whitespacesAndNewlines)
             return candidate?.isEmpty == false ? candidate : nil
-        } catch is CancellationError { throw CancellationError() }
-        catch let error as URLError where error.code == .cancelled { throw CancellationError() }
-        catch { throw CredentialLoginError.unavailable }
+        } catch is CancellationError { throw CancellationError() } catch let error as URLError
+            where error.code == .cancelled
+        { throw CancellationError() } catch { throw CredentialLoginError.unavailable }
     }
 
     private func encode(_ value: String) -> String {
-        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? ""
+        value.addingPercentEncoding(
+            withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? ""
     }
 }

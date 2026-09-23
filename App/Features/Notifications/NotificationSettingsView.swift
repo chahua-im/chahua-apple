@@ -40,7 +40,9 @@ struct NotificationSettingsView: View {
                         Button("Enable notifications") {
                             Task { await notifications.requestAuthorization() }
                         }
-                        .disabled(notifications.isRegistering || notifications.isUnregistering || isSigningOut)
+                        .disabled(
+                            notifications.isRegistering || notifications.isUnregistering
+                                || isSigningOut)
                     }
                     Button("Open System Settings") {
                         notifications.openSystemSettings()
@@ -52,7 +54,9 @@ struct NotificationSettingsView: View {
                     } label: {
                         Label("Refresh chats", systemImage: "arrow.clockwise")
                     }
-                    .disabled(chatStore.state.isRefreshingChats || chatStore.state.isRefreshingThreads || isSigningOut)
+                    .disabled(
+                        chatStore.state.isRefreshingChats || chatStore.state.isRefreshingThreads
+                            || isSigningOut)
                     Button("Sign out", role: .destructive) {
                         onSignOut()
                     }
@@ -82,7 +86,7 @@ struct NotificationSettingsView: View {
         case .authorized: String(localized: "Allowed")
         case .provisional: String(localized: "Quiet delivery")
         #if os(iOS)
-        case .ephemeral: String(localized: "Temporary access")
+            case .ephemeral: String(localized: "Temporary access")
         #endif
         @unknown default: String(localized: "Unknown")
         }
@@ -90,7 +94,9 @@ struct NotificationSettingsView: View {
 
     private var registrationDescription: String {
         if notifications.isUnregistering { return String(localized: "Unregistering…") }
-        if notifications.notificationsDisabled { return String(localized: "Disabled on this device") }
+        if notifications.notificationsDisabled {
+            return String(localized: "Disabled on this device")
+        }
         if notifications.isRegistering { return String(localized: "Registering…") }
         return notifications.isRegistered
             ? String(localized: "Registered")

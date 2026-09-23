@@ -1,6 +1,6 @@
+import ChahuaAPI
 import Combine
 import Foundation
-import ChahuaAPI
 
 @MainActor
 final class ChatDraftStore: ObservableObject {
@@ -28,13 +28,17 @@ final class ChatDraftStore: ObservableObject {
         let key = snapshot.conversationKey
         let reply = normalizedReply(snapshot.draft.replyToMessage, chatID: snapshot.chatID)
         if unsavedDrafts.contains(key),
-           (drafts[key] != snapshot.draft.text || draftReplies[key] != reply) {
-            draftRevisions[key] = max(draftRevisions[key, default: 0], snapshot.draft.editRevision + 1)
+            drafts[key] != snapshot.draft.text || draftReplies[key] != reply
+        {
+            draftRevisions[key] = max(
+                draftRevisions[key, default: 0], snapshot.draft.editRevision + 1)
         } else if snapshot.draft.editRevision >= draftRevisions[key, default: 0] {
             drafts[key] = snapshot.draft.text
             draftReplies[key] = reply
             draftRevisions[key] = snapshot.draft.editRevision
-            draftUpdatedAt[key] = snapshot.draft.text.isEmpty && snapshot.draft.attachments.isEmpty ? nil : snapshot.draft.updatedAt
+            draftUpdatedAt[key] =
+                snapshot.draft.text.isEmpty && snapshot.draft.attachments.isEmpty
+                ? nil : snapshot.draft.updatedAt
             unsavedDrafts.remove(key)
         }
     }
@@ -61,7 +65,8 @@ final class ChatDraftStore: ObservableObject {
     func redactReplyTargets(_ messageIDs: Set<String>, chatID: String) {
         deletedReplyIDs[chatID, default: []].formUnion(messageIDs)
         for key in draftReplies.keys where key.chatID == chatID {
-            guard let reply = draftReplies[key], !reply.isDeleted, messageIDs.contains(reply.id) else { continue }
+            guard let reply = draftReplies[key], !reply.isDeleted, messageIDs.contains(reply.id)
+            else { continue }
             draftReplies[key] = reply.redactedForDeletion()
             unsavedDrafts.insert(key)
             draftRevisions[key, default: 0] += 1
@@ -78,7 +83,10 @@ final class ChatDraftStore: ObservableObject {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard drafts[key] != text else { return }
         drafts[key] = text
-        draftUpdatedAt[key] = text.isEmpty && outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty ? nil : Date()
+        draftUpdatedAt[key] =
+            text.isEmpty
+                && outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty
+            ? nil : Date()
         unsavedDrafts.insert(key)
         draftRevisions[key, default: 0] += 1
         scheduleDraftSave(key: key)
@@ -122,11 +130,14 @@ final class ChatDraftStore: ObservableObject {
             return
         }
         deferredDraftFlushes.remove(key)
-        guard let text = drafts[key], unsavedDrafts.contains(key), !committingDrafts.contains(key) else { return }
+        guard let text = drafts[key], unsavedDrafts.contains(key), !committingDrafts.contains(key)
+        else { return }
         let revision = draftRevisions[key, default: 0]
         let requestGeneration = generation
         do {
-            try await outgoingQueue.saveDraft(chatID: chatID, threadID: threadID, text: text, editRevision: revision, updatedAt: Date(), replyToMessage: draftReplies[key])
+            try await outgoingQueue.saveDraft(
+                chatID: chatID, threadID: threadID, text: text, editRevision: revision,
+                updatedAt: Date(), replyToMessage: draftReplies[key])
             guard generation == requestGeneration else { return }
             draftSaveFailed = false
         } catch {
@@ -143,7 +154,9 @@ final class ChatDraftStore: ObservableObject {
             throw AttachmentDraftError.busy
         }
         await flushDraft(chatID: chatID, threadID: threadID)
-        guard !draftSaveFailed, !unsavedDrafts.contains(key) else { throw AttachmentDraftError.notSaved }
+        guard !draftSaveFailed, !unsavedDrafts.contains(key) else {
+            throw AttachmentDraftError.notSaved
+        }
     }
 
     private enum AttachmentDraftError: LocalizedError {
@@ -151,17 +164,25 @@ final class ChatDraftStore: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .busy: "Finish editing this message before changing its attachments."
-            case .notSaved: "Your draft couldn’t be saved. Retry local storage before changing its attachments."
+            case .notSaved:
+                "Your draft couldn’t be saved. Retry local storage before changing its attachments."
             }
         }
     }
 
-    func submitDraft(chatID: String, threadID: String? = nil, text submittedText: String? = nil) async -> Bool {
+    func submitDraft(chatID: String, threadID: String? = nil, text submittedText: String? = nil)
+        async -> Bool
+    {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         // A media caption stays modal-local until this atomic enqueue.
-        let text = (submittedText ?? draftText(chatID: chatID, threadID: threadID)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!text.isEmpty || !outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty), !composingDrafts.contains(key),
-              !committingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
+        let text = (submittedText ?? draftText(chatID: chatID, threadID: threadID))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard
+            !text.isEmpty
+                || !outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty,
+            !composingDrafts.contains(key),
+            !committingDrafts.contains(key), outgoingQueue.storageState == .ready
+        else { return false }
         pendingDraftSaves.removeValue(forKey: key)?.cancel()
         committingDrafts.insert(key)
         let requestGeneration = generation
@@ -172,7 +193,9 @@ final class ChatDraftStore: ObservableObject {
         unsavedDrafts.remove(key)
         defer { if generation == requestGeneration { committingDrafts.remove(key) } }
         do {
-            try await outgoingQueue.enqueueText(chatID: chatID, threadID: threadID, text: text, clearedDraftRevision: revision, replyToMessage: draftReplies[key])
+            try await outgoingQueue.enqueueText(
+                chatID: chatID, threadID: threadID, text: text, clearedDraftRevision: revision,
+                replyToMessage: draftReplies[key])
             guard generation == requestGeneration else { return false }
             if draftRevisions[key] == revision {
                 drafts[key] = ""
@@ -200,17 +223,21 @@ final class ChatDraftStore: ObservableObject {
         try await outgoingQueue.discardDraftAttachments(chatID: chatID, threadID: threadID)
     }
 
-    func submitSticker(_ sticker: MessageStickerResponse, chatID: String, threadID: String? = nil) async throws -> Bool {
+    func submitSticker(_ sticker: MessageStickerResponse, chatID: String, threadID: String? = nil)
+        async throws -> Bool
+    {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let requestGeneration = generation
         let reply = draftReplies[key]
         // This send preserves the composition; autosaving it is best-effort.
         await flushDraft(chatID: chatID, threadID: threadID)
         guard generation == requestGeneration, !committingDrafts.contains(key),
-              !composingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
+            !composingDrafts.contains(key), outgoingQueue.storageState == .ready
+        else { return false }
         committingDrafts.insert(key)
         defer { if generation == requestGeneration { committingDrafts.remove(key) } }
-        try await outgoingQueue.enqueueSticker(chatID: chatID, threadID: threadID, sticker: sticker, replyToMessage: reply)
+        try await outgoingQueue.enqueueSticker(
+            chatID: chatID, threadID: threadID, sticker: sticker, replyToMessage: reply)
         guard generation == requestGeneration else { return false }
         if draftReplies[key]?.id == reply?.id {
             setDraftReply(nil, chatID: chatID, threadID: threadID)
@@ -225,7 +252,8 @@ final class ChatDraftStore: ObservableObject {
         // A voice send does not consume the text/media draft.
         await flushDraft(chatID: chatID, threadID: threadID)
         guard generation == requestGeneration, !committingDrafts.contains(key),
-              !composingDrafts.contains(key), outgoingQueue.storageState == .ready else { return false }
+            !composingDrafts.contains(key), outgoingQueue.storageState == .ready
+        else { return false }
         committingDrafts.insert(key)
         defer {
             if generation == requestGeneration {
@@ -233,7 +261,8 @@ final class ChatDraftStore: ObservableObject {
                 if unsavedDrafts.contains(key) { scheduleDraftSave(key: key) }
             }
         }
-        try await outgoingQueue.enqueueVoice(chatID: chatID, threadID: threadID, fileURL: fileURL, replyToMessage: reply)
+        try await outgoingQueue.enqueueVoice(
+            chatID: chatID, threadID: threadID, fileURL: fileURL, replyToMessage: reply)
         guard generation == requestGeneration else { return false }
         // A voice message has no caption. Text/media entered during recording
         // remains a separate draft, including edits made while enqueue suspends.

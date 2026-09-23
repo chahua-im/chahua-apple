@@ -1,6 +1,7 @@
 import ChahuaAPI
 import Foundation
 import XCTest
+
 @testable import chahua_apple
 
 @MainActor
@@ -16,8 +17,14 @@ final class BubbleMediaLayoutTests: XCTestCase {
     }
 
     func testInvalidGalleryDimensionsUseTheSameFallbackAsMissingDimensions() throws {
-        let missing = [try attachment(id: "a", width: nil, height: 100), try attachment(id: "b", width: 200, height: 100)]
-        let invalid = [try attachment(id: "a", width: -3, height: 100), try attachment(id: "b", width: 200, height: 100)]
+        let missing = [
+            try attachment(id: "a", width: nil, height: 100),
+            try attachment(id: "b", width: 200, height: 100),
+        ]
+        let invalid = [
+            try attachment(id: "a", width: -3, height: 100),
+            try attachment(id: "b", width: 200, height: 100),
+        ]
         let expected = try XCTUnwrap(BubbleMediaLayout.gallery(for: missing, availableWidth: 300))
         let actual = try XCTUnwrap(BubbleMediaLayout.gallery(for: invalid, availableWidth: 300))
         XCTAssertEqual(actual.cells.map(\.frame), expected.cells.map(\.frame))
@@ -30,16 +37,20 @@ final class BubbleMediaLayoutTests: XCTestCase {
         }
         let gallery = try XCTUnwrap(BubbleMediaLayout.gallery(for: images, availableWidth: 300))
         for cell in gallery.cells {
-            XCTAssertTrue(CGRect(origin: .zero, size: gallery.size).insetBy(dx: -0.001, dy: -0.001).contains(cell.frame))
+            XCTAssertTrue(
+                CGRect(origin: .zero, size: gallery.size).insetBy(dx: -0.001, dy: -0.001).contains(
+                    cell.frame))
         }
         XCTAssertLessThanOrEqual(gallery.size.height, 400)
     }
 
     func testGalleryCapacityKeepsOverflowInTheSixthVisibleTile() throws {
         for count in [2, 3, 4, 5, 6, 7, 20] {
-            let images = try (0 ..< count).map { try attachment(id: String($0), width: 100 + $0 * 40, height: 200) }
+            let images = try (0..<count).map {
+                try attachment(id: String($0), width: 100 + $0 * 40, height: 200)
+            }
             let gallery = try XCTUnwrap(BubbleMediaLayout.gallery(for: images, availableWidth: 300))
-            XCTAssertEqual(gallery.cells.map(\.attachment.id), (0 ..< min(count, 6)).map(String.init))
+            XCTAssertEqual(gallery.cells.map(\.attachment.id), (0..<min(count, 6)).map(String.init))
             XCTAssertEqual(gallery.cells.last?.overflowCount, count > 6 ? count - 5 : 0)
             for cell in gallery.cells {
                 XCTAssertGreaterThan(cell.frame.width, 0)
@@ -51,7 +62,12 @@ final class BubbleMediaLayoutTests: XCTestCase {
     }
 
     private func attachment(id: String, width: Int?, height: Int?) throws -> AttachmentResponse {
-        let object: [String: Any] = ["id": id, "url": "https://example.invalid/\(id).png", "kind": "image/png", "size": 1, "fileName": "\(id).png", "width": width as Any? ?? NSNull(), "height": height as Any? ?? NSNull()]
-        return try JSONDecoder().decode(AttachmentResponse.self, from: JSONSerialization.data(withJSONObject: object))
+        let object: [String: Any] = [
+            "id": id, "url": "https://example.invalid/\(id).png", "kind": "image/png", "size": 1,
+            "fileName": "\(id).png", "width": width as Any? ?? NSNull(),
+            "height": height as Any? ?? NSNull(),
+        ]
+        return try JSONDecoder().decode(
+            AttachmentResponse.self, from: JSONSerialization.data(withJSONObject: object))
     }
 }

@@ -76,7 +76,10 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             if let refreshTask { _ = try await refreshTask.value }
             try checkSession(generation)
             guard let token, !token.isEmpty else { throw APIError.invalidToken }
-            guard var components = URLComponents(url: configuration.baseURL, resolvingAgainstBaseURL: false) else {
+            guard
+                var components = URLComponents(
+                    url: configuration.baseURL, resolvingAgainstBaseURL: false)
+            else {
                 throw APIError.invalidBaseURL(configuration.baseURL)
             }
             switch components.scheme?.lowercased() {
@@ -84,7 +87,8 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             case "http": components.scheme = "ws"
             default: throw APIError.invalidBaseURL(configuration.baseURL)
             }
-            components.path = components.path.hasSuffix("/")
+            components.path =
+                components.path.hasSuffix("/")
                 ? components.path + "ws"
                 : components.path + "/ws"
             components.query = nil
@@ -126,16 +130,21 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     }
 
     public func me() async throws -> MeResponse {
-        try await send(HTTPRequestSpec(method: .get, path: ["users", "me"]), decoding: MeResponse.self)
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["users", "me"]), decoding: MeResponse.self)
     }
 
-    func send<Response: Decodable>(_ spec: HTTPRequestSpec, decoding: Response.Type) async throws -> Response {
+    func send<Response: Decodable>(_ spec: HTTPRequestSpec, decoding: Response.Type) async throws
+        -> Response
+    {
         do {
             let generation = sessionGeneration
             let (data, status) = try await perform(spec)
             try checkSession(generation)
-            do { return try JSONCoding.decoder.decode(Response.self, from: data) }
-            catch { throw APIError.decoding(statusCode: status, description: JSONCoding.decodingDescription(error)) }
+            do { return try JSONCoding.decoder.decode(Response.self, from: data) } catch {
+                throw APIError.decoding(
+                    statusCode: status, description: JSONCoding.decodingDescription(error))
+            }
         } catch {
             logFailure(spec, response: String(reflecting: Response.self), error: error)
             throw error
@@ -180,7 +189,9 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             detail = "error type=\(String(reflecting: type(of: error)))"
         }
         // Only the static resource name is public: omit IDs, query values, headers, and bodies.
-        Self.logger.error("Request failed method=\(spec.method.rawValue, privacy: .public) resource=/\(spec.path.first ?? "", privacy: .public) response=\(response, privacy: .public) \(detail, privacy: .public)")
+        Self.logger.error(
+            "Request failed method=\(spec.method.rawValue, privacy: .public) resource=/\(spec.path.first ?? "", privacy: .public) response=\(response, privacy: .public) \(detail, privacy: .public)"
+        )
     }
 
     private func perform(_ spec: HTTPRequestSpec) async throws -> (Data, Int) {
@@ -190,8 +201,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         try checkSession(generation)
         if firstResponse.status == 401, spec.allowsTokenRefresh, initialToken != nil {
             let refreshed: String
-            do { refreshed = try await refreshedToken() }
-            catch {
+            do { refreshed = try await refreshedToken() } catch {
                 try checkSession(generation)
                 throw error
             }
@@ -202,24 +212,28 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
                 token = nil
                 throw APIError.invalidToken
             }
-            guard (200 ..< 300).contains(retryResponse.status) else {
+            guard (200..<300).contains(retryResponse.status) else {
                 throw APIError.http(status: retryResponse.status, body: retryResponse.data)
             }
             return retryResponse
         }
-        guard (200 ..< 300).contains(firstResponse.status) else {
+        guard (200..<300).contains(firstResponse.status) else {
             throw APIError.http(status: firstResponse.status, body: firstResponse.data)
         }
         return firstResponse
     }
 
-    private func execute(_ spec: HTTPRequestSpec, token: String?) async throws -> (data: Data, status: Int) {
+    private func execute(_ spec: HTTPRequestSpec, token: String?) async throws -> (
+        data: Data, status: Int
+    ) {
         let generation = sessionGeneration
         let request = try makeRequest(spec, token: token)
         do {
             let (data, response) = try await session.data(for: request)
             try checkSession(generation)
-            guard let response = response as? HTTPURLResponse else { throw APIError.unexpectedResponse }
+            guard let response = response as? HTTPURLResponse else {
+                throw APIError.unexpectedResponse
+            }
             return (data, response.statusCode)
         } catch {
             try checkSession(generation)
@@ -233,11 +247,15 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     }
 
     private func makeRequest(_ spec: HTTPRequestSpec, token: String?) throws -> URLRequest {
-        guard var components = URLComponents(url: configuration.baseURL, resolvingAgainstBaseURL: false) else {
+        guard
+            var components = URLComponents(
+                url: configuration.baseURL, resolvingAgainstBaseURL: false)
+        else {
             throw APIError.invalidBaseURL(configuration.baseURL)
         }
         let path = try spec.encodedPath()
-        components.percentEncodedPath = components.percentEncodedPath.hasSuffix("/")
+        components.percentEncodedPath =
+            components.percentEncodedPath.hasSuffix("/")
             ? String(components.percentEncodedPath.dropLast()) + path
             : components.percentEncodedPath + path
         components.queryItems = spec.query.isEmpty ? nil : spec.query
@@ -250,8 +268,12 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
 
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let contentType = spec.contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
-        if let userAgent = configuration.userAgent { request.setValue(userAgent, forHTTPHeaderField: "User-Agent") }
+        if let contentType = spec.contentType {
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        }
+        if let userAgent = configuration.userAgent {
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        }
         if let appVersion = configuration.appVersion {
             request.setValue(appVersion, forHTTPHeaderField: "X-App-Version")
         }
@@ -265,13 +287,18 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
 
     private func fetchMe(token: String) async throws -> MeResponse {
         let generation = sessionGeneration
-        let spec = HTTPRequestSpec(method: .get, path: ["users", "me"], requiresAuth: false, allowsTokenRefresh: false)
+        let spec = HTTPRequestSpec(
+            method: .get, path: ["users", "me"], requiresAuth: false, allowsTokenRefresh: false)
         let (data, status) = try await execute(spec, token: token)
         try checkSession(generation)
         if status == 401 { throw APIError.invalidToken }
-        guard (200 ..< 300).contains(status) else { throw APIError.invalidResponse(statusCode: status) }
-        do { return try JSONCoding.decoder.decode(MeResponse.self, from: data) }
-        catch { throw APIError.decoding(statusCode: status, description: JSONCoding.decodingDescription(error)) }
+        guard (200..<300).contains(status) else {
+            throw APIError.invalidResponse(statusCode: status)
+        }
+        do { return try JSONCoding.decoder.decode(MeResponse.self, from: data) } catch {
+            throw APIError.decoding(
+                statusCode: status, description: JSONCoding.decodingDescription(error))
+        }
     }
 
     private func decodeAuthToken(_ data: Data, status: Int) throws -> String {
@@ -280,8 +307,10 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !token.isEmpty else { throw APIError.invalidToken }
             return token
-        } catch let error as APIError { throw error }
-        catch { throw APIError.decoding(statusCode: status, description: JSONCoding.decodingDescription(error)) }
+        } catch let error as APIError { throw error } catch {
+            throw APIError.decoding(
+                statusCode: status, description: JSONCoding.decodingDescription(error))
+        }
     }
 
     private func refreshedToken() async throws -> String {
@@ -312,14 +341,16 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     private func performRefresh(generation: UUID) async throws -> String {
         try checkSession(generation)
         guard let token else { throw APIError.invalidToken }
-        let spec = HTTPRequestSpec(method: .post, path: ["auth", "refresh"], requiresAuth: false, allowsTokenRefresh: false)
+        let spec = HTTPRequestSpec(
+            method: .post, path: ["auth", "refresh"], requiresAuth: false, allowsTokenRefresh: false
+        )
         let response = try await execute(spec, token: token)
         try checkSession(generation)
         if response.status == 401 {
             self.token = nil
             throw APIError.invalidToken
         }
-        guard (200 ..< 300).contains(response.status) else {
+        guard (200..<300).contains(response.status) else {
             throw APIError.invalidResponse(statusCode: response.status)
         }
         let refreshed = try decodeAuthToken(response.data, status: response.status)
