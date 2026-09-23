@@ -176,7 +176,7 @@ struct ChatListView: View {
             )
             .contentShape(Rectangle())
             .overlay {
-                if store.pendingListActions.contains(item.id) {
+                if isBlockingListAction(for: item) {
                     ProgressView()
                         .padding(10)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -192,10 +192,11 @@ struct ChatListView: View {
     private func swipeRow(for item: ConversationListItem) -> some View {
         let leading = leadingSwipeAction(for: item)
         let trailing = trailingSwipeActions(for: item)
-        let isBusy = store.pendingListActions.contains(item.id)
+        let isBusy = store.pendingListAction(for: item.id) != nil
+        let blocksInteraction = isBlockingListAction(for: item)
         return SwipeRow(
             id: item.id, revealedID: $revealedConversationID,
-            leadingAction: leading, trailingActions: trailing, isBusy: isBusy,
+            leadingAction: leading, trailingActions: trailing, isBusy: blocksInteraction,
             onAction: { performSwipeAction($0, on: item) }
         ) {
             selectionButton(for: item)
@@ -213,12 +214,17 @@ struct ChatListView: View {
                     }
                 }
         }
-        .onChange(of: isBusy) { _, busy in
-            if busy, revealedConversationID == item.id { revealedConversationID = nil }
+        .onChange(of: blocksInteraction) { _, blocksInteraction in
+            if blocksInteraction, revealedConversationID == item.id { revealedConversationID = nil }
         }
         .onDisappear {
             if revealedConversationID == item.id { revealedConversationID = nil }
         }
+    }
+
+    private func isBlockingListAction(for item: ConversationListItem) -> Bool {
+        guard let action = store.pendingListAction(for: item.id) else { return false }
+        return action != .markRead && action != .markUnread
     }
 
     private func leadingSwipeAction(for item: ConversationListItem) -> SwipeRowAction? {
@@ -264,7 +270,7 @@ struct ChatListView: View {
     }
 
     private func perform(_ action: ConversationListAction, on item: ConversationListItem) {
-        guard !store.pendingListActions.contains(item.id) else { return }
+        guard store.pendingListAction(for: item.id) == nil else { return }
         revealedConversationID = nil
         Task { await store.performListAction(action, conversation: item.id) }
     }

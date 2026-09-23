@@ -34,7 +34,7 @@ final class ChatStore: ObservableObject {
     @Published var currentUserProfile: MeResponse? {
         didSet { stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? []) }
     }
-    @Published private(set) var pendingListActions = Set<ConversationKey>()
+    @Published private(set) var pendingListActions = [ConversationKey: ConversationListAction]()
     @Published var listActionError: String?
     @Published private(set) var deletingMessageIDs = Set<String>()
     let conversationMessages = ConversationMessageStore()
@@ -431,13 +431,19 @@ final class ChatStore: ObservableObject {
         _ = await (chats, threads)
     }
 
+    func pendingListAction(for conversation: ConversationKey) -> ConversationListAction? {
+        pendingListActions[conversation]
+    }
+
     func performListAction(_ action: ConversationListAction, conversation: ConversationKey) async {
-        guard !pendingListActions.contains(conversation) else { return }
+        guard pendingListActions[conversation] == nil else { return }
         let requestGeneration = generation
-        pendingListActions.insert(conversation)
+        pendingListActions[conversation] = action
         listActionError = nil
         defer {
-            if generation == requestGeneration { pendingListActions.remove(conversation) }
+            if generation == requestGeneration {
+                pendingListActions.removeValue(forKey: conversation)
+            }
         }
         do {
             try await serializeGroupMutation(chatID: conversation.chatID) {
