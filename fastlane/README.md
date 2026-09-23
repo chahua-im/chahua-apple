@@ -13,6 +13,17 @@ For _fastlane_ installation instructions, see [Installing _fastlane_](https://do
 
 # Available Actions
 
+### ci_artifacts
+
+```sh
+[bundle exec] fastlane ci_artifacts
+```
+
+Build the checked commit's App Store IPA and notarized Developer ID app ZIP
+
+----
+
+
 ## iOS
 
 ### ios sync_development_signing

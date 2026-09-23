@@ -1,0 +1,110 @@
+// Standalone Pipeline from SCM, main branch, script path ci/Jenkinsfile.apple-build.
+// Job: chahua/chahua-apple-build. Only the multibranch main checks job may trigger it.
+// macos-signing must be a dedicated trusted macOS agent/user, never used for PR checks.
+// Install the repository Ruby/Bundler, Xcode, both SDKs and universal native dependencies.
+// Credentials: github-app; apple-match-ssh (SSH key); apple-match-password (secret text);
+// asc-api-key (secret .p8 file), asc-key-id and asc-issuer-id (secret text, team API key).
+// Preload github.com known_hosts. Match assets must already exist (read-only CI).
+// Plugins: Git, Credentials Binding, SSH Agent, Copy Artifact, Pipeline.
+// CFBundleVersion uses BUILD_NUMBER directly; initialize/preserve the job counter accordingly.
+pipeline {
+  agent none
+
+  options {
+    skipDefaultCheckout(true)
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '90', artifactNumToKeepStr: '90'))
+    copyArtifactPermission('chahua/deploy/apple-appstore-publish')
+    timestamps()
+  }
+
+  parameters {
+    string(name: 'GIT_COMMIT_SHA', defaultValue: '', description: 'Exact commit that passed main checks; supplied by the upstream job.')
+  }
+
+  stages {
+    stage('Validate Input') {
+      steps {
+        script {
+          if (!(params.GIT_COMMIT_SHA ==~ /[0-9a-f]{40}/)) {
+            error('GIT_COMMIT_SHA must be a full commit SHA; no branch fallback.')
+          }
+          def causes = currentBuild.getBuildCauses('hudson.model.Cause$UpstreamCause')
+          if (!causes.any { it.upstreamProject == 'chahua/chahua-apple/main' }) {
+            error('Only chahua/chahua-apple/main may trigger a signed artifact build.')
+          }
+        }
+      }
+    }
+
+    stage('Build Apple Artifacts') {
+      agent { label 'macos-signing' }
+      options { timeout(time: 120, unit: 'MINUTES') }
+      environment {
+        CI = 'true'
+        FASTLANE_SKIP_UPDATE_CHECK = 'true'
+        FASTLANE_OPT_OUT_USAGE = 'true'
+        BUNDLE_FROZEN = 'true'
+      }
+      stages {
+        stage('Checkout') {
+          steps {
+            deleteDir()
+            checkout([
+              $class: 'GitSCM',
+              branches: [[name: params.GIT_COMMIT_SHA]],
+              userRemoteConfigs: [[
+                credentialsId: 'github-app',
+                refspec: '+refs/heads/main:refs/remotes/origin/main',
+                url: 'https://github.com/chahua-im/chahua-apple.git'
+              ]]
+            ])
+            sh '''#!/bin/bash
+set -euo pipefail
+[[ "$(git rev-parse HEAD)" == "$GIT_COMMIT_SHA" ]]
+git merge-base --is-ancestor HEAD origin/main
+bundle install
+'''
+          }
+        }
+
+        stage('Sign and Package') {
+          steps {
+            sshagent(credentials: ['apple-match-ssh']) {
+              withCredentials([
+                string(credentialsId: 'apple-match-password', variable: 'MATCH_PASSWORD'),
+                file(credentialsId: 'asc-api-key', variable: 'ASC_KEY_FILE'),
+                string(credentialsId: 'asc-key-id', variable: 'ASC_KEY_ID'),
+                string(credentialsId: 'asc-issuer-id', variable: 'ASC_ISSUER_ID')
+              ]) {
+                sh 'bundle exec fastlane ci_artifacts'
+              }
+            }
+          }
+        }
+
+        stage('Archive') {
+          steps {
+            archiveArtifacts artifacts: 'build/artifacts/*', fingerprint: true, onlyIfSuccessful: true
+          }
+        }
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'build/logs/*.log', allowEmptyArchive: true
+        }
+        cleanup {
+          // Fastlane also cleans up on errors; this covers interruption of the Ruby process.
+          sh '''#!/bin/bash
+set -euo pipefail
+keychain="$HOME/Library/Keychains/chahua-ci-${BUILD_NUMBER}-db"
+if [[ -f "$keychain" ]]; then
+  security delete-keychain "$keychain"
+fi
+'''
+          deleteDir()
+        }
+      }
+    }
+  }
+}

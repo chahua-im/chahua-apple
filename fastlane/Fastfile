@@ -83,3 +83,83 @@ platform :mac do
     )
   end
 end
+
+# Jenkins runs this only on the isolated macos-signing agent. Match remains read-only.
+desc("Build the checked commit's App Store IPA and notarized Developer ID app ZIP")
+lane :ci_artifacts do
+  require "json"
+  require "digest"
+
+  root = File.expand_path("..", __dir__)
+  output = File.join(root, "build", "artifacts")
+  number = ENV.fetch("BUILD_NUMBER")
+  UI.user_error!("BUILD_NUMBER must be a positive integer") unless number.match?(/\A[1-9]\d*\z/)
+  version = number
+  keychain = "chahua-ci-#{number}"
+  FileUtils.mkdir_p(output)
+  begin
+    setup_ci(force: true, keychain_name: keychain, set_default_keychain: false, timeout: 7200)
+    sync_match(platform: "ios", type: "appstore")
+    build_app(
+      project: File.join(root, "chahua-apple.xcodeproj"),
+      scheme: "chahua-apple",
+      configuration: "Release",
+      destination: "generic/platform=iOS",
+      archive_path: File.join(root, "build", "ios.xcarchive"),
+      derived_data_path: File.join(root, "build", "DerivedData-ios"),
+      output_directory: output,
+      output_name: "Chahua.ipa",
+      export_method: "app-store",
+      export_options: {
+        manageAppVersionAndBuildNumber: false,
+        signingStyle: "manual",
+        teamID: "9422PL3GFR",
+        provisioningProfiles: { "app.chahua.chat" => "match AppStore app.chahua.chat" }
+      },
+      xcargs: "CURRENT_PROJECT_VERSION=#{version} CODE_SIGN_IDENTITY='iPhone Distribution' " \
+              "PROVISIONING_PROFILE_SPECIFIER='match AppStore app.chahua.chat'",
+      buildlog_path: File.join(root, "build", "logs"),
+      xcodebuild_formatter: ""
+    )
+
+    sync_match(platform: "macos", type: "developer_id")
+    app = build_mac_app(
+      project: File.join(root, "chahua-apple.xcodeproj"),
+      scheme: "chahua-apple",
+      configuration: "Release",
+      destination: "generic/platform=macOS",
+      archive_path: File.join(root, "build", "macos.xcarchive"),
+      derived_data_path: File.join(root, "build", "DerivedData-macos"),
+      output_directory: File.join(root, "build", "macos"),
+      output_name: "Chahua",
+      skip_package_pkg: true,
+      xcargs: "CURRENT_PROJECT_VERSION=#{version} ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO " \
+              "CODE_SIGN_IDENTITY='Developer ID Application' " \
+              "PROVISIONING_PROFILE_SPECIFIER='match Direct app.chahua.chat macos' " \
+              "OTHER_CODE_SIGN_FLAGS='--timestamp' ENABLE_HARDENED_RUNTIME=YES",
+      buildlog_path: File.join(root, "build", "logs"),
+      xcodebuild_formatter: ""
+    )
+    zip = File.join(output, "Chahua-macOS.zip")
+    sh("codesign", "--verify", "--deep", "--strict", app)
+    sh("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zip)
+    sh("xcrun", "notarytool", "submit", zip,
+       "--key", ENV.fetch("ASC_KEY_FILE"), "--key-id", ENV.fetch("ASC_KEY_ID"),
+       "--issuer", ENV.fetch("ASC_ISSUER_ID"), "--wait", "--timeout", "30m")
+    sh("xcrun", "stapler", "staple", app)
+    sh("xcrun", "stapler", "validate", app)
+    FileUtils.rm_f(zip)
+    sh("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zip)
+
+    artifacts = ["Chahua.ipa", "Chahua-macOS.zip"]
+    File.write(File.join(output, "apple-artifact-metadata.json"), JSON.pretty_generate(
+      buildNumber: number,
+      bundleVersion: version,
+      commitSha: ENV.fetch("GIT_COMMIT_SHA"),
+      artifacts: artifacts.to_h { |name| [name, Digest::SHA256.file(File.join(output, name)).hexdigest] }
+    ))
+  ensure
+    path = File.expand_path("~/Library/Keychains/#{keychain}-db")
+    delete_keychain(name: keychain) if File.exist?(path)
+  end
+end
