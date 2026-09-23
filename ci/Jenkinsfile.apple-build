@@ -12,7 +12,7 @@ pipeline {
     skipDefaultCheckout(true)
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '90', artifactNumToKeepStr: '90'))
-    copyArtifactPermission('chahua/deploy/apple-appstore-publish,chahua/deploy/apple-macos-notarize')
+    copyArtifactPermission('chahua/deploy/ios-appstore-publish,chahua/deploy/macos-notarize')
   }
 
   parameters {
