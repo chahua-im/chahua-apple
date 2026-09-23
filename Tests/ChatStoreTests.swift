@@ -549,12 +549,9 @@ final class ChatStoreTests: XCTestCase {
 
         let deleted = await store.deleteMessage(message)
         XCTAssertTrue(deleted)
-        let redacted = model.rows.compactMap { row -> MessageResponse? in
-            guard case .message(let row) = row else { return nil }
-            return row.entry.remoteMessage
-        }.first
-        XCTAssertEqual(redacted?.isDeleted, true)
-        XCTAssertNil(redacted?.message)
+        XCTAssertTrue(
+            model.rows.isEmpty,
+            "A successfully deleted message leaves neither a bubble nor its date separator")
         XCTAssertEqual(
             store.drafts.draftReply(chatID: "chat"), message.replyPreview.redactedForDeletion())
         XCTAssertEqual(

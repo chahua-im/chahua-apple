@@ -57,20 +57,26 @@
                 let row = try XCTUnwrap(ancestor as? TimelineRowView)
                 let action = try XCTUnwrap(row.accessibilityCustomActions()?.first)
                 XCTAssertTrue(try XCTUnwrap(action.handler)())
-                try await Task.sleep(for: .milliseconds(600))
-                frameView.layoutSubtreeIfNeeded()
-                let visibleText = textViews(in: frameView)
+                let copyLabel = MessageMenuAction.copy.label(hasAttachments: false)
+                let menuDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+                var copyCandidate: NSButton?
+                while copyCandidate == nil, ContinuousClock.now < menuDeadline {
+                    frameView.layoutSubtreeIfNeeded()
+                    copyCandidate = buttons(in: frameView).first {
+                        $0.accessibilityLabel() == copyLabel
+                    }
+                    if copyCandidate == nil { try await Task.sleep(for: .milliseconds(20)) }
+                }
+                let copyAction = try XCTUnwrap(
+                    copyCandidate,
+                    "Missing Copy action: outgoing=\(outgoing), dark=\(dark), width=\(width)")
                 XCTAssertEqual(
-                    visibleText.count, 1, "Desktop menus must not duplicate the message.")
+                    textViews(in: frameView).count, 1,
+                    "Desktop menus must not duplicate the message.")
                 XCTAssertEqual(
                     original.convert(original.bounds, to: frameView), originalFrame,
                     "Opening the menu must not move or resize the message.")
-                let copyButton = try XCTUnwrap(
-                    buttons(in: frameView).first {
-                        $0.accessibilityLabel()
-                            == MessageMenuAction.copy.label(hasAttachments: false)
-                    })
-                XCTAssertTrue(copyButton.isEnabled)
+                XCTAssertTrue(copyAction.isEnabled)
                 let bitmap = try XCTUnwrap(
                     frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds))
                 frameView.cacheDisplay(in: frameView.bounds, to: bitmap)
@@ -97,12 +103,17 @@
                     NSApp.postEvent(click, atStart: false)
                 }
                 let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-                while copyButton.window != nil, ContinuousClock.now < deadline {
+                while buttons(in: frameView).contains(where: {
+                    $0.accessibilityLabel() == copyLabel
+                }), ContinuousClock.now < deadline {
                     try await Task.sleep(for: .milliseconds(20))
                 }
                 XCTAssertTrue(
                     window.isVisible, "The outside click must not activate the window control.")
-                XCTAssertNil(copyButton.window, "Clicking title-bar chrome must dismiss the menu.")
+                XCTAssertFalse(
+                    buttons(in: frameView).contains {
+                        $0.accessibilityLabel() == copyLabel
+                    }, "Clicking title-bar chrome must dismiss the menu.")
             }
         }
 

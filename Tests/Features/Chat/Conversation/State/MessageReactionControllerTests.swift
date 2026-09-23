@@ -144,6 +144,7 @@ final class MessageReactionControllerTests: XCTestCase {
         let stale = try message(reactions: [["emoji": "👍", "count": 1, "reactedByMe": true]])
         let (controller, api, store) = makeController()
         let timeline = try await timeline(message: original, store: store)
+        XCTAssertEqual(visibleMessage(timeline)?.id, original.id)
         let operation = Task {
             await controller.toggle(message: original, emoji: "👍", currentUserID: 1)
         }
@@ -156,8 +157,9 @@ final class MessageReactionControllerTests: XCTestCase {
         await api.finishRead(2, with: .success(stale))
         await operation.value
 
-        XCTAssertEqual(visibleMessage(timeline)?.isDeleted, true)
-        XCTAssertEqual(visibleMessage(timeline)?.reactions, [])
+        XCTAssertTrue(
+            timeline.rows.isEmpty,
+            "The late reaction response must not restore a deleted message or its date separator")
     }
 
     func testFiveOwnedReactionsBlocksAdditionButAllowsRemoval() async throws {
