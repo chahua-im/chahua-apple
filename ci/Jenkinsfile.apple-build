@@ -1,6 +1,5 @@
 // Standalone Pipeline from SCM, main branch, script path ci/Jenkinsfile.apple-build.
 // Job: chahua/chahua-apple-build. Empty GIT_COMMIT_SHA builds origin/main tip; otherwise a pinned SHA.
-// macos-signing must be a dedicated trusted macOS agent/user, never used for PR checks.
 // Install rbenv/ruby-build, Xcode, both SDKs and native build dependencies on the agent.
 // Credentials: github-app; apple-match-ssh (SSH key); apple-match-password (secret text);
 // asc-api-key (secret .p8 file), asc-key-id and asc-issuer-id (secret text, team API key).
@@ -8,7 +7,7 @@
 // Plugins: Git, Credentials Binding, SSH Agent, Copy Artifact, Lockable Resources, Pipeline.
 // CFBundleVersion uses BUILD_NUMBER directly; initialize/preserve the job counter accordingly.
 pipeline {
-  agent none
+  agent { label 'macos' }
 
   options {
     skipDefaultCheckout(true)
@@ -34,7 +33,6 @@ pipeline {
     }
 
     stage('Build Apple Artifacts') {
-      agent { label 'macos-signing' }
       options { timeout(time: 120, unit: 'MINUTES') }
       environment {
         CI = 'true'
