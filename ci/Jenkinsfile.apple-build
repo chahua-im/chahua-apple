@@ -15,7 +15,6 @@ pipeline {
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '90', artifactNumToKeepStr: '90'))
     copyArtifactPermission('chahua/deploy/apple-appstore-publish')
-    timestamps()
   }
 
   parameters {
