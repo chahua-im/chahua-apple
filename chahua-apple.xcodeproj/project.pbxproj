@@ -460,7 +460,7 @@
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Mac Developer";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 201;
 				DEAD_CODE_STRIPPING = YES;
@@ -492,7 +492,7 @@
 				PRODUCT_NAME = Chahua;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "match AppStore app.chahua.chat";
-				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "match Development app.chahua.chat macos";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "match Direct app.chahua.chat macos";
 				REGISTER_APP_GROUPS = YES;
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;

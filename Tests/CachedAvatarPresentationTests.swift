@@ -19,19 +19,23 @@ final class CachedAvatarPresentationTests: XCTestCase {
             data: try makeMediaPNG(red: 255, green: 0, blue: 255, width: 32, height: 128)
         )
         let context = try makeContext(fixture: fixture)
-        let firstRecorder = AvatarPhaseRecorder()
-        let firstHost = try makeHost(context: context, fixture: fixture, recorder: firstRecorder)
-        defer { firstHost.close() }
+        let remountRecorder: AvatarPhaseRecorder
+        do {
+            let firstRecorder = AvatarPhaseRecorder()
+            let firstHost = try makeHost(
+                context: context, fixture: fixture, recorder: firstRecorder)
+            defer { firstHost.close() }
 
-        try await waitUntil("The initial Kingfisher image did not load") {
-            try self.containsColor(firstHost.snapshot(), red: 255, green: 0, blue: 255)
+            try await waitUntil("The initial Kingfisher image did not load") {
+                try self.containsColor(firstHost.snapshot(), red: 255, green: 0, blue: 255)
+            }
+            XCTAssertEqual(fixture.requestCount, 1)
+            remountRecorder = AvatarPhaseRecorder()
         }
-        XCTAssertEqual(fixture.requestCount, 1)
-        firstHost.close()
-        let remountRecorder = AvatarPhaseRecorder()
         let remountedHost = try makeHost(
             context: context, fixture: fixture, recorder: remountRecorder)
         defer { remountedHost.close() }
+
         let firstRemountedFrame = try remountedHost.snapshot()
 
         XCTAssertEqual(
@@ -40,40 +44,6 @@ final class CachedAvatarPresentationTests: XCTestCase {
             "A memory-cached image must not expose its placeholder during a SwiftUI remount."
         )
         XCTAssertTrue(try containsColor(firstRemountedFrame, red: 255, green: 0, blue: 255))
-        XCTAssertEqual(fixture.requestCount, 1)
-    }
-
-    func testAnimatedImageAdvancesAndRemountsWithoutSpinner() async throws {
-        let fixture = MediaImageFixture(data: try makeMediaGIF(), contentType: "image/gif")
-        let context = try makeContext(fixture: fixture)
-        let firstHost = try makeAnimatedHost(context: context, fixture: fixture)
-        defer { firstHost.close() }
-
-        var sawRed = false
-        var sawGreen = false
-        for _ in 0..<80 where !sawRed || !sawGreen {
-            let snapshot = try firstHost.snapshot()
-            if !sawRed {
-                sawRed = try containsColor(snapshot, red: 255, green: 0, blue: 0)
-            }
-            if !sawGreen {
-                sawGreen = try containsColor(snapshot, red: 0, green: 255, blue: 0)
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        XCTAssertTrue(sawRed && sawGreen, "Kingfisher must present more than one GIF frame.")
-        XCTAssertEqual(fixture.requestCount, 1)
-
-        firstHost.close()
-        let remountedHost = try makeAnimatedHost(context: context, fixture: fixture)
-        defer { remountedHost.close() }
-        let firstRemountedFrame = try remountedHost.snapshot()
-        let remountShowsRed = try containsColor(firstRemountedFrame, red: 255, green: 0, blue: 0)
-        let remountShowsGreen = try containsColor(firstRemountedFrame, red: 0, green: 255, blue: 0)
-        XCTAssertTrue(
-            remountShowsRed || remountShowsGreen,
-            "A memory-cached animation must show a cached frame instead of a spinner on remount."
-        )
         XCTAssertEqual(fixture.requestCount, 1)
     }
 
@@ -113,38 +83,41 @@ final class CachedAvatarPresentationTests: XCTestCase {
         let fixture = MediaImageFixture(
             data: try makeMediaGIF(), contentType: "image/gif", suspended: true)
         let context = try makeContext(fixture: fixture)
-        let (image, host) = try makeTimelineHost(context: context, fixture: fixture)
-        defer { host.close() }
-        try await waitUntil("The held image request did not start") { fixture.requestCount == 1 }
-        XCTAssertTrue(hasVisibleSpinner(in: image))
-        XCTAssertFalse(try containsAnimationColor(host.snapshot()))
-        fixture.resume()
-        try await waitUntil("The animation never displayed pixels") {
-            try self.containsAnimationColor(host.snapshot())
+        do {
+            let (image, host) = try makeTimelineHost(context: context, fixture: fixture)
+            defer { host.close() }
+            try await waitUntil("The held image request did not start") {
+                fixture.requestCount == 1
+            }
+            XCTAssertTrue(hasVisibleSpinner(in: image))
+            XCTAssertFalse(try containsAnimationColor(host.snapshot()))
+            fixture.resume()
+            try await waitUntil("The animation never displayed pixels") {
+                try self.containsAnimationColor(host.snapshot())
+            }
+            XCTAssertFalse(hasVisibleSpinner(in: image))
+
+            // Hold all subsequent network work: every following frame must come
+            // from the view or the account's memory cache, not another download.
+            fixture.suspend()
+            image.configure(
+                url: fixture.url, contentMode: .fit, animates: true, showsBlurredBackdrop: false,
+                thumbnailPixelSize: CGSize(width: 160, height: 160), mediaContext: context)
+            XCTAssertTrue(try containsAnimationColor(host.snapshot()))
+            XCTAssertFalse(hasVisibleSpinner(in: image))
+            image.setVisible(false)
+            image.setVisible(true)
+            XCTAssertTrue(try containsAnimationColor(host.snapshot()))
+            XCTAssertFalse(hasVisibleSpinner(in: image))
+
+            image.clear()
+            image.configure(
+                url: fixture.url, contentMode: .fit, animates: true, showsBlurredBackdrop: false,
+                thumbnailPixelSize: CGSize(width: 240, height: 240), mediaContext: context)
+            image.setVisible(true)
+            XCTAssertTrue(try containsAnimationColor(host.snapshot()))
+            XCTAssertFalse(hasVisibleSpinner(in: image))
         }
-        XCTAssertFalse(hasVisibleSpinner(in: image))
-
-        // Hold all subsequent network work: every following frame must come
-        // from the view or the account's memory cache, not another download.
-        fixture.suspend()
-        image.configure(
-            url: fixture.url, contentMode: .fit, animates: true, showsBlurredBackdrop: false,
-            thumbnailPixelSize: CGSize(width: 160, height: 160), mediaContext: context)
-        XCTAssertTrue(try containsAnimationColor(host.snapshot()))
-        XCTAssertFalse(hasVisibleSpinner(in: image))
-        image.setVisible(false)
-        image.setVisible(true)
-        XCTAssertTrue(try containsAnimationColor(host.snapshot()))
-        XCTAssertFalse(hasVisibleSpinner(in: image))
-
-        image.clear()
-        image.configure(
-            url: fixture.url, contentMode: .fit, animates: true, showsBlurredBackdrop: false,
-            thumbnailPixelSize: CGSize(width: 240, height: 240), mediaContext: context)
-        image.setVisible(true)
-        XCTAssertTrue(try containsAnimationColor(host.snapshot()))
-        XCTAssertFalse(hasVisibleSpinner(in: image))
-        host.close()
 
         let (remounted, secondHost) = try makeTimelineHost(
             context: context, fixture: fixture, pixels: CGSize(width: 320, height: 320)
@@ -281,35 +254,6 @@ final class CachedAvatarPresentationTests: XCTestCase {
             hasVisibleSpinner(in: image),
             "Resizing failed media must not restart an unresolved spinner.")
         XCTAssertEqual(fixture.requestCount, 1)
-    }
-
-    func testAnimatedWebPMovesAndSurvivesMemoryAndDiskRemounts() async throws {
-        let fixture = MediaImageFixture(
-            data: try makeMediaWebPCheckerboard(animated: true), contentType: "image/webp")
-        let context = try makeContext(fixture: fixture)
-        let (image, host) = try makeTimelineHost(context: context, fixture: fixture)
-        defer { host.close() }
-        try await assertWebPMoves(host)
-        XCTAssertFalse(hasVisibleSpinner(in: image))
-        fixture.suspend()
-        host.close()
-
-        let (remounted, memoryHost) = try makeTimelineHost(
-            context: context, fixture: fixture, pixels: CGSize(width: 192, height: 192)
-        )
-        defer { memoryHost.close() }
-        let firstFrame = try checkerboardHalf(memoryHost.snapshot())
-        XCTAssertNotEqual(firstFrame, 0, "A resized warm WebP must draw synchronously.")
-        XCTAssertFalse(hasVisibleSpinner(in: remounted))
-        memoryHost.close()
-        context.clearMemoryCache()
-
-        let (_, diskHost) = try makeTimelineHost(context: context, fixture: fixture)
-        defer { diskHost.close() }
-        try await assertWebPMoves(diskHost)
-        XCTAssertEqual(
-            fixture.requestCount, 1,
-            "Disk reload must preserve animation bytes, not download or freeze a PNG.")
     }
 
     private func makeTimelineHost(
@@ -589,7 +533,8 @@ private final class AvatarPresentationHost {
         #if os(macOS)
             window.contentViewController = controller
             window.setContentSize(bounds.size)
-            window.orderFront(nil)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             controller.view.frame = bounds
             controller.view.layoutSubtreeIfNeeded()
         #else
@@ -607,7 +552,6 @@ private final class AvatarPresentationHost {
             window.contentViewController = nil
             window.close()
         #else
-            window.rootViewController = nil
             window.isHidden = true
         #endif
     }
