@@ -139,8 +139,7 @@ final class AuthSessionModel: ObservableObject {
             logger.error(
                 "\(operation, privacy: .public) failed with HTTP status \(statusCode, privacy: .public)"
             )
-        case KeychainTokenStorageError.operationFailed(
-            operation: let storageOperation, status: let status):
+        case KeychainTokenStorageError.operationFailed(let storageOperation, let status):
             logger.error(
                 "\(operation, privacy: .public) failed while \(storageOperation, privacy: .public) token storage: \(status, privacy: .public)"
             )

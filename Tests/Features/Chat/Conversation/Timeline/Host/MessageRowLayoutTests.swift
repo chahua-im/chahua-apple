@@ -374,7 +374,7 @@
                 row.subviews.contains { $0 is NSButton && !$0.isHidden }
             }
             scroll.contentView.scroll(to: .zero)
-            rows.forEach { $0.setVisible(true) }
+            for row in rows { row.setVisible(true) }
             rows[0].mouseEntered(with: entered)
             XCTAssertEqual(rows.map(showsReply), [true, false])
 
@@ -382,7 +382,7 @@
             // Both rows remain visible; neither reuse nor a mouseExited event clears
             // the old row. This is the viewport refresh used by the native table.
             XCTAssertTrue(rows.allSatisfy { !$0.visibleRect.isEmpty })
-            rows.forEach { $0.setVisible(true) }
+            for row in rows { row.setVisible(true) }
             XCTAssertEqual(rows.map(showsReply), [false, true])
             rows[0].mouseEntered(with: entered)
             XCTAssertEqual(
@@ -390,10 +390,10 @@
                 "A delayed enter event must not resurrect the old row's hover.")
 
             scroll.contentView.scroll(to: .zero)
-            rows.forEach { $0.setVisible(true) }
+            for row in rows { row.setVisible(true) }
             XCTAssertEqual(rows.map(showsReply), [true, false])
             window.active = false
-            rows.forEach { $0.setVisible(true) }
+            for row in rows { row.setVisible(true) }
             XCTAssertEqual(rows.map(showsReply), [false, false])
         }
 

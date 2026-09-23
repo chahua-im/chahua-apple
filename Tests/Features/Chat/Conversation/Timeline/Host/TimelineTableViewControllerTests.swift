@@ -308,20 +308,21 @@
                             "height": 300,
                         ] as [String: Any]
                     }
+                },
+                check: { cell, textView, bitmap in
+                    self.assertGlyphsVisible(textView, in: cell)
+                    let centralWidth = max(0, cell.bounds.width - 24 - 2 * (36 + 8))
+                    XCTAssertLessThanOrEqual(
+                        self.backgroundWidth(in: bitmap, outgoing: false), centralWidth + 1)
+                    let textFrame = cell.convert(textView.bounds, from: textView)
+                    let textBottom =
+                        cell.isFlipped ? textFrame.maxY : cell.bounds.height - textFrame.minY
+                    XCTAssertGreaterThanOrEqual(
+                        cell.bounds.height - textBottom, 8,
+                        "Caption metadata, thread and bottom padding must remain below the final text line."
+                    )
                 }
-            ) { cell, textView, bitmap in
-                self.assertGlyphsVisible(textView, in: cell)
-                let centralWidth = max(0, cell.bounds.width - 24 - 2 * (36 + 8))
-                XCTAssertLessThanOrEqual(
-                    self.backgroundWidth(in: bitmap, outgoing: false), centralWidth + 1)
-                let textFrame = cell.convert(textView.bounds, from: textView)
-                let textBottom =
-                    cell.isFlipped ? textFrame.maxY : cell.bounds.height - textFrame.minY
-                XCTAssertGreaterThanOrEqual(
-                    cell.bounds.height - textBottom, 8,
-                    "Caption metadata, thread and bottom padding must remain below the final text line."
-                )
-            }
+            )
         }
 
         func testIncomingMetadataRemainsReadableInDarkAppearance() async throws {

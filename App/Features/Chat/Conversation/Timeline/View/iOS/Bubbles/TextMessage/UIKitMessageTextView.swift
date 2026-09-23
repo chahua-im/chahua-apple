@@ -3,7 +3,7 @@
 
     extension MessageTextContent.Coordinator: UITextViewDelegate {
         func textView(
-            _ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange,
+            _ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange,
             interaction: UITextItemInteraction
         ) -> Bool {
             if interaction == .invokeDefaultAction {

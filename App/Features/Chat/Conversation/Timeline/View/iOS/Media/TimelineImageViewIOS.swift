@@ -307,28 +307,30 @@
                         }
                         self.imageTask = task
                     }
+                },
+                completionHandler: { [weak self] result in
+                    MainActor.assumeIsolated {
+                        guard let self, self.generation == current, self.requestKey == key else {
+                            return
+                        }
+                        self.imageTask = nil
+                        self.loading = false
+                        self.requestFinished = true
+                        switch result {
+                        case .success(let value):
+                            self.failed = !self.installImage(value.image, animates: key.animates)
+                        case .failure:
+                            self.failed = true
+                        }
+                        if self.failed && self.decodedCGImage == nil {
+                            self.onLoadFailure?(
+                                String(localized: "Image download or decoding failed."))
+                        }
+                        self.setNeedsLayout()
+                        self.refreshVisibility()
+                    }
                 }
-            ) { [weak self] result in
-                MainActor.assumeIsolated {
-                    guard let self, self.generation == current, self.requestKey == key else {
-                        return
-                    }
-                    self.imageTask = nil
-                    self.loading = false
-                    self.requestFinished = true
-                    switch result {
-                    case .success(let value):
-                        self.failed = !self.installImage(value.image, animates: key.animates)
-                    case .failure:
-                        self.failed = true
-                    }
-                    if self.failed && self.decodedCGImage == nil {
-                        self.onLoadFailure?(String(localized: "Image download or decoding failed."))
-                    }
-                    self.setNeedsLayout()
-                    self.refreshVisibility()
-                }
-            }
+            )
             if generation == current, requestKey == key, loading { imageTask = task }
         }
 

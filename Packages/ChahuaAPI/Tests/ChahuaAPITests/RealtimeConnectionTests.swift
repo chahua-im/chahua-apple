@@ -313,7 +313,7 @@ private actor RealtimeLoopbackServer {
     func stop() {
         releaseRefresh()
         listener.cancel()
-        connections.forEach { $0.cancel() }
+        for connection in connections { connection.cancel() }
         connections.removeAll()
     }
 
