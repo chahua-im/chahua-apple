@@ -26,6 +26,12 @@ pipeline {
       }
     }
 
+    stage('Style Check') {
+      steps {
+        sh 'bash ci/check.sh style'
+      }
+    }
+
     stage('Prepare Ruby') {
       steps {
         lock(resource: "ruby-install-${env.NODE_NAME}") {
@@ -47,15 +53,18 @@ pipeline {
       }
       post {
         // Keep Xcode's result bundles when tests fail as well as when they pass.
+        // Convert Xcode result bundles to JUnit XML so Jenkins records individual
+        // test cases, including failures from a partially completed test run.
         always {
+          sh '''
+            for result in .ci/TestResults/*.xcresult; do
+              [ -d "$result" ] || continue
+              ci/xcresult-to-junit.rb "$result" "${result%.xcresult}.xml"
+            done
+          '''
+          junit allowEmptyResults: true, testResults: '.ci/TestResults/*.xml'
           archiveArtifacts artifacts: '.ci/TestResults/**/*.xcresult/**', allowEmptyArchive: true, onlyIfSuccessful: false
         }
-      }
-    }
-
-    stage('Style Check') {
-      steps {
-        sh 'bash ci/check.sh style'
       }
     }
 
