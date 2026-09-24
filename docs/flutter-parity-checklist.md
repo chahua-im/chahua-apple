@@ -23,7 +23,6 @@ Tracks user-facing functionality implemented in the old Flutter client but missi
 - [ ] **Save received media to Photos:** save both images and videos to the device photo library, handling authorization and reporting success or failure.
 - [ ] **Owned sticker-pack management:** create a pack, upload/add stickers with metadata, remove stickers, and delete an owned pack. Sending, favorites, and subscriptions already exist.
 - [ ] **Sticker picker hold-to-preview:** show an enlarged preview while pressing and holding a sticker before sending; preserve tap-to-send behavior.
-- [ ] **Bare `www.` links:** recognize URLs such as `www.example.com` and open them using HTTPS, while preserving existing HTTP/HTTPS link handling.
 
 ## Groups
 
