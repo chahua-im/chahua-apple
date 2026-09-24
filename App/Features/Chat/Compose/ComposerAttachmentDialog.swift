@@ -120,6 +120,9 @@ struct ComposerAttachmentDialog: View {
         .onDrop(
             of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted, perform: importDrop
         )
+        #if os(macOS)
+            .onPasteCommand(of: [.image, .movie, .fileURL]) { _ = importDrop($0) }
+        #endif
         .overlay {
             if isMediaDropTargeted && canInteract {
                 RoundedRectangle(cornerRadius: 28)
@@ -262,7 +265,8 @@ struct ComposerAttachmentDialog: View {
                     ComposerInputBridge(
                         input: input, draft: $text, isFocused: isCaptionFocused,
                         isEnabled: canEditCaption,
-                        onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit
+                        onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
+                        onPasteImages: canInteract ? { _ = importDrop($0) } : nil
                     )
                     .accessibilityHidden(true)
                 )
