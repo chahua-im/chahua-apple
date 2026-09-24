@@ -64,12 +64,11 @@ struct ConversationListHeader<Account: View>: View {
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 16)
-            .padding(.bottom, 12)
             #if !os(macOS)
                 // macOS already reserves vertical clearance in the window-controls row.
                 .padding(.top, 12)
             #endif
-            .overlay(alignment: .bottom) { Divider() }
+            .background(alignment: .bottom) { Divider() }
         #endif
     }
 
