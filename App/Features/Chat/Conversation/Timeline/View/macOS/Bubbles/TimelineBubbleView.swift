@@ -203,7 +203,16 @@
             guard self.visible != visible else { return }
             self.visible = visible
             mediaView?.setVisible(visible && mediaView?.isHidden == false)
-            if !visible { voiceController?.stop() }
+            if !visible, let controller = voiceController {
+                // Native row visibility is updated inside NSViewRepresentable.updateNSView.
+                // Teardown must publish only after that SwiftUI update completes.
+                DispatchQueue.main.async { [weak self, weak controller] in
+                    guard let self, !self.visible, self.voiceController === controller else {
+                        return
+                    }
+                    controller?.stop()
+                }
+            }
             configureAudio()
         }
 
@@ -360,7 +369,11 @@
         }
 
         private func clearAudio() {
-            voiceController?.stop()
+            // A recycled row no longer owns this controller. Retain it until
+            // teardown runs after the hosting view has left the update pass.
+            if let controller = voiceController {
+                DispatchQueue.main.async { controller.stop() }
+            }
             voiceView?.removeFromSuperview()
             voiceView = nil
             voiceController = nil

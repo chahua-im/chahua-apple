@@ -31,7 +31,10 @@ struct ComposerVoicePanel: View {
             }
             await playback.load(url: url)
         }
-        .onDisappear { playback.stop() }
+        .onDisappear {
+            // onDisappear can run during SwiftUI's update of the preview host.
+            DispatchQueue.main.async { playback.stop() }
+        }
     }
 
     private var recordingControls: some View {

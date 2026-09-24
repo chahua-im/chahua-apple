@@ -262,10 +262,10 @@ struct ComposerMediaGallery: View {
                     Button("Remove", role: .destructive) { onRemove(attachment.id) }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .font(.body.weight(.semibold))
+                        .font(optionIconFont)
                 }
                 .menuStyle(.borderlessButton)
-                .frame(width: 36, height: 36)
+                .frame(width: optionButtonSize, height: optionButtonSize)
                 .background(.regularMaterial, in: Circle())
                 .menuIndicator(.hidden)
                 .disabled(!isEnabled)
@@ -274,6 +274,22 @@ struct ComposerMediaGallery: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .accessibilityLabel(attachment.fileName)
+    }
+
+    private var optionButtonSize: CGFloat {
+        #if os(macOS)
+            30
+        #else
+            36
+        #endif
+    }
+
+    private var optionIconFont: Font {
+        #if os(macOS)
+            .system(size: 13, weight: .semibold)
+        #else
+            .body.weight(.semibold)
+        #endif
     }
 
     private func move(_ index: Int, by offset: Int) {

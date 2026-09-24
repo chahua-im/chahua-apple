@@ -54,9 +54,7 @@ struct ConversationListRow: View {
                             Color.clear
                         }
                     }
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.88) : Color.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .modifier(ConversationListSubtitleStyle(isSelected: isSelected))
                     if item.unreadCount > 0 {
                         Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
                             .font(.system(size: 12, weight: .semibold))
@@ -107,6 +105,20 @@ struct ConversationListRow: View {
                 ? format : format.year())
     }
 
+}
+
+/// The archived entry and conversation rows use the same secondary line
+/// typography even though their navigation and trailing metadata differ.
+struct ConversationListSubtitleStyle: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .font(.body)
+            .foregroundStyle(isSelected ? Color.white.opacity(0.88) : Color.secondary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }
 
 #if DEBUG

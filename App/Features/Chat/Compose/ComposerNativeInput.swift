@@ -1,10 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 #if os(macOS)
     import AppKit
 #else
     import UIKit
-    import UniformTypeIdentifiers
 #endif
 
 enum ComposerInputSnapshot {
@@ -37,47 +37,25 @@ struct ComposerSendFocus: ViewModifier {
 }
 
 // Native exception: SwiftUI's String binding has no mention identity, marked
-// text, or selection API. Keep its visual TextField and delegate, track UID
+// text, or selection API. Preserve native editing and track UID
 // spans alongside its plain text storage, and use native replacement/undo.
 // Never infer identity from a visible name or replace the text delegate.
 #if os(macOS)
-    struct ComposerInputBridge: NSViewRepresentable {
-        let input: ComposerInputState
-        let draft: Binding<String>
-        let isFocused: Bool
-        let isEnabled: Bool
-        let onCompositionChanged: ((Bool) -> Void)?
-        var onSubmit: (() -> Void)? = nil
-        var focusOnEntry = false
-
-        func makeNSView(context: Context) -> ComposerInputMarker {
-            let marker = ComposerInputMarker()
-            updateNSView(marker, context: context)
-            return marker
-        }
-
-        func updateNSView(_ marker: ComposerInputMarker, context: Context) {
-            marker.connect(
-                input: input, draft: draft, isFocused: isFocused, isEnabled: isEnabled,
-                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit,
-                focusOnEntry: focusOnEntry)
-        }
-
-        static func dismantleNSView(_ marker: ComposerInputMarker, coordinator: ()) {
-            marker.disconnect()
-        }
-    }
-
-    // A multiline SwiftUI TextField bounds its height but does not provide a
-    // scrolling caption viewport on macOS. Keep a native scrolling text view
-    // here, with the same committed-draft/IME bridge as the main composer. The
-    // dialog and gallery do not scroll in response to caption wheel gestures.
-    struct ComposerCaptionInput: NSViewRepresentable {
+    // Native exception: SwiftUI's macOS TextField consumes Finder's filename
+    // representation before onPasteCommand can import its file URL. Use the
+    // caption's scrolling native editor for both surfaces so all Paste actions
+    // prefer media while text, selection, undo and IME remain AppKit-owned.
+    struct ComposerTextInput: NSViewRepresentable {
         let input: ComposerInputState
         let draft: Binding<String>
         let isEnabled: Bool
         let onCompositionChanged: ((Bool) -> Void)?
         let onSubmit: () -> Void
+        var onPasteMedia: (([NSItemProvider]) -> Void)? = nil
+        var focus: Binding<Bool>? = nil
+        var fontSize: CGFloat? = nil
+        var maximumHeight: CGFloat = .greatestFiniteMagnitude
+        var accessibilityLabel = "Caption"
 
         func makeNSView(context: Context) -> ComposerCaptionScrollView {
             let view = ComposerCaptionScrollView()
@@ -88,14 +66,17 @@ struct ComposerSendFocus: ViewModifier {
         func updateNSView(_ view: ComposerCaptionScrollView, context: Context) {
             view.configure(
                 input: input, draft: draft, isEnabled: isEnabled,
-                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit,
+                onPasteMedia: onPasteMedia, focus: focus, fontSize: fontSize,
+                accessibilityLabel: accessibilityLabel)
         }
 
         func sizeThatFits(
             _ proposal: ProposedViewSize, nsView: ComposerCaptionScrollView, context: Context
         ) -> CGSize? {
             guard let width = proposal.width, width.isFinite else { return nil }
-            return CGSize(width: width, height: nsView.captionHeight(for: width))
+            return CGSize(
+                width: width, height: min(maximumHeight, nsView.captionHeight(for: width)))
         }
 
         static func dismantleNSView(_ view: ComposerCaptionScrollView, coordinator: ()) {
@@ -104,9 +85,11 @@ struct ComposerSendFocus: ViewModifier {
     }
 
     final class ComposerCaptionScrollView: NSScrollView, NSTextViewDelegate {
-        private let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 20))
+        private let editor = ComposerMediaTextView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 20))
         private let marker = ComposerInputMarker()
         private weak var input: ComposerInputState?
+        private var requestedFocus: Bool?
 
         init() {
             super.init(frame: .zero)
@@ -145,9 +128,20 @@ struct ComposerSendFocus: ViewModifier {
 
         func configure(
             input: ComposerInputState, draft: Binding<String>, isEnabled: Bool,
-            onCompositionChanged: ((Bool) -> Void)?, onSubmit: @escaping () -> Void
+            onCompositionChanged: ((Bool) -> Void)?, onSubmit: @escaping () -> Void,
+            onPasteMedia: (([NSItemProvider]) -> Void)?, focus: Binding<Bool>?,
+            fontSize: CGFloat?, accessibilityLabel: String
         ) {
             self.input = input
+            editor.onPasteMedia = onPasteMedia
+            editor.onFocusChanged = focus.map { binding in
+                { focused in
+                    DispatchQueue.main.async { binding.wrappedValue = focused }
+                }
+            }
+            editor.font =
+                fontSize.map { .systemFont(ofSize: $0) } ?? .preferredFont(forTextStyle: .body)
+            editor.setAccessibilityLabel(accessibilityLabel)
             let text = input.editorText ?? draft.wrappedValue
             if editor.string != text, !editor.hasMarkedText() {
                 let selection = editor.selectedRange()
@@ -161,7 +155,16 @@ struct ComposerSendFocus: ViewModifier {
             editor.isEditable = isEnabled
             marker.connect(
                 input: input, draft: draft, isFocused: true, isEnabled: isEnabled,
-                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit)
+                onCompositionChanged: onCompositionChanged, onSubmit: onSubmit,
+                focusOnEntry: focus != nil)
+            if let focus, requestedFocus != focus.wrappedValue {
+                requestedFocus = focus.wrappedValue
+                if focus.wrappedValue {
+                    window?.makeFirstResponder(editor)
+                } else if window?.firstResponder === editor {
+                    window?.makeFirstResponder(nil)
+                }
+            }
         }
 
         func captionHeight(for width: CGFloat) -> CGFloat {
@@ -201,8 +204,84 @@ struct ComposerSendFocus: ViewModifier {
 
         func disconnect() {
             marker.disconnect()
+            editor.onPasteMedia = nil
+            editor.onFocusChanged = nil
             editor.delegate = nil
             input = nil
+        }
+    }
+
+    final class ComposerMediaTextView: NSTextView {
+        var onPasteMedia: (([NSItemProvider]) -> Void)?
+        var onFocusChanged: ((Bool) -> Void)?
+
+        // Plain NSTextView disables Paste for image-only clipboards. Enable the
+        // same media path for menu/context-menu Paste as for Command-V; keep
+        // AppKit's normal validation when attachment import is unavailable.
+        override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+            if item.action == #selector(paste(_:)), isEditable, onPasteMedia != nil,
+                NSPasteboard.general.canReadItem(withDataConformingToTypes: [
+                    UTType.fileURL.identifier, UTType.image.identifier, UTType.movie.identifier,
+                ])
+            {
+                return true
+            }
+            return super.validateUserInterfaceItem(item)
+        }
+
+        override func becomeFirstResponder() -> Bool {
+            let accepted = super.becomeFirstResponder()
+            if accepted { onFocusChanged?(true) }
+            return accepted
+        }
+
+        override func resignFirstResponder() -> Bool {
+            let accepted = super.resignFirstResponder()
+            if accepted { onFocusChanged?(false) }
+            return accepted
+        }
+
+        override func paste(_ sender: Any?) {
+            guard isEditable, let onPasteMedia else {
+                super.paste(sender)
+                return
+            }
+            let providers = (NSPasteboard.general.pasteboardItems ?? []).compactMap {
+                item -> NSItemProvider? in
+                // Finder also supplies plain text. Keep the file URL ahead of
+                // image previews so acquisition imports the original file.
+                if let value = item.string(forType: .fileURL),
+                    let url = URL(string: value), url.isFileURL
+                {
+                    let provider = NSItemProvider()
+                    provider.registerDataRepresentation(
+                        forTypeIdentifier: UTType.fileURL.identifier, visibility: .all
+                    ) { completion in
+                        completion(url.dataRepresentation, nil)
+                        return nil
+                    }
+                    return provider
+                }
+                guard
+                    let type = item.types.first(where: {
+                        guard let type = UTType($0.rawValue) else { return false }
+                        return type.conforms(to: .image) || type.conforms(to: .movie)
+                    }), let data = item.data(forType: type)
+                else { return nil }
+                let provider = NSItemProvider()
+                provider.registerDataRepresentation(
+                    forTypeIdentifier: type.rawValue, visibility: .all
+                ) { completion in
+                    completion(data, nil)
+                    return nil
+                }
+                return provider
+            }
+            guard !providers.isEmpty else {
+                super.paste(sender)
+                return
+            }
+            onPasteMedia(providers)
         }
     }
 

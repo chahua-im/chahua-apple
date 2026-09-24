@@ -6,6 +6,10 @@ See the [setup guide](docs/setup.md) to prepare a development environment and sy
 
 - [Why SwiftUI is not ready for this complex chat scroll host](docs/arch/swiftui-scroll-host-evaluation.md)
 
+## Conversation timeline
+
+iOS and macOS group consecutive non-system messages from the same sender within a calendar day, regardless of the time between messages. A date separator, unread separator, system message, or sender change starts a new group. The sender name appears on the first bubble of a group where sender names are enabled; the avatar appears on the final bubble. Adjacent bubbles have a 4-point vertical gap within a group and an 8-point gap between groups.
+
 ## Jenkins
 
 | Job | Pipeline definition | Trigger |

@@ -25,6 +25,80 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertTrue(h.hasFocusedEditor)
     }
 
+    func testVoicePreviewStopInvalidatesPendingLoadWithoutPublishingIdleResets() async throws {
+        let playback = VoicePlaybackController()
+        var changes = 0
+        let observer = playback.objectWillChange.sink { changes += 1 }
+        defer { observer.cancel() }
+        playback.stop()
+        XCTAssertEqual(changes, 0, "An idle preview has no state to publish on teardown.")
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("m4a")
+        let loading = Task { await playback.load(url: url) }
+        try await Task.sleep(for: .milliseconds(50))
+        // Like a hosting row leaving the view tree, stop on the next main turn.
+        DispatchQueue.main.async { playback.stop() }
+        try await Task.sleep(for: .milliseconds(200))
+        await loading.value
+        XCTAssertFalse(playback.isLoading)
+        XCTAssertFalse(playback.isPlaying)
+        XCTAssertNil(playback.error)
+        let afterStop = changes
+        playback.stop()
+        XCTAssertEqual(changes, afterStop)
+    }
+
+    #if os(macOS)
+        func testFinderImagePasteImportsOriginalWithoutInsertingFilename() async throws {
+            let h = try await mount(text: "caption")
+            let image = NSImage(size: NSSize(width: 16, height: 12), flipped: false) { rect in
+                NSColor.red.setFill()
+                rect.fill()
+                return true
+            }
+            let data = try XCTUnwrap(image.tiffRepresentation)
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString).appendingPathExtension("tiff")
+            try data.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let imported = expectation(description: "Original Finder image imported")
+            h.state.onImportImages = { urls in
+                XCTAssertEqual(urls.count, 1)
+                XCTAssertEqual(try Data(contentsOf: XCTUnwrap(urls.first)), data)
+                imported.fulfill()
+            }
+            try await pause()
+            let board = NSPasteboard.general
+            let saved = (board.pasteboardItems ?? []).map { item in
+                let copy = NSPasteboardItem()
+                for type in item.types {
+                    if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+                }
+                return copy
+            }
+            defer {
+                board.clearContents()
+                board.writeObjects(saved)
+            }
+            try h.selectEnd()
+            board.clearContents()
+            board.setString(" tail", forType: .string)
+            try h.focusedEditor().paste(nil)
+            try await pause()
+            XCTAssertEqual(h.state.text, "caption tail")
+
+            board.clearContents()
+            let item = NSPasteboardItem()
+            item.setString(url.absoluteString, forType: .fileURL)
+            item.setString(url.lastPathComponent, forType: .string)
+            board.writeObjects([item])
+            try h.focusedEditor().paste(nil)
+            await fulfillment(of: [imported], timeout: 3)
+            XCTAssertEqual(h.state.text, "caption tail")
+        }
+    #endif
+
     #if os(iOS)
         func testStickerPickerRestoresOnlyDisplacedInputFocus() async throws {
             let h = try await mount(text: "")

@@ -1,5 +1,6 @@
 import ChahuaAPI
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import chahua_apple
@@ -21,23 +22,56 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertEqual(rows.count, 4)
         XCTAssertEqual(rows.compactMap(dateRow).map(\.ordinalDay).count, 2)
         XCTAssertEqual(rows.compactMap(messageRow).map(\.entry.serverID), ["1", "2"])
+        XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.single, .single])
     }
 
-    func testBuildDerivesPlatformGroupingPositions() throws {
+    func testBuildKeepsContiguousSenderGroupedAcrossMinutes() throws {
         let rows = builder().build([
             try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
             try TimelineTestFixtures.message(id: "2", senderID: 2, at: 30),
             try TimelineTestFixtures.message(id: "3", senderID: 2, at: 45),
             try TimelineTestFixtures.message(id: "4", senderID: 2, at: 0, minute: 6),
         ])
+        let messages = rows.compactMap(messageRow)
+        XCTAssertEqual(messages.map(\.groupPosition), [.first, .middle, .middle, .last])
+        XCTAssertEqual(messages.map(\.showsSenderName), [true, false, false, false])
+    }
 
-        #if os(macOS)
-            XCTAssertEqual(
-                rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .middle, .last])
-        #else
-            XCTAssertEqual(
-                rows.compactMap(messageRow).map(\.groupPosition), [.first, .middle, .last, .single])
-        #endif
+    func testSameSenderBubblesUseFourPointGapAndOneAvatar() throws {
+        for body in ["Hi", String(repeating: "A longer message for row geometry. ", count: 8)] {
+            let rows = builder().build([
+                try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0, text: body),
+                try TimelineTestFixtures.message(
+                    id: "2", senderID: 2, at: 0, minute: 6, text: body),
+                try TimelineTestFixtures.message(
+                    id: "3", senderID: 3, at: 10, minute: 6, text: body),
+            ]).compactMap(messageRow)
+            XCTAssertEqual(rows.map(\.groupPosition), [.first, .last, .single])
+            XCTAssertEqual(rows.map(\.showsSenderName), [true, false, true])
+            let environment = TimelineLayoutEnvironment.current(timelineWidth: 320)
+            let engine = TimelineLayoutEngine()
+            let layouts = rows.map { row in
+                engine.layout(
+                    TimelineRowPresentation.make(
+                        row: .message(row), currentUserProfile: nil, currentUserID: 1,
+                        isThreadTimeline: false, environment: environment),
+                    environment: environment)
+            }
+            XCTAssertNil(layouts[0].frames[.avatar])
+            for index in 1..<3 {
+                let bubble = try XCTUnwrap(layouts[index].frames[.bubble])
+                let avatar = try XCTUnwrap(layouts[index].frames[.avatar])
+                XCTAssertEqual(avatar.maxY, bubble.maxY, accuracy: 0.5)
+                XCTAssertGreaterThanOrEqual(bubble.height, environment.avatarSize)
+            }
+            for index in 0..<2 {
+                let current = try XCTUnwrap(layouts[index].frames[.bubble])
+                let next = try XCTUnwrap(layouts[index + 1].frames[.bubble])
+                XCTAssertEqual(
+                    layouts[index].size.height - current.maxY + next.minY,
+                    index == 0 ? 4 : 8, accuracy: 0.5)
+            }
+        }
     }
 
     func testSystemMessageBreaksGrouping() throws {

@@ -30,7 +30,7 @@ struct ComposerAttachmentDialog: View {
     @StateObject private var input = ComposerInputState()
     @FocusState private var isCaptionFocused: Bool
     #if os(macOS)
-        @FocusState private var isCancelFocused: Bool
+        @FocusState private var isHeaderFocused: Bool
     #endif
     @State private var isSubmitting = false
     @State private var isCancelling = false
@@ -112,9 +112,10 @@ struct ComposerAttachmentDialog: View {
         .buttonStyle(.plain)
         .background(.regularMaterial)
         #if os(macOS)
-            .frame(width: 520, height: attachments.count > 1 ? 620 : 520)
-            // AppKit otherwise chooses the native caption as its initial key view.
-            .defaultFocus($isCancelFocused, true)
+            .frame(width: 440, height: attachments.count > 1 ? 560 : 540)
+            // Give initial keyboard focus to the inert title, not Cancel or the
+            // caption; neither an accidental discard nor a visible ring belongs here.
+            .defaultFocus($isHeaderFocused, true)
         #endif
         .contentShape(Rectangle())
         .onDrop(
@@ -156,20 +157,21 @@ struct ComposerAttachmentDialog: View {
         HStack {
             Button(action: cancel) {
                 Image(systemName: "xmark")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
+                    .font(headerIconFont)
+                    .frame(width: headerButtonSize, height: headerButtonSize)
                     .background(.background.opacity(0.8), in: Circle())
             }
             .accessibilityLabel("Cancel")
             .disabled(isAcquiring || isSubmitting || isCancelling)
-            #if os(macOS)
-                .focusable()
-                .focused($isCancelFocused)
-            #endif
             Spacer()
             Text("\(attachments.count) Media")
                 .font(.headline)
                 .accessibilityLabel("\(attachments.count) attachments")
+                #if os(macOS)
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($isHeaderFocused)
+                #endif
             Spacer()
             #if os(iOS)
                 if isCaptionFocused {
@@ -197,16 +199,32 @@ struct ComposerAttachmentDialog: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.title3.weight(.semibold))
+                    .font(headerIconFont.weight(.semibold))
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .frame(width: 44, height: 44)
+            .frame(width: headerButtonSize, height: headerButtonSize)
             .background(.background.opacity(0.8), in: Circle())
             .disabled(!canInteract || attachments.isEmpty)
             .accessibilityLabel("Media options")
         }
         .padding(12)
+    }
+
+    private var headerButtonSize: CGFloat {
+        #if os(macOS)
+            32
+        #else
+            44
+        #endif
+    }
+
+    private var headerIconFont: Font {
+        #if os(macOS)
+            .system(size: 15)
+        #else
+            .title3
+        #endif
     }
 
     private var captionBar: some View {
@@ -217,9 +235,9 @@ struct ComposerAttachmentDialog: View {
                 .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 24))
             Button(action: submit) {
                 Image(systemName: "paperplane.fill")
-                    .font(.system(size: 23, weight: .semibold))
+                    .font(.system(size: sendSymbolSize, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 48, height: 48)
+                    .frame(width: sendButtonSize, height: sendButtonSize)
                     .background(canSubmit ? Color.accentColor : Color.secondary, in: Circle())
             }
             .disabled(!canSubmit)
@@ -229,12 +247,29 @@ struct ComposerAttachmentDialog: View {
         .padding(12)
     }
 
+    private var sendButtonSize: CGFloat {
+        #if os(macOS)
+            40
+        #else
+            48
+        #endif
+    }
+
+    private var sendSymbolSize: CGFloat {
+        #if os(macOS)
+            19
+        #else
+            23
+        #endif
+    }
+
     @ViewBuilder
     private var captionEditor: some View {
         #if os(macOS)
-            ComposerCaptionInput(
+            ComposerTextInput(
                 input: input, draft: $text, isEnabled: canEditCaption,
-                onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit
+                onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
+                onPasteMedia: canInteract ? { _ = importDrop($0) } : nil
             )
             .overlay(alignment: .topLeading) {
                 if (input.editorText ?? text).isEmpty {

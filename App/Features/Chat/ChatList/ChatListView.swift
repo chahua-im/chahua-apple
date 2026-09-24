@@ -139,9 +139,7 @@ struct ChatListView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Archived").font(.headline)
                 Text("View archived chats and threads")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .modifier(ConversationListSubtitleStyle(isSelected: false))
             }
             Spacer(minLength: 8)
             if count > 0 {

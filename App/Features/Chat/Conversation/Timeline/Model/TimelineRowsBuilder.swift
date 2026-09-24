@@ -55,7 +55,6 @@ struct TimelineRowsBuilder {
     var isGroupChat: Bool
 
     var calendar: Calendar
-    var groupingGap: TimeInterval = 300
     func build(_ messages: [MessageResponse], unreadBeforeMessageID: String? = nil) -> [TimelineRow]
     {
         build(
@@ -85,6 +84,7 @@ struct TimelineRowsBuilder {
             }
 
             if index == unreadIndex { rows.append(.unreadSeparator) }
+            // A visible separator starts a new run even when the sender is unchanged.
             let groupedWithPrevious =
                 index > entries.startIndex && index != unreadIndex
                 && grouped(entries[index - 1], entry)
@@ -127,11 +127,7 @@ struct TimelineRowsBuilder {
             later.messageType != .system,
             calendar.isDate(earlier.createdAt, inSameDayAs: later.createdAt)
         else { return false }
-        #if os(macOS)
-            return true
-        #else
-            return later.createdAt.timeIntervalSince(earlier.createdAt) <= groupingGap
-        #endif
+        return true
     }
 
     private func groupPosition(

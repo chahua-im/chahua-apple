@@ -195,7 +195,15 @@
             guard self.visible != visible else { return }
             self.visible = visible
             mediaView?.setVisible(visible && mediaView?.isHidden == false)
-            if !visible { voiceController?.stop() }
+            if !visible, let controller = voiceController {
+                // UIKit hosting configuration may be updated in a SwiftUI view pass.
+                DispatchQueue.main.async { [weak self, weak controller] in
+                    guard let self, !self.visible, self.voiceController === controller else {
+                        return
+                    }
+                    controller?.stop()
+                }
+            }
             configureAudio()
         }
 
@@ -363,7 +371,9 @@
         }
 
         private func clearAudio() {
-            voiceController?.stop()
+            if let controller = voiceController {
+                DispatchQueue.main.async { controller.stop() }
+            }
             voiceView?.removeFromSuperview()
             voiceView = nil
             voiceController = nil

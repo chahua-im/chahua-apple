@@ -8,6 +8,8 @@
     final class TimelineContextSource {
         private weak var tableView: NSTableView?
         private var monitor: Any?
+        private var selectionObserver: NSObjectProtocol?
+        private weak var selectedTextView: AppKitMessageTextView?
 
         init(tableView: NSTableView) {
             self.tableView = tableView
@@ -23,16 +25,29 @@
                 }
                 return consumed ? nil : event
             }
+            selectionObserver = NotificationCenter.default.addObserver(
+                forName: NSTextView.didChangeSelectionNotification, object: nil, queue: nil
+            ) { [weak self] notification in
+                MainActor.assumeIsolated { self?.selectionDidChange(notification) }
+            }
         }
 
         func stop() {
             if let monitor { NSEvent.removeMonitor(monitor) }
+            if let selectionObserver {
+                NotificationCenter.default.removeObserver(selectionObserver)
+            }
             monitor = nil
+            selectionObserver = nil
+            clearSelectedText()
         }
 
         deinit {
             MainActor.assumeIsolated {
                 if let monitor { NSEvent.removeMonitor(monitor) }
+                if let selectionObserver {
+                    NotificationCenter.default.removeObserver(selectionObserver)
+                }
             }
         }
 
@@ -63,11 +78,50 @@
             return true
         }
 
+        private func selectionDidChange(_ notification: Notification) {
+            guard let tableView, let textView = notification.object as? AppKitMessageTextView,
+                textView.isDescendant(of: tableView)
+            else { return }
+            guard textView.selectedRange().length > 0 else {
+                if selectedTextView === textView { selectedTextView = nil }
+                return
+            }
+            if selectedTextView !== textView { clearSelectedText() }
+            selectedTextView = textView
+        }
+
+        private func clearSelectedText() {
+            guard let previous = selectedTextView else { return }
+            selectedTextView = nil
+            let selection = previous.selectedRange()
+            if selection.location != NSNotFound && selection.length > 0 {
+                previous.setSelectedRange(NSRange(location: selection.location, length: 0))
+            }
+        }
+
         private func handle(_ event: NSEvent) -> NSEvent? {
             guard let tableView, let window = tableView.window, event.window === window,
-                event.type == .rightMouseDown || event.modifierFlags.contains(.control),
                 !tableView.isHiddenOrHasHiddenAncestor
             else { return event }
+            if event.type == .leftMouseDown && !event.modifierFlags.contains(.control) {
+                if let previous = selectedTextView {
+                    let point = tableView.convert(event.locationInWindow, from: nil)
+                    let index = tableView.row(at: point)
+                    if index >= 0,
+                        let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false)
+                            as? TimelineTableCellView,
+                        let bubble = cell.rowView.binding?.layout.frames[.bubble],
+                        bubble.contains(cell.rowView.convert(event.locationInWindow, from: nil)),
+                        !previous.isDescendant(of: cell)
+                    {
+                        clearSelectedText()
+                    }
+                }
+                return event
+            }
+            guard event.type == .rightMouseDown || event.modifierFlags.contains(.control) else {
+                return event
+            }
             let point = tableView.convert(event.locationInWindow, from: nil)
             guard tableView.visibleRect.contains(point) else { return event }
             let index = tableView.row(at: point)
@@ -76,9 +130,12 @@
                     as? TimelineTableCellView,
                 let binding = cell.rowView.binding,
                 let bubble = binding.layout.frames[.bubble],
-                bubble.contains(cell.rowView.convert(event.locationInWindow, from: nil)),
-                Self.openContextMenu(for: cell.rowView)
+                bubble.contains(cell.rowView.convert(event.locationInWindow, from: nil))
             else { return event }
+            if let previous = selectedTextView, !previous.isDescendant(of: cell) {
+                clearSelectedText()
+            }
+            guard Self.openContextMenu(for: cell.rowView) else { return event }
             return nil
         }
 

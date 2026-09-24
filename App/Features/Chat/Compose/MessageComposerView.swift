@@ -81,26 +81,47 @@ struct MessageComposerView: View {
         )
     }
 
-    private var composerInputBridge: some View {
-        let enabled =
-            isEnabled && !isAcquiring && !voiceRecorder.isActive && !showsAttachmentDialog
-            && !showsStickerPicker
-        #if os(iOS)
-            let pasteImages: (([NSItemProvider]) -> Void)? =
-                canAcquire ? { importProviders($0) } : nil
+    #if os(macOS)
+        private var messageEditor: some View {
+            ComposerTextInput(
+                input: input, draft: $text,
+                isEnabled: isEnabled && !isAcquiring && !voiceRecorder.isActive
+                    && !showsAttachmentDialog && !showsStickerPicker,
+                onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
+                onPasteMedia: canAcquire ? { importProviders($0) } : nil,
+                focus: Binding(get: { isInputFocused }, set: { isInputFocused = $0 }),
+                fontSize: fontSize, maximumHeight: max(20, maxHeight - 24),
+                accessibilityLabel: "Message"
+            )
+            .overlay(alignment: .topLeading) {
+                if (input.editorText ?? text).isEmpty {
+                    Text("Message")
+                        .foregroundStyle(.tertiary)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+    #else
+        private var composerInputBridge: some View {
+            let enabled =
+                isEnabled && !isAcquiring && !voiceRecorder.isActive && !showsAttachmentDialog
+                && !showsStickerPicker
             return ComposerInputBridge(
                 input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
                 onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
-                onPasteImages: pasteImages
+                onPasteImages: canAcquire ? { importProviders($0) } : nil
             )
             .accessibilityHidden(true)
+        }
+    #endif
+
+    private var messageTextField: some View {
+        #if os(macOS)
+            messageEditor
         #else
-            return ComposerInputBridge(
-                input: input, draft: $text, isFocused: isInputFocused, isEnabled: enabled,
-                onCompositionChanged: onCompositionChanged, onSubmit: keyboardSubmit,
-                focusOnEntry: true
-            )
-            .accessibilityHidden(true)
+            TextField("Message", text: editorText, axis: .vertical)
+                .background(composerInputBridge)
         #endif
     }
 
@@ -165,7 +186,7 @@ struct MessageComposerView: View {
                         ComposerVoicePanel(recorder: voiceRecorder)
                     } else {
                         HStack(alignment: .bottom, spacing: 0) {
-                            TextField("Message", text: editorText, axis: .vertical)
+                            messageTextField
                                 .textFieldStyle(.plain)
                                 .font(.system(size: fontSize))
                                 .lineLimit(1...6)
@@ -210,7 +231,6 @@ struct MessageComposerView: View {
                                     guard !input.isComposing else { return .ignored }
                                     return input.onMentionKey?(.down) == true ? .handled : .ignored
                                 }
-                                .background(composerInputBridge)
                                 .accessibilityLabel("Message")
 
                             Button(action: toggleStickerPicker) {
@@ -373,9 +393,6 @@ struct MessageComposerView: View {
             case .failure(let error): imageError = error.localizedDescription
             }
         }
-        #if os(macOS)
-            .onPasteCommand(of: [.image, .movie, .fileURL]) { importProviders($0) }
-        #endif
         .onDrop(of: [.image, .movie, .fileURL], isTargeted: nil) { providers in
             guard canAcquire else { return false }
             return attachmentState.acceptDrop(providers)

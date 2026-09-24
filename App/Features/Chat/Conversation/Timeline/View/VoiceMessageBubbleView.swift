@@ -101,9 +101,6 @@ struct VoiceMessageBubbleView: View {
             guard isActive, let url else { return }
             await controller.load(url: url)
         }
-        .onDisappear {
-            controller.stop()
-        }
     }
 
     private var playbackButton: some View {

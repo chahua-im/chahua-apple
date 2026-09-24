@@ -143,8 +143,15 @@ final class VoicePlaybackController: ObservableObject {
         position = player.currentTime
     }
 
+    private var isStopped: Bool {
+        player == nil && preparation == nil && source == nil && directory == nil
+            && !isLoading && !isPlaying && duration == 0 && position == 0
+            && waveform.isEmpty && error == nil
+    }
+
     /// Releases downloaded/decoded files and invalidates in-flight loads on cell reuse.
     func stop() {
+        guard !isStopped else { return }
         generation = UUID()
         preparation?.cancel()
         preparation = nil

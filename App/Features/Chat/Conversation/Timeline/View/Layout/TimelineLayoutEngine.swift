@@ -133,7 +133,10 @@ struct TimelineLayoutEngine {
         var frames: [TimelineSectionID: CGRect] = [:]
         var titleFrames: [CGRect] = []
         var replyContentFrames: [CGRect] = []
-        var y: CGFloat = 4
+        // The preceding row contributes 4pt below its bubble. Only a new
+        // sender run adds another 4pt above this bubble.
+        var y: CGFloat =
+            row.groupPosition == .middle || row.groupPosition == .last ? 0 : 4
         let bubbleY = y
         var height: CGFloat = 0
         if let title = p.title {
@@ -293,8 +296,13 @@ struct TimelineLayoutEngine {
                 x: bubbleX, y: bubbleY + height, width: b, height: footerHeight)
             height += footerHeight
         }
+        // A short final bubble must contain its avatar's height. Reserving that
+        // height outside the bubble would silently enlarge the inter-bubble gap.
+        if row.groupPosition == .single || row.groupPosition == .last {
+            height = max(height, e.avatarSize)
+        }
         frames[.bubble] = CGRect(x: bubbleX, y: bubbleY, width: b, height: height)
-        let mainBottom = max(4 + e.avatarSize, bubbleY + height)
+        let mainBottom = bubbleY + height
         if row.groupPosition == .single || row.groupPosition == .last {
             frames[.avatar] = CGRect(
                 x: row.isOutgoing ? e.timelineWidth - 12 - e.avatarSize : 12,

@@ -36,6 +36,9 @@
         }
       }
     },
+    "Chahua composer media slot" : {
+
+    },
     "NSMicrophoneUsageDescription" : {
       "comment" : "Privacy - Microphone Usage Description",
       "extractionState" : "manual",

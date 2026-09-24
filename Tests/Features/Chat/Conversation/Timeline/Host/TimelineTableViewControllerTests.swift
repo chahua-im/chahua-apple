@@ -89,6 +89,69 @@
                 "At the latest message, the indicator must be at the bottom of its track.")
         }
 
+        func testSelectingAnotherMessageClearsPreviousBubbleSelection() async throws {
+            let page = try TimelineTestFixtures.page([
+                TimelineTestFixtures.message(id: "first", at: 0, text: "first bubble"),
+                TimelineTestFixtures.message(id: "second", at: 1, text: "second bubble"),
+            ])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: HistorySource(initial: page, older: page),
+                messageStore: ConversationMessageStore())
+            let controller = TimelineTableViewController(model: model)
+            controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
+            let window = mountForDisplay(controller)
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                model.close()
+                window.close()
+            }
+            await model.loadInitial()
+            try await waitForDisplay(controller, model: model)
+            let table = try XCTUnwrap(
+                timelineScrollView(in: controller.view)?.documentView as? NSTableView)
+            func text(_ id: String) throws -> AppKitMessageTextView {
+                let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == id })
+                let cell = try XCTUnwrap(
+                    table.view(atColumn: 0, row: index, makeIfNecessary: true))
+                cell.layoutSubtreeIfNeeded()
+                return try XCTUnwrap(textViews(in: cell).first as? AppKitMessageTextView)
+            }
+            let first = try text("first")
+            let second = try text("second")
+            first.setSelectedRange(NSRange(location: 0, length: 5))
+            second.setSelectedRange(NSRange(location: 0, length: 6))
+            XCTAssertEqual(first.selectedRange().length, 0)
+            XCTAssertEqual(second.selectedRange().length, 6)
+
+            first.setSelectedRange(NSRange(location: 0, length: 5))
+            XCTAssertEqual(second.selectedRange().length, 0)
+            let point = second.convert(NSPoint(x: 5, y: 5), to: nil)
+            let click = try XCTUnwrap(
+                NSEvent.mouseEvent(
+                    with: .leftMouseDown, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: 1, pressure: 1))
+            NSApp.sendEvent(click)
+            XCTAssertEqual(first.selectedRange().length, 0)
+            second.setSelectedRange(NSRange(location: 0, length: 6))
+            let pasteboard = NSPasteboard.general
+            let savedItems = (pasteboard.pasteboardItems ?? []).map { item in
+                let copy = NSPasteboardItem()
+                for type in item.types {
+                    if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+                }
+                return copy
+            }
+            defer {
+                pasteboard.clearContents()
+                pasteboard.writeObjects(savedItems)
+            }
+            second.copy(nil)
+            XCTAssertEqual(pasteboard.string(forType: .string), "second")
+        }
+
         func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
             let messages = try (0..<16).map {
                 try TimelineTestFixtures.message(
