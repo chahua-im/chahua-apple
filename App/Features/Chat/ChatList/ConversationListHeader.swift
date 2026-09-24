@@ -3,6 +3,8 @@ import SwiftUI
 struct ConversationListHeader<Account: View>: View {
     @Binding var selection: ConversationListScope
     var badges = ConversationTabBadges()
+    var showsMessagesTab = ConversationListPreferences.defaultShowsMessagesTab
+    var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
     var onBack: (() -> Void)?
     @ViewBuilder let account: () -> Account
 
@@ -16,8 +18,11 @@ struct ConversationListHeader<Account: View>: View {
                     .frame(width: 44, height: 44)
                     .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
                     .accessibilityLabel(onBack == nil ? Text("Account") : Text("Back to chats"))
-                ConversationScopePicker(selection: $selection, badges: badges)
-                    .frame(minHeight: 44)
+                ConversationScopePicker(
+                    selection: $selection, badges: badges, showsMessagesTab: showsMessagesTab,
+                    badgeColor: badgeColor
+                )
+                .frame(minHeight: 44)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -59,8 +64,11 @@ struct ConversationListHeader<Account: View>: View {
                     .help("New message")
                     .disabled(true)
                 }
-                ConversationScopePicker(selection: $selection, badges: badges)
-                    .frame(maxWidth: .infinity)
+                ConversationScopePicker(
+                    selection: $selection, badges: badges, showsMessagesTab: showsMessagesTab,
+                    badgeColor: badgeColor
+                )
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderless)
             .padding(.horizontal, 16)

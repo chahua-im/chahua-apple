@@ -451,7 +451,8 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C0BB0002303BCC2200320001 /* Release.xcconfig */;
 			buildSettings = {
-				APNS_ENVIRONMENT = development;
+				APNS_ENVIRONMENT = production;
+				"APNS_ENVIRONMENT[sdk=macosx*]" = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon-iOS";
 				"ASSETCATALOG_COMPILER_APPICON_NAME[sdk=macosx*]" = "AppIcon-macOS";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

@@ -47,9 +47,9 @@
             layer?.masksToBounds = true
             setAccessibilityElement(false)
             setAccessibilityRole(.group)
-            setAccessibilityLabel(String(localized: "Message actions"))
+            setAccessibilityLabel(AppLanguage.localized("Message actions"))
 
-            dismissButton.setAccessibilityLabel(String(localized: "Dismiss message actions"))
+            dismissButton.setAccessibilityLabel(AppLanguage.localized("Dismiss message actions"))
             dismissButton.onPress = { [weak self] in self?.onDismiss?() }
             addSubview(dismissButton)
 
@@ -73,16 +73,16 @@
             progress.style = .spinning
             progress.controlSize = .small
             progress.isDisplayedWhenStopped = false
-            progress.setAccessibilityLabel(String(localized: "Updating reaction"))
+            progress.setAccessibilityLabel(AppLanguage.localized("Updating reaction"))
             reactionSurface.addSubview(progress)
 
             blockButton.configureHorizontal(
-                symbol: "square.and.pencil", label: String(localized: "Move back to composer"),
+                symbol: "square.and.pencil", label: AppLanguage.localized("Move back to composer"),
                 destructive: false)
             blockButton.onPress = { [weak self] in self?.onBlock?() }
             pendingSurface.addSubview(blockButton)
             revokeButton.configureHorizontal(
-                symbol: "trash", label: String(localized: "Revoke unsent message"),
+                symbol: "trash", label: AppLanguage.localized("Revoke unsent message"),
                 destructive: true)
             revokeButton.onPress = { [weak self] in self?.onRevoke?() }
             pendingSurface.addSubview(revokeButton)
@@ -138,10 +138,10 @@
                         })?.count ?? 0
                     let label =
                         selected
-                        ? String(localized: "Remove reaction: \(emoji)")
-                        : String(localized: "React with: \(emoji)")
+                        ? AppLanguage.localized("Remove reaction: \(emoji)")
+                        : AppLanguage.localized("React with: \(emoji)")
                     button.setAccessibilityLabel(
-                        label + ", " + String(localized: "\(count) reactions"))
+                        label + ", " + AppLanguage.localized("\(count) reactions"))
                     button.setAccessibilityValue(selected ? 1 : 0)
                     button.setAccessibilitySelected(selected)
                     button.setAccessibilityHelp(
@@ -156,11 +156,11 @@
                     button.configureSymbol("plus", pointSize: 21)
                     button.isEnabled = false
                     button.alphaValue = 0.4
-                    button.setAccessibilityLabel(String(localized: "More reactions"))
+                    button.setAccessibilityLabel(AppLanguage.localized("More reactions"))
                     button.setAccessibilityValue(nil)
                     button.setAccessibilitySelected(false)
-                    button.setAccessibilityHelp(String(localized: "Not implemented yet"))
-                    button.toolTip = String(localized: "Not implemented yet")
+                    button.setAccessibilityHelp(AppLanguage.localized("Not implemented yet"))
+                    button.toolTip = AppLanguage.localized("Not implemented yet")
                 }
             }
             if isReacting && policy.canReact {
@@ -199,7 +199,8 @@
                 button.alphaValue = button.isEnabled ? 1 : 0.4
                 let hint =
                     implemented
-                    ? String(localized: "Unavailable") : String(localized: "Not implemented yet")
+                    ? AppLanguage.localized("Unavailable")
+                    : AppLanguage.localized("Not implemented yet")
                 button.toolTip = button.isEnabled ? label : hint
                 button.setAccessibilityHelp(button.isEnabled ? nil : hint)
                 button.onPress = { [weak self] in self?.onAction?(action) }
@@ -228,9 +229,9 @@
             blockButton.alphaValue = blockButton.isEnabled ? 1 : 0.4
             revokeButton.alphaValue = revokeButton.isEnabled ? 1 : 0.4
             blockButton.setAccessibilityHelp(
-                blockButton.isEnabled ? nil : String(localized: "Unavailable"))
+                blockButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
             revokeButton.setAccessibilityHelp(
-                revokeButton.isEnabled ? nil : String(localized: "Unavailable"))
+                revokeButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
             needsLayout = true
             layoutSubtreeIfNeeded()
         }
@@ -413,12 +414,12 @@
         private func reactionHint(eligibility: MessageReactionEligibility, hasCallback: Bool)
             -> String
         {
-            if eligibility.isReacting { return String(localized: "Updating reaction") }
-            if !hasCallback || !eligibility.canReact { return String(localized: "Unavailable") }
+            if eligibility.isReacting { return AppLanguage.localized("Updating reaction") }
+            if !hasCallback || !eligibility.canReact { return AppLanguage.localized("Unavailable") }
             if eligibility.personalLimitReached {
-                return String(localized: "You can add up to five reactions")
+                return AppLanguage.localized("You can add up to five reactions")
             }
-            return String(localized: "Reaction limit reached")
+            return AppLanguage.localized("Reaction limit reached")
         }
 
     }

@@ -18,13 +18,13 @@
         private var presentation: Presentation?
         private var tasks: [Operation: Task<Void, Never>] = [:]
         private let initialLoading = TimelineLoadingPanel(
-            label: String(localized: "Loading messages"))
+            label: AppLanguage.localized("Loading messages"))
         private let initialFailure = TimelineInitialFailurePanel()
         private let initialBanner = TimelineBannerView(cornerRadius: 0)
         private let olderEdge = TimelineEdgeView(
-            title: String(localized: "Couldn’t load older messages — Retry"))
+            title: AppLanguage.localized("Couldn’t load older messages — Retry"))
         private let newerEdge = TimelineEdgeView(
-            title: String(localized: "Couldn’t load newer messages — Retry"))
+            title: AppLanguage.localized("Couldn’t load newer messages — Retry"))
         private let repositionProgress = TimelineLoadingPanel(label: nil, material: true)
         private let repositionFailure = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
         private let reconciliationFailure = TimelineBannerView(
@@ -79,11 +79,11 @@
             initialFailure.isHidden = showsTable || state.content != .initialLoadFailed
             if showsTable && (state.content == .idle || state.content == .loadingInitial) {
                 initialBanner.configure(
-                    text: String(localized: "Loading messages"), action: nil, loading: true)
+                    text: AppLanguage.localized("Loading messages"), action: nil, loading: true)
             } else if showsTable && state.content == .initialLoadFailed {
                 initialBanner.configure(
-                    text: String(localized: "Couldn’t load messages."),
-                    action: String(localized: "Try again"), loading: false)
+                    text: AppLanguage.localized("Couldn’t load messages."),
+                    action: AppLanguage.localized("Try again"), loading: false)
             } else {
                 initialBanner.hide()
             }
@@ -93,17 +93,17 @@
             if showsTable, let failure = state.repositionFailure {
                 repositionFailure.configure(
                     text: failure == .liveEdge
-                        ? String(localized: "Couldn’t load messages.")
-                        : String(localized: "That message isn’t available."),
-                    action: String(localized: "Dismiss"), loading: false
+                        ? AppLanguage.localized("Couldn’t load messages.")
+                        : AppLanguage.localized("That message isn’t available."),
+                    action: AppLanguage.localized("Dismiss"), loading: false
                 )
             } else {
                 repositionFailure.hide()
             }
             if showsTable && state.reconciliationFailed {
                 reconciliationFailure.configure(
-                    text: String(localized: "Couldn’t refresh messages."),
-                    action: String(localized: "Retry"), loading: false)
+                    text: AppLanguage.localized("Couldn’t refresh messages."),
+                    action: AppLanguage.localized("Retry"), loading: false)
             } else {
                 reconciliationFailure.hide()
             }
@@ -178,6 +178,10 @@
 
         deinit {
             for task in tasks.values { task.cancel() }
+        }
+
+        func setBadgeColor(_ badgeColor: ConversationUnreadBadgeColor) {
+            jumpControl.setBadgeColor(badgeColor)
         }
     }
 
@@ -259,7 +263,7 @@
             progress.style = .spinning
             progress.controlSize = .regular
             progress.isDisplayedWhenStopped = false
-            progress.setAccessibilityLabel(text ?? String(localized: "Loading messages"))
+            progress.setAccessibilityLabel(text ?? AppLanguage.localized("Loading messages"))
             addSubview(progress)
             if let label {
                 label.alignment = .center
@@ -295,10 +299,10 @@
         var onRetry: (() -> Void)?
         private let image = NSImageView()
         private let title = timelineChromeLabel(
-            String(localized: "Couldn’t load messages"), style: .headline)
+            AppLanguage.localized("Couldn’t load messages"), style: .headline)
         private let detail = timelineChromeLabel(
-            String(localized: "Check your connection and try again."), style: .body)
-        private let retry = TimelineChromeButton(title: String(localized: "Try again"))
+            AppLanguage.localized("Check your connection and try again."), style: .body)
+        private let retry = TimelineChromeButton(title: AppLanguage.localized("Try again"))
         override var isFlipped: Bool { true }
 
         override init(frame frameRect: NSRect) {
@@ -415,7 +419,7 @@
             progress.style = .spinning
             progress.controlSize = .small
             progress.isDisplayedWhenStopped = false
-            progress.setAccessibilityLabel(String(localized: "Loading messages"))
+            progress.setAccessibilityLabel(AppLanguage.localized("Loading messages"))
             retry.font = .preferredFont(forTextStyle: .body)
             retry.onAction = { [weak self] in self?.onRetry?() }
             addSubview(progress)
@@ -454,9 +458,10 @@
         private let background = timelineChromeMaterial(
             cornerRadius: TimelineJumpControl.diameter / 2)
         private let button = TimelineChromeButton(
-            title: String(localized: "Jump to latest messages"), symbol: "chevron.down")
+            title: AppLanguage.localized("Jump to latest messages"), symbol: "chevron.down")
         private let badge = timelineChromeLabel(style: .caption2)
         private let badgeBackground = NSView()
+        private var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
         override var isFlipped: Bool { true }
 
         override init(frame frameRect: NSRect) {
@@ -482,13 +487,19 @@
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+        func setBadgeColor(_ badgeColor: ConversationUnreadBadgeColor) {
+            guard self.badgeColor != badgeColor else { return }
+            self.badgeColor = badgeColor
+            updateBadgeColor()
+        }
+
         func setCount(_ count: Int64) {
-            let title = String(localized: "Jump to latest messages")
+            let title = AppLanguage.localized("Jump to latest messages")
             badge.stringValue = String(max(0, count))
             badgeBackground.isHidden = count <= 0
             button.setAccessibilityLabel(title)
             button.setAccessibilityValue(
-                count > 0 ? String(localized: "\(count) unread messages") : nil)
+                count > 0 ? AppLanguage.localized("\(count) unread messages") : nil)
             needsLayout = true
         }
 
@@ -523,7 +534,7 @@
 
         private func updateBadgeColor() {
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                badgeBackground.layer?.backgroundColor = NSColor(ChahuaTheme.accent).cgColor
+                badgeBackground.layer?.backgroundColor = NSColor(badgeColor.color).cgColor
             }
         }
     }

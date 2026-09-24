@@ -12,6 +12,12 @@ struct ChahuaApp: App {
     #else
         @NSApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     #endif
+    @AppStorage(AppLanguage.storageKey) private var appLanguageRawValue = AppLanguage.system
+        .rawValue
+    private var appLanguage: AppLanguage {
+        AppLanguage(rawValue: appLanguageRawValue) ?? .system
+    }
+
     private let compositionRoot: AppCompositionRoot?
 
     init() {
@@ -47,6 +53,7 @@ struct ChahuaApp: App {
                 appRoot
             #endif
         }
+        .environment(\.locale, appLanguage.locale)
         #if os(macOS)
             .windowStyle(.hiddenTitleBar)
             .windowResizability(.contentMinSize)

@@ -76,6 +76,13 @@
                 finishResizeIfPossible()
             }
         }
+        var messageTextSize = MessageTextSizePreference.defaultValue {
+            didSet {
+                guard messageTextSize != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
         var headerInset: CGFloat = 0 {
             didSet {
                 guard headerInset != oldValue, isViewLoaded else { return }
@@ -322,12 +329,17 @@
 
         private var currentEnvironment: TimelineLayoutEnvironment {
             let geometry = currentGeometry
+            let preferredBodySize = NSFont.preferredFont(forTextStyle: .body).pointSize
+            let bodySize = MessageTextSizePreference.scaledBodySize(messageTextSize)
+            let relativeScale = bodySize / max(1, preferredBodySize)
             return .current(
                 timelineWidth: geometry.rowWidth,
                 displayScale: geometry.scale,
-                bodySize: geometry.fontSize,
-                captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
-                caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
+                bodySize: bodySize,
+                captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize
+                    * relativeScale,
+                caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize
+                    * relativeScale,
                 layoutDirection: view.userInterfaceLayoutDirection == .rightToLeft
                     ? .rightToLeft : .leftToRight)
         }

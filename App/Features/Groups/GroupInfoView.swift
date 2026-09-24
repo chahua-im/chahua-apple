@@ -76,7 +76,8 @@ struct GroupInfoView: View {
             Text("Are you sure you want to leave this group?")
         }
         .alert(
-            Text(failure?.operation.title ?? String(localized: "Couldn’t complete group action")),
+            Text(
+                failure?.operation.title ?? AppLanguage.localized("Couldn’t complete group action")),
             isPresented: Binding(
                 get: { failure != nil && failure?.operation.isLoad == false },
                 set: { if !$0 { failure = nil } }
@@ -99,7 +100,7 @@ struct GroupInfoView: View {
                 .font(.title2.weight(.bold))
                 .multilineTextAlignment(.center)
                 .textSelection(.enabled)
-            Text(description ?? String(localized: "No group description yet."))
+            Text(description ?? AppLanguage.localized("No group description yet."))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -109,7 +110,7 @@ struct GroupInfoView: View {
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(displayName)
-        .accessibilityValue(description ?? String(localized: "No group description yet."))
+        .accessibilityValue(description ?? AppLanguage.localized("No group description yet."))
     }
 
     private var actions: some View {
@@ -194,12 +195,12 @@ struct GroupInfoView: View {
     }
 
     private var muteStatus: String {
-        guard isMuted, let mutedUntil else { return String(localized: "Not muted") }
+        guard isMuted, let mutedUntil else { return AppLanguage.localized("Not muted") }
         if Calendar(identifier: .gregorian).component(.year, from: mutedUntil) >= 9000 {
-            return String(localized: "Muted forever")
+            return AppLanguage.localized("Muted forever")
         }
         let date = mutedUntil.formatted(date: .abbreviated, time: .shortened)
-        return String(localized: "Muted until \(date)")
+        return AppLanguage.localized("Muted until \(date)")
     }
 
     private func loadInfo() async {
@@ -359,9 +360,9 @@ private enum GroupInfoOperation {
 
     var title: String {
         switch self {
-        case .load: String(localized: "Couldn’t load group info")
-        case .mute, .unmute: String(localized: "Couldn’t update notifications")
-        case .leave: String(localized: "Couldn’t leave group")
+        case .load: AppLanguage.localized("Couldn’t load group info")
+        case .mute, .unmute: AppLanguage.localized("Couldn’t update notifications")
+        case .leave: AppLanguage.localized("Couldn’t leave group")
         }
     }
 }

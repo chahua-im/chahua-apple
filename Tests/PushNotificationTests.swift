@@ -82,6 +82,19 @@ final class PushNotificationTests: XCTestCase {
             UNNotification(coder: NotificationDecoder(["request": request, "date": Date()])))
     }
 
+    func testSignedAPNsEnvironmentOverridesBuildMetadata() {
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString,
+            environment: "development", signedEntitlement: "production")
+        XCTAssertEqual(notifications.configuredEnvironment, .sandbox)
+        XCTAssertEqual(notifications.signedEnvironment, .production)
+        XCTAssertEqual(notifications.apnsEnvironment, .production)
+        XCTAssertNil(notifications.backendEnvironment)
+        XCTAssertNil(notifications.deviceTokenSuffix)
+        notifications.didRegister(deviceToken: Data([0x12, 0x34, 0x56, 0x78, 0x90]))
+        XCTAssertEqual(notifications.deviceTokenSuffix, "34567890")
+    }
+
     func testDisablePersistsAcrossRelaunchAndLateTokenCallbacks() async throws {
         let suite = UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

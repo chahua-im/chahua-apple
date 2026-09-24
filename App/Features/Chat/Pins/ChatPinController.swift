@@ -121,7 +121,7 @@ final class ChatPinController: ObservableObject {
         } catch {
             await report(
                 error, generation: requestGeneration,
-                message: String(localized: "Couldn’t pin message. Please try again."))
+                message: AppLanguage.localized("Couldn’t pin message. Please try again."))
         }
     }
 
@@ -150,7 +150,7 @@ final class ChatPinController: ObservableObject {
             }
             await report(
                 error, generation: requestGeneration,
-                message: String(localized: "Couldn’t unpin message. Please try again."))
+                message: AppLanguage.localized("Couldn’t unpin message. Please try again."))
         }
     }
 
@@ -246,7 +246,7 @@ final class ChatPinController: ObservableObject {
             failedChatIDs.insert(chatID)
             await report(
                 error, generation: requestGeneration,
-                message: String(localized: "Couldn’t load pinned messages. Please try again."))
+                message: AppLanguage.localized("Couldn’t load pinned messages. Please try again."))
         }
     }
 

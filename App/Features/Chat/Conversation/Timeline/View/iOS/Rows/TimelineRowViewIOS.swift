@@ -256,7 +256,7 @@
                 ? nil
                 : [
                     UIAccessibilityCustomAction(
-                        name: String(localized: "Message actions"),
+                        name: AppLanguage.localized("Message actions"),
                         actionHandler: { [weak self] _ in
                             guard let self, let bubble = self.bubble, let window = self.window,
                                 self.binding?.actions.openContextMenu != nil
@@ -334,7 +334,7 @@
                 button.tintColor = .secondaryLabel
                 button.backgroundColor = UIColor.label.withAlphaComponent(0.06)
                 button.layer.cornerRadius = 14
-                button.accessibilityLabel = String(localized: "Reply")
+                button.accessibilityLabel = AppLanguage.localized("Reply")
                 button.addAction(
                     UIAction { [weak self] _ in self?.reply() }, for: .primaryActionTriggered)
                 button.addSubview(hoverMarker)

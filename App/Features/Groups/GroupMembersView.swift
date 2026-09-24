@@ -88,7 +88,8 @@ struct GroupMembersView: View {
             model.cancelPendingRequests()
         }
         .confirmationDialog(
-            Text(pendingAction?.confirmationTitle ?? String(localized: "Confirm member action")),
+            Text(
+                pendingAction?.confirmationTitle ?? AppLanguage.localized("Confirm member action")),
             isPresented: Binding(
                 get: { pendingAction != nil },
                 set: { if !$0 { pendingAction = nil } }
@@ -274,7 +275,8 @@ struct GroupMembersView: View {
         guard model.canManage(action.member) else {
             failedAction = .init(
                 action: action,
-                message: String(localized: "You no longer have permission to manage group members.")
+                message: AppLanguage.localized(
+                    "You no longer have permission to manage group members.")
             )
             return
         }
@@ -299,7 +301,7 @@ struct GroupMembersView: View {
 
     private func memberName(_ member: MemberResponse) -> String {
         let username = member.username?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return username?.isEmpty == false ? username! : String(localized: "User \(member.uid)")
+        return username?.isEmpty == false ? username! : AppLanguage.localized("User \(member.uid)")
     }
 
     private func memberRoleLabel(_ role: GroupRole) -> LocalizedStringKey {
@@ -331,24 +333,24 @@ private struct PendingMemberAction: Identifiable {
 
     var confirmationTitle: String {
         switch kind {
-        case .promote: String(localized: "Promote member")
-        case .demote: String(localized: "Demote member")
-        case .remove: String(localized: "Remove member")
+        case .promote: AppLanguage.localized("Promote member")
+        case .demote: AppLanguage.localized("Demote member")
+        case .remove: AppLanguage.localized("Remove member")
         }
     }
 
     var confirmationMessage: String {
         let name = memberDisplayName
         return switch kind {
-        case .promote: String(localized: "Promote \(name) to admin?")
-        case .demote: String(localized: "Demote \(name) to member?")
-        case .remove: String(localized: "Remove \(name) from this group?")
+        case .promote: AppLanguage.localized("Promote \(name) to admin?")
+        case .demote: AppLanguage.localized("Demote \(name) to member?")
+        case .remove: AppLanguage.localized("Remove \(name) from this group?")
         }
     }
 
     private var memberDisplayName: String {
         let username = member.username?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return username?.isEmpty == false ? username! : String(localized: "User \(member.uid)")
+        return username?.isEmpty == false ? username! : AppLanguage.localized("User \(member.uid)")
     }
 }
 

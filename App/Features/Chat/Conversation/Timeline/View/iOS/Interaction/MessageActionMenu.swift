@@ -127,7 +127,7 @@
             .help(
                 enabled
                     ? action.label(hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
-                    : String(localized: "Not implemented yet"))
+                    : AppLanguage.localized("Not implemented yet"))
         }
 
         private func react(_ emoji: String) {
@@ -177,8 +177,8 @@
             .opacity(enabled ? 1 : 0.4)
             .accessibilityLabel(
                 selected
-                    ? String(localized: "Remove reaction: \(name)")
-                    : String(localized: "React with: \(name)")
+                    ? AppLanguage.localized("Remove reaction: \(name)")
+                    : AppLanguage.localized("React with: \(name)")
             )
             .accessibilityAddTraits(selected ? .isSelected : [])
             .help(name)

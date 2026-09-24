@@ -19,17 +19,18 @@ extension MessageMenuAction {
 
     func label(hasAttachments: Bool) -> String {
         switch self {
-        case .copy: hasAttachments ? String(localized: "Copy Text") : String(localized: "Copy")
-        case .copyLink: String(localized: "Copy Link")
-        case .reply: String(localized: "Reply")
-        case .thread: String(localized: "Thread")
-        case .pin: String(localized: "Pin")
-        case .unpin: String(localized: "Unpin")
-        case .edit: String(localized: "Edit")
-        case .delete: String(localized: "Delete")
-        case .save: String(localized: "Save")
-        case .favorite: String(localized: "Favorite")
-        case .reactionDetails: String(localized: "Reactions")
+        case .copy:
+            hasAttachments ? AppLanguage.localized("Copy Text") : AppLanguage.localized("Copy")
+        case .copyLink: AppLanguage.localized("Copy Link")
+        case .reply: AppLanguage.localized("Reply")
+        case .thread: AppLanguage.localized("Thread")
+        case .pin: AppLanguage.localized("Pin")
+        case .unpin: AppLanguage.localized("Unpin")
+        case .edit: AppLanguage.localized("Edit")
+        case .delete: AppLanguage.localized("Delete")
+        case .save: AppLanguage.localized("Save")
+        case .favorite: AppLanguage.localized("Favorite")
+        case .reactionDetails: AppLanguage.localized("Reactions")
         }
     }
 }

@@ -938,6 +938,10 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             guard let editor = resolveEditor(), notification.object as? NSTextView === editor else {
                 return
             }
+            if notification.name == NSText.didBeginEditingNotification {
+                input?.nativeEditingBegan()
+            }
+
             observeMentionStorage(editor.textStorage)
             input?.nativeInputChanged(isEdit: notification.name == NSText.didChangeNotification)
         }
@@ -1085,6 +1089,12 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             guard let editor = resolveEditor(), notification.object as? UIView === editor else {
                 return
             }
+            if notification.name == UITextField.textDidBeginEditingNotification
+                || notification.name == UITextView.textDidBeginEditingNotification
+            {
+                input?.nativeEditingBegan()
+            }
+
             observeMentionStorage((editor as? UITextView)?.textStorage)
             input?.nativeInputChanged(
                 isEdit: notification.name == UITextView.textDidChangeNotification

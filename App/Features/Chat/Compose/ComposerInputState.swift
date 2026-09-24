@@ -20,6 +20,12 @@ final class ComposerInputState: ObservableObject {
     private var settlementObserver: CFRunLoopObserver?
     private var endingSnapshot: ComposerInputSnapshot?
     private var endingMentionText: NSAttributedString?
+    // An editing-end notification can be sent synchronously while SwiftUI is
+    // reconciling a representable's focus. Keep its query dismissal and IME
+    // gate private until the existing run-loop settlement boundary publishes
+    // the settled native snapshot.
+    private var mentionQueryToClearAfterEditingEnd: ComposerMentionQuery?
+    private var hasPendingComposition = false
 
     func configure(draft: Binding<String>, onCompositionChanged: ((Bool) -> Void)?) {
         self.draft = draft
@@ -29,7 +35,7 @@ final class ComposerInputState: ObservableObject {
     func receiveExternalText(_ text: String) {
         // Restoration must not replace an in-flight user edit. A binding echo of
         // our own commit must not recreate spans or erase the native undo stack.
-        guard !isComposing, !hasPendingEdit else { return }
+        guard !isComposing, !hasPendingComposition, !hasPendingEdit else { return }
         guard ComposerMentionText.wireText(mentionText) != text || editorText == nil else { return }
         mentionText = ComposerMentionText.expand(text, names: mentionNames)
         editorText = mentionText.string
@@ -43,7 +49,7 @@ final class ComposerInputState: ObservableObject {
     }
 
     private func hydrateMentionNames() {
-        guard !isComposing, !hasPendingEdit,
+        guard !isComposing, !hasPendingComposition, !hasPendingEdit,
             nativeInput?.canHydrateMentionLabels != false
         else { return }
         let hydrated = NSMutableAttributedString(attributedString: mentionText)
@@ -75,17 +81,29 @@ final class ComposerInputState: ObservableObject {
         scheduleSettlement()
     }
 
+    func nativeEditingBegan() {
+        // A new native editor session supersedes a pending focus-loss state.
+        mentionQueryToClearAfterEditingEnd = nil
+        hasPendingComposition = false
+    }
+
     func nativeEditingEnded(
         _ snapshot: ComposerInputSnapshot, visibleText: NSAttributedString? = nil
     ) {
         endingSnapshot = snapshot
         endingMentionText = visibleText ?? nativeInput?.attributedText
-        if case .marked = snapshot { beginComposition() }
-        mentionQuery = nil
+        if case .marked = snapshot {
+            hasPendingComposition = true
+        } else {
+            mentionQueryToClearAfterEditingEnd = mentionQuery
+        }
         scheduleSettlement()
     }
 
     func refreshMentionQuery() {
+        // The end snapshot may still hold IME preedit while SwiftUI is
+        // reconciling focus. Settlement publishes its composition state.
+        guard !hasPendingComposition else { return }
         guard !isComposing, let nativeInput,
             case .committed = nativeInput.snapshot(),
             let text = nativeInput.attributedText, let selection = nativeInput.selection
@@ -99,7 +117,9 @@ final class ComposerInputState: ObservableObject {
 
     func insertMention(uid: Int32, label: String, query: ComposerMentionQuery) -> Bool {
         refreshMentionQuery()
-        guard !isComposing, mentionQuery == query, let nativeInput else { return false }
+        guard !isComposing, !hasPendingComposition, mentionQuery == query, let nativeInput else {
+            return false
+        }
         let replacement = NSMutableAttributedString(
             attributedString: ComposerMentionText.mention(uid: uid, label: label))
         replacement.append(NSAttributedString(string: " "))
@@ -111,6 +131,9 @@ final class ComposerInputState: ObservableObject {
     }
 
     func prepareSubmission(allowEmptyUnfocused: Bool = false) -> Bool {
+        // Treat a marked editing-end snapshot as composing until settlement;
+        // a candidate-confirmation Return must not send in that interval.
+        guard !hasPendingComposition else { return false }
         var snapshot = nativeInput?.snapshot() ?? .unavailable
         if case .unavailable = snapshot { snapshot = endingSnapshot ?? .unavailable }
         if case .marked = snapshot {
@@ -154,6 +177,7 @@ final class ComposerInputState: ObservableObject {
     }
 
     private func beginComposition() {
+        hasPendingComposition = false
         mentionQuery = nil
         guard !isComposing else { return }
         isComposing = true
@@ -179,6 +203,10 @@ final class ComposerInputState: ObservableObject {
             return
         }
         finishEditing(snapshot: snapshot)
+        if let query = mentionQueryToClearAfterEditingEnd, mentionQuery == query {
+            mentionQuery = nil
+        }
+        mentionQueryToClearAfterEditingEnd = nil
     }
 
     func detach(finalSnapshot: ComposerInputSnapshot? = nil) {
@@ -194,9 +222,10 @@ final class ComposerInputState: ObservableObject {
     }
 
     private func finishEditing(snapshot: ComposerInputSnapshot) {
-        let shouldPublish = hasPendingEdit || isComposing
+        let shouldPublish = hasPendingEdit || isComposing || hasPendingComposition
         let visible = nativeInput?.attributedText ?? endingMentionText
         hasPendingEdit = false
+        hasPendingComposition = false
         endingSnapshot = nil
         endingMentionText = nil
         stopObserving()

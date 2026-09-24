@@ -75,7 +75,8 @@ final class MessageReactionController: ObservableObject {
         } catch {
             guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled
             else { return nil }
-            self.error = String(localized: "Couldn’t load message permissions. Please try again.")
+            self.error = AppLanguage.localized(
+                "Couldn’t load message permissions. Please try again.")
             if case APIError.invalidToken = error { await onInvalidToken() }
             return nil
         }
@@ -141,7 +142,7 @@ final class MessageReactionController: ObservableObject {
             else { return }
             self.error =
                 (error as? Failure)?.message
-                ?? String(localized: "Couldn’t update reaction. Please try again.")
+                ?? AppLanguage.localized("Couldn’t update reaction. Please try again.")
             if case APIError.invalidToken = error { await onInvalidToken() }
         }
     }
@@ -209,12 +210,13 @@ final class MessageReactionController: ObservableObject {
         var message: String {
             switch self {
             case .unknownOwnership:
-                String(localized: "Couldn’t determine your reactions. Please try again.")
-            case .changed: String(localized: "This message’s reactions changed. Please try again.")
-            case .deleted: String(localized: "This message has been deleted.")
-            case .userLimit: String(localized: "You can add up to 5 reactions to a message.")
+                AppLanguage.localized("Couldn’t determine your reactions. Please try again.")
+            case .changed:
+                AppLanguage.localized("This message’s reactions changed. Please try again.")
+            case .deleted: AppLanguage.localized("This message has been deleted.")
+            case .userLimit: AppLanguage.localized("You can add up to 5 reactions to a message.")
             case .distinctLimit:
-                String(localized: "A message can have up to 50 different reactions.")
+                AppLanguage.localized("A message can have up to 50 different reactions.")
             }
         }
     }

@@ -70,6 +70,8 @@
             interactionContext: MessageInteractionContext,
             mediaContext: AppMediaContext?,
             colorScheme: ColorScheme,
+            messageTextSize: Int,
+            unreadBadgeColor: ConversationUnreadBadgeColor,
             headerInset: CGFloat,
             composerInset: CGFloat,
             isSplitResizing: Bool
@@ -82,12 +84,14 @@
             tableController.isSplitResizing = isSplitResizing
             tableController.mediaContext = mediaContext
             tableController.colorScheme = colorScheme
+            tableController.messageTextSize = messageTextSize
             // The table applies these as contentInsets. Chrome only positions itself;
             // neither this controller nor its representable adds another safe area.
             tableController.headerInset = headerInset
             tableController.composerInset = composerInset
             interactionController.configure(actions: actions, context: interactionContext)
             tableController.actions = interactionController.routedActions
+            chromeView.setBadgeColor(unreadBadgeColor)
             if isViewLoaded {
                 if appearanceChanged { applyAppearance() }
                 requestRefresh()

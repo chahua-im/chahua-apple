@@ -9,12 +9,21 @@
         @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
         @Environment(\.isChatSplitResizing) private var isSplitResizing
-
+        @AppStorage(MessageTextSizePreference.storageKey)
+        private var messageTextSize = MessageTextSizePreference.defaultValue
+        @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
+        private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
+            .rawValue
         let model: ConversationTimelineModel
         var initialPosition: TimelineInitialPosition = .liveEdge
         var loadsInitialAutomatically = true
         var actions = TimelineBubbleActions()
         var interactionContext = MessageInteractionContext()
+
+        private var unreadBadgeColor: ConversationUnreadBadgeColor {
+            ConversationUnreadBadgeColor(rawValue: unreadBadgeColorRawValue)
+                ?? ConversationListPreferences.defaultUnreadBadgeColor
+        }
 
         func makeNSViewController(context: Context) -> TimelineViewController {
             let controller = TimelineViewController(model: model)
@@ -32,6 +41,8 @@
                 interactionContext: interactionContext,
                 mediaContext: mediaContext,
                 colorScheme: colorScheme,
+                messageTextSize: messageTextSize,
+                unreadBadgeColor: unreadBadgeColor,
                 headerInset: chatHeaderInset,
                 composerInset: chatComposerInset,
                 isSplitResizing: isSplitResizing

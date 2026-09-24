@@ -254,7 +254,8 @@
                 imageView.clear()
                 imageView.isHidden = true
                 showWarning(
-                    symbol: "video.slash", label: String(localized: "Video preview unavailable"),
+                    symbol: "video.slash",
+                    label: AppLanguage.localized("Video preview unavailable"),
                     color: .white.withAlphaComponent(0.8))
             } else {
                 imageView.configure(
@@ -267,8 +268,8 @@
             accessibilityTraits = isEnabled ? .button : .image
             accessibilityLabel =
                 video
-                ? String(localized: "Video preview unavailable")
-                : isEnabled ? String(localized: "Open image") : String(localized: "Image")
+                ? AppLanguage.localized("Video preview unavailable")
+                : isEnabled ? AppLanguage.localized("Open image") : AppLanguage.localized("Image")
             updateTapMarker()
             setNeedsLayout()
         }
@@ -341,15 +342,16 @@
                 clearSticker()
                 showWarning(
                     symbol: "photo.badge.exclamationmark",
-                    label: String(localized: "Sticker data is missing."), color: .secondaryLabel)
+                    label: AppLanguage.localized("Sticker data is missing."), color: .secondaryLabel
+                )
             }
             isEnabled = canOpen && sticker != nil
             accessibilityTraits = isEnabled ? .button : .image
             accessibilityLabel =
                 (sticker?.name).flatMap { $0.isEmpty ? nil : $0 }
                 ?? (sticker?.emoji).flatMap { $0.isEmpty ? nil : $0 }
-                ?? String(localized: "Sticker")
-            accessibilityHint = isEnabled ? String(localized: "Opens sticker pack") : nil
+                ?? AppLanguage.localized("Sticker")
+            accessibilityHint = isEnabled ? AppLanguage.localized("Opens sticker pack") : nil
             updateTapMarker()
             setNeedsLayout()
         }

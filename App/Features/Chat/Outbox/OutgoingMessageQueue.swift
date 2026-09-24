@@ -998,7 +998,7 @@ nonisolated private enum OutgoingVoiceFiles {
     enum ImportError: LocalizedError {
         case invalidAudio
         var errorDescription: String? {
-            String(localized: "The voice recording is not a valid M4A file.")
+            AppLanguage.localized("The voice recording is not a valid M4A file.")
         }
     }
 

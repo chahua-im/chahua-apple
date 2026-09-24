@@ -192,7 +192,7 @@ struct ChatDetailView: View {
     private var deletionSurface: some View {
         conversationDropSurface
             .confirmationDialog(
-                String(localized: "Delete Message"),
+                AppLanguage.localized("Delete Message"),
                 isPresented: Binding(
                     get: { messageToDelete != nil }, set: { if !$0 { messageToDelete = nil } }),
                 titleVisibility: .visible,
@@ -214,7 +214,7 @@ struct ChatDetailView: View {
                     Text("Are you sure you want to delete this message?")
                 } else {
                     Text(
-                        "Are you sure you want to delete this message from \(message.sender.name ?? String(localized: "this user"))?"
+                        "Are you sure you want to delete this message from \(message.sender.name ?? AppLanguage.localized("this user"))?"
                     )
                 }
             }
@@ -592,7 +592,7 @@ struct ChatDetailView: View {
                     submittedText.trimmingCharacters(in: .whitespacesAndNewlines))
             }
         } else {
-            editError = String(localized: "Couldn’t edit this message. Please try again.")
+            editError = AppLanguage.localized("Couldn’t edit this message. Please try again.")
         }
         return didUpdate
     }

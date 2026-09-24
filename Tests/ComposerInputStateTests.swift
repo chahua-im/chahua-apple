@@ -133,6 +133,31 @@
             XCTAssertFalse(harness.input.prepareExplicitSubmission())
         }
 
+        func testMarkedEditingEndDefersCompositionPublicationUntilSettlement() throws {
+            let harness = NativeComposerHarness(text: "@a")
+            defer { harness.input.detach() }
+            harness.input.refreshMentionQuery()
+            let query = try XCTUnwrap(harness.input.mentionQuery)
+            harness.editor.setMarkedText(
+                "b", selectedRange: NSRange(location: 1, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+
+            harness.input.nativeEditingEnded(
+                .marked, visibleText: harness.editor.attributedString())
+            harness.input.nativeInput = nil
+            harness.restore("restored draft")
+
+            XCTAssertFalse(harness.input.isComposing)
+            XCTAssertEqual(harness.input.mentionQuery, query)
+            XCTAssertEqual(harness.input.editorText, "@a")
+
+            XCTAssertFalse(harness.input.prepareSubmission())
+
+            harness.input.settleNativeInput()
+            XCTAssertTrue(harness.input.isComposing)
+            XCTAssertNil(harness.input.mentionQuery)
+        }
+
         func testSelectedMentionKeepsUIDWithoutTokenizingEqualPlainName() throws {
             let harness = NativeComposerHarness(text: "@Ada @a")
             defer { harness.input.detach() }
@@ -144,6 +169,32 @@
             XCTAssertFalse(
                 harness.input.insertMention(uid: 99, label: "Ada", query: query),
                 "Stale result must not replace a new caret position.")
+        }
+
+        func testEditingEndDefersMentionDismissalUntilSettlement() throws {
+            let harness = NativeComposerHarness(text: "@a")
+            defer { harness.input.detach() }
+            harness.input.refreshMentionQuery()
+            let query = try XCTUnwrap(harness.input.mentionQuery)
+
+            harness.input.nativeEditingEnded(harness.snapshot())
+            XCTAssertEqual(harness.input.mentionQuery, query)
+
+            harness.input.settleNativeInput()
+            XCTAssertNil(harness.input.mentionQuery)
+        }
+
+        func testNewEditingSessionKeepsItsMentionQueryAfterAnEarlierEditingEnd() throws {
+            let harness = NativeComposerHarness(text: "@a")
+            defer { harness.input.detach() }
+            harness.input.refreshMentionQuery()
+            let query = try XCTUnwrap(harness.input.mentionQuery)
+
+            harness.input.nativeEditingEnded(harness.snapshot())
+            harness.input.nativeEditingBegan()
+            harness.input.settleNativeInput()
+
+            XCTAssertEqual(harness.input.mentionQuery, query)
         }
 
         func testRestoredMentionLabelsAndQueryRespectSelectionAndIdentity() {

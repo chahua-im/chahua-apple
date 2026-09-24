@@ -31,7 +31,7 @@ struct ThreadDetailView: View {
 
     private var threadTitle: String {
         let title = messagePreview(thread.threadRootMessage)
-        return title.isEmpty ? String(localized: "Message") : title
+        return title.isEmpty ? AppLanguage.localized("Message") : title
     }
 
     private func loadChat() async {

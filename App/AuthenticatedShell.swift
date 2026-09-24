@@ -14,6 +14,11 @@ struct AuthenticatedShell: View {
 
     @State private var selectedScope: ConversationListScope = .messages
     @State private var archivedScope: ConversationListScope = .messages
+    @AppStorage(ConversationListPreferences.showsMessagesTabStorageKey)
+    private var showsMessagesTab = ConversationListPreferences.defaultShowsMessagesTab
+    @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
+    private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
+        .rawValue
     @State private var listPath: [NavigationRoute] = []
     @State private var selectedConversationID: ConversationKey?
     @State private var showsSettings = false
@@ -37,6 +42,34 @@ struct AuthenticatedShell: View {
 
     private var isBrowsingArchived: Bool { listPath.last == .archive }
 
+    private var unreadBadgeColor: ConversationUnreadBadgeColor {
+        ConversationUnreadBadgeColor(rawValue: unreadBadgeColorRawValue)
+            ?? ConversationListPreferences.defaultUnreadBadgeColor
+    }
+
+    private func scopeBinding(archived: Bool) -> Binding<ConversationListScope> {
+        Binding(
+            get: {
+                normalizedScope(archived ? archivedScope : selectedScope)
+            },
+            set: { scope in
+                if archived {
+                    archivedScope = normalizedScope(scope)
+                } else {
+                    selectedScope = normalizedScope(scope)
+                }
+            })
+    }
+
+    private func normalizedScope(_ scope: ConversationListScope) -> ConversationListScope {
+        showsMessagesTab || scope != .messages ? scope : .groups
+    }
+
+    private func normalizeConversationScopes() {
+        selectedScope = normalizedScope(selectedScope)
+        archivedScope = normalizedScope(archivedScope)
+    }
+
     private struct NotificationNavigation {
         let route: PushNotificationRoute
         let userID: Int32
@@ -51,7 +84,7 @@ struct AuthenticatedShell: View {
         var key: ConversationKey { .init(chatID: chat.id, threadID: rootMessage.id) }
         var title: String {
             let preview = messagePreview(rootMessage.replyPreview)
-            return preview.isEmpty ? String(localized: "Thread") : preview
+            return preview.isEmpty ? AppLanguage.localized("Thread") : preview
         }
     }
 
@@ -85,11 +118,16 @@ struct AuthenticatedShell: View {
             if phase == .active { claimNotification() }
         }
         .task(id: notificationNavigation?.requestID) { await resolveNotification() }
+        .onChange(of: showsMessagesTab) { _, showsMessagesTab in
+            guard !showsMessagesTab else { return }
+            selectedScope = .groups
+            archivedScope = .groups
+        }
         .onChange(of: me.uid) { _, _ in
             selectConversation(nil)
             showsSettings = false
             listPath.removeAll()
-            archivedScope = .messages
+            archivedScope = normalizedScope(.messages)
         }
         .onChange(of: isSigningOut) { _, signingOut in
             if signingOut {
@@ -98,6 +136,7 @@ struct AuthenticatedShell: View {
             }
         }
         .onAppear {
+            normalizeConversationScopes()
             isVisible = true
             reportVisibleConversation()
         }
@@ -112,8 +151,13 @@ struct AuthenticatedShell: View {
                 set: { showsSettings = $0 }
             )
         ) {
-            settings
-                .frame(minWidth: 360, idealWidth: 460, minHeight: 420, idealHeight: 540)
+            #if os(macOS)
+                settings
+                    .frame(minWidth: 760, idealWidth: 880, minHeight: 540, idealHeight: 640)
+            #else
+                settings
+                    .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
+            #endif
         }
         #if os(iOS)
             .fullScreenCover(
@@ -150,7 +194,7 @@ struct AuthenticatedShell: View {
                         ChatFloatingHeader(
                             title: threadPath.isEmpty
                                 ? selectedTitle
-                                : openedThread?.title ?? String(localized: "Thread"),
+                                : openedThread?.title ?? AppLanguage.localized("Thread"),
                             onBack: !threadPath.isEmpty
                                 ? popThread : isSplit ? nil : { selectConversation(nil) },
                             onClose: isSplit && threadPath.isEmpty
@@ -194,7 +238,7 @@ struct AuthenticatedShell: View {
                             .modifier(
                                 ChatPhoneDetailHeader(
                                     title: openedThread?.key == key
-                                        ? openedThread?.title ?? String(localized: "Thread")
+                                        ? openedThread?.title ?? AppLanguage.localized("Thread")
                                         : selectedTitle,
                                     onOpenInfo: key.threadID == nil ? infoAction : nil
                                 ) {
@@ -239,7 +283,7 @@ struct AuthenticatedShell: View {
     #endif
 
     private func chatList(archived: Bool) -> some View {
-        let scope = archived ? $archivedScope : $selectedScope
+        let scope = scopeBinding(archived: archived)
         let badges = ConversationTabBadges(
             chats: archived ? chatStore.state.archivedChats : chatStore.state.chats,
             threads: archived ? chatStore.state.archivedThreads : chatStore.state.threads,
@@ -251,6 +295,7 @@ struct AuthenticatedShell: View {
             scope: scope.wrappedValue,
             archivedMode: archived,
             onOpenArchived: openArchived,
+            badgeColor: unreadBadgeColor,
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectConversation($0.id) }
         )
@@ -259,11 +304,14 @@ struct AuthenticatedShell: View {
                 // One custom toolbar item owns the avatar/picker spacing. Give the
                 // container an explicit width: UIKit otherwise measures its flexible
                 // segmented control at zero inside the horizontal stack.
-                let picker = ConversationScopePicker(selection: scope, badges: badges)
-                    .frame(
-                        minWidth: 0,
-                        maxWidth: max(
-                            0, geometry.size.width - (archived ? 96 : accountAvatarDiameter + 40)))
+                let picker = ConversationScopePicker(
+                    selection: scope, badges: badges, showsMessagesTab: showsMessagesTab,
+                    badgeColor: unreadBadgeColor
+                )
+                .frame(
+                    minWidth: 0,
+                    maxWidth: max(
+                        0, geometry.size.width - (archived ? 96 : accountAvatarDiameter + 40)))
                 let header = HStack(spacing: 8) {
                     accountButton
                         .labelStyle(.iconOnly)
@@ -297,8 +345,8 @@ struct AuthenticatedShell: View {
         #else
             return VStack(spacing: 0) {
                 ConversationListHeader(
-                    selection: scope, badges: badges,
-                    onBack: archived ? { closeArchived() } : nil
+                    selection: scope, badges: badges, showsMessagesTab: showsMessagesTab,
+                    badgeColor: unreadBadgeColor, onBack: archived ? { closeArchived() } : nil
                 ) { accountButton }
                 list
             }
@@ -307,7 +355,7 @@ struct AuthenticatedShell: View {
 
     private func openArchived() {
         guard listPath.isEmpty else { return }
-        archivedScope = selectedScope
+        archivedScope = normalizedScope(selectedScope)
         listPath.append(.archive)
     }
 
@@ -467,9 +515,9 @@ struct AuthenticatedShell: View {
     private var selectedTitle: String {
         if let navigation = notificationNavigation {
             if navigation.route.threadID != nil {
-                return selectedConversation?.title ?? String(localized: "Thread")
+                return selectedConversation?.title ?? AppLanguage.localized("Thread")
             }
-            return navigation.chat?.chatDisplayName ?? String(localized: "Loading conversation")
+            return navigation.chat?.chatDisplayName ?? AppLanguage.localized("Loading conversation")
         }
         return selectedConversation?.title ?? ""
     }

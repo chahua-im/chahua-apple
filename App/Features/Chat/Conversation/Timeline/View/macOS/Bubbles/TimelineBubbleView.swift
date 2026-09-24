@@ -761,7 +761,8 @@
                     button.setButtonType(.momentaryPushIn)
                     button.target = self
                     button.action = #selector(openFailure)
-                    button.setAccessibilityLabel(String(localized: "Failed to send. Retry options"))
+                    button.setAccessibilityLabel(
+                        AppLanguage.localized("Failed to send. Retry options"))
                     addSubview(button)
                     self.failureButton = button
                 }

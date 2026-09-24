@@ -97,7 +97,8 @@ struct TimelineRowPresentation {
                             : sticker
                                 ? "sticker" : audio ? "audio" : supported ? "text" : "unsupported"))
             if system {
-                standaloneText = deleted ? String(localized: "[Deleted]") : message.entry.text ?? ""
+                standaloneText =
+                    deleted ? AppLanguage.localized("[Deleted]") : message.entry.text ?? ""
                 sections.append(
                     .standalone(
                         standaloneText!,
@@ -172,7 +173,7 @@ struct TimelineRowPresentation {
                     formatter.dateFormat = "HH:mm"
                     let time =
                         formatter.string(from: message.entry.createdAt)
-                        + (remote?.isEdited == true ? " " + String(localized: "(Edited)") : "")
+                        + (remote?.isEdited == true ? " " + AppLanguage.localized("(Edited)") : "")
                     metadata = MessageMetadata(
                         time: time, state: message.isOutgoing ? message.entry.displayState : nil,
                         isOutgoing: message.isOutgoing, isOverlay: overlay,
@@ -181,8 +182,8 @@ struct TimelineRowPresentation {
                 } else {
                     standaloneText =
                         deleted
-                        ? String(localized: "Message deleted")
-                        : String(localized: "This message type isn’t supported yet")
+                        ? AppLanguage.localized("Message deleted")
+                        : AppLanguage.localized("This message type isn’t supported yet")
                     sections.append(.standalone(standaloneText!, author: nil))
                 }
                 if !deleted {
@@ -195,7 +196,8 @@ struct TimelineRowPresentation {
                     if !isThreadTimeline, let count = remote?.threadInfo?.replyCount {
                         threadLabel =
                             count == 1
-                            ? String(localized: "1 reply") : String(localized: "\(count) replies")
+                            ? AppLanguage.localized("1 reply")
+                            : AppLanguage.localized("\(count) replies")
                         sections.append(.thread(threadLabel!))
                     }
                 }
@@ -208,7 +210,7 @@ struct TimelineRowPresentation {
             standaloneText = formatter.string(from: date.day)
             sections = [.kind("date"), .standalone(standaloneText!, author: nil)]
         case .unreadSeparator:
-            standaloneText = String(localized: "Below are unread messages")
+            standaloneText = AppLanguage.localized("Below are unread messages")
             sections = [.kind("unread"), .standalone(standaloneText!, author: nil)]
         }
         return .init(

@@ -24,7 +24,7 @@ struct ComposerAttachmentDialog: View {
     let onImportProviders: ([NSItemProvider]) -> Void
     let onSubmit: () async -> Bool
     let onCancel: () async throws -> Void
-    var onSearchMembers: ComposerMemberSearch? = nil
+    nonisolated var onSearchMembers: ComposerMemberSearch? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var input = ComposerInputState()

@@ -63,7 +63,7 @@ enum ConversationListItem: Hashable, Identifiable {
             return chat.chatDisplayName
         case .thread(let thread):
             let preview = messagePreview(thread.threadRootMessage)
-            return preview.isEmpty ? String(localized: "Message") : preview
+            return preview.isEmpty ? AppLanguage.localized("Message") : preview
         }
     }
 
@@ -93,11 +93,11 @@ enum ConversationListItem: Hashable, Identifiable {
         case .chat(let chat):
             guard let lastMessage = chat.lastMessage else { return nil }
             let preview = messagePreview(lastMessage)
-            return preview.isEmpty ? String(localized: "Message") : preview
+            return preview.isEmpty ? AppLanguage.localized("Message") : preview
         case .thread(let thread):
             let message = thread.lastReply ?? thread.threadRootMessage
             let preview = messagePreview(message)
-            return preview.isEmpty ? String(localized: "Message") : preview
+            return preview.isEmpty ? AppLanguage.localized("Message") : preview
         }
     }
 
@@ -112,7 +112,7 @@ enum ConversationListItem: Hashable, Identifiable {
             sender = (thread.lastReply ?? thread.threadRootMessage).sender
         }
         let name = sender.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (name?.isEmpty == false) ? name : String(localized: "User \(sender.uid)")
+        return (name?.isEmpty == false) ? name : AppLanguage.localized("User \(sender.uid)")
     }
 
     static func entries(
@@ -145,9 +145,9 @@ extension ChatListItem {
         switch kind {
         case .dm:
             return nonEmpty(peer?.username) ?? nonEmpty(name)
-                ?? String(localized: "Direct Message \(id)")
+                ?? AppLanguage.localized("Direct Message \(id)")
         case .group:
-            return nonEmpty(name) ?? String(localized: "Chat \(id)")
+            return nonEmpty(name) ?? AppLanguage.localized("Chat \(id)")
         }
     }
 

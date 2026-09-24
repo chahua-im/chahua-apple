@@ -8,9 +8,17 @@
         @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
         @ScaledMetric(relativeTo: .caption2) private var jumpBadgeDiameter: CGFloat = 22
+        @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
+        private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
+            .rawValue
         var initialPosition: TimelineInitialPosition = .liveEdge
         var loadsInitialAutomatically = true
         var actions = TimelineBubbleActions()
+
+        private var unreadBadgeColor: ConversationUnreadBadgeColor {
+            ConversationUnreadBadgeColor(rawValue: unreadBadgeColorRawValue)
+                ?? ConversationListPreferences.defaultUnreadBadgeColor
+        }
 
         var body: some View {
             // A scrolling viewport fills its proposal; its message contents must not
@@ -36,7 +44,7 @@
                                                 minHeight: jumpBadgeDiameter
                                             )
                                             .foregroundStyle(.white)
-                                            .background(ChahuaTheme.accent, in: Capsule())
+                                            .background(unreadBadgeColor.color, in: Capsule())
                                             .offset(x: 8, y: -8)
                                     }
                                 }
@@ -45,7 +53,8 @@
                         .accessibilityLabel("Jump to latest messages")
                         .accessibilityValue(
                             model.jumpUnreadCount > 0
-                                ? String(localized: "\(model.jumpUnreadCount) unread messages") : ""
+                                ? AppLanguage.localized("\(model.jumpUnreadCount) unread messages")
+                                : ""
                         )
                         .padding(ChahuaTheme.Spacing.large)
                         .padding(.bottom, chatComposerInset)

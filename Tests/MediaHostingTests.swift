@@ -7,6 +7,27 @@ import XCTest
 
 @MainActor
 final class MediaHostingTests: XCTestCase {
+    func testClearingMediaCacheRefreshesDiskUsageWithoutTouchingOtherCaches() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        let first = try ImageCache(name: UUID().uuidString, cacheDirectoryURL: directory)
+        let second = try ImageCache(name: UUID().uuidString, cacheDirectoryURL: directory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let data = Data(repeating: 0x41, count: 4096)
+        try await first.storeToDisk(data, forKey: "image")
+        try await second.storeToDisk(data, forKey: "other-account")
+        let model = MediaCacheSettingsModel(
+            mediaContext: AppMediaContext(cache: first, downloader: .default))
+        await model.refresh()
+        XCTAssertGreaterThan(model.diskStorageSize, 0)
+
+        await model.clear()
+        XCTAssertEqual(model.state, .cleared)
+        XCTAssertEqual(model.diskStorageSize, 0)
+        let otherAccountBytes = try await second.diskStorageSize
+        XCTAssertGreaterThan(otherAccountBytes, 0)
+    }
+
     func testPreparingGeometryDoesNotAcquireRemoteAvatars() async throws {
         let requested = expectation(description: "Geometry preparation must not request an avatar")
         requested.isInverted = true

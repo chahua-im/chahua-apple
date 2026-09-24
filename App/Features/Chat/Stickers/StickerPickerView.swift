@@ -80,7 +80,7 @@ struct StickerPickerView: View {
             Divider()
             ScrollView(.horizontal) {
                 HStack(spacing: 4) {
-                    packTab(id: nil, name: String(localized: "Favorites")) {
+                    packTab(id: nil, name: AppLanguage.localized("Favorites")) {
                         Image(systemName: "heart.fill").font(.title3)
                     }
                     ForEach(library.packs) { pack in

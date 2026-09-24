@@ -115,13 +115,14 @@
             chrome.alpha = 0
             view.addSubview(chrome)
             configureButton(
-                closeButton, symbol: "xmark", label: String(localized: "Close image"),
+                closeButton, symbol: "xmark", label: AppLanguage.localized("Close image"),
                 action: #selector(closeTapped))
             configureButton(
-                previousButton, symbol: "chevron.left", label: String(localized: "Previous image"),
+                previousButton, symbol: "chevron.left",
+                label: AppLanguage.localized("Previous image"),
                 action: #selector(previousTapped))
             configureButton(
-                nextButton, symbol: "chevron.right", label: String(localized: "Next image"),
+                nextButton, symbol: "chevron.right", label: AppLanguage.localized("Next image"),
                 action: #selector(nextTapped))
             countLabel.textColor = .white
             countLabel.accessibilityIdentifier = "image-detail-position"
@@ -334,8 +335,9 @@
         }
 
         private func updateChrome() {
-            countLabel.text = String(localized: "\(selectedIndex + 1) of \(gallery.items.count)")
-            countLabel.accessibilityLabel = String(localized: "Image")
+            countLabel.text = AppLanguage.localized(
+                "\(selectedIndex + 1) of \(gallery.items.count)")
+            countLabel.accessibilityLabel = AppLanguage.localized("Image")
             countLabel.accessibilityValue = countLabel.text
             let showsPagingButtons = UIAccessibility.isVoiceOverRunning && gallery.items.count > 1
             previousButton.isHidden = !showsPagingButtons
@@ -651,8 +653,8 @@
             imageCanvas.isAccessibilityElement = true
             imageCanvas.accessibilityTraits = .image
             imageCanvas.accessibilityLabel =
-                item.fileName.isEmpty ? String(localized: "Image") : item.fileName
-            imageCanvas.accessibilityHint = String(localized: "Pinch or double-tap to zoom.")
+                item.fileName.isEmpty ? AppLanguage.localized("Image") : item.fileName
+            imageCanvas.accessibilityHint = AppLanguage.localized("Pinch or double-tap to zoom.")
             scrollView.addSubview(imageCanvas)
             stillImage.contentMode = .scaleToFill
             imageCanvas.addSubview(stillImage)
@@ -661,7 +663,7 @@
             spinner.color = .white
             spinner.hidesWhenStopped = true
             addSubview(spinner)
-            errorLabel.text = String(localized: "Unable to load image")
+            errorLabel.text = AppLanguage.localized("Unable to load image")
             errorLabel.font = .preferredFont(forTextStyle: .body)
             errorLabel.adjustsFontForContentSizeCategory = true
             errorLabel.textColor = .white
@@ -670,7 +672,7 @@
             errorLabel.isHidden = true
             addSubview(errorLabel)
             var retryConfiguration = UIButton.Configuration.filled()
-            retryConfiguration.title = String(localized: "Retry")
+            retryConfiguration.title = AppLanguage.localized("Retry")
             retryConfiguration.baseBackgroundColor = .darkGray
             retryConfiguration.baseForegroundColor = .white
             retryConfiguration.cornerStyle = .capsule

@@ -2,7 +2,8 @@ import ChahuaAPI
 import Combine
 import SwiftUI
 
-typealias ComposerMemberSearch = @MainActor (ListMembersQuery) async throws -> [MemberResponse]
+typealias ComposerMemberSearch =
+    @MainActor @Sendable (ListMembersQuery) async throws -> [MemberResponse]
 
 /// Both editors use the same chat-scoped picker. Native input owns the caret,
 /// mention identities, and IME; this surface only searches and selects members.
@@ -10,7 +11,7 @@ struct ComposerMentionSuggestions: View {
     @ObservedObject var input: ComposerInputState
     let wireText: String
     let isEnabled: Bool
-    let search: ComposerMemberSearch?
+    nonisolated let search: ComposerMemberSearch?
     @StateObject private var suggestions = ComposerMentionSuggestionsModel()
 
     private var mentionedIDs: [Int32] {

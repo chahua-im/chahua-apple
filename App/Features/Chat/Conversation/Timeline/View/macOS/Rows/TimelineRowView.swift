@@ -307,7 +307,7 @@
             setAccessibilityRole(.group)
             setAccessibilityCustomActions([
                 NSAccessibilityCustomAction(
-                    name: String(localized: "Message actions"),
+                    name: AppLanguage.localized("Message actions"),
                     handler: { [weak self] in
                         guard let self else { return false }
                         return TimelineContextSource.openContextMenu(for: self)
@@ -329,8 +329,8 @@
             setButtonType(.momentaryPushIn)
             wantsLayer = true
             layer?.cornerRadius = 14
-            setAccessibilityLabel(String(localized: "Reply"))
-            toolTip = String(localized: "Reply")
+            setAccessibilityLabel(AppLanguage.localized("Reply"))
+            toolTip = AppLanguage.localized("Reply")
             updatePaint()
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

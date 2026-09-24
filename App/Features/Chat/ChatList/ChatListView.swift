@@ -8,6 +8,7 @@ struct ChatListView: View {
     let scope: ConversationListScope
     var archivedMode = false
     var onOpenArchived: (() -> Void)?
+    var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
     let selectedConversationID: ConversationKey?
     let onSelectConversation: (ConversationListItem) -> Void
     @State private var isPullRefreshing = false
@@ -170,7 +171,7 @@ struct ChatListView: View {
                 item: item,
                 draft: drafts.draftText(chatID: item.id.chatID, threadID: item.id.threadID),
                 store: store, currentUserID: currentUserID,
-                isSelected: selectedConversationID == item.id
+                isSelected: selectedConversationID == item.id, badgeColor: badgeColor
             )
             .contentShape(Rectangle())
             .overlay {
@@ -230,12 +231,14 @@ struct ChatListView: View {
         if item.unreadCount > 0 {
             return .init(
                 action: ConversationListAction.markRead.rawValue,
-                title: String(localized: "Mark as Read"), symbol: "checkmark.message", tint: .blue)
+                title: AppLanguage.localized("Mark as Read"), symbol: "checkmark.message",
+                tint: .blue)
         }
         if case .chat = item {
             return .init(
                 action: ConversationListAction.markUnread.rawValue,
-                title: String(localized: "Mark as Unread"), symbol: "message.badge", tint: .blue)
+                title: AppLanguage.localized("Mark as Unread"), symbol: "message.badge", tint: .blue
+            )
         }
         // Threads have no mark-unread endpoint; do not offer a local-only badge.
         return nil
@@ -244,7 +247,8 @@ struct ChatListView: View {
     private func trailingSwipeActions(for item: ConversationListItem) -> [SwipeRowAction] {
         let archive = SwipeRowAction(
             action: (archivedMode ? ConversationListAction.unarchive : .archive).rawValue,
-            title: archivedMode ? String(localized: "Unarchive") : String(localized: "Archive"),
+            title: archivedMode
+                ? AppLanguage.localized("Unarchive") : AppLanguage.localized("Archive"),
             symbol: archivedMode ? "tray" : "archivebox", tint: .indigo)
         guard case .chat(let chat) = item else { return [archive] }
         let isMuted = (chat.mutedUntil ?? .distantPast) > Date()
@@ -252,7 +256,7 @@ struct ChatListView: View {
             archive,
             .init(
                 action: (isMuted ? ConversationListAction.unmute : .mute).rawValue,
-                title: isMuted ? String(localized: "Unmute") : String(localized: "Mute"),
+                title: isMuted ? AppLanguage.localized("Unmute") : AppLanguage.localized("Mute"),
                 symbol: isMuted ? "bell" : "bell.slash", tint: .orange),
         ]
     }

@@ -51,7 +51,7 @@
                     saturation: 0.55 / 0.775, brightness: 0.775, alpha: 1)
                 backgroundColor = showsFallback ? fallbackColor : .clear
             }
-            accessibilityLabel = String(localized: "Avatar for \(name)")
+            accessibilityLabel = AppLanguage.localized("Avatar for \(name)")
             imageView.onImageAvailabilityChanged = { [weak self] available in
                 guard let self else { return }
                 self.showsFallback = !available

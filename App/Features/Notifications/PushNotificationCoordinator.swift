@@ -1,6 +1,7 @@
 import ChahuaAPI
 import Combine
 import Foundation
+import Security
 import UserNotifications
 import os
 
@@ -19,6 +20,7 @@ final class PushNotificationCoordinator: ObservableObject {
     @Published private(set) var isRegistering = false
     @Published private(set) var isRegistered = false
     @Published private(set) var notificationsDisabled: Bool
+    @Published private(set) var deviceTokenSuffix: String?
     @Published private(set) var isUnregistering = false
     @Published private(set) var pendingNavigation: PushNotificationRoute?
 
@@ -32,6 +34,8 @@ final class PushNotificationCoordinator: ObservableObject {
     private let defaults: UserDefaults
     private let storageKey: String
     private let environment: APNsEnvironment?
+    let configuredEnvironment: APNsEnvironment?
+    let signedEnvironment: APNsEnvironment?
     private let logger = Logger(subsystem: "app.chahua.chat", category: "push")
     private var uid: Int32?
     private var generation = 0
@@ -48,7 +52,8 @@ final class PushNotificationCoordinator: ObservableObject {
         api: (any PushSubscriptionProviding)?, namespace: String,
         center: UNUserNotificationCenter = .current(), defaults: UserDefaults = .standard,
         environment: String? = Bundle.main.object(forInfoDictionaryKey: "ChahuaAPNSEnvironment")
-            as? String
+            as? String,
+        signedEntitlement: String? = nil
     ) {
         self.api = api
         self.center = center
@@ -56,13 +61,39 @@ final class PushNotificationCoordinator: ObservableObject {
         storageKey = "APNsRegistration." + namespace
         notificationsDisabled = defaults.bool(forKey: storageKey + ".disabled")
         switch environment {
-        case "development": self.environment = .sandbox
-        case "production": self.environment = .production
-        default: self.environment = nil
+        case "development": configuredEnvironment = .sandbox
+        case "production": configuredEnvironment = .production
+        default: configuredEnvironment = nil
         }
+        switch signedEntitlement ?? Self.apnsEntitlementValue() {
+        case "development": signedEnvironment = .sandbox
+        case "production": signedEnvironment = .production
+        default: signedEnvironment = nil
+        }
+        // macOS can route using the signed entitlement instead of potentially
+        // mismatched Info.plist metadata. iOS cannot inspect its entitlement;
+        // both values come from APNS_ENVIRONMENT in the project build settings.
+        self.environment = signedEnvironment ?? configuredEnvironment
         if let data = defaults.data(forKey: storageKey) {
             registration = try? JSONDecoder().decode(Registration.self, from: data)
         }
+    }
+    private static func apnsEntitlementValue() -> String? {
+        #if os(macOS)
+            guard let task = SecTaskCreateFromSelf(nil) else { return nil }
+            return SecTaskCopyValueForEntitlement(
+                task, "com.apple.developer.aps-environment" as CFString, nil) as? String
+        #else
+            // iOS does not make SecTask entitlement inspection available to apps.
+            // The build setting populates both Info.plist and the signing request.
+            return nil
+        #endif
+    }
+
+    var apnsEnvironment: APNsEnvironment? { environment }
+    var backendEnvironment: APNsEnvironment? {
+        guard isRegistered, registration?.uid == uid else { return nil }
+        return registration?.environment
     }
 
     func setSession(uid: Int32?) {
@@ -218,6 +249,7 @@ final class PushNotificationCoordinator: ObservableObject {
 
     func didRegister(deviceToken: Data) {
         self.deviceToken = deviceToken.map { String(format: "%02x", $0) }.joined()
+        deviceTokenSuffix = String(self.deviceToken?.suffix(8) ?? "")
         synchronizeRegistration()
     }
 
@@ -225,8 +257,9 @@ final class PushNotificationCoordinator: ObservableObject {
         guard uid != nil, !notificationsDisabled, !isUnregistering else { return }
         isRegistering = false
         isRegistered = false
-        registrationError = String(
-            localized: "Couldn’t register for push notifications. Try again.")
+        registrationError =
+            AppLanguage.localized("Couldn’t register for push notifications. Try again.")
+            + " " + error.localizedDescription
         logger.error("APNs registration failed: \(String(describing: error), privacy: .public)")
     }
 

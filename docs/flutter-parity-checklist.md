@@ -45,7 +45,13 @@ Group verification used temporary hosted runners with deterministic API response
 - [ ] **Cache inspection and clearing:** display cached media/image disk usage and let the user clear it with confirmation, then refresh the displayed usage. Do not remove unsent outbox data.
 - [ ] **Combined conversation-tab visibility:** persist a preference to show/hide the combined All/Messages scope, keeping selection valid when it is hidden.
 - [ ] **App-specific message text size:** provide a persisted message text-size control equivalent to Flutter's 14–18 pt preference, without regressing system accessibility behavior.
-- [ ] **Unread-badge color:** provide a persisted color override and reset-to-default action, applied consistently to unread badges.
+- [ ] **Unread-badge color:** provide a persisted color override and reset-to-default action for colored unread badges; muted conversations and the aggregate Archived row use the same adaptive gray badge.
+
+Settings uses shared controls with platform-appropriate navigation: a pushed category list and grouped forms on iPhone/iPad, and a persistent sidebar with detail pane on macOS. The Messages preference uses a switch on both platforms. The language override updates SwiftUI and eager app-localized strings; the cache action targets only the active account's Kingfisher media cache. Messages-tab visibility, message typography, and colored unread badges are persisted and applied to their native chat surfaces; muted conversation badges stay gray. The isolated cache-clear scenario passed on macOS and iPhone 17 Pro simulator: disk usage fell to zero while another account's cache remained intact. Conversation-scope tests passed on macOS. Builds and model tests are not user-visible verification: leave these boxes unchecked until the settings navigation, language switching, cache clearing, scope transitions, text scaling (including accessibility sizes), and badge colors have been exercised on both platforms.
+
+Grouped iOS settings forms use their native row separators; standalone dividers are reserved for the macOS detail cards so they do not render as empty rows on iPhone or iPad.
+
+Notification settings show OS authorization, APNs environment, a non-sensitive token suffix, backend confirmation, and a retry action. macOS can inspect the signed entitlement and use it for backend routing; iOS cannot read that entitlement at runtime, so it reports the build-configured environment (shared by Info.plist and the signing request). iOS Release now requests production APNs; Debug/Local and macOS Release retain sandbox to preserve the existing working macOS behavior. A successful backend subscription confirms registration, not end-to-end delivery: verify on a signed physical iPhone by sending a message while the app is backgrounded.
 
 ## Scope exclusions
 

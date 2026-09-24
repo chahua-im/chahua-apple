@@ -176,7 +176,7 @@
             if failureAction != nil, contentLayout.metadata?.state == .failed {
                 actions.append(
                     UIAccessibilityCustomAction(
-                        name: String(localized: "Failed to send. Retry options"),
+                        name: AppLanguage.localized("Failed to send. Retry options"),
                         target: self, selector: #selector(performAccessibleFailureAction)
                     ))
             }
@@ -206,7 +206,7 @@
             super.init(frame: frame)
             imageView?.contentMode = .scaleAspectFit
             addTarget(self, action: #selector(activate), for: .touchUpInside)
-            accessibilityLabel = String(localized: "Failed to send. Retry options")
+            accessibilityLabel = AppLanguage.localized("Failed to send. Retry options")
             marker.frame = bounds
             addSubview(marker)
         }

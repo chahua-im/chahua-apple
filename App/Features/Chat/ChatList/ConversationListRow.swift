@@ -9,7 +9,7 @@ struct ConversationListRow: View {
     @ObservedObject var store: ChatStore
     let currentUserID: Int32
     let isSelected: Bool
-    @Environment(\.colorScheme) private var colorScheme
+    var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
     @Environment(\.locale) private var locale
     @Environment(\.calendar) private var calendar
 
@@ -58,14 +58,16 @@ struct ConversationListRow: View {
                     if item.unreadCount > 0 {
                         Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
                             .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(isMuted ? Color.primary : Color.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
-                            .background(
-                                isMuted
-                                    ? ChahuaTheme.ChatList.muted(for: colorScheme)
-                                    : ChahuaTheme.ChatList.primary, in: Capsule()
-                            )
+                            .background {
+                                if isMuted {
+                                    Capsule().fill(.quaternary)
+                                } else {
+                                    Capsule().fill(badgeColor.color)
+                                }
+                            }
                             .fixedSize()
                             .accessibilityLabel("\(item.unreadCount) unread messages")
                     } else if isMuted {

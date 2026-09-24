@@ -30,14 +30,27 @@ struct MessageComposerView: View {
     var stickerLibrary: StickerLibrary? = nil
     var onSendSticker: ((MessageStickerResponse) async -> Bool)? = nil
     var onSendVoice: ((URL) async -> Bool)? = nil
-    var onSearchMembers: ComposerMemberSearch? = nil
+    nonisolated var onSearchMembers: ComposerMemberSearch? = nil
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showsPhotos = false
     @State private var showsFiles = false
     @StateObject private var input = ComposerInputState()
     @StateObject private var voiceRecorder = ComposerVoiceRecorder()
     @Environment(\.scenePhase) private var scenePhase
-    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = 15
+    @AppStorage(MessageTextSizePreference.storageKey)
+    private var messageTextSize = MessageTextSizePreference.defaultValue
+    #if os(iOS)
+        @ScaledMetric(relativeTo: .body) private var scaledDefaultMessageTextSize: CGFloat = 17
+    #endif
+    private var fontSize: CGFloat {
+        #if os(iOS)
+            scaledDefaultMessageTextSize
+                * CGFloat(MessageTextSizePreference.clamped(messageTextSize))
+                / CGFloat(MessageTextSizePreference.defaultValue)
+        #else
+            MessageTextSizePreference.scaledBodySize(messageTextSize)
+        #endif
+    }
     @FocusState private var isInputFocused: Bool
     @State private var showsAttachmentDialog = false
     @State private var attachmentCaption = ""

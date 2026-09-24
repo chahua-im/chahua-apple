@@ -58,6 +58,13 @@
                 applyConversationBackground()
             }
         }
+        var messageTextSize = MessageTextSizePreference.defaultValue {
+            didSet {
+                guard messageTextSize != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
         var headerInset: CGFloat = 0 {
             didSet {
                 guard headerInset != oldValue, isViewLoaded else { return }
@@ -280,14 +287,19 @@
 
         private var currentEnvironment: TimelineLayoutEnvironment {
             let traits = view.traitCollection
+            let preferredBodySize = UIFont.preferredFont(
+                forTextStyle: .body, compatibleWith: traits
+            ).pointSize
+            let bodySize = MessageTextSizePreference.scaledBodySize(
+                messageTextSize, compatibleWith: traits)
+            let relativeScale = bodySize / max(1, preferredBodySize)
             return .current(
                 timelineWidth: availableRowWidth, displayScale: traits.displayScale,
-                bodySize: UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits)
-                    .pointSize,
+                bodySize: bodySize,
                 captionSize: UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits)
-                    .pointSize,
+                    .pointSize * relativeScale,
                 caption2Size: UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits)
-                    .pointSize,
+                    .pointSize * relativeScale,
                 avatarSize: UIFontMetrics(forTextStyle: .body).scaledValue(
                     for: 36, compatibleWith: traits),
                 layoutDirection: view.effectiveUserInterfaceLayoutDirection == .rightToLeft

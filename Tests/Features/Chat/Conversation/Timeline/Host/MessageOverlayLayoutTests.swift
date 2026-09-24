@@ -25,6 +25,8 @@
                 host.configure(
                     actions: .init(), interactionContext: .init(canWrite: true, isAdmin: true),
                     mediaContext: nil, colorScheme: dark ? .dark : .light,
+                    messageTextSize: MessageTextSizePreference.defaultValue,
+                    unreadBadgeColor: .default,
                     headerInset: 0, composerInset: 0, isSplitResizing: false)
                 let size = CGSize(width: width, height: 650)
                 let window = NSWindow(

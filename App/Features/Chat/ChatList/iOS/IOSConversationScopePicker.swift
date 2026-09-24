@@ -4,10 +4,13 @@
     struct IOSConversationScopePicker: View {
         @Binding var selection: ConversationListScope
         var badges: ConversationTabBadges
+        var showsMessagesTab = ConversationListPreferences.defaultShowsMessagesTab
+        var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
 
         var body: some View {
             Picker("Conversation scope", selection: $selection) {
-                ForEach(ConversationListScope.allCases) { scope in
+                ForEach(ConversationListScope.pickerScopes(showsMessagesTab: showsMessagesTab)) {
+                    scope in
                     Text(scope.localizedTitle)
                         .tag(scope)
                         .accessibilityValue(
@@ -22,7 +25,9 @@
                 // The native picker retains its Liquid Glass selection and gestures.
                 // Badges decorate the segment edges without intercepting any touches.
                 HStack(spacing: 0) {
-                    ForEach(ConversationListScope.allCases) { scope in
+                    ForEach(ConversationListScope.pickerScopes(showsMessagesTab: showsMessagesTab))
+                    {
+                        scope in
                         Color.clear
                             .frame(maxWidth: .infinity)
                             .overlay(alignment: .topTrailing) {
@@ -32,7 +37,7 @@
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 2)
-                                        .background(Color.accentColor, in: Capsule())
+                                        .background(badgeColor.color, in: Capsule())
                                         .fixedSize()
                                         .offset(x: -2, y: -4)
                                 }

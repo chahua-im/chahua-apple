@@ -105,7 +105,8 @@ final class StickerLibrary: ObservableObject {
                 if self.packLoadIDs[id] == requestID {
                     await self.report(
                         error, generation: requestGeneration,
-                        message: String(localized: "Couldn’t load sticker pack. Please try again."))
+                        message: AppLanguage.localized(
+                            "Couldn’t load sticker pack. Please try again."))
                 }
                 return nil
             }
@@ -149,7 +150,7 @@ final class StickerLibrary: ObservableObject {
                 if self.stickerLoadIDs[id] == requestID {
                     await self.report(
                         error, generation: requestGeneration,
-                        message: String(localized: "Couldn’t load sticker. Please try again."))
+                        message: AppLanguage.localized("Couldn’t load sticker. Please try again."))
                 }
                 return nil
             }
@@ -190,7 +191,8 @@ final class StickerLibrary: ObservableObject {
         } catch {
             await report(
                 error, generation: requestGeneration,
-                message: String(localized: "Couldn’t update favorite sticker. Please try again."))
+                message: AppLanguage.localized(
+                    "Couldn’t update favorite sticker. Please try again."))
         }
     }
 
@@ -216,8 +218,8 @@ final class StickerLibrary: ObservableObject {
         } catch {
             await report(
                 error, generation: requestGeneration,
-                message: String(
-                    localized: "Couldn’t update sticker pack subscription. Please try again."))
+                message: AppLanguage.localized(
+                    "Couldn’t update sticker pack subscription. Please try again."))
             return false
         }
     }
@@ -293,7 +295,7 @@ final class StickerLibrary: ObservableObject {
         } catch {
             await report(
                 error, generation: requestGeneration,
-                message: String(localized: "Couldn’t load stickers. Please try again."))
+                message: AppLanguage.localized("Couldn’t load stickers. Please try again."))
         }
     }
 

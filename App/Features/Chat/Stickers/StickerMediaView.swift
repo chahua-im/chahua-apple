@@ -194,7 +194,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
             guard let url = URL(string: media.url),
                 ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil
             else {
-                showFailure(String(localized: "Sticker media URL is invalid."))
+                showFailure(AppLanguage.localized("Sticker media URL is invalid."))
                 return
             }
             if isVideo {
@@ -232,7 +232,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
                 videoLoading = true
             } else if !type.hasPrefix("image/") {
                 showFailure(
-                    String(localized: "Unsupported sticker media type: \(media.contentType)"))
+                    AppLanguage.localized("Unsupported sticker media type: \(media.contentType)"))
                 return
             }
         }
@@ -407,7 +407,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
         updateProgress(visible: false)
         imageView.setVisible(false)
         video?.setVisible(false)
-        let caption = bounds.width < 120 ? String(localized: "Failed") : description
+        let caption = bounds.width < 120 ? AppLanguage.localized("Failed") : description
         setStatus(emoji.isEmpty ? caption : "\(emoji)\n\(caption)")
         #if os(macOS)
             toolTip = description
@@ -454,18 +454,20 @@ final class StickerMediaSurfaceView: StickerNativeView {
 
     private func updateAccessibility() {
         let label =
-            emoji.isEmpty ? String(localized: "Sticker") : String(localized: "Sticker \(emoji)")
+            emoji.isEmpty
+            ? AppLanguage.localized("Sticker") : AppLanguage.localized("Sticker \(emoji)")
         #if os(iOS)
             accessibilityLabel = label
             accessibilityValue =
                 failure
-                ?? (videoLoading && !hasVideoPoster ? String(localized: "Loading sticker") : nil)
+                ?? (videoLoading && !hasVideoPoster
+                    ? AppLanguage.localized("Loading sticker") : nil)
         #else
             setAccessibilityLabel(label)
             setAccessibilityValue(
                 failure
                     ?? (videoLoading && !hasVideoPoster
-                        ? String(localized: "Loading sticker") : nil))
+                        ? AppLanguage.localized("Loading sticker") : nil))
         #endif
     }
 }
@@ -545,7 +547,7 @@ private final class StickerVideoPlayback: NSObject, WKScriptMessageHandler, WKNa
         }
         #if os(iOS)
             if contentType.hasPrefix("video/webm"), #unavailable(iOS 17.4) {
-                onStatus?(String(localized: "WebM stickers require iOS 17.4 or later."), false)
+                onStatus?(AppLanguage.localized("WebM stickers require iOS 17.4 or later."), false)
                 return
             }
         #endif
@@ -590,13 +592,15 @@ private final class StickerVideoPlayback: NSObject, WKScriptMessageHandler, WKNa
             capturePoster()
         case "unsupported", "error:4":
             onStatus?(
-                String(localized: "This device cannot decode this sticker’s video format."), false)
+                AppLanguage.localized("This device cannot decode this sticker’s video format."),
+                false)
         case "error:2":
-            onStatus?(String(localized: "Sticker video could not be downloaded."), false)
+            onStatus?(AppLanguage.localized("Sticker video could not be downloaded."), false)
         case "error:3":
             onStatus?(
-                String(localized: "Sticker video is damaged or uses an unsupported codec."), false)
-        default: onStatus?(String(localized: "Sticker video playback failed."), false)
+                AppLanguage.localized("Sticker video is damaged or uses an unsupported codec."),
+                false)
+        default: onStatus?(AppLanguage.localized("Sticker video playback failed."), false)
         }
     }
 
@@ -622,7 +626,7 @@ private final class StickerVideoPlayback: NSObject, WKScriptMessageHandler, WKNa
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard loaded, navigation === self.navigation else { return }
-        onStatus?(String(localized: "Sticker video could not be loaded."), false)
+        onStatus?(AppLanguage.localized("Sticker video could not be loaded."), false)
     }
 
     func webView(
@@ -634,7 +638,7 @@ private final class StickerVideoPlayback: NSObject, WKScriptMessageHandler, WKNa
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard loaded else { return }
-        onStatus?(String(localized: "Sticker video playback was interrupted."), false)
+        onStatus?(AppLanguage.localized("Sticker video playback was interrupted."), false)
     }
 
     private static func jsonString(_ value: String) -> String {

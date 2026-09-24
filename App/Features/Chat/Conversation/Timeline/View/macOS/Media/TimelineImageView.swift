@@ -339,7 +339,7 @@
                         }
                         if self.failed && self.decodedCGImage == nil {
                             self.onLoadFailure?(
-                                String(localized: "Image download or decoding failed."))
+                                AppLanguage.localized("Image download or decoding failed."))
                         }
                         self.needsLayout = true
                         self.refreshVisibility()

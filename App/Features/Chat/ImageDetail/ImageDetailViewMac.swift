@@ -84,7 +84,7 @@
             layer?.masksToBounds = true
             setAccessibilityElement(false)
             setAccessibilityRole(.group)
-            setAccessibilityLabel(String(localized: "Image viewer"))
+            setAccessibilityLabel(AppLanguage.localized("Image viewer"))
             appearance = NSAppearance(named: .darkAqua)
 
             backdrop.wantsLayer = true
@@ -101,13 +101,14 @@
             addSubview(chrome)
 
             configureButton(
-                closeButton, symbol: "xmark", label: String(localized: "Close image"),
+                closeButton, symbol: "xmark", label: AppLanguage.localized("Close image"),
                 action: #selector(close))
             configureButton(
-                previousButton, symbol: "chevron.left", label: String(localized: "Previous image"),
+                previousButton, symbol: "chevron.left",
+                label: AppLanguage.localized("Previous image"),
                 action: #selector(previousImage))
             configureButton(
-                nextButton, symbol: "chevron.right", label: String(localized: "Next image"),
+                nextButton, symbol: "chevron.right", label: AppLanguage.localized("Next image"),
                 action: #selector(nextImage))
             countLabel.textColor = .white
             countLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
@@ -246,8 +247,8 @@
             nextButton.isEnabled = canPage && selectedIndex + 1 < gallery.items.count
             previousButton.isHidden = gallery.items.count == 1
             nextButton.isHidden = gallery.items.count == 1
-            countLabel.stringValue = String(
-                localized: "\(selectedIndex + 1) of \(gallery.items.count)")
+            countLabel.stringValue = AppLanguage.localized(
+                "\(selectedIndex + 1) of \(gallery.items.count)")
             fileNameLabel.stringValue = gallery.items[selectedIndex].fileName
             nextButton.nextKeyView =
                 activePage?.retryButton.isHidden == false ? activePage?.retryButton : closeButton
@@ -599,7 +600,7 @@
     @MainActor
     private final class MessageImageDetailMacPage: NSView {
         let scrollView = NSScrollView()
-        let retryButton = NSButton(title: String(localized: "Retry"), target: nil, action: nil)
+        let retryButton = NSButton(title: AppLanguage.localized("Retry"), target: nil, action: nil)
         var onZoomChanged: (() -> Void)?
         var onRetry: (() -> Void)?
 
@@ -646,7 +647,7 @@
 
             progress.style = .spinning
             progress.isDisplayedWhenStopped = false
-            progress.setAccessibilityLabel(String(localized: "Loading image"))
+            progress.setAccessibilityLabel(AppLanguage.localized("Loading image"))
             addSubview(progress)
             statusLabel.textColor = .white
             statusLabel.font = .systemFont(ofSize: 14)
@@ -655,7 +656,7 @@
             retryButton.bezelStyle = .rounded
             retryButton.target = self
             retryButton.action = #selector(retry)
-            retryButton.setAccessibilityLabel(String(localized: "Retry loading image"))
+            retryButton.setAccessibilityLabel(AppLanguage.localized("Retry loading image"))
             addSubview(retryButton)
             magnificationObservation = scrollView.observe(\.magnification, options: [.new]) {
                 [weak self] _, _ in
@@ -703,7 +704,8 @@
             progress.isHidden = !isLoading || image != nil
             statusLabel.stringValue =
                 failed
-                ? String(localized: "Unable to load image") : String(localized: "Loading image…")
+                ? AppLanguage.localized("Unable to load image")
+                : AppLanguage.localized("Loading image…")
             statusLabel.isHidden = image != nil
             retryButton.isHidden = !failed
             onZoomChanged?()

@@ -98,14 +98,14 @@ final class VoicePlaybackController: ObservableObject {
             if let directory { try? FileManager.default.removeItem(at: directory) }
             directory = nil
             if !(error is CancellationError), !Task.isCancelled {
-                self.error = String(localized: "Couldn’t play voice message. Try again.")
+                self.error = AppLanguage.localized("Couldn’t play voice message. Try again.")
             }
         }
     }
 
     func toggle() {
         guard !Self.recordingActive else {
-            error = String(localized: "Finish recording before playing a voice message.")
+            error = AppLanguage.localized("Finish recording before playing a voice message.")
             return
         }
         guard let player, !isLoading else { return }
@@ -132,7 +132,7 @@ final class VoicePlaybackController: ObservableObject {
                 MainActor.assumeIsolated { self?.updatePosition() }
             }
         } catch {
-            self.error = String(localized: "Couldn’t play voice message. Try again.")
+            self.error = AppLanguage.localized("Couldn’t play voice message. Try again.")
             pause()
         }
     }

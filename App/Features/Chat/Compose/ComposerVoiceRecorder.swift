@@ -138,7 +138,8 @@ final class ComposerVoiceRecorder: NSObject, ObservableObject, AVAudioRecorderDe
         isLocked = false
         guard elapsed >= 1 else {
             discard()
-            error = String(localized: "Voice message is too short. Record for at least 1 second.")
+            error = AppLanguage.localized(
+                "Voice message is too short. Record for at least 1 second.")
             return
         }
         previewURL = files?.recordingURL

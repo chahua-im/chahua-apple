@@ -666,7 +666,7 @@
                 // Keep timestamp and status together, with retry available on the
                 // same element even when the drawn symbol is too small to target.
                 accessibilityTraits = .button
-                accessibilityHint = String(localized: "Failed to send. Retry options")
+                accessibilityHint = AppLanguage.localized("Failed to send. Retry options")
             } else {
                 failureButton?.clear()
                 failureButton?.isHidden = true
@@ -718,7 +718,7 @@
             if metadata?.state == .failed, failureAction != nil {
                 actions.append(
                     UIAccessibilityCustomAction(
-                        name: String(localized: "Failed to send. Retry options"),
+                        name: AppLanguage.localized("Failed to send. Retry options"),
                         target: self, selector: #selector(performAccessibleFailureAction)
                     ))
             }

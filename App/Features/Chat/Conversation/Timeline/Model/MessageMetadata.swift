@@ -87,7 +87,8 @@ struct MessageMetadata {
             row.entry.createdAt.formatted(
                 .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(
                     Locale(identifier: Locale.current.identifier + "@hours=h23")))
-            + (row.entry.remoteMessage?.isEdited == true ? " " + String(localized: "(Edited)") : "")
+            + (row.entry.remoteMessage?.isEdited == true
+                ? " " + AppLanguage.localized("(Edited)") : "")
         self.init(
             time: time, state: row.isOutgoing ? row.entry.displayState : nil,
             isOutgoing: row.isOutgoing, isOverlay: isOverlay, fontSize: fontSize)
@@ -97,10 +98,10 @@ struct MessageMetadata {
         guard let state else { return time }
         let label: String
         switch state {
-        case .queued: label = String(localized: "Queued")
-        case .sending: label = String(localized: "Sending")
-        case .delivered: label = String(localized: "Sent")
-        case .failed: label = String(localized: "Failed to send")
+        case .queued: label = AppLanguage.localized("Queued")
+        case .sending: label = AppLanguage.localized("Sending")
+        case .delivered: label = AppLanguage.localized("Sent")
+        case .failed: label = AppLanguage.localized("Failed to send")
         }
         return "\(time), \(label)"
     }

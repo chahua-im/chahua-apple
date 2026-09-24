@@ -63,7 +63,7 @@
                 layer?.backgroundColor = showsFallback ? fallbackColor : nil
                 needsDisplay = true
             }
-            setAccessibilityLabel(String(localized: "Avatar for \(name)"))
+            setAccessibilityLabel(AppLanguage.localized("Avatar for \(name)"))
             let pixels = ceil(diameter * displayScale)
             imageView.onImageAvailabilityChanged = { [weak self] available in
                 guard let self else { return }

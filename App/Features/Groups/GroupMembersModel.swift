@@ -290,6 +290,6 @@ private enum GroupMembersActionError: LocalizedError {
     case notAuthorized
 
     var errorDescription: String? {
-        String(localized: "You no longer have permission to manage group members.")
+        AppLanguage.localized("You no longer have permission to manage group members.")
     }
 }

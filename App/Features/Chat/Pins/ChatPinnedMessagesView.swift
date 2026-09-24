@@ -219,5 +219,5 @@ struct ChatPinnedMessagesSheet: View {
 private func pinPreview(_ message: MessageResponse) -> String {
     let sender = message.sender.name ?? "User \(message.sender.uid)"
     let preview = messagePreview(message.replyPreview)
-    return "\(sender): \(preview.isEmpty ? String(localized: "Message") : preview)"
+    return "\(sender): \(preview.isEmpty ? AppLanguage.localized("Message") : preview)"
 }

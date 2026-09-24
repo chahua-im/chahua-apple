@@ -154,12 +154,12 @@ struct VoiceMessageBubbleView: View {
     }
 
     private var status: String {
-        if url == nil { return String(localized: "Audio unavailable") }
-        if !isActive && controller.duration <= 0 { return String(localized: "Voice message") }
+        if url == nil { return AppLanguage.localized("Audio unavailable") }
+        if !isActive && controller.duration <= 0 { return AppLanguage.localized("Voice message") }
         if controller.isLoading || controller.duration <= 0 && controller.error == nil {
-            return String(localized: "Loading audio…")
+            return AppLanguage.localized("Loading audio…")
         }
-        if controller.error != nil { return String(localized: "Unable to play audio") }
+        if controller.error != nil { return AppLanguage.localized("Unable to play audio") }
         return "\(Self.time(controller.position)) / \(Self.time(controller.duration))"
     }
 

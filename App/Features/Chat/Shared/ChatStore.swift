@@ -455,7 +455,8 @@ final class ChatStore: ObservableObject {
             return
         } catch {
             guard generation == requestGeneration, !Task.isCancelled else { return }
-            listActionError = String(localized: "Couldn’t update conversation. Please try again.")
+            listActionError = AppLanguage.localized(
+                "Couldn’t update conversation. Please try again.")
             if case APIError.invalidToken = error { await onInvalidToken() }
         }
     }
@@ -554,7 +555,8 @@ final class ChatStore: ObservableObject {
         } catch {
             guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled
             else { return }
-            listActionError = String(localized: "Couldn’t update conversation. Please try again.")
+            listActionError = AppLanguage.localized(
+                "Couldn’t update conversation. Please try again.")
             // markRead owns its invalid-token handling, including notification cursors.
             if action != .markRead, case APIError.invalidToken = error { await onInvalidToken() }
         }

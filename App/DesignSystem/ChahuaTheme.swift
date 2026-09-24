@@ -36,12 +36,6 @@ enum ChahuaTheme {
         // PWA primary and Ionic medium palette, including its dark-mode variant.
         static let primary = Color(
             .sRGB, red: 43.0 / 255, green: 122.0 / 255, blue: 205.0 / 255, opacity: 1)
-
-        static func muted(for colorScheme: ColorScheme) -> Color {
-            colorScheme == .dark
-                ? Color(.sRGB, red: 152.0 / 255, green: 154.0 / 255, blue: 162.0 / 255, opacity: 1)
-                : Color(.sRGB, red: 99.0 / 255, green: 100.0 / 255, blue: 105.0 / 255, opacity: 1)
-        }
     }
 
     enum Spacing {
