@@ -94,7 +94,8 @@ struct MessageComposerView: View {
                 accessibilityLabel: "Message"
             )
             .overlay(alignment: .topLeading) {
-                if (input.editorText ?? text).isEmpty {
+                // Marked IME text is native-only until commit; the hint must still disappear.
+                if !hasText {
                     Text("Message")
                         .foregroundStyle(.tertiary)
                         .allowsHitTesting(false)

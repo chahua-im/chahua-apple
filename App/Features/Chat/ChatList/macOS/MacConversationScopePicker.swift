@@ -57,13 +57,23 @@
 
     /// CSS flex-grow behavior: preserve each tab's intrinsic width, then share spare space.
     private struct GrowingScopeTabs: Layout {
+        func makeCache(subviews: Subviews) -> [CGSize] {
+            subviews.map { $0.sizeThatFits(.unspecified) }
+        }
+
+        func updateCache(subviews: Subviews, cache: inout [CGSize]) {
+            cache.removeAll(keepingCapacity: true)
+            for subview in subviews {
+                cache.append(subview.sizeThatFits(.unspecified))
+            }
+        }
+
         func sizeThatFits(
-            proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+            proposal: ProposedViewSize, subviews: Subviews, cache: inout [CGSize]
         ) -> CGSize {
             var width: CGFloat = 0
             var height: CGFloat = 0
-            for subview in subviews {
-                let size = subview.sizeThatFits(.unspecified)
+            for size in cache {
                 width += size.width
                 height = max(height, size.height)
             }
@@ -74,18 +84,19 @@
         }
 
         func placeSubviews(
-            in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+            in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews,
+            cache: inout [CGSize]
         ) {
             guard !subviews.isEmpty else { return }
             var intrinsicTotal: CGFloat = 0
-            for subview in subviews {
-                intrinsicTotal += subview.sizeThatFits(.unspecified).width
+            for size in cache {
+                intrinsicTotal += size.width
             }
             let growth = max(0, bounds.width - intrinsicTotal) / CGFloat(subviews.count)
             let shrink = intrinsicTotal > bounds.width ? bounds.width / intrinsicTotal : 1
             var x = bounds.minX
-            for subview in subviews {
-                let width = subview.sizeThatFits(.unspecified).width * shrink + growth
+            for (index, subview) in subviews.enumerated() {
+                let width = cache[index].width * shrink + growth
                 subview.place(
                     at: CGPoint(x: x, y: bounds.minY),
                     proposal: ProposedViewSize(width: width, height: bounds.height))
