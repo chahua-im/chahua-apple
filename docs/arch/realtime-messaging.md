@@ -156,13 +156,13 @@ No timer periodically refreshes data. Silent drops and cross-device read-state c
 
 ### Visible-message read progress
 
-Both native timeline hosts report confirmed messages whose entire row fits between the floating header and composer. The latest fully visible message becomes eligible after remaining the candidate for 500 ms. Partial rows, pending messages, and separators never advance read progress. Navigation, programmatic scrolling, invalid geometry, and inactive scenes cancel the dwell; resuming requires fresh host geometry. Requests are serialized and failures retry only after another stable viewport.
+Both native timeline hosts report confirmed messages whose entire row fits between the floating header and composer. On entry, the last fully visible confirmed message is marked read immediately after the initial scroll settles; subsequent visible candidates must remain stable for 500 ms. Partial rows, pending messages, and separators never advance read progress. Navigation, programmatic scrolling, invalid geometry, and inactive scenes cancel the dwell; resuming requires fresh host geometry. Requests are serialized and failures retry only after another stable viewport.
 
 Parent chats use `POST /chats/{chatID}/read`; threads use `POST /chats/{chatID}/threads/{threadID}/read`, with an opaque string `messageId`. The response supplies authoritative `lastReadMessageId` and `unreadCount` for that scope only. List requests started before an acknowledgement are discarded and refreshed rather than overwriting the new count. The server only advances read cursors; local known-order watermarks suppress backward scrolling without parsing IDs.
 
 The entry separator stays fixed as read progress advances. A nil or unavailable entry cursor seeks the oldest accessible page using opaque older cursors, retaining one page while seeking because the API has no oldest-position query. Native scroll bounds still apply near the end of a short conversation.
 
-Native scroll completion saves the reached message anchor before acknowledging the request, since acknowledgement can synchronously change header/composer geometry. Subsequent layout must restore that reached position, not the pre-navigation anchor. Once navigation has finished, a settled viewport at the actual live bottom resumes following latest even without a user gesture; the end of a historical page is not the live bottom.
+Native scroll completion saves the reached message anchor before acknowledging the request, since acknowledgement can synchronously change header/composer geometry. Subsequent layout must restore that reached position, not the pre-navigation anchor. Once navigation has finished, a settled viewport at the actual live bottom resumes following latest even without a user gesture; the end of a historical page is not the live bottom. The jump-to-latest control waits for measured geometry and appears only when the viewport is away from the live bottom, regardless of unread metadata or scroll direction.
 
 ## Protocol boundaries
 

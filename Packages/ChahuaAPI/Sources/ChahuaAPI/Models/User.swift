@@ -65,3 +65,16 @@ public struct StickerPackOrderItem: Codable, Hashable, Sendable {
     public let stickerPackId: String
     public let lastUsedOn: Int64
 }
+
+/// One preference mutation for `PUT /users/me/stickerpack-order`.
+public struct StickerPackOrderUpdate: Codable, Hashable, Sendable {
+    public let stickerPackId: String
+    public let lastUsedOn: Int64
+    public let isAutoSort: Bool?
+
+    public init(stickerPackId: String, lastUsedOn: Int64, isAutoSort: Bool? = nil) {
+        self.stickerPackId = stickerPackId
+        self.lastUsedOn = lastUsedOn
+        self.isAutoSort = isAutoSort
+    }
+}

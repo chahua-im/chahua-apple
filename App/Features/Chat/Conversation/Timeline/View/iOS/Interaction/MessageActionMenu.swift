@@ -16,6 +16,8 @@
 
         @AppStorage(MessageReactionPreferences.recentStorageKey)
         private var recentStorage = MessageReactionPreferences.defaultRecentStorage
+        @AppStorage(MessageReactionPreferences.pinnedRevisionStorageKey)
+        private var pinnedRevision = 0
         @ScaledMetric(relativeTo: .caption2) private var actionRowHeight: CGFloat = 63
 
         private var policy: MessageActionPolicy { .init(row: row, context: context) }
@@ -23,6 +25,11 @@
             .init(
                 canReact: policy.canReact, isReacting: isReacting,
                 reactions: row.entry.remoteMessage?.reactions ?? [])
+        }
+
+        private var quickReactions: [String] {
+            _ = pinnedRevision
+            return MessageReactionPreferences.quick(from: recentStorage)
         }
 
         var body: some View {
@@ -40,7 +47,7 @@
 
         private var reactionStrip: some View {
             HStack(spacing: 2) {
-                ForEach(MessageReactionPreferences.quick(from: recentStorage), id: \.self) {
+                ForEach(quickReactions, id: \.self) {
                     emoji in
                     MessageReactionButton(emoji: emoji, name: emoji, eligibility: eligibility) {
                         react(emoji)

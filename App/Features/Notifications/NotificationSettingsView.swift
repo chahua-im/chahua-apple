@@ -2,18 +2,19 @@ import ChahuaAPI
 import SwiftUI
 import UserNotifications
 
-enum SettingsPage: String, CaseIterable, Identifiable {
-    case appearance, conversations, notifications, storage, account
+enum SettingsPage: String, Identifiable {
+    case appearance, conversations, storage, stickers, notifications
 
+    static let generalPages: [Self] = [.appearance, .conversations, .storage, .stickers]
     var id: Self { self }
 
     var title: LocalizedStringKey {
         switch self {
         case .appearance: "Appearance"
         case .conversations: "Conversations"
-        case .notifications: "Notifications"
         case .storage: "Storage"
-        case .account: "Account"
+        case .stickers: "Emojis & Stickers"
+        case .notifications: "Notifications"
         }
     }
 
@@ -21,9 +22,9 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         switch self {
         case .appearance: "paintpalette"
         case .conversations: "bubble.left.and.bubble.right"
-        case .notifications: "bell"
         case .storage: "internaldrive"
-        case .account: "person.crop.circle"
+        case .stickers: "face.smiling"
+        case .notifications: "bell"
         }
     }
 }
@@ -31,7 +32,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 struct NotificationSettingsView: View {
     @ObservedObject var notifications: PushNotificationCoordinator
     @ObservedObject var chatStore: ChatStore
-    let username: String
+    let me: MeResponse
     let isSigningOut: Bool
     let onSignOut: () -> Void
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.system.rawValue
@@ -62,31 +63,32 @@ struct NotificationSettingsView: View {
     }
 
     var accountSummary: some View {
-        HStack(spacing: 16) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(ChahuaTheme.accent)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(username)
-                    .font(.title2.weight(.semibold))
-                    .textSelection(.enabled)
-                Text("Your space, your way")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
+        VStack(spacing: 12) {
+            AvatarView(
+                url: me.avatarUrl.flatMap(URL.init(string:)),
+                displayName: me.username,
+                diameter: 88)
+            Text(me.username)
+                .font(.title2.weight(.bold))
+                .textSelection(.enabled)
         }
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .accessibilityElement(children: .combine)
+    }
+
+    var signOutRow: some View {
+        Button("Sign out", role: .destructive) { onSignOut() }
+            .foregroundStyle(.red)
+            .disabled(isSigningOut || notifications.isUnregistering)
     }
 
     @ViewBuilder
     func page(_ page: SettingsPage, grouped: Bool) -> some View {
-        if grouped {
+        if page == .stickers {
+            StickerSettingsView(library: chatStore.stickers, currentUserID: me.uid)
+        } else if grouped {
             Form {
-                if page == .account {
-                    Section { accountSummary }
-                }
                 Section {
                     pageRows(page, showsDividers: false)
                 }
@@ -99,7 +101,6 @@ struct NotificationSettingsView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    if page == .account { accountSummary }
                     Label(page.title, systemImage: page.symbol)
                         .font(.title2.weight(.semibold))
                     VStack(alignment: .leading, spacing: 16) {
@@ -123,6 +124,8 @@ struct NotificationSettingsView: View {
     @ViewBuilder
     private func pageRows(_ page: SettingsPage, showsDividers: Bool) -> some View {
         switch page {
+        case .stickers:
+            EmptyView()
         case .appearance:
             LabeledContent("App language") {
                 Picker("App language", selection: $language) {
@@ -284,18 +287,6 @@ struct NotificationSettingsView: View {
                     notifications.isRegistering || notifications.isUnregistering || isSigningOut)
             }
             Button("Open System Settings") { notifications.openSystemSettings() }
-        case .account:
-            Button {
-                Task { await chatStore.refreshActiveConversations() }
-            } label: {
-                Label("Refresh chats", systemImage: "arrow.clockwise")
-            }
-            .disabled(
-                chatStore.state.isRefreshingChats || chatStore.state.isRefreshingThreads
-                    || isSigningOut)
-            if showsDividers { Divider() }
-            Button("Sign out", role: .destructive) { onSignOut() }
-                .disabled(isSigningOut || notifications.isUnregistering)
         }
     }
 

@@ -122,6 +122,24 @@
         func setStickerPackSubscription(id: String, subscribed: Bool) async throws {
             throw Failure.unexpectedOperation
         }
+        func createStickerPack(name: String, description: String?) async throws
+            -> StickerPackSummary
+        {
+            throw Failure.unexpectedOperation
+        }
+        func updateStickerPack(id: String, name: String?, description: String?) async throws
+            -> StickerPackSummary
+        { throw Failure.unexpectedOperation }
+        func deleteStickerPack(id: String) async throws { throw Failure.unexpectedOperation }
+        func uploadStickerToPack(
+            id: String, upload: StickerUpload, emoji: String, name: String?, description: String?
+        ) async throws -> MessageStickerResponse { throw Failure.unexpectedOperation }
+        func removeStickerFromPack(id: String, stickerID: String) async throws {
+            throw Failure.unexpectedOperation
+        }
+        func updateStickerPackOrder(_ order: [StickerPackOrderUpdate]) async throws {
+            throw Failure.unexpectedOperation
+        }
         func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
             throw Failure.unexpectedOperation
         }

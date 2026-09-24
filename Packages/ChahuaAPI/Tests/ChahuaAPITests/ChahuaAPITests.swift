@@ -693,6 +693,102 @@ final class ChahuaAPITests: XCTestCase {
         }
     }
 
+    func testStickerPackManagementUsesServerRequestShapes() async throws {
+        let requests = RequestRecorder()
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        try Data("sticker payload".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let pack = #"""
+            {"id":"pack-one","ownerUid":42,"ownerName":null,"name":"Greetings","description":"Hello",
+             "createdAt":"2026-09-01T01:02:03Z","updatedAt":"2026-09-01T01:02:04Z",
+             "stickerCount":0,"isSubscribed":true,"previewSticker":null}
+            """#
+        let sticker = #"""
+            {"id":"sticker-one","emoji":"👋","createdAt":"2026-09-01T01:02:03Z","isFavorited":false,
+             "media":{"id":"media-one","url":"https://cdn.example/sticker.png","contentType":"image/png","size":15}}
+            """#
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/stickers/packs"):
+                return (201, pack)
+            case ("PATCH", "/stickers/packs/pack-one"):
+                return (200, pack)
+            case ("DELETE", "/stickers/packs/pack-one"),
+                ("DELETE", "/stickers/packs/pack-one/stickers/sticker-one"):
+                return (204, "")
+            case ("POST", "/stickers/packs/pack-one/stickers"):
+                return (201, sticker)
+            case ("PUT", "/users/me/stickerpack-order"):
+                return (200, "")
+            default:
+                return (404, "")
+            }
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        let created = try await client.createStickerPack(name: "Greetings", description: "Hello")
+        XCTAssertEqual(created.id, "pack-one")
+        let updated = try await client.updateStickerPack(
+            id: "pack-one", name: nil, description: "Updated")
+        XCTAssertEqual(updated.id, "pack-one")
+        let uploaded = try await client.uploadStickerToPack(
+            id: "pack-one",
+            upload: .init(fileURL: fileURL, fileName: "wave\".png", contentType: "image/png"),
+            emoji: "👋", name: "  ", description: "  "
+        )
+        XCTAssertEqual(uploaded.id, "sticker-one")
+        try await client.removeStickerFromPack(id: "pack-one", stickerID: "sticker-one")
+        try await client.updateStickerPackOrder([
+            .init(stickerPackId: "pack-one", lastUsedOn: 1_725_194_096, isAutoSort: true)
+        ])
+        try await client.deleteStickerPack(id: "pack-one")
+
+        XCTAssertEqual(
+            requests.values.map(\.httpMethod),
+            ["POST", "PATCH", "POST", "DELETE", "PUT", "DELETE"])
+        XCTAssertEqual(
+            requests.values.compactMap(\.url).map(\.path),
+            [
+                "/stickers/packs", "/stickers/packs/pack-one",
+                "/stickers/packs/pack-one/stickers",
+                "/stickers/packs/pack-one/stickers/sticker-one",
+                "/users/me/stickerpack-order", "/stickers/packs/pack-one",
+            ])
+
+        let createBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(requests.values[0])) as? [String: Any])
+        XCTAssertEqual(createBody["name"] as? String, "Greetings")
+        XCTAssertEqual(createBody["description"] as? String, "Hello")
+        let updateBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(requests.values[1])) as? [String: Any])
+        XCTAssertNil(updateBody["name"])
+        XCTAssertEqual(updateBody["description"] as? String, "Updated")
+
+        let uploadRequest = requests.values[2]
+        let contentType = try XCTUnwrap(uploadRequest.value(forHTTPHeaderField: "Content-Type"))
+        let boundary = try XCTUnwrap(contentType.split(separator: "=").last).description
+        let multipart = String(decoding: requestBody(uploadRequest), as: UTF8.self)
+        XCTAssertTrue(multipart.hasPrefix("--\(boundary)\r\n"))
+        XCTAssertTrue(multipart.contains("name=\"emoji\"\r\n\r\n👋\r\n"))
+        XCTAssertFalse(multipart.contains("name=\"name\""))
+        XCTAssertFalse(multipart.contains("name=\"description\""))
+        XCTAssertTrue(multipart.contains("name=\"file\"; filename=\"wave\\\".png\""))
+        XCTAssertTrue(multipart.contains("Content-Type: image/png\r\n\r\nsticker payload\r\n"))
+        XCTAssertTrue(multipart.hasSuffix("--\(boundary)--\r\n"))
+
+        let orderBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(requests.values[4])) as? [String: Any])
+        let order = try XCTUnwrap(orderBody["order"] as? [[String: Any]]).first
+        XCTAssertEqual(order?["stickerPackId"] as? String, "pack-one")
+        XCTAssertEqual(order?["lastUsedOn"] as? Int, 1_725_194_096)
+        XCTAssertEqual(order?["isAutoSort"] as? Bool, true)
+    }
+
     private func testSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

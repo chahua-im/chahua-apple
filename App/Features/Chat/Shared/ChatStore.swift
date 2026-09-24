@@ -32,7 +32,10 @@ final class ChatStore: ObservableObject {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "conversations")
     @Published private(set) var state = ChatState()
     @Published var currentUserProfile: MeResponse? {
-        didSet { stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? []) }
+        didSet {
+            stickers.setAccount(currentUserProfile?.uid)
+            stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? [])
+        }
     }
     @Published private(set) var pendingListActions = [ConversationKey: ConversationListAction]()
     @Published var listActionError: String?

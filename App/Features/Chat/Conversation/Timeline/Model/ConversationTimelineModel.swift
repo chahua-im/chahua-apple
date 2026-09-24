@@ -25,9 +25,8 @@ final class ConversationTimelineModel: ObservableObject {
     var jumpUnreadCount: Int64 { state.live.unreadCount }
     var showsJumpToLatest: Bool {
         state.content == .ready
-            && (jumpUnreadCount > 0 || state.live.pendingLiveCount > 0
-                || (state.live.scrollsTowardNewer
-                    && !(isAtLiveEdge && state.live.isPinnedToBottom)))
+            && (!isAtLiveEdge
+                || (viewportRevision == snapshotRevision && !state.live.isPinnedToBottom))
     }
     let updates = CurrentValueSubject<TimelineHostSnapshot, Never>(
         .init(revision: 0, windowRevision: 0, rows: [], animateFollowing: false, pendingScroll: nil)
@@ -50,7 +49,7 @@ final class ConversationTimelineModel: ObservableObject {
     private var pendingScroll: TimelineScrollRequest?
     private var lastProjection: ConversationProjection?
     private var lastViewport = TimelineViewport.empty
-    private var viewportRevision: Int?
+    @Published private(set) var viewportRevision: Int?
     private var visibleAnchorID: String?
     private var lastInitialPosition: TimelineInitialPosition = .liveEdge
     private var initialTask: Task<Void, Never>?
@@ -467,7 +466,7 @@ final class ConversationTimelineModel: ObservableObject {
         canReuseLatestWindowAfterPendingChange = false
         let previousAnchorID = visibleAnchorID
         lastViewport = viewport
-        viewportRevision = revision
+        if viewportRevision != revision { viewportRevision = revision }
         visibleAnchorID = nil
         if let first = viewport.firstVisibleIndex, let last = viewport.lastVisibleIndex {
             for index in first...last where rows[index].messageID != nil {

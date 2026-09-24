@@ -51,6 +51,8 @@ Settings uses shared controls with platform-appropriate navigation: a pushed cat
 
 Grouped iOS settings forms use their native row separators; standalone dividers are reserved for the macOS detail cards so they do not render as empty rows on iPhone or iPad.
 
+Settings now starts with the signed-in avatar/name, groups active destinations under General and Push Notifications, and ends with Sign out; the obsolete Account/Refresh chats page is removed. Emojis & Stickers manages owned and subscribed packs, pinned quick reactions, sorting preferences, server-backed pack ordering, and owned-pack sticker uploads/removal. Sticker management is shared across iOS/macOS; the API request-shape test covers pack and upload mutations. Visual interaction with an authenticated account still requires manual verification.
+
 Notification settings show OS authorization, APNs environment, a non-sensitive token suffix, backend confirmation, and a retry action. macOS can inspect the signed entitlement and use it for backend routing; iOS cannot read that entitlement at runtime, so it reports the build-configured environment (shared by Info.plist and the signing request). iOS Release now requests production APNs; Debug/Local and macOS Release retain sandbox to preserve the existing working macOS behavior. A successful backend subscription confirms registration, not end-to-end delivery: verify on a signed physical iPhone by sending a message while the app is backgrounded.
 
 ## Scope exclusions

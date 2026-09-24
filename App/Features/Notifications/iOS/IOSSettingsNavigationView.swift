@@ -10,13 +10,23 @@
         var body: some View {
             NavigationStack {
                 List {
-                    Section { settings.accountSummary }
-                    Section {
-                        ForEach(SettingsPage.allCases) { page in
+                    settings.accountSummary
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    Section("General") {
+                        ForEach(SettingsPage.generalPages) { page in
                             NavigationLink(value: page) {
                                 Label(page.title, systemImage: page.symbol)
                             }
                         }
+                    }
+                    Section("Push Notifications") {
+                        NavigationLink(value: SettingsPage.notifications) {
+                            Label(SettingsPage.notifications.title, systemImage: "bell")
+                        }
+                    }
+                    Section {
+                        settings.signOutRow
                     }
                 }
                 .listStyle(.insetGrouped)

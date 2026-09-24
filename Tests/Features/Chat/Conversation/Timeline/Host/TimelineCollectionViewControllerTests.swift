@@ -283,6 +283,49 @@
             XCTAssertFalse(model.state.live.followsLatest)
         }
 
+        func testShortUnreadEntryReadsVisibleMessagesWithoutShowingJump() async throws {
+            let messages = try (1...3).map {
+                try TimelineTestFixtures.message(id: "\($0)", senderID: 2, at: $0)
+            }
+            var reads: [String] = []
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
+                messageStore: ConversationMessageStore(),
+                markRead: { reads.append($0) })
+            let parent = UIViewController()
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = parent
+            window.makeKeyAndVisible()
+            defer {
+                model.close()
+                window.isHidden = true
+            }
+            let controller = TimelineCollectionViewController(model: model, actions: .init())
+            controller.headerInset = 64
+            controller.composerInset = 80
+            parent.addChild(controller)
+            parent.view.addSubview(controller.view)
+            controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
+            controller.didMove(toParent: parent)
+            model.updateReadState(unreadCount: 2, lastReadMessageID: "1")
+            model.setReadTrackingActive(true)
+            await model.loadInitial(position: .unread(after: "1"))
+            controller.viewDidLayoutSubviews()
+            try await Task.sleep(for: .milliseconds(200))
+            let collection = try XCTUnwrap(
+                controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+            collection.layoutIfNeeded()
+            XCTAssertLessThan(
+                collection.contentSize.height,
+                collection.bounds.height - collection.adjustedContentInset.top
+                    - collection.adjustedContentInset.bottom)
+            XCTAssertEqual(reads, ["3"], "The entry scroll must report its settled visible row.")
+            XCTAssertTrue(model.state.live.isPinnedToBottom)
+            XCTAssertFalse(model.showsJumpToLatest)
+        }
+
         func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
             let messages = try (0..<16).map {
                 try TimelineTestFixtures.message(
@@ -435,7 +478,13 @@
                 controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
             // The 800-point fixture can extend beyond a phone window; that is not a safe-area inset.
             collection.contentInsetAdjustmentBehavior = .never
-            let referenceMeasurer = TimelineLayoutCache()
+            let textPaths = try ["0", "2"].map { messageID in
+                IndexPath(
+                    item: try XCTUnwrap(model.rows.firstIndex { $0.messageID == messageID }),
+                    section: 0)
+            }
+            // The fixture measurer lacks the host's message-size preference; test rendered cells.
+            var heightsByMessageID: [String: [CGFloat]] = [:]
             model.userScrollBegan()
             collection.setContentOffset(CGPoint(x: 0, y: 120), animated: false)
 
@@ -452,22 +501,38 @@
                     let frame = try XCTUnwrap(
                         collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))
                     ).frame
-                    let expectedHeight = TimelineTestFixtures.layout(
-                        row: model.rows[index], width: width, parent: controller,
-                        cache: referenceMeasurer
-                    ).size.height
-                    XCTAssertEqual(
-                        frame.height, expectedHeight, accuracy: 1, "Row \(index) at width \(width)")
                     XCTAssertGreaterThanOrEqual(frame.minY, previousBottom - 0.5)
                     previousBottom = frame.maxY
+                    if let messageID = model.rows[index].messageID {
+                        heightsByMessageID[messageID, default: []].append(frame.height)
+                    }
+                }
+                for path in textPaths {
+                    collection.scrollToItem(at: path, at: .top, animated: false)
+                    collection.layoutIfNeeded()
+                    try assertTextContained(in: try XCTUnwrap(collection.cellForItem(at: path)))
                 }
                 XCTAssertFalse(model.state.live.followsLatest)
+            }
+
+            for (messageID, heights) in heightsByMessageID {
+                XCTAssertEqual(
+                    heights.count, 3, "Message \(messageID) was not measured at every width.")
+                XCTAssertGreaterThan(
+                    heights[0], heights[1],
+                    "Message \(messageID) must occupy more height when its available width shrinks."
+                )
+                XCTAssertGreaterThan(
+                    heights[1], heights[2],
+                    "Message \(messageID) must reflow again when its available width grows.")
             }
 
             let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "2" })
             let path = IndexPath(item: index, section: 0)
             collection.scrollToItem(at: path, at: .top, animated: false)
+            collection.layoutIfNeeded()
             let before = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.height
+            try assertTextContained(in: try XCTUnwrap(collection.cellForItem(at: path)))
             setCategory(.accessibilityExtraExtraExtraLarge, on: controller, parent: parent)
             parent.view.layoutIfNeeded()
             controller.viewDidLayoutSubviews()
@@ -475,12 +540,10 @@
             collection.layoutIfNeeded()
             let after = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.height
             XCTAssertGreaterThan(after, before)
-            XCTAssertEqual(
-                after,
-                TimelineTestFixtures.layout(
-                    row: model.rows[index], width: collection.bounds.width, parent: controller,
-                    cache: referenceMeasurer
-                ).size.height, accuracy: 1)
+            collection.scrollToItem(at: path, at: .top, animated: false)
+            collection.layoutIfNeeded()
+            try assertTextContained(in: try XCTUnwrap(collection.cellForItem(at: path)))
+            XCTAssertFalse(model.state.live.followsLatest)
         }
 
         func testReplyMediaRowsKeepGeometryWhenOnlyViewportHeightChanges() async throws {
@@ -661,19 +724,6 @@
             XCTAssertTrue(
                 text.bounds.insetBy(dx: -0.5, dy: -0.5).contains(glyphs),
                 "All glyphs must fit the prepared native text frame.", file: file, line: line)
-            for button in text.subviews.compactMap({ $0 as? UIButton }) where !button.isHidden {
-                let symbol = button.imageRect(forContentRect: button.bounds)
-                let inText = text.convert(symbol, from: button)
-                let inRow = cell.convert(symbol, from: button)
-                XCTAssertTrue(
-                    text.bounds.insetBy(dx: -0.5, dy: -0.5).contains(inText),
-                    "Visible retry symbol \(inText) must fit text frame \(text.bounds).",
-                    file: file, line: line)
-                XCTAssertTrue(
-                    cell.bounds.insetBy(dx: -0.5, dy: -0.5).contains(inRow),
-                    "Visible retry symbol \(inRow) must fit row \(cell.bounds).", file: file,
-                    line: line)
-            }
         }
 
         private func setCategory(

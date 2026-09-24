@@ -51,6 +51,8 @@
             displayScheduler = TimelineDisplayScheduler(view: view)
             model.$state.sink { [weak self] _ in self?.requestRefresh() }.store(in: &subscriptions)
             model.$rows.sink { [weak self] _ in self?.requestRefresh() }.store(in: &subscriptions)
+            model.$viewportRevision.sink { [weak self] _ in self?.requestRefresh() }
+                .store(in: &subscriptions)
             model.updates.sink { [weak self] _ in self?.requestRefresh() }.store(in: &subscriptions)
             let notifications = NotificationCenter.default
             notifications.addObserver(

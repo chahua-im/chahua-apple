@@ -1,5 +1,18 @@
 import Foundation
 
+/// A local file submitted as the `file` field of a sticker creation request.
+public struct StickerUpload: Sendable {
+    public let fileURL: URL
+    public let fileName: String
+    public let contentType: String
+
+    public init(fileURL: URL, fileName: String, contentType: String) {
+        self.fileURL = fileURL
+        self.fileName = fileName
+        self.contentType = contentType
+    }
+}
+
 public struct StickerPackPreviewSticker: Codable, Hashable, Sendable, Identifiable {
     public let id: String
     public let media: MessageStickerMediaResponse

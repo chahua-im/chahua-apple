@@ -11,16 +11,36 @@
         var body: some View {
             NavigationSplitView {
                 List(selection: $selection) {
-                    ForEach(SettingsPage.allCases) { page in
-                        Label(page.title, systemImage: page.symbol)
-                            .tag(page)
+                    settings.accountSummary
+                        .listRowBackground(Color.clear)
+                    Section("General") {
+                        ForEach(SettingsPage.generalPages) { page in
+                            Label(page.title, systemImage: page.symbol)
+                                .tag(page)
+                        }
                     }
+                    Section("Push Notifications") {
+                        Label(SettingsPage.notifications.title, systemImage: "bell")
+                            .tag(SettingsPage.notifications)
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    settings.signOutRow
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
                 }
                 .navigationTitle("Settings")
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
             } detail: {
                 if let selection {
-                    settings.page(selection, grouped: false)
+                    if selection == .stickers {
+                        NavigationStack {
+                            settings.page(selection, grouped: false)
+                        }
+                    } else {
+                        settings.page(selection, grouped: false)
+                    }
                 } else {
                     ContentUnavailableView("Select a setting", systemImage: "gearshape")
                 }

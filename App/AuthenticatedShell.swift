@@ -500,7 +500,7 @@ struct AuthenticatedShell: View {
     private var settings: some View {
         NotificationSettingsView(
             notifications: notifications, chatStore: chatStore,
-            username: me.username, isSigningOut: isSigningOut,
+            me: me, isSigningOut: isSigningOut,
             onSignOut: onSignOut)
     }
 

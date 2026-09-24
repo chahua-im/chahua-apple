@@ -254,6 +254,7 @@ final class ConversationTimelineModelTests: XCTestCase {
                 firstVisibleIndex: 0, lastVisibleIndex: 0, distanceToTop: 0, distanceToBottom: 500,
                 height: 400), reason: .user, revision: model.updates.value.revision)
         XCTAssertFalse(model.state.live.isPinnedToBottom)
+        XCTAssertTrue(model.showsJumpToLatest, "Moving away from the bottom reveals the shortcut.")
 
         source.store.apply(.message(try TimelineTestFixtures.message(id: "2", senderID: 2, at: 2)))
 
@@ -281,6 +282,8 @@ final class ConversationTimelineModelTests: XCTestCase {
                 height: 400), reason: .user, revision: model.updates.value.revision)
 
         XCTAssertTrue(model.state.live.isPinnedToBottom)
+        XCTAssertFalse(
+            model.showsJumpToLatest, "A stale unread count cannot keep the shortcut on screen.")
         XCTAssertEqual(
             model.jumpUnreadCount, 1,
             "Reaching bottom alone cannot clear authoritative unread state.")
@@ -855,21 +858,34 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(model).map(\.id), ["3"])
     }
 
-    func testUnreadEntryAtSettledLiveBottomResumesFollowingWithoutUserScroll() async throws {
-        let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1...3))])
-        await model.open(position: .unread(after: "2"))
+    func testUnreadEntryAtSettledLiveBottomMarksVisibleMessagesWithoutShowingJump() async throws {
+        var reads: [String] = []
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3))],
+            markRead: { reads.append($0) })
+        model.updateReadState(unreadCount: 2, lastReadMessageID: "1")
+        model.setReadTrackingActive(true)
+        await model.open(position: .unread(after: "1"))
+        XCTAssertFalse(model.showsJumpToLatest, "Wait for actual geometry before showing a jump.")
         let request = try XCTUnwrap(model.updates.value.pendingScroll)
         let viewport = TimelineViewport(
             firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1,
-            distanceToTop: 0, distanceToBottom: 0, height: 600)
+            distanceToTop: 0, distanceToBottom: 0, height: 600,
+            fullyVisibleMessageIDs: ["1", "2", "3"])
         model.viewportDidChange(viewport, reason: .layout, revision: model.updates.value.revision)
         XCTAssertFalse(
             model.state.live.followsLatest, "An unfinished reveal still owns navigation.")
+        XCTAssertTrue(reads.isEmpty, "Do not mark messages read before the entry scroll settles.")
         model.scrollRequestDidFinish(id: request.id)
         model.viewportDidChange(
             viewport, reason: .programmatic, revision: model.updates.value.revision)
+        await source.drain()
+        XCTAssertEqual(reads, ["3"], "Entering reads through the last fully visible message.")
         XCTAssertTrue(model.state.live.isPinnedToBottom)
         XCTAssertTrue(model.state.live.followsLatest)
+        XCTAssertFalse(
+            model.showsJumpToLatest, "Unread metadata does not mean the viewport is away.")
+        model.updateReadState(unreadCount: 0, lastReadMessageID: "3")
         source.store.apply(.message(try TimelineTestFixtures.message(id: "4", senderID: 2, at: 4)))
         XCTAssertTrue(model.updates.value.animateFollowing)
     }
@@ -1184,25 +1200,20 @@ final class ConversationTimelineModelTests: XCTestCase {
         model.close()
     }
 
-    func testJumpVisibilityTracksUserDirectionWithoutTreatingLayoutAsScrolling() async throws {
+    func testJumpVisibilityTracksActualViewportNotScrollDirectionOrUnreadMetadata() async throws {
         let (model, _, _) = try makeModel(pages: [.success(try livePage(ids: 1...5))])
         await model.open()
         reportVisible(["4"], to: model)
         model.userScrollBegan()
         reportVisible(["3"], to: model, reason: .user)
-        XCTAssertFalse(
-            model.showsJumpToLatest, "Browsing older read history does not show the button.")
+        XCTAssertTrue(model.showsJumpToLatest, "Scrolling upward leaves the live bottom.")
         reportVisible(["4"], to: model, reason: .layout)
-        XCTAssertFalse(model.showsJumpToLatest, "Layout changes do not infer user intent.")
-        reportVisible(["5"], to: model, reason: .user)
-        XCTAssertTrue(model.showsJumpToLatest)
+        XCTAssertTrue(model.showsJumpToLatest, "Layout updates retain actual viewport position.")
         reportVisible(["5"], to: model, reason: .user, distanceToBottom: 0)
-        XCTAssertFalse(
-            model.showsJumpToLatest, "The absolute latest edge has nowhere newer to jump.")
+        XCTAssertFalse(model.showsJumpToLatest, "The absolute latest edge has nowhere to jump.")
         model.updateReadState(unreadCount: 2, lastReadMessageID: "3")
-        XCTAssertTrue(
-            model.showsJumpToLatest,
-            "Unread metadata makes the button available even before read confirmation.")
+        XCTAssertFalse(
+            model.showsJumpToLatest, "Unread metadata cannot show a button at the bottom.")
         model.updateReadState(unreadCount: 0, lastReadMessageID: "5")
         XCTAssertFalse(model.showsJumpToLatest)
     }

@@ -113,6 +113,27 @@ public protocol ChahuaAPIClient: Sendable {
     func setStickerFavorite(id: String, favorite: Bool) async throws
     func setStickerPackSubscription(id: String, subscribed: Bool) async throws
 
+    /// Creates a sticker pack with `POST /stickers/packs`.
+    func createStickerPack(name: String, description: String?) async throws -> StickerPackSummary
+
+    /// Changes the supplied fields of an owned pack with `PATCH /stickers/packs/{id}`.
+    func updateStickerPack(id: String, name: String?, description: String?) async throws
+        -> StickerPackSummary
+
+    /// Deletes an owned pack with `DELETE /stickers/packs/{id}`.
+    func deleteStickerPack(id: String) async throws
+
+    /// Uploads a new sticker as multipart form data to an owned pack.
+    func uploadStickerToPack(
+        id: String, upload: StickerUpload, emoji: String, name: String?, description: String?
+    ) async throws -> MessageStickerResponse
+
+    /// Removes a sticker from an owned pack with `DELETE /stickers/packs/{id}/stickers/{stickerID}`.
+    func removeStickerFromPack(id: String, stickerID: String) async throws
+
+    /// Merges sticker-pack ordering preferences with `PUT /users/me/stickerpack-order`.
+    func updateStickerPackOrder(_ order: [StickerPackOrderUpdate]) async throws
+
     /// Sends a message with `POST /chats/{chatID}/messages`.
     ///
     /// `clientGeneratedId` in the body identifies the client-side send attempt;
@@ -138,6 +159,27 @@ public protocol ChahuaAPIClient: Sendable {
 }
 
 extension ChahuaAPIClient {
+    public func createStickerPack(name: String) async throws -> StickerPackSummary {
+        try await createStickerPack(name: name, description: nil)
+    }
+
+    public func updateStickerPack(id: String, name: String) async throws -> StickerPackSummary {
+        try await updateStickerPack(id: id, name: name, description: nil)
+    }
+
+    public func updateStickerPack(id: String, description: String) async throws
+        -> StickerPackSummary
+    {
+        try await updateStickerPack(id: id, name: nil, description: description)
+    }
+
+    public func uploadStickerToPack(id: String, upload: StickerUpload, emoji: String) async throws
+        -> MessageStickerResponse
+    {
+        try await uploadStickerToPack(
+            id: id, upload: upload, emoji: emoji, name: nil, description: nil)
+    }
+
     public func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody)
         async throws -> MessageResponse
     {

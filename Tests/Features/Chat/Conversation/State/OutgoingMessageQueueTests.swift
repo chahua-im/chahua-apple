@@ -1092,6 +1092,22 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func setStickerPackSubscription(id: String, subscribed: Bool) async throws {
         throw APIError.unavailable
     }
+    func createStickerPack(name: String, description: String?) async throws -> StickerPackSummary {
+        throw APIError.unavailable
+    }
+    func updateStickerPack(id: String, name: String?, description: String?) async throws
+        -> StickerPackSummary
+    { throw APIError.unavailable }
+    func deleteStickerPack(id: String) async throws { throw APIError.unavailable }
+    func uploadStickerToPack(
+        id: String, upload: StickerUpload, emoji: String, name: String?, description: String?
+    ) async throws -> MessageStickerResponse { throw APIError.unavailable }
+    func removeStickerFromPack(id: String, stickerID: String) async throws {
+        throw APIError.unavailable
+    }
+    func updateStickerPackOrder(_ order: [StickerPackOrderUpdate]) async throws {
+        throw APIError.unavailable
+    }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         throw APIError.unavailable
     }

@@ -51,7 +51,13 @@ struct StickerPickerView: View {
                             Button {
                                 guard !isSending else { return }
                                 isSending = true
+                                let selectedPackID = selectedPackID
                                 Task {
+                                    if let selectedPackID {
+                                        Task { await library.recordPackUse(selectedPackID) }
+                                    } else {
+                                        library.recordFavoriteUse(sticker)
+                                    }
                                     _ = await onSelect(sticker)
                                     isSending = false
                                 }
