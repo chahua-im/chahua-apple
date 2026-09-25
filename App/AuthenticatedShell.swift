@@ -14,8 +14,8 @@ struct AuthenticatedShell: View {
 
     @State private var selectedScope: ConversationListScope = .messages
     @State private var archivedScope: ConversationListScope = .messages
-    @AppStorage(ConversationListPreferences.showsMessagesTabStorageKey)
-    private var showsMessagesTab = ConversationListPreferences.defaultShowsMessagesTab
+    @AppStorage(ConversationListPreferences.showThreadsInMessagesStorageKey)
+    private var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
     @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
     private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
         .rawValue
@@ -50,24 +50,15 @@ struct AuthenticatedShell: View {
     private func scopeBinding(archived: Bool) -> Binding<ConversationListScope> {
         Binding(
             get: {
-                normalizedScope(archived ? archivedScope : selectedScope)
+                archived ? archivedScope : selectedScope
             },
             set: { scope in
                 if archived {
-                    archivedScope = normalizedScope(scope)
+                    archivedScope = scope
                 } else {
-                    selectedScope = normalizedScope(scope)
+                    selectedScope = scope
                 }
             })
-    }
-
-    private func normalizedScope(_ scope: ConversationListScope) -> ConversationListScope {
-        showsMessagesTab || scope != .messages ? scope : .groups
-    }
-
-    private func normalizeConversationScopes() {
-        selectedScope = normalizedScope(selectedScope)
-        archivedScope = normalizedScope(archivedScope)
     }
 
     private struct NotificationNavigation {
@@ -118,16 +109,11 @@ struct AuthenticatedShell: View {
             if phase == .active { claimNotification() }
         }
         .task(id: notificationNavigation?.requestID) { await resolveNotification() }
-        .onChange(of: showsMessagesTab) { _, showsMessagesTab in
-            guard !showsMessagesTab else { return }
-            selectedScope = .groups
-            archivedScope = .groups
-        }
         .onChange(of: me.uid) { _, _ in
             selectConversation(nil)
             showsSettings = false
             listPath.removeAll()
-            archivedScope = normalizedScope(.messages)
+            archivedScope = .messages
         }
         .onChange(of: isSigningOut) { _, signingOut in
             if signingOut {
@@ -136,7 +122,6 @@ struct AuthenticatedShell: View {
             }
         }
         .onAppear {
-            normalizeConversationScopes()
             isVisible = true
             reportVisibleConversation()
         }
@@ -287,13 +272,14 @@ struct AuthenticatedShell: View {
         let badges = ConversationTabBadges(
             chats: archived ? chatStore.state.archivedChats : chatStore.state.chats,
             threads: archived ? chatStore.state.archivedThreads : chatStore.state.threads,
-            archived: archived)
+            archived: archived, showThreadsInMessages: showThreadsInMessages)
         let list = ChatListView(
             store: chatStore,
             drafts: chatStore.drafts,
             currentUserID: me.uid,
             scope: scope.wrappedValue,
             archivedMode: archived,
+            showThreadsInMessages: showThreadsInMessages,
             onOpenArchived: openArchived,
             badgeColor: unreadBadgeColor,
             selectedConversationID: selectedConversationID,
@@ -305,8 +291,7 @@ struct AuthenticatedShell: View {
                 // container an explicit width: UIKit otherwise measures its flexible
                 // segmented control at zero inside the horizontal stack.
                 let picker = ConversationScopePicker(
-                    selection: scope, badges: badges, showsMessagesTab: showsMessagesTab,
-                    badgeColor: unreadBadgeColor
+                    selection: scope, badges: badges, badgeColor: unreadBadgeColor
                 )
                 .frame(
                     minWidth: 0,
@@ -345,7 +330,7 @@ struct AuthenticatedShell: View {
         #else
             return VStack(spacing: 0) {
                 ConversationListHeader(
-                    selection: scope, badges: badges, showsMessagesTab: showsMessagesTab,
+                    selection: scope, badges: badges,
                     badgeColor: unreadBadgeColor, onBack: archived ? { closeArchived() } : nil
                 ) { accountButton }
                 list
@@ -355,7 +340,7 @@ struct AuthenticatedShell: View {
 
     private func openArchived() {
         guard listPath.isEmpty else { return }
-        archivedScope = normalizedScope(selectedScope)
+        archivedScope = selectedScope
         listPath.append(.archive)
     }
 

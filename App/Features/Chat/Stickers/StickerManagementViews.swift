@@ -2,16 +2,11 @@ import ChahuaAPI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Settings-owned management for the account's emoji reactions and sticker packs.
-struct StickerSettingsView: View {
+struct ReactionManagementView: View {
     @ObservedObject var library: StickerLibrary
     let currentUserID: Int32
 
     @State private var pinnedReactionText = ""
-    @State private var showsCreatePack = false
-    @State private var newPackName = ""
-    @State private var isCreatingPack = false
-    @State private var createdPackID: String?
 
     private let reactionChoices = ["👍", "❤️", "😂", "😮", "😢", "🎉", "👏", "🔥", "🙏", "👀"]
 
@@ -61,18 +56,40 @@ struct StickerSettingsView: View {
             } footer: {
                 Text("Pinned reactions appear first in the message reaction menu.")
             }
+        }
+        .navigationTitle("Reaction Management")
+        .task(id: currentUserID) {
+            library.setAccount(currentUserID)
+            pinnedReactionText = library.pinnedReactions.joined()
+        }
+        .onChange(of: library.pinnedReactions) { _, reactions in
+            let text = reactions.joined()
+            if pinnedReactionText != text { pinnedReactionText = text }
+        }
+    }
 
-            Section("Sticker Sorting") {
-                Toggle(
-                    "Auto-sort sticker packs",
-                    isOn: Binding(
-                        get: { library.autoSortPacks }, set: library.setAutoSortPacks))
-                Toggle(
-                    "Auto-sort favorite stickers",
-                    isOn: Binding(
-                        get: { library.autoSortFavorites }, set: library.setAutoSortFavorites))
-            }
+    private func appendPinnedReaction(_ emoji: String) {
+        var reactions = library.pinnedReactions
+        if let index = reactions.firstIndex(of: emoji) {
+            reactions.remove(at: index)
+        } else if reactions.count < StickerPreferences.maximumPinnedReactions {
+            reactions.append(emoji)
+        }
+        library.setPinnedReactions(reactions)
+    }
+}
 
+struct StickerPackManagementView: View {
+    @ObservedObject var library: StickerLibrary
+    let currentUserID: Int32
+
+    @State private var showsCreatePack = false
+    @State private var newPackName = ""
+    @State private var isCreatingPack = false
+    @State private var createdPackID: String?
+
+    var body: some View {
+        List {
             Section {
                 Button {
                     newPackName = ""
@@ -91,7 +108,7 @@ struct StickerSettingsView: View {
 
             packsSection
         }
-        .navigationTitle("Emojis & Stickers")
+        .navigationTitle("Manage Sticker Packs")
         #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -102,12 +119,7 @@ struct StickerSettingsView: View {
         #endif
         .task(id: currentUserID) {
             library.setAccount(currentUserID)
-            pinnedReactionText = library.pinnedReactions.joined()
             await library.refresh()
-        }
-        .onChange(of: library.pinnedReactions) { _, reactions in
-            let text = reactions.joined()
-            if pinnedReactionText != text { pinnedReactionText = text }
         }
         .refreshable { await library.refresh() }
         .navigationDestination(item: $createdPackID) { packID in
@@ -179,16 +191,6 @@ struct StickerSettingsView: View {
     }
 
     private var currentErrorMessage: String { library.error ?? "" }
-
-    private func appendPinnedReaction(_ emoji: String) {
-        var reactions = library.pinnedReactions
-        if let index = reactions.firstIndex(of: emoji) {
-            reactions.remove(at: index)
-        } else if reactions.count < StickerPreferences.maximumPinnedReactions {
-            reactions.append(emoji)
-        }
-        library.setPinnedReactions(reactions)
-    }
 
     private func createPack() {
         let name = newPackName.trimmingCharacters(in: .whitespacesAndNewlines)

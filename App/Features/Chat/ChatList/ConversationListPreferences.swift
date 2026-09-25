@@ -2,10 +2,10 @@ import SwiftUI
 
 /// Persisted presentation preferences for the conversation list.
 enum ConversationListPreferences {
-    static let showsMessagesTabStorageKey = "chat.list.showsMessagesTab"
+    static let showThreadsInMessagesStorageKey = "chat.list.showThreadsInMessages"
     static let unreadBadgeColorStorageKey = "chat.list.unreadBadgeColor"
 
-    static let defaultShowsMessagesTab = true
+    static let defaultShowThreadsInMessages = true
     static let defaultUnreadBadgeColor = ConversationUnreadBadgeColor.default
 }
 

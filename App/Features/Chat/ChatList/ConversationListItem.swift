@@ -7,18 +7,22 @@ enum ConversationListScope: String, CaseIterable, Identifiable {
 
     var id: Self { self }
     var includesChats: Bool { self != .threads }
-    var includesThreads: Bool { self == .messages || self == .threads }
+    func includesThreads(showThreadsInMessages: Bool) -> Bool {
+        self == .threads || (self == .messages && showThreadsInMessages)
+    }
 }
 
 struct ConversationTabBadges: Equatable {
     var groups = 0
     var dms = 0
     var threads = 0
+    var showThreadsInMessages = true
 
     init(
         chats: [ChatListItem] = [], threads: [ThreadListItem] = [], archived: Bool = false,
-        now: Date = Date()
+        showThreadsInMessages: Bool = true, now: Date = Date()
     ) {
+        self.showThreadsInMessages = showThreadsInMessages
         for chat in chats where chat.archived == archived && chat.unreadCount > 0 {
             guard archived || chat.mutedUntil.map({ $0 > now }) != true else { continue }
             switch chat.kind {
@@ -33,7 +37,7 @@ struct ConversationTabBadges: Equatable {
 
     subscript(scope: ConversationListScope) -> Int {
         switch scope {
-        case .messages: groups + dms + threads
+        case .messages: groups + dms + (showThreadsInMessages ? threads : 0)
         case .groups: groups
         case .dms: dms
         case .threads: threads
@@ -117,7 +121,8 @@ enum ConversationListItem: Hashable, Identifiable {
 
     static func entries(
         chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope,
-        archived: Bool = false, draftUpdatedAt: [ConversationKey: Date] = [:]
+        archived: Bool = false, showThreadsInMessages: Bool = true,
+        draftUpdatedAt: [ConversationKey: Date] = [:]
     ) -> [Self] {
         var result: [Self] = []
         if scope.includesChats {
@@ -127,7 +132,7 @@ enum ConversationListItem: Hashable, Identifiable {
                         || (scope == .dms && $0.kind == .dm))
             }.map(Self.chat)
         }
-        if scope.includesThreads {
+        if scope.includesThreads(showThreadsInMessages: showThreadsInMessages) {
             result += threads.filter { $0.archived == archived }.map(Self.thread)
         }
         return result.sorted {

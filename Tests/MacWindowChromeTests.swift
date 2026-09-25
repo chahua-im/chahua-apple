@@ -6,8 +6,8 @@
     @testable import chahua_apple
 
     @MainActor
-    final class SidebarWindowControlsTests: XCTestCase {
-        func testConversationTitleChangesKeepTrafficLightsInsideSidebar() async throws {
+    final class MacWindowChromeTests: XCTestCase {
+        func testNativeTrafficLightsStayFixedThroughConversationChanges() async throws {
             let selection = Selection()
             let host = NSHostingController(rootView: SelectionSurface(selection: selection))
             let window = NSWindow(
@@ -25,28 +25,28 @@
 
             for title in ["First conversation", "Second conversation", nil] as [String?] {
                 selection.chat = title
-                await settle(window)
-                let actual = try positions(in: window)
-                for (before, after) in zip(original, actual) {
-                    XCTAssertEqual(
-                        after.x, before.x, accuracy: 0.5,
-                        "Selecting a chat must not move a window button horizontally")
-                    XCTAssertEqual(
-                        after.y, before.y, accuracy: 0.5,
-                        "Selecting a chat must not move a window button vertically")
+                // Check throughout SwiftUI's navigation-title update, not only
+                // after AppKit finishes its next layout pass.
+                for _ in 0..<10 {
+                    try await Task.sleep(for: .milliseconds(20))
+                    window.contentView?.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    try assertPositions(in: window, equalTo: original)
                 }
             }
             window.setContentSize(NSSize(width: 1000, height: 650))
             await settle(window)
-            let resized = try positions(in: window)
-            for (before, after) in zip(original, resized) {
+            try assertPositions(in: window, equalTo: original)
+        }
+
+        private func assertPositions(in window: NSWindow, equalTo original: [CGPoint]) throws {
+            for (before, after) in zip(original, try positions(in: window)) {
                 XCTAssertEqual(after.x, before.x, accuracy: 0.5)
                 XCTAssertEqual(
                     after.y, before.y, accuracy: 0.5,
-                    "Buttons remain inset from the window top after resize")
+                    "Native window buttons should not shift when switching chats or resizing")
             }
         }
-
         private func settle(_ window: NSWindow) async {
             // SwiftUI title propagation and AppKit's subsequent frame notifications
             // run on separate turns of the main run loop.
@@ -73,25 +73,21 @@
             @ObservedObject var selection: Selection
 
             var body: some View {
-                HStack(spacing: 12) {
-                    VStack {
-                        SidebarWindowControls().frame(height: 52)
-                        Text("Chats")
-                        Spacer()
-                    }
-                    .frame(width: 320)
-                    Group {
-                        if let chat = selection.chat {
-                            Text(chat).navigationTitle(chat)
-                        } else {
-                            Text("Select a conversation")
+                ChatSplitLayout(hasSelection: selection.chat != nil) { _ in
+                    Text("Chats").frame(maxWidth: .infinity, maxHeight: .infinity)
+                } detail: { _ in
+                    NavigationStack {
+                        Group {
+                            if let chat = selection.chat {
+                                Text(chat).navigationTitle(chat)
+                            } else {
+                                Text("Select a conversation")
+                            }
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(12)
                 .frame(minWidth: 900, minHeight: 600)
-                .ignoresSafeArea(.container, edges: .top)
             }
         }
     }

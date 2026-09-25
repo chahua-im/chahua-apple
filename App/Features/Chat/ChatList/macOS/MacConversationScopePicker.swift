@@ -5,13 +5,11 @@
     struct MacConversationScopePicker: View {
         @Binding var selection: ConversationListScope
         var badges: ConversationTabBadges
-        var showsMessagesTab = ConversationListPreferences.defaultShowsMessagesTab
         var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
 
         var body: some View {
             GrowingScopeTabs {
-                ForEach(ConversationListScope.pickerScopes(showsMessagesTab: showsMessagesTab)) {
-                    scope in
+                ForEach(ConversationListScope.allCases) { scope in
                     Button {
                         selection = scope
                     } label: {

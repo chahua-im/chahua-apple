@@ -28,6 +28,10 @@ final class ConversationScopeTests: XCTestCase {
             ConversationListItem.entries(chats: chats, threads: threads, scope: .messages).map(
                 \.id), [threadKey, .init(chatID: "dm"), parentKey])
         XCTAssertEqual(
+            ConversationListItem.entries(
+                chats: chats, threads: threads, scope: .messages, showThreadsInMessages: false
+            ).map(\.id), [.init(chatID: "dm"), parentKey])
+        XCTAssertEqual(
             ConversationListItem.entries(chats: chats, threads: threads, scope: .groups).map(\.id),
             [parentKey])
         XCTAssertEqual(
@@ -36,6 +40,10 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(
             ConversationListItem.entries(chats: chats, threads: threads, scope: .threads).map(\.id),
             [threadKey])
+        XCTAssertEqual(
+            ConversationListItem.entries(
+                chats: chats, threads: threads, scope: .threads, showThreadsInMessages: false
+            ).map(\.id), [threadKey])
         let reordered = ConversationListItem.entries(
             chats: chats, threads: threads, scope: .messages,
             draftUpdatedAt: [parentKey: Date(timeIntervalSince1970: 60)])
@@ -48,6 +56,11 @@ final class ConversationScopeTests: XCTestCase {
                 .init(chatID: "group", threadID: "archived-root"), .init(chatID: "archived-dm"),
                 .init(chatID: "archived"),
             ])
+        XCTAssertEqual(
+            ConversationListItem.entries(
+                chats: chats, threads: threads, scope: .messages, archived: true,
+                showThreadsInMessages: false
+            ).map(\.id), [.init(chatID: "archived-dm"), .init(chatID: "archived")])
         XCTAssertEqual(
             ConversationListItem.entries(
                 chats: chats, threads: threads, scope: .groups, archived: true
@@ -76,6 +89,23 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(archived[.dms], 1)
         XCTAssertEqual(archived[.messages], 2)
         XCTAssertEqual(ConversationTabBadges(chats: chats)[.messages], 0)
+    }
+
+    func testHidingThreadsFromMessagesKeepsThreadsBadgeAndArchivedChatCounts() throws {
+        let thread = try ScopeTestFixtures.thread(
+            chatID: "chat", id: "root", unreadCount: 3)
+        let chats = [
+            ChatListItem(id: "chat", unreadCount: 1, archived: false, kind: .group),
+            ChatListItem(id: "archived", unreadCount: 2, archived: true, kind: .dm),
+        ]
+        let active = ConversationTabBadges(
+            chats: chats, threads: [thread], showThreadsInMessages: false)
+        XCTAssertEqual(active[.messages], 1)
+        XCTAssertEqual(active[.threads], 1)
+        XCTAssertEqual(
+            ConversationTabBadges(
+                chats: chats, threads: [thread], archived: true,
+                showThreadsInMessages: false)[.messages], 1)
     }
 
     func testPendingThreadRepliesStayInTheirTimelineThroughAcknowledgement() async throws {
@@ -174,7 +204,8 @@ final class ConversationScopeTests: XCTestCase {
 @MainActor
 enum ScopeTestFixtures {
     static func thread(
-        chatID: String = "chat", id: String, at: TimeInterval = 40, archived: Bool = false
+        chatID: String = "chat", id: String, at: TimeInterval = 40, archived: Bool = false,
+        unreadCount: Int64 = 0
     ) throws -> ThreadListItem {
         let message = try TimelineTestFixtures.message(id: id, chatID: chatID, at: 1)
         let encoder = JSONEncoder()
@@ -186,7 +217,8 @@ enum ScopeTestFixtures {
             chatId: chatID, chatName: "Parent", chatAvatar: nil, threadRootMessage: preview,
             participants: [], lastReply: nil, replyCount: 1,
             lastReplyAt: Date(timeIntervalSince1970: at),
-            unreadCount: 0, lastReadMessageId: nil, subscribedAt: Date(timeIntervalSince1970: 0),
+            unreadCount: unreadCount, lastReadMessageId: nil,
+            subscribedAt: Date(timeIntervalSince1970: 0),
             archived: archived)
     }
 }

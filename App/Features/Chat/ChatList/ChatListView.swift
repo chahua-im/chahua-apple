@@ -7,6 +7,7 @@ struct ChatListView: View {
     let currentUserID: Int32
     let scope: ConversationListScope
     var archivedMode = false
+    var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
     var onOpenArchived: (() -> Void)?
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
     let selectedConversationID: ConversationKey?
@@ -20,6 +21,7 @@ struct ChatListView: View {
     private struct LoadID: Equatable {
         let scope: ConversationListScope
         let archived: Bool
+        let showThreadsInMessages: Bool
     }
 
     private var chatPhase: ChatListLoadPhase {
@@ -30,24 +32,30 @@ struct ChatListView: View {
         archivedMode ? store.state.archivedThreadListLoadPhase : store.state.threadListLoadPhase
     }
 
+    private var includesThreads: Bool {
+        scope.includesThreads(showThreadsInMessages: showThreadsInMessages)
+    }
+
     private var hasArchivedConversations: Bool {
         (scope.includesChats
             && store.state.archivedChats.contains {
                 scope == .messages || (scope == .groups && $0.kind == .group)
                     || (scope == .dms && $0.kind == .dm)
-            }) || (scope.includesThreads && !store.state.archivedThreads.isEmpty)
+            }) || (includesThreads && !store.state.archivedThreads.isEmpty)
             || (scope.includesChats && store.state.archivedChatListLoadPhase == .failed)
-            || (scope.includesThreads && store.state.archivedThreadListLoadPhase == .failed)
+            || (includesThreads && store.state.archivedThreadListLoadPhase == .failed)
     }
 
     var body: some View {
         let items = ConversationListItem.entries(
             chats: archivedMode ? store.state.archivedChats : store.state.chats,
             threads: archivedMode ? store.state.archivedThreads : store.state.threads,
-            scope: scope, archived: archivedMode, draftUpdatedAt: drafts.draftUpdatedAt)
+            scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages,
+            draftUpdatedAt: drafts.draftUpdatedAt)
         List {
             ConversationListLoadStatus(
                 state: store.state, scope: scope, archivedMode: archivedMode,
+                showThreadsInMessages: showThreadsInMessages,
                 isPullRefreshing: isPullRefreshing, onRetry: { await refreshScope() }
             )
             #if os(macOS)
@@ -106,7 +114,11 @@ struct ChatListView: View {
         .onChange(of: archivedMode) { _, _ in revealedConversationID = nil }
         .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
         .onDisappear { revealedConversationID = nil }
-        .task(id: LoadID(scope: scope, archived: archivedMode)) { await loadScope() }
+        .task(
+            id: LoadID(
+                scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages
+            )
+        ) { await loadScope() }
         .refreshable {
             isPullRefreshing = true
             defer { isPullRefreshing = false }
@@ -126,8 +138,8 @@ struct ChatListView: View {
 
     private var archivedEntry: some View {
         let count = ConversationTabBadges(
-            chats: store.state.archivedChats, threads: store.state.archivedThreads, archived: true)[
-                scope]
+            chats: store.state.archivedChats, threads: store.state.archivedThreads,
+            archived: true, showThreadsInMessages: showThreadsInMessages)[scope]
         return HStack(spacing: 12) {
             Image(systemName: "archivebox")
                 .font(.title2)
@@ -268,7 +280,7 @@ struct ChatListView: View {
 
     private var isLoaded: Bool {
         (!scope.includesChats || chatPhase == .loaded)
-            && (!scope.includesThreads || threadPhase == .loaded)
+            && (!includesThreads || threadPhase == .loaded)
     }
 
     private func perform(_ action: ConversationListAction, on item: ConversationListItem) {
@@ -295,7 +307,7 @@ struct ChatListView: View {
     }
 
     private func loadThreadsIfNeeded() async {
-        guard scope.includesThreads else { return }
+        guard includesThreads else { return }
         if archivedMode {
             await store.loadArchivedThreads()
         } else {
@@ -316,7 +328,7 @@ struct ChatListView: View {
     }
 
     private func refreshActiveScope() async {
-        if scope == .messages {
+        if scope == .messages && showThreadsInMessages {
             await store.refreshActiveConversations()
         } else if scope == .threads {
             await store.refreshActiveThreads()
@@ -326,7 +338,7 @@ struct ChatListView: View {
     }
 
     private func refreshArchivedScope() async {
-        if scope == .messages {
+        if scope == .messages && showThreadsInMessages {
             await store.refreshArchivedConversations()
         } else if scope == .threads {
             await store.refreshArchivedThreads()
@@ -341,6 +353,7 @@ struct ConversationListLoadStatus: View {
     let state: ChatState
     let scope: ConversationListScope
     var archivedMode = false
+    var showThreadsInMessages = true
     var isPullRefreshing = false
     let onRetry: () async -> Void
 
@@ -352,12 +365,16 @@ struct ConversationListLoadStatus: View {
         archivedMode ? state.archivedThreadListLoadPhase : state.threadListLoadPhase
     }
 
+    private var includesThreads: Bool {
+        scope.includesThreads(showThreadsInMessages: showThreadsInMessages)
+    }
+
     private var hasFailure: Bool {
         (scope.includesChats
             && (chatPhase == .failed
                 || (archivedMode
                     ? state.archivedChatListRefreshFailed : state.chatListRefreshFailed)))
-            || (scope.includesThreads
+            || (includesThreads
                 && (threadPhase == .failed
                     || (archivedMode
                         ? state.archivedThreadListRefreshFailed : state.threadListRefreshFailed)))
@@ -365,7 +382,7 @@ struct ConversationListLoadStatus: View {
 
     private var isLoading: Bool {
         (scope.includesChats && (chatPhase == .idle || chatPhase == .loading))
-            || (scope.includesThreads && (threadPhase == .idle || threadPhase == .loading))
+            || (includesThreads && (threadPhase == .idle || threadPhase == .loading))
     }
 
     var body: some View {

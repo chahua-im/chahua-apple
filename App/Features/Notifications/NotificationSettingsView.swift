@@ -3,29 +3,48 @@ import SwiftUI
 import UserNotifications
 
 enum SettingsPage: String, Identifiable {
-    case appearance, conversations, storage, stickers, notifications
+    case language, appearance, conversations, storage, reactions, stickerPacks, notifications
 
-    static let generalPages: [Self] = [.appearance, .conversations, .storage, .stickers]
+    static let generalPages: [Self] = [.language, .appearance, .conversations, .storage]
+    static let stickerPages: [Self] = [.reactions, .stickerPacks]
     var id: Self { self }
 
     var title: LocalizedStringKey {
         switch self {
+        case .language: "Language"
         case .appearance: "Appearance"
         case .conversations: "Conversations"
         case .storage: "Storage"
-        case .stickers: "Emojis & Stickers"
-        case .notifications: "Notifications"
+        case .reactions: "Quick Reaction"
+        case .stickerPacks: "Manage Sticker Packs"
+        case .notifications: "Push Notifications"
         }
     }
 
     var symbol: String {
         switch self {
+        case .language: "globe"
         case .appearance: "paintpalette"
         case .conversations: "bubble.left.and.bubble.right"
         case .storage: "internaldrive"
-        case .stickers: "face.smiling"
+        case .reactions: "face.smiling"
+        case .stickerPacks: "square.stack"
         case .notifications: "bell"
         }
+    }
+
+    static func navigationTitle(languageRawValue: String) -> String {
+        let language = AppLanguage(rawValue: languageRawValue) ?? .system
+        let bundle: Bundle
+        if language != .system,
+            let path = Bundle.main.path(forResource: language.rawValue, ofType: "lproj"),
+            let selectedBundle = Bundle(path: path)
+        {
+            bundle = selectedBundle
+        } else {
+            bundle = .main
+        }
+        return String(localized: "Settings", bundle: bundle, locale: language.locale)
     }
 }
 
@@ -36,8 +55,8 @@ struct NotificationSettingsView: View {
     let isSigningOut: Bool
     let onSignOut: () -> Void
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.system.rawValue
-    @AppStorage(ConversationListPreferences.showsMessagesTabStorageKey)
-    private var showsMessagesTab = true
+    @AppStorage(ConversationListPreferences.showThreadsInMessagesStorageKey)
+    private var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
     @AppStorage(MessageTextSizePreference.storageKey)
     private var messageTextSize = MessageTextSizePreference.defaultValue
     @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
@@ -83,10 +102,20 @@ struct NotificationSettingsView: View {
             .disabled(isSigningOut || notifications.isUnregistering)
     }
 
+    var autoSortPacksRow: some View {
+        StickerSortRow(library: chatStore.stickers, packs: true)
+    }
+
+    var autoSortFavoritesRow: some View {
+        StickerSortRow(library: chatStore.stickers, packs: false)
+    }
+
     @ViewBuilder
     func page(_ page: SettingsPage, grouped: Bool) -> some View {
-        if page == .stickers {
-            StickerSettingsView(library: chatStore.stickers, currentUserID: me.uid)
+        if page == .reactions {
+            ReactionManagementView(library: chatStore.stickers, currentUserID: me.uid)
+        } else if page == .stickerPacks {
+            StickerPackManagementView(library: chatStore.stickers, currentUserID: me.uid)
         } else if grouped {
             Form {
                 Section {
@@ -124,9 +153,9 @@ struct NotificationSettingsView: View {
     @ViewBuilder
     private func pageRows(_ page: SettingsPage, showsDividers: Bool) -> some View {
         switch page {
-        case .stickers:
+        case .reactions, .stickerPacks:
             EmptyView()
-        case .appearance:
+        case .language:
             LabeledContent("App language") {
                 Picker("App language", selection: $language) {
                     ForEach(AppLanguage.allCases) { option in
@@ -135,7 +164,7 @@ struct NotificationSettingsView: View {
                 }
                 .labelsHidden()
             }
-            if showsDividers { Divider() }
+        case .appearance:
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Message text size", systemImage: "textformat.size")
@@ -201,11 +230,8 @@ struct NotificationSettingsView: View {
                 .disabled(unreadBadgeColor == ConversationUnreadBadgeColor.default.rawValue)
             }
         case .conversations:
-            Toggle("Show Messages tab", isOn: $showsMessagesTab)
+            Toggle("Show 'Threads' in Messages", isOn: $showThreadsInMessages)
                 .toggleStyle(.switch)
-            Text("Groups, DMs, and Threads stay available when Messages is hidden.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         case .storage:
             if let mediaContext {
                 MediaCacheSettingsSection(context: mediaContext)
@@ -320,5 +346,23 @@ struct NotificationSettingsView: View {
         return notifications.isRegistered
             ? AppLanguage.localized("Registered")
             : AppLanguage.localized("Not registered")
+    }
+}
+
+private struct StickerSortRow: View {
+    @ObservedObject var library: StickerLibrary
+    let packs: Bool
+
+    var body: some View {
+        if packs {
+            Toggle(
+                "Auto-sort sticker packs",
+                isOn: Binding(get: { library.autoSortPacks }, set: library.setAutoSortPacks))
+        } else {
+            Toggle(
+                "Auto-sort favorite stickers",
+                isOn: Binding(
+                    get: { library.autoSortFavorites }, set: library.setAutoSortFavorites))
+        }
     }
 }

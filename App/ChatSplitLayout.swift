@@ -62,8 +62,9 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                 pane(
                     VStack(spacing: 0) {
                         #if os(macOS)
-                            SidebarWindowControls()
-                                .frame(height: 52)
+                            // Keep the native title-bar controls in AppKit's ownership.
+                            // The sidebar only reserves space beneath their overlay.
+                            Color.clear.frame(height: 52)
                         #endif
                         sidebar(isSplit)
                     }
