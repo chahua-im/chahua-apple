@@ -126,7 +126,7 @@
                         currentUserID: binding.context.currentUserID, isOutgoing: row.isOutgoing,
                         action: binding.actions.openLink,
                         mentionAction: binding.actions.openMention,
-                        metadata: localFrames[.media] == nil ? p.metadata : nil,
+                        metadata: localFrames[.metadata] == nil ? p.metadata : nil,
                         failureAction: failureAction, geometry: geometry, fontSize: e.bodySize
                     ), resetSelection: resetSelection)
             } else {

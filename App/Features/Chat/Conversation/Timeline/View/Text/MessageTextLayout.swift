@@ -10,6 +10,7 @@ struct MessageTextGeometry: Equatable {
     let size: CGSize
     let bodyBounds: CGRect
     let lastLineBounds: CGRect
+    let visibleBounds: CGRect
     let metadataFrame: CGRect
     let metadataIsInline: Bool
 }
@@ -149,9 +150,13 @@ final class MessageTextLayout {
             : CGRect(
                 x: width - metadataSize.width, y: metadataY, width: metadataSize.width,
                 height: metadataSize.height)
+        let glyphBounds =
+            glyphs.length > 0 && bodyBounds.height <= lastLine.height + 0.5
+            ? layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer) : bodyBounds
+        let visibleBounds = metadata == nil ? glyphBounds : glyphBounds.union(metadataFrame)
         let result = MessageTextGeometry(
             size: CGSize(width: width, height: ceil(max(bodyBounds.maxY, metadataFrame.maxY))),
-            bodyBounds: bodyBounds, lastLineBounds: lastLine,
+            bodyBounds: bodyBounds, lastLineBounds: lastLine, visibleBounds: visibleBounds,
             metadataFrame: metadataFrame, metadataIsInline: inline
         )
         cachedGeometry = result

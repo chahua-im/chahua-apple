@@ -131,7 +131,7 @@
                         currentUserID: binding.context.currentUserID, isOutgoing: row.isOutgoing,
                         action: binding.actions.openLink,
                         mentionAction: binding.actions.openMention,
-                        metadata: localFrames[.media] == nil ? presentation.metadata : nil,
+                        metadata: localFrames[.metadata] == nil ? presentation.metadata : nil,
                         failureAction: failureAction, geometry: geometry,
                         fontSize: environment.bodySize
                     ), resetSelection: resetSelection)

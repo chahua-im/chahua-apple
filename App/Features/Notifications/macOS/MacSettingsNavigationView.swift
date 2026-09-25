@@ -25,8 +25,6 @@
                         }
                     }
                     Section("Stickers") {
-                        settings.autoSortPacksRow
-                        settings.autoSortFavoritesRow
                         ForEach(SettingsPage.stickerPages) { page in
                             Label(page.title, systemImage: page.symbol)
                                 .tag(page)

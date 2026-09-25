@@ -2,16 +2,6 @@
     import UIKit
 
     extension MessageTextContent.Coordinator: UITextViewDelegate {
-        func textView(
-            _ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange,
-            interaction: UITextItemInteraction
-        ) -> Bool {
-            if interaction == .invokeDefaultAction {
-                activateLink(in: textView.textStorage, at: characterRange.location)
-            }
-            // UIKit's URL previews and menus must not bypass the current app actions.
-            return false
-        }
 
         @available(iOS 17.0, *)
         func textView(

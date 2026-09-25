@@ -412,27 +412,36 @@ private struct StickerPackDetailSettingsView: View {
         .accessibilityLabel("Add sticker")
     }
 
+    @ViewBuilder
     private func stickerCell(_ sticker: MessageStickerResponse) -> some View {
-        Button {
-            if isOwned { stickerToRemove = sticker }
-        } label: {
-            ZStack(alignment: .topTrailing) {
-                StickerMediaView(media: sticker.media, emoji: sticker.emoji)
-                    .frame(maxWidth: .infinity, minHeight: 92)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-                if isOwned {
-                    Image(systemName: "xmark.circle.fill")
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(.secondary)
-                        .padding(5)
-                        .accessibilityHidden(true)
-                }
+        if isOwned {
+            Button {
+                stickerToRemove = sticker
+            } label: {
+                stickerTile(sticker)
+            }
+            .buttonStyle(.plain)
+            .disabled(library.pendingMutationIDs.contains(packID))
+            .accessibilityLabel("Remove \(sticker.name ?? sticker.emoji)")
+        } else {
+            stickerTile(sticker)
+                .accessibilityLabel(sticker.name ?? sticker.emoji)
+        }
+    }
+
+    private func stickerTile(_ sticker: MessageStickerResponse) -> some View {
+        ZStack(alignment: .topTrailing) {
+            StickerMediaView(media: sticker.media, emoji: sticker.emoji)
+                .frame(maxWidth: .infinity, minHeight: 92)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+            if isOwned {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.secondary)
+                    .padding(5)
+                    .accessibilityHidden(true)
             }
         }
-        .buttonStyle(.plain)
-        .disabled(!isOwned || library.pendingMutationIDs.contains(packID))
-        .accessibilityLabel(
-            isOwned ? "Remove \(sticker.name ?? sticker.emoji)" : sticker.name ?? sticker.emoji)
     }
 
     private var stickerRemovalBinding: Binding<Bool> {

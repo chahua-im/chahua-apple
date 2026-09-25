@@ -26,8 +26,6 @@
                         }
                     }
                     Section("Stickers") {
-                        settings.autoSortPacksRow
-                        settings.autoSortFavoritesRow
                         ForEach(SettingsPage.stickerPages) { page in
                             NavigationLink(value: page) {
                                 Label(page.title, systemImage: page.symbol)

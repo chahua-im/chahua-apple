@@ -137,40 +137,22 @@ final class MessageTextLayoutTests: XCTestCase {
                 host.view.layoutIfNeeded()
             }
             try await settle()
-            let link = try XCTUnwrap(URL(string: "https://example.com"))
-            let mention = try XCTUnwrap(URL(string: "chahua-mention://2"))
-            let linkRange = (text.text as NSString).range(of: link.absoluteString)
+            let linkRange = (text.text as NSString).range(of: "https://example.com")
             let mentionRange = (text.text as NSString).range(of: "@User 2")
             let expectedText = "Hello https://example.com \u{2002}@User 2\u{2002}"
             XCTAssertEqual(
                 text.text, expectedText, "Timestamp metadata must not enter the selectable text.")
+            let coordinator = try XCTUnwrap(text.delegate as? MessageTextContent.Coordinator)
             text.selectedRange = NSRange(location: 0, length: 5)
-            XCTAssertEqual(
-                text.delegate?.textView?(
-                    text, shouldInteractWith: link, in: linkRange, interaction: .presentActions),
-                false)
-            XCTAssertTrue(opened.isEmpty)
-            XCTAssertEqual(
-                text.delegate?.textView?(
-                    text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction
-                ), false)
-            XCTAssertEqual(
-                text.delegate?.textView?(
-                    text, shouldInteractWith: mention, in: mentionRange,
-                    interaction: .invokeDefaultAction), false)
+            coordinator.activateLink(in: text.textStorage, at: linkRange.location)
+            coordinator.activateLink(in: text.textStorage, at: mentionRange.location)
             XCTAssertEqual(opened, ["first:https://example.com", "first:mention:2"])
 
             text.apply(content("replacement:"), resetSelection: false)
             try await settle()
             XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
-            XCTAssertEqual(
-                text.delegate?.textView?(
-                    text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction
-                ), false)
-            XCTAssertEqual(
-                text.delegate?.textView?(
-                    text, shouldInteractWith: mention, in: mentionRange,
-                    interaction: .invokeDefaultAction), false)
+            coordinator.activateLink(in: text.textStorage, at: linkRange.location)
+            coordinator.activateLink(in: text.textStorage, at: mentionRange.location)
             let expectedActions = [
                 "first:https://example.com", "first:mention:2", "replacement:https://example.com",
                 "replacement:mention:2",
@@ -179,14 +161,8 @@ final class MessageTextLayoutTests: XCTestCase {
 
             text.apply(content(nil), resetSelection: false)
             try await settle()
-            XCTAssertEqual(
-                text.delegate?.textView?(
-                    text, shouldInteractWith: link, in: linkRange, interaction: .invokeDefaultAction
-                ), false)
-            XCTAssertEqual(
-                text.delegate?.textView?(
-                    text, shouldInteractWith: mention, in: mentionRange,
-                    interaction: .invokeDefaultAction), false)
+            coordinator.activateLink(in: text.textStorage, at: linkRange.location)
+            coordinator.activateLink(in: text.textStorage, at: mentionRange.location)
             XCTAssertEqual(opened, expectedActions)
             XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
             XCTAssertEqual(text.text, expectedText)
@@ -210,6 +186,95 @@ final class MessageTextLayoutTests: XCTestCase {
         let geometry = layout.geometry(for: assignedWidth)
         XCTAssertEqual(geometry.metadataFrame.maxX, assignedWidth, accuracy: 0.5)
         XCTAssertTrue(geometry.metadataIsInline)
+    }
+
+    func testShortHeaderlessBubbleCentersTextAndTimestampAtAvatarHeight() throws {
+        let message = try TimelineTestFixtures.message(
+            id: "short-avatar", senderID: 1, at: 1, fields: ["message": "得很多年"])
+        let row = TimelineRow.message(
+            .init(
+                entry: .remote(message), isOutgoing: true, groupPosition: .last,
+                showsSenderName: false))
+        let environment = TimelineLayoutEnvironment.current(
+            timelineWidth: 360, bodySize: 14, avatarSize: 52)
+        let presentation = TimelineRowPresentation.make(
+            row: row, currentUserProfile: nil, currentUserID: 1,
+            isThreadTimeline: false, environment: environment)
+        let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+        let bubble = try XCTUnwrap(layout.frames[.bubble])
+        let text = try XCTUnwrap(layout.frames[.text])
+        let geometry = try XCTUnwrap(layout.textGeometry)
+        let visible = geometry.visibleBounds.offsetBy(dx: text.minX, dy: text.minY)
+        XCTAssertEqual(bubble.height, environment.avatarSize, accuracy: 0.5)
+        XCTAssertEqual(visible.midY, bubble.midY, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(text.minY - bubble.minY, TimelineRowMetrics.textVerticalInset)
+        XCTAssertGreaterThanOrEqual(bubble.maxY - text.maxY, TimelineRowMetrics.textVerticalInset)
+        let standardEnvironment = TimelineLayoutEnvironment.current(timelineWidth: 360)
+        let standardPresentation = TimelineRowPresentation.make(
+            row: row, currentUserProfile: nil, currentUserID: 1,
+            isThreadTimeline: false, environment: standardEnvironment)
+        let standard = TimelineLayoutEngine().layout(
+            standardPresentation, environment: standardEnvironment)
+        let standardBubble = try XCTUnwrap(standard.frames[.bubble])
+        let standardText = try XCTUnwrap(standard.frames[.text])
+        let standardInk = try XCTUnwrap(standard.textGeometry).visibleBounds
+            .offsetBy(dx: standardText.minX, dy: standardText.minY)
+        XCTAssertEqual(standardInk.midY, standardBubble.midY, accuracy: 0.5)
+
+        let tallMessage = try TimelineTestFixtures.message(
+            id: "tall-avatar", senderID: 1, at: 2,
+            fields: ["message": "One\nTwo\nThree\nFour"])
+        let tallRow = TimelineRow.message(
+            .init(
+                entry: .remote(tallMessage), isOutgoing: true, groupPosition: .last,
+                showsSenderName: false))
+        let tallPresentation = TimelineRowPresentation.make(
+            row: tallRow, currentUserProfile: nil, currentUserID: 1,
+            isThreadTimeline: false, environment: environment)
+        let tallLayout = TimelineLayoutEngine().layout(
+            tallPresentation, environment: environment)
+        let tallBubble = try XCTUnwrap(tallLayout.frames[.bubble])
+        let tallText = try XCTUnwrap(tallLayout.frames[.text])
+        XCTAssertGreaterThan(tallBubble.height, environment.avatarSize)
+        XCTAssertEqual(
+            tallText.minY - tallBubble.minY, TimelineRowMetrics.textVerticalInset, accuracy: 0.5)
+        XCTAssertEqual(
+            tallBubble.maxY - tallText.maxY, TimelineRowMetrics.textVerticalInset, accuracy: 0.5)
+    }
+
+    func testImageCaptionUsesAvailableLastLineForTimestamp() throws {
+        let message = try TimelineTestFixtures.message(
+            id: "image-caption", at: 1,
+            fields: [
+                "message": "Short caption",
+                "hasAttachments": true,
+                "attachments": [
+                    [
+                        "id": "image", "url": "https://media.example/image.png",
+                        "kind": "image/png", "size": 900, "fileName": "image.png",
+                        "width": 240, "height": 150,
+                    ]
+                ],
+            ])
+        let row = TimelineRow.message(
+            .init(
+                entry: .remote(message), isOutgoing: true, groupPosition: .last,
+                showsSenderName: false))
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 360)
+        let presentation = TimelineRowPresentation.make(
+            row: row, currentUserProfile: nil, currentUserID: 1,
+            isThreadTimeline: false, environment: environment)
+        let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+        let bubble = try XCTUnwrap(layout.frames[.bubble])
+        let media = try XCTUnwrap(layout.frames[.media])
+        let text = try XCTUnwrap(layout.frames[.text])
+        let geometry = try XCTUnwrap(layout.textGeometry)
+        XCTAssertTrue(geometry.metadataIsInline)
+        XCTAssertNil(layout.frames[.metadata])
+        XCTAssertEqual(text.minY, media.maxY + 4, accuracy: 0.5)
+        XCTAssertEqual(bubble.maxY - text.maxY, TimelineRowMetrics.textVerticalInset, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(geometry.metadataFrame.maxX, text.width)
+        XCTAssertLessThanOrEqual(geometry.metadataFrame.maxY, text.height)
     }
 
     func testMetadataMovesBelowCrowdedFinalLineAndBackAfterResize() {

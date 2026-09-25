@@ -121,6 +121,12 @@ struct NotificationSettingsView: View {
                 Section {
                     pageRows(page, showsDividers: false)
                 }
+                if page == .conversations {
+                    Section("Stickers") {
+                        autoSortPacksRow
+                        autoSortFavoritesRow
+                    }
+                }
             }
             .formStyle(.grouped)
             .navigationTitle(page.title)
@@ -232,6 +238,14 @@ struct NotificationSettingsView: View {
         case .conversations:
             Toggle("Show 'Threads' in Messages", isOn: $showThreadsInMessages)
                 .toggleStyle(.switch)
+            if showsDividers {
+                Divider()
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Stickers").font(.headline)
+                    autoSortPacksRow
+                    autoSortFavoritesRow
+                }
+            }
         case .storage:
             if let mediaContext {
                 MediaCacheSettingsSection(context: mediaContext)

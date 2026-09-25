@@ -9,7 +9,7 @@ struct MediaCacheSettingsSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Group {
             LabeledContent("Cached images and media") {
                 if model.isRefreshing {
                     ProgressView().controlSize(.small)
@@ -21,11 +21,20 @@ struct MediaCacheSettingsSection: View {
                     .monospacedDigit()
                 }
             }
+            .task { await model.refresh() }
             Text("Downloaded images can be fetched again. Drafts and unsent messages are kept.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Button("Clear media cache", role: .destructive) { confirmsClear = true }
                 .disabled(model.isClearing || model.isRefreshing)
+                .confirmationDialog("Remove downloaded media?", isPresented: $confirmsClear) {
+                    Button("Clear cache", role: .destructive) { Task { await model.clear() } }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text(
+                        "Downloaded images will be removed from this device. Unsent messages will not be affected."
+                    )
+                }
             if model.isClearing {
                 ProgressView("Clearing cache…").controlSize(.small)
             }
@@ -38,15 +47,6 @@ struct MediaCacheSettingsSection: View {
                     .font(.footnote)
                     .foregroundStyle(.green)
             }
-        }
-        .task { await model.refresh() }
-        .confirmationDialog("Remove downloaded media?", isPresented: $confirmsClear) {
-            Button("Clear cache", role: .destructive) { Task { await model.clear() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "Downloaded images will be removed from this device. Unsent messages will not be affected."
-            )
         }
     }
 }

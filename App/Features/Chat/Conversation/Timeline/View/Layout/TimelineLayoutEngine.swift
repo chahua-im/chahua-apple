@@ -67,7 +67,7 @@ struct TimelineLayoutEngine {
                 attributedText: MessageTextContent.attributedText(
                     text: text, mentions: row.entry.remoteMessage?.mentions ?? [],
                     currentUserID: nil, isOutgoing: row.isOutgoing,
-                    font: .systemFont(ofSize: e.bodySize)), metadata: hasMedia ? nil : metadata)
+                    font: .systemFont(ofSize: e.bodySize)), metadata: metadata)
             preferredText = textMeasurer.idealSize.width + 24
         }
         var labelFont = BubbleNativeFont.systemFont(ofSize: e.bodySize)
@@ -211,18 +211,40 @@ struct TimelineLayoutEngine {
         // Omitting the sender title removes only that row and its gap, not the
         // bubble's outer text padding.
         if hasBody {
-            height +=
-                hasMedia
-                ? 4 : p.reply == nil && p.title == nil ? TimelineRowMetrics.textVerticalInset : 0
             geometry = textMeasurer.geometry(for: innerWidth)
             // Snap the allocated extent before snapping its origin below. Rounding
             // both edges independently can shorten the native drawing surface at
             // fractional display scales while its installed text geometry stays tall.
             let textHeight = pixel(geometry!.size.height, e)
+            let plainText = p.title == nil && p.reply == nil && !hasMedia && p.threadLabel == nil
+            let avatarSlack: CGFloat =
+                (row.groupPosition == .single || row.groupPosition == .last) && plainText
+                ? max(0, e.avatarSize - textHeight - 2 * TimelineRowMetrics.textVerticalInset)
+                : 0
+            let extraTop = pixel(avatarSlack / 2, e)
+            // TextKit's line allocation is not the visible ink. Keep the glyphs
+            // and inline timestamp centered even when the avatar adds no slack.
+            let opticalShift: CGFloat =
+                plainText && geometry!.bodyBounds.height <= geometry!.lastLineBounds.height + 0.5
+                ? ((textHeight + 2 * TimelineRowMetrics.textVerticalInset + avatarSlack) / 2
+                    - TimelineRowMetrics.textVerticalInset - extraTop
+                    - geometry!.visibleBounds.midY) * scale
+                : 0
+            let shift = min(
+                TimelineRowMetrics.textVerticalInset + avatarSlack - extraTop,
+                max(
+                    -TimelineRowMetrics.textVerticalInset - extraTop,
+                    opticalShift.rounded() / scale))
+            height +=
+                (hasMedia
+                    ? 4
+                    : p.reply == nil && p.title == nil
+                        ? TimelineRowMetrics.textVerticalInset : 0)
+                + extraTop + shift
             frames[.text] = CGRect(
                 x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: textHeight)
-            height += textHeight
-            if !hasMedia { height += TimelineRowMetrics.textVerticalInset }
+            height +=
+                textHeight + TimelineRowMetrics.textVerticalInset + avatarSlack - extraTop - shift
         } else if let label = p.standaloneText {
             if p.title == nil && p.reply == nil { height += 8 }
             let labelWidth = max(0, innerWidth - displayedSymbolSize.width - standaloneGap)
@@ -257,7 +279,7 @@ struct TimelineLayoutEngine {
                     x: media.maxX - outerInset - pillWidth,
                     y: max(media.minY, media.maxY - outerInset - pillHeight), width: pillWidth,
                     height: pillHeight)
-            } else if hasMedia || !hasBody {
+            } else if !hasBody {
                 if !hasMedia && !audio && p.reply == nil && p.title == nil { height += 8 }
                 let size = scaled(metadata.size, width: innerWidth)
                 let metadataHeight = pixel(size.height, e)
