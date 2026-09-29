@@ -4,6 +4,10 @@ import Foundation
 import PhotosUI
 import UniformTypeIdentifiers
 
+#if os(iOS)
+    import UIKit
+#endif
+
 /// One acquisition transaction is shared by the pane, inline composer and caption sheet.
 @MainActor
 final class ComposerAttachmentState: ObservableObject {
@@ -57,6 +61,29 @@ enum ComposerImageAcquisition {
             throw error
         }
     }
+
+    #if os(iOS)
+        /// The camera result is an in-memory UIImage, unlike the provider-backed pickers.
+        /// Materialize it in the same private temporary layout so the normal importer owns
+        /// its durable copy and `removeTemporary` can clean up after either outcome.
+        static func writeCapturedPhoto(_ image: UIImage) throws -> URL {
+            guard let data = image.jpegData(compressionQuality: 0.95) else {
+                throw AcquisitionError.unavailable
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "composer-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true)
+            let destination = directory.appendingPathComponent("photo.jpg")
+            do {
+                try data.write(to: destination, options: .atomic)
+                return destination
+            } catch {
+                try? FileManager.default.removeItem(at: directory)
+                throw error
+            }
+        }
+    #endif
 
     nonisolated static func removeTemporary(_ urls: [URL]) {
         for url in urls { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }

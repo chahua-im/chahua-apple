@@ -61,6 +61,21 @@ final class AppCompositionRoot {
             provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
         notifications = PushNotificationCoordinator(
             api: apiClient as? any PushSubscriptionProviding, namespace: mediaNamespace)
+        notifications.setQuickReplySender {
+            [weak sessionModel, weak outgoingQueue] uid, route, text in
+            guard let sessionModel, let outgoingQueue,
+                case .authenticated(let me) = sessionModel.state, me.uid == uid
+            else { throw CancellationError() }
+            // Session bootstrap may still be opening the account-scoped outbox
+            // when a cold-launch action arrives. Wait for it before persisting.
+            await outgoingQueue.activate(uid: uid)
+            try Task.checkCancellation()
+            guard case .authenticated(let me) = sessionModel.state, me.uid == uid else {
+                throw CancellationError()
+            }
+            try await outgoingQueue.enqueueIndependentText(
+                chatID: route.chatID, threadID: route.threadID, text: text)
+        }
         sessionModel.prepareForSignOut = { [weak notifications] in
             try await notifications?.prepareForSignOut()
         }

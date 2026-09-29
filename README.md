@@ -10,6 +10,21 @@ See the [setup guide](docs/setup.md) to prepare a development environment and sy
 
 iOS and macOS group consecutive non-system messages from the same sender within a calendar day, regardless of the time between messages. A date separator, unread separator, system message, or sender change starts a new group. The sender name appears on the first bubble of a group where sender names are enabled; the avatar appears on the final bubble. Adjacent bubbles have a 4-point vertical gap within a group and an 8-point gap between groups.
 
+## Notifications, camera, and incoming shares
+
+- iOS and macOS message notifications offer **Reply**. The server must send `aps.category: "chahua"`; the separate routing envelope remains unchanged. Replies target the notification's chat/thread through the account-scoped outbox without consuming the open composer draft.
+- On iOS, **Take Photo** is available from the attachment menu and attachment preview menu. Capture returns to the existing media preview for an explicit Send; cancellation preserves the draft. Camera access requires a physical device and permission. macOS retains Photos and Files.
+- The iOS **Chahua** Share extension accepts text, web links, images, and videos in one unified sheet. Its media preview sits above a searchable grid of recent writable chat and thread avatars; the caption and **Send** stay on that screen with a single destination and no push navigation. Content uploads while the destination is being prepared. Sending replaces the card with a gapped activity ring, then a success checkmark before the share flow dismisses. macOS does not ship a Share extension.
+- Failed content acquisition blocks sending rather than silently omitting items. A failed message request retains its destination and idempotency ID for retry.
+
+The iOS app and extension share the session token through Keychain Sharing, not a shared plaintext file. Open the updated iOS app once to migrate an existing session before using the extension. Register `app.chahua.chat.share` only for iOS and refresh the iOS host/extension provisioning profiles with access to `$(AppIdentifierPrefix)app.chahua.chat.shared`; macOS signing requires only the app profile. Fastlane's iOS signing lanes include both identifiers, while its macOS lanes include only `app.chahua.chat`. Distribution signing and physical-device APNs/camera/share verification require those profiles.
+
+Manual verification:
+
+1. Leave a draft in a chat/thread, reply to its notification while Chahua is backgrounded or cold, and verify delivery to that destination without changing the draft.
+2. Capture a photo from each attachment entry point, then exercise cancellation and denied camera permission; nothing should send before confirmation.
+3. On iOS, from another app, share a link, text, a photo, and a video. Confirm the unified sheet keeps the preview, search/recent destination grid, caption, and Send together; exercise both chat and thread destinations, offline retry, and sign-out/account switching. Confirm the sent content in the destination and the brief success check before dismissal.
+
 ## Jenkins
 
 | Job | Pipeline definition | Trigger |

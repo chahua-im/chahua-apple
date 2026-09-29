@@ -22,6 +22,7 @@ struct ComposerAttachmentDialog: View {
     let onCompressionChanged: (Bool) -> Void
     let onReorder: ([String]) -> Void
     let onImportProviders: ([NSItemProvider]) -> Void
+    let onTakePhoto: () -> Void
     let onSubmit: () async -> Bool
     let onCancel: () async throws -> Void
     nonisolated var onSearchMembers: ComposerMemberSearch? = nil
@@ -44,6 +45,14 @@ struct ComposerAttachmentDialog: View {
     private var canInteract: Bool { isEnabled && !isAcquiring && !isSubmitting && !isCancelling }
     private var canEditCaption: Bool { isEnabled && !isSubmitting && !isCancelling }
     private var canSubmit: Bool { canInteract && canSend && !attachments.isEmpty }
+
+    private var hasMediaOptions: Bool {
+        #if os(iOS)
+            true
+        #else
+            !attachments.isEmpty
+        #endif
+    }
     private var editorText: Binding<String> {
         Binding(get: { input.editorText ?? text }, set: { input.receiveEditorText($0) })
     }
@@ -186,6 +195,13 @@ struct ComposerAttachmentDialog: View {
                 }
             #endif
             Menu {
+                #if os(iOS)
+                    Button("Take Photo", systemImage: "camera") {
+                        dismissKeyboard()
+                        guard !input.isComposing else { return }
+                        onTakePhoto()
+                    }
+                #endif
                 if attachments.contains(where: { $0.mimeType.hasPrefix("image/") }) {
                     Toggle(
                         "Compress images",
@@ -205,7 +221,7 @@ struct ComposerAttachmentDialog: View {
             .menuIndicator(.hidden)
             .frame(width: headerButtonSize, height: headerButtonSize)
             .background(.background.opacity(0.8), in: Circle())
-            .disabled(!canInteract || attachments.isEmpty)
+            .disabled(!canInteract || !hasMediaOptions)
             .accessibilityLabel("Media options")
         }
         .padding(12)
@@ -228,39 +244,9 @@ struct ComposerAttachmentDialog: View {
     }
 
     private var captionBar: some View {
-        HStack(alignment: .bottom, spacing: 12) {
+        AttachmentCaptionBar(canSend: canSubmit, onSend: submit) {
             captionEditor
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 24))
-            Button(action: submit) {
-                Image(systemName: "paperplane.fill")
-                    .font(.system(size: sendSymbolSize, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: sendButtonSize, height: sendButtonSize)
-                    .background(canSubmit ? Color.accentColor : Color.secondary, in: Circle())
-            }
-            .disabled(!canSubmit)
-            .accessibilityLabel("Send")
-            .modifier(ComposerSendFocus())
         }
-        .padding(12)
-    }
-
-    private var sendButtonSize: CGFloat {
-        #if os(macOS)
-            40
-        #else
-            48
-        #endif
-    }
-
-    private var sendSymbolSize: CGFloat {
-        #if os(macOS)
-            19
-        #else
-            23
-        #endif
     }
 
     @ViewBuilder

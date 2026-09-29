@@ -25,17 +25,6 @@ protocol ComposerNativeInput: AnyObject {
     func commitMarkedText() -> ComposerInputSnapshot
 }
 
-struct ComposerSendFocus: ViewModifier {
-    func body(content: Content) -> some View {
-        #if os(macOS)
-            // Send must not take keyboard focus from the editor on mouse clicks.
-            content.focusable(false)
-        #else
-            content
-        #endif
-    }
-}
-
 // Native exception: SwiftUI's String binding has no mention identity, marked
 // text, or selection API. Preserve native editing and track UID
 // spans alongside its plain text storage, and use native replacement/undo.

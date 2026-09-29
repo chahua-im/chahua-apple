@@ -10,4 +10,4 @@ case "${1:-}" in
 esac
 
 xcrun swift-format "$@" --recursive \
-  App Tests Packages/*/Package.swift Packages/*/Sources Packages/*/Tests
+  App Shared ShareExtension Tests Packages/*/Package.swift Packages/*/Sources Packages/*/Tests

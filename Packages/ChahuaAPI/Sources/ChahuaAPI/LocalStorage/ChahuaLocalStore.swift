@@ -139,6 +139,42 @@ public final class ChahuaLocalStore: Sendable {
         }
     }
 
+    /// Queues text without consuming an in-progress composition for the conversation.
+    public func enqueueIndependentText(
+        chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,
+        text: String, enqueuedAt: Date
+    ) async throws -> LocalConversationSnapshot {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw LocalStorageError.blankMessage }
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        return try await database.write { db in
+            try Self.ensure(db, key)
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            try Self.insert(
+                db, key, id: clientGeneratedID, senderID: senderID, text: trimmed, replyData: nil,
+                date: enqueuedAt, revision: 0, blocked: false)
+            if let composition = before.composingItem {
+                // Keep the unsent composition last, after the independently queued item.
+                // Its identity, content, upload checkpoints and draft revision stay intact.
+                let sequence = try Int64.fetchOne(
+                    db,
+                    sql:
+                        "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
+                    arguments: [chatID, threadID ?? ""])!
+                try db.execute(
+                    sql:
+                        "UPDATE outgoing_message SET enqueue_sequence = ?, dispatch_order = ? WHERE client_generated_id = ?",
+                    arguments: [sequence, sequence, composition.clientGeneratedID])
+                try db.execute(
+                    sql:
+                        "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?",
+                    arguments: [chatID, threadID ?? ""])
+            }
+            try Self.bump(db, key)
+            return try Self.snapshot(db, key, directory: self.directory)
+        }
+    }
+
     /// Sends independently of the blocked composition without consuming its draft.
     public func enqueueSticker(
         chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,

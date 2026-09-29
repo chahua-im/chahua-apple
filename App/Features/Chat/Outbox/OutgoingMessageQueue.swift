@@ -222,6 +222,35 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
+    /// Persists a text send without consuming the conversation's current draft.
+    /// Notification replies use this path because their system-owned input must
+    /// never alter text or attachments already being composed in the app.
+    func enqueueIndependentText(
+        chatID: String, threadID: String? = nil, text: String
+    ) async throws {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw LocalStorageError.blankMessage
+        }
+        guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed
+        else {
+            throw QueueError.storageUnavailable
+        }
+        let current = generation
+        do {
+            try await checkpoint(.enqueue, generation: current)
+            let snapshot = try await store.enqueueIndependentText(
+                chatID: chatID, threadID: threadID, senderID: uid,
+                clientGeneratedID: UUID().uuidString,
+                text: text, enqueuedAt: Date())
+            try checkGeneration(current)
+            publish(snapshot)
+            wakeWorker(key: snapshot.conversationKey)
+        } catch {
+            storageFailed(error, operation: "enqueue independent text", generation: current)
+            throw error
+        }
+    }
+
     func enqueueSticker(
         chatID: String, threadID: String? = nil, sticker: MessageStickerResponse,
         replyToMessage: MessagePreview? = nil

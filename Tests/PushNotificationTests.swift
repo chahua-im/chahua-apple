@@ -73,6 +73,93 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertNil(notifications.pendingNavigation)
     }
 
+    func testQuickReplyQueuesThreadTargetAndRejectsBlankText() async throws {
+        let recorder = QuickReplyRecorder()
+        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        notifications.setQuickReplySender { uid, route, text in
+            await recorder.append(.init(uid: uid, route: route, text: text))
+        }
+        notifications.setSession(uid: 1)
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": [
+                    "type": "reply", "chatId": "42", "messageId": "101", "threadRootId": "100",
+                ]
+            ]))
+
+        await notifications.receiveQuickReply(route, userText: "  Sent from notification  ")
+        await notifications.receiveQuickReply(route, userText: " \n ")
+
+        let replies = await recorder.replies()
+        XCTAssertEqual(replies, [.init(uid: 1, route: route, text: "Sent from notification")])
+    }
+
+    func testColdQuickReplyWaitsForAuthenticatedDurableHandoff() async throws {
+        let namespace = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let registration = try JSONSerialization.data(
+            withJSONObject: ["uid": 1, "token": "0102", "environment": "sandbox"])
+        defaults.set(registration, forKey: "APNsRegistration." + namespace)
+        let recorder = QuickReplyRecorder()
+        let completion = QuickReplyCompletion()
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: namespace, defaults: defaults)
+        notifications.setQuickReplySender { uid, route, text in
+            await recorder.append(.init(uid: uid, route: route, text: text))
+        }
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "42", "messageId": "101"]
+            ]))
+        let handoff = Task {
+            await completion.set(
+                await notifications.receiveQuickReply(route, userText: "Cold reply"))
+        }
+
+        await Task.yield()
+        let completedEarly = await completion.value()
+        XCTAssertNil(completedEarly)
+        notifications.setSession(uid: 1)
+        await handoff.value
+
+        let completed = await completion.value()
+        let replies = await recorder.replies()
+        XCTAssertEqual(completed, true)
+        XCTAssertEqual(replies.map(\.text), ["Cold reply"])
+    }
+
+    func testColdQuickReplyIsDiscardedForDifferentRegisteredAccount() async throws {
+        let namespace = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let registration = try JSONSerialization.data(
+            withJSONObject: ["uid": 1, "token": "0102", "environment": "sandbox"])
+        defaults.set(registration, forKey: "APNsRegistration." + namespace)
+        let recorder = QuickReplyRecorder()
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: namespace, defaults: defaults)
+        notifications.setQuickReplySender { uid, route, text in
+            await recorder.append(.init(uid: uid, route: route, text: text))
+        }
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "42", "messageId": "101"]
+            ]))
+
+        let handoff = Task {
+            await notifications.receiveQuickReply(route, userText: "Only for account one")
+        }
+        await Task.yield()
+        notifications.setSession(uid: 2)
+        let accepted = await handoff.value
+        notifications.setSession(uid: 1)
+
+        let replies = await recorder.replies()
+        XCTAssertFalse(accepted)
+        XCTAssertTrue(replies.isEmpty)
+    }
+
     private func makeNotification(userInfo: [AnyHashable: Any]) throws -> UNNotification {
         let content = UNMutableNotificationContent()
         content.userInfo = userInfo
@@ -236,6 +323,26 @@ final class PushNotificationTests: XCTestCase {
         notifications.setSceneActive(id: scene, active: true)
         XCTAssertTrue(notifications.presentationOptions(for: route).contains(.banner))
     }
+}
+
+private struct QuickReplyRecord: Equatable, Sendable {
+    let uid: Int32
+    let route: PushNotificationRoute
+    let text: String
+}
+
+private actor QuickReplyRecorder {
+    private var recorded: [QuickReplyRecord] = []
+
+    func append(_ reply: QuickReplyRecord) { recorded.append(reply) }
+    func replies() -> [QuickReplyRecord] { recorded }
+}
+
+private actor QuickReplyCompletion {
+    private var completed: Bool?
+
+    func set(_ value: Bool) { completed = value }
+    func value() -> Bool? { completed }
 }
 
 private actor PushSubscriptionStore: PushSubscriptionProviding {

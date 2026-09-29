@@ -3,6 +3,10 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
+#if os(iOS)
+    import AVFoundation
+#endif
+
 struct MessageComposerView: View {
     @Binding var text: String
     @ObservedObject var attachmentState: ComposerAttachmentState
@@ -34,6 +38,12 @@ struct MessageComposerView: View {
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showsPhotos = false
     @State private var showsFiles = false
+    #if os(iOS)
+        @State private var showsCamera = false
+        @State private var isRequestingCameraPermission = false
+        @State private var presentsCameraAfterAttachmentDialog = false
+        @State private var capturedPhotoURL: URL?
+    #endif
     @StateObject private var input = ComposerInputState()
     @StateObject private var voiceRecorder = ComposerVoiceRecorder()
     @Environment(\.scenePhase) private var scenePhase
@@ -59,7 +69,20 @@ struct MessageComposerView: View {
     @State private var showsStickerPicker = false
     @State private var stickerPickerStoleFocus = false
 
-    private var isAcquiring: Bool { attachmentState.isAcquiring }
+    private var isAcquiring: Bool {
+        #if os(iOS)
+            attachmentState.isAcquiring || isRequestingCameraPermission
+        #else
+            attachmentState.isAcquiring
+        #endif
+    }
+    private var isCameraPresented: Bool {
+        #if os(iOS)
+            showsCamera
+        #else
+            false
+        #endif
+    }
     private var imageError: String? {
         get { attachmentState.error }
         nonmutating set { attachmentState.error = newValue }
@@ -75,6 +98,7 @@ struct MessageComposerView: View {
     private var canAcquire: Bool {
         isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
             && editingMessage == nil && onImportImages != nil
+            && !isCameraPresented
     }
     private var canPickSticker: Bool {
         canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil
@@ -85,6 +109,7 @@ struct MessageComposerView: View {
         isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
             && !hasContent && editingMessage == nil && onSendVoice != nil
             && !showsPhotos && !showsFiles && !showsAttachmentDialog
+            && !isCameraPresented
     }
 
     private var editorText: Binding<String> {
@@ -163,6 +188,11 @@ struct MessageComposerView: View {
                     .modifier(ComposerSendFocus())
                 } else if !voiceRecorder.isActive {
                     Menu {
+                        #if os(iOS)
+                            Button("Take Photo", systemImage: "camera") {
+                                takePhoto()
+                            }
+                        #endif
                         Button("Photos", systemImage: "photo.on.rectangle") {
                             dismissStickerPicker(restoreFocus: false)
                             input.settleNativeInput()
@@ -333,6 +363,10 @@ struct MessageComposerView: View {
         .sheet(
             isPresented: $showsAttachmentDialog,
             onDismiss: {
+                #if os(iOS)
+                    let shouldPresentCamera = presentsCameraAfterAttachmentDialog
+                    presentsCameraAfterAttachmentDialog = false
+                #endif
                 if !attachmentSubmitted { text = attachmentCaption }
                 attachmentCaption = ""
                 input.receiveExternalText(text)
@@ -340,6 +374,13 @@ struct MessageComposerView: View {
                     if isEnabled { isInputFocused = true }
                 #else
                     isInputFocused = false
+                #endif
+                #if os(iOS)
+                    if shouldPresentCamera {
+                        // The attachment sheet has fully dismissed at this callback; schedule
+                        // full-screen camera for the next presentation transaction.
+                        DispatchQueue.main.async { showsCamera = true }
+                    }
                 #endif
             }
         ) {
@@ -356,6 +397,7 @@ struct MessageComposerView: View {
                 onReorder: { ids in performImageOperation { try await onReorderAttachments?(ids) }
                 },
                 onImportProviders: importProviders,
+                onTakePhoto: takePhoto,
                 onSubmit: {
                     let sent = await onSubmit(attachmentCaption)
                     if sent { attachmentSubmitted = true }
@@ -373,6 +415,29 @@ struct MessageComposerView: View {
                 onSearchMembers: onSearchMembers
             )
         }
+        #if os(iOS)
+            .fullScreenCover(
+                isPresented: $showsCamera,
+                onDismiss: {
+                    guard let capturedPhotoURL else { return }
+                    self.capturedPhotoURL = nil
+                    importCapturedPhoto(capturedPhotoURL)
+                }
+            ) {
+                ComposerCameraPicker(
+                    onCapture: { url in
+                        capturedPhotoURL = url
+                        showsCamera = false
+                    },
+                    onCancel: { showsCamera = false },
+                    onError: { error in
+                        imageError = error.localizedDescription
+                        showsCamera = false
+                    }
+                )
+                .ignoresSafeArea()
+            }
+        #endif
         .photosPicker(
             isPresented: $showsPhotos, selection: $selectedPhotos,
             matching: .any(of: [.images, .videos])
@@ -430,7 +495,15 @@ struct MessageComposerView: View {
         } message: {
             Text(voiceRecorder.error ?? "")
         }
-        .onDisappear { voiceRecorder.discard() }
+        .onDisappear {
+            voiceRecorder.discard()
+            #if os(iOS)
+                if let capturedPhotoURL {
+                    ComposerImageAcquisition.removeTemporary([capturedPhotoURL])
+                    self.capturedPhotoURL = nil
+                }
+            #endif
+        }
         .onChange(of: scenePhase) { _, phase in
             voiceRecorder.setSceneActive(phase == .active)
             // A permission alert can make the scene inactive; only backgrounding cancels it.
@@ -498,6 +571,69 @@ struct MessageComposerView: View {
             do { try await operation() } catch { imageError = error.localizedDescription }
         }
     }
+
+    private func takePhoto() {
+        #if os(iOS)
+            guard canAcquire else { return }
+            guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+                imageError = "This device doesn’t have an available camera."
+                return
+            }
+            if !showsAttachmentDialog {
+                input.settleNativeInput()
+                guard !input.isComposing else {
+                    imageError = "Finish composing your text before adding attachments."
+                    return
+                }
+                dismissStickerPicker(restoreFocus: false)
+                isInputFocused = false
+            }
+            isRequestingCameraPermission = true
+            Task {
+                let granted = await cameraPermissionGranted()
+                isRequestingCameraPermission = false
+                guard granted else {
+                    imageError =
+                        "Camera access is disabled. Enable Camera in Settings to take a photo."
+                    return
+                }
+                guard isEnabled && !isSubmitting && !voiceRecorder.isActive else { return }
+                if showsAttachmentDialog {
+                    presentsCameraAfterAttachmentDialog = true
+                    showsAttachmentDialog = false
+                } else {
+                    showsCamera = true
+                }
+            }
+        #endif
+    }
+
+    #if os(iOS)
+
+        private func cameraPermissionGranted() async -> Bool {
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .authorized:
+                true
+            case .notDetermined:
+                await AVCaptureDevice.requestAccess(for: .video)
+            case .denied, .restricted:
+                false
+            @unknown default:
+                false
+            }
+        }
+
+        private func importCapturedPhoto(_ url: URL) {
+            guard canAcquire else {
+                ComposerImageAcquisition.removeTemporary([url])
+                return
+            }
+            performImageOperation(opensDialog: true) {
+                defer { ComposerImageAcquisition.removeTemporary([url]) }
+                try await onImportImages?([url])
+            }
+        }
+    #endif
 
     private func importProviders(_ providers: [NSItemProvider]) {
         performImageOperation(opensDialog: true) {

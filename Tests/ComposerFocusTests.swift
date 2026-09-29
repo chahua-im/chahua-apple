@@ -636,7 +636,7 @@ private struct FocusComposerRoot: View {
             isAcquiring: false, attachmentError: nil,
             onCompositionChanged: { state.composing = $0 },
             onRemove: { _ in }, onRetry: { _ in }, onCompressionChanged: { _ in },
-            onReorder: { _ in }, onImportProviders: { _ in },
+            onReorder: { _ in }, onImportProviders: { _ in }, onTakePhoto: {},
             onSubmit: {
                 state.submits += 1
                 return true

@@ -13,6 +13,8 @@
 		C0CC0001303BCC2200320001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0005303BCC2200320001 /* Kingfisher */; };
 		C0CC0002303BCC2200320001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0006303BCC2200320001 /* Kingfisher */; };
 		C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C0EE0002303BCC2200320001 /* ChahuaAudio */; };
+		C0F0000130460000003200C0 /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C0F0000230460000003200C0 /* ShareExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		C0F0000330460000003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0F0000430460000003200C0 /* ChahuaAPI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -23,7 +25,28 @@
 			remoteGlobalIDString = C0985FCD303BCC22003200C0;
 			remoteInfo = "chahua-ios";
 		};
+		C0F0000630460000003200C0 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C0985FC6303BCC22003200C0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0F0000730460000003200C0;
+			remoteInfo = ShareExtension;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C0F0000530460000003200C0 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				C0F0000130460000003200C0 /* ShareExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		C0985FCE303BCC22003200C0 /* Chahua.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Chahua.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -36,6 +59,10 @@
 		C0BB0002303BCC2200320001 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		C0BB0003303BCC2200320001 /* Local.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Local.xcconfig; sourceTree = "<group>"; };
 		C0DD0001303BCC2200320001 /* macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = macOS.entitlements; sourceTree = "<group>"; };
+		C0F0000230460000003200C0 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0F0000830460000003200C0 /* ShareExtension-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "ShareExtension-Info.plist"; sourceTree = "<group>"; };
+		C0F0000930460000003200C0 /* ShareExtension-iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "ShareExtension-iOS.entitlements"; sourceTree = "<group>"; };
+		C0F0001530460000003200C0 /* ShareExtension-Local-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "ShareExtension-Local-Info.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -47,6 +74,16 @@
 		C09860FF3044841E003200C0 /* Tests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Tests;
+			sourceTree = "<group>";
+		};
+		C0F0000B30460000003200C0 /* ShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+		C0F0000C30460000003200C0 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -71,6 +108,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C0F0000D30460000003200C0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C0F0000330460000003200C0 /* ChahuaAPI in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -78,6 +123,8 @@
 			isa = PBXGroup;
 			children = (
 				C0985FD0303BCC22003200C0 /* App */,
+				C0F0000C30460000003200C0 /* Shared */,
+				C0F0000B30460000003200C0 /* ShareExtension */,
 				C0BB0006303BCC2200320001 /* Config */,
 				C09860FF3044841E003200C0 /* Tests */,
 				C0985FCF303BCC22003200C0 /* Products */,
@@ -88,6 +135,7 @@
 			isa = PBXGroup;
 			children = (
 				C0985FCE303BCC22003200C0 /* Chahua.app */,
+				C0F0000230460000003200C0 /* ShareExtension.appex */,
 				C09860FE3044841E003200C0 /* chahua-appleTests.xctest */,
 			);
 			name = Products;
@@ -99,6 +147,9 @@
 				C098623230467881003200C0 /* iOS.entitlements */,
 				C098620530463971003200C0 /* InfoPlist.xcstrings */,
 				C098620430463901003200C0 /* Info.plist */,
+				C0F0000830460000003200C0 /* ShareExtension-Info.plist */,
+				C0F0001530460000003200C0 /* ShareExtension-Local-Info.plist */,
+				C0F0000930460000003200C0 /* ShareExtension-iOS.entitlements */,
 				C0BB0001303BCC2200320001 /* Debug.xcconfig */,
 				C0BB0002303BCC2200320001 /* Release.xcconfig */,
 				C0BB0003303BCC2200320001 /* Local.xcconfig */,
@@ -118,13 +169,16 @@
 				C0985FCA303BCC22003200C0 /* Sources */,
 				C0985FCB303BCC22003200C0 /* Frameworks */,
 				C0985FCC303BCC22003200C0 /* Resources */,
+				C0F0000530460000003200C0 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C0F0000E30460000003200C0 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C0985FD0303BCC22003200C0 /* App */,
+				C0F0000C30460000003200C0 /* Shared */,
 			);
 			name = "chahua-apple";
 			packageProductDependencies = (
@@ -161,6 +215,30 @@
 			productReference = C09860FE3044841E003200C0 /* chahua-appleTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		C0F0000730460000003200C0 /* ShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0F0000F30460000003200C0 /* Build configuration list for PBXNativeTarget "ShareExtension" */;
+			buildPhases = (
+				C0F0001030460000003200C0 /* Sources */,
+				C0F0000D30460000003200C0 /* Frameworks */,
+				C0F0001130460000003200C0 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C0F0000B30460000003200C0 /* ShareExtension */,
+				C0F0000C30460000003200C0 /* Shared */,
+			);
+			name = ShareExtension;
+			packageProductDependencies = (
+				C0F0000430460000003200C0 /* ChahuaAPI */,
+			);
+			productName = ShareExtension;
+			productReference = C0F0000230460000003200C0 /* ShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -174,6 +252,9 @@
 					C0985FCD303BCC22003200C0 = {
 						CreatedOnToolsVersion = 26.6;
 						SystemCapabilities = {
+							com.apple.KeychainSharing = {
+								enabled = 1;
+							};
 							com.apple.Push = {
 								enabled = 1;
 							};
@@ -182,6 +263,14 @@
 					C09860FD3044841E003200C0 = {
 						CreatedOnToolsVersion = 26.6;
 						TestTargetID = C0985FCD303BCC22003200C0;
+					};
+					C0F0000730460000003200C0 = {
+						CreatedOnToolsVersion = 26.6;
+						SystemCapabilities = {
+							com.apple.KeychainSharing = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -207,6 +296,7 @@
 			projectRoot = "";
 			targets = (
 				C0985FCD303BCC22003200C0 /* chahua-apple */,
+				C0F0000730460000003200C0 /* ShareExtension */,
 				C09860FD3044841E003200C0 /* chahua-appleTests */,
 			);
 		};
@@ -222,6 +312,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C09860FC3044841E003200C0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0F0001130460000003200C0 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -245,6 +342,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C0F0001030460000003200C0 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -252,6 +356,12 @@
 			isa = PBXTargetDependency;
 			target = C0985FCD303BCC22003200C0 /* chahua-apple */;
 			targetProxy = C09861023044841E003200C0 /* PBXContainerItemProxy */;
+		};
+		C0F0000E30460000003200C0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = C0F0000730460000003200C0 /* ShareExtension */;
+			targetProxy = C0F0000630460000003200C0 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -390,6 +500,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
+				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
@@ -458,6 +569,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
+				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
@@ -624,6 +736,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
+				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
@@ -684,6 +797,120 @@
 			};
 			name = Local;
 		};
+		C0F0001230460000003200C0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0BB0001303BCC2200320001 /* Debug.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
+				CODE_SIGN_ENTITLEMENTS = "Config/ShareExtension-iOS.entitlements";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 201;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 9422PL3GFR;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/ShareExtension-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				MARKETING_VERSION = 0.2;
+				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat.share;
+				PRODUCT_MODULE_NAME = ShareExtension;
+				PRODUCT_NAME = ShareExtension;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "match Development app.chahua.chat.share";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C0F0001330460000003200C0 /* Local */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0BB0003303BCC2200320001 /* Local.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
+				CODE_SIGN_ENTITLEMENTS = "Config/ShareExtension-iOS.entitlements";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 201;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 9422PL3GFR;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/ShareExtension-Local-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				MARKETING_VERSION = 0.2;
+				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat.share;
+				PRODUCT_MODULE_NAME = ShareExtension;
+				PRODUCT_NAME = ShareExtension;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "match Development app.chahua.chat.share";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Local;
+		};
+		C0F0001430460000003200C0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C0BB0002303BCC2200320001 /* Release.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
+				CODE_SIGN_ENTITLEMENTS = "Config/ShareExtension-iOS.entitlements";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 201;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = 9422PL3GFR;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/ShareExtension-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				MARKETING_VERSION = 0.2;
+				PRODUCT_BUNDLE_IDENTIFIER = app.chahua.chat.share;
+				PRODUCT_MODULE_NAME = ShareExtension;
+				PRODUCT_NAME = ShareExtension;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "match AppStore app.chahua.chat.share";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -713,6 +940,16 @@
 				C09861043044841E003200C0 /* Debug */,
 				C09861053044841E003200C0 /* Local */,
 				C09861063044841E003200C0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0F0000F30460000003200C0 /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0F0001230460000003200C0 /* Debug */,
+				C0F0001330460000003200C0 /* Local */,
+				C0F0001430460000003200C0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -766,6 +1003,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0EE0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAudio" */;
 			productName = ChahuaAudio;
+		};
+		C0F0000430460000003200C0 /* ChahuaAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */;
+			productName = ChahuaAPI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

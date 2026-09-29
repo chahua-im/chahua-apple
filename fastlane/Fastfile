@@ -2,11 +2,13 @@ default_platform(:ios)
 
 private_lane :sync_match do |options|
   repository = options.fetch(:type) == "development" ? "development" : "distribution"
+  app_identifiers = ["app.chahua.chat"]
+  app_identifiers << "app.chahua.chat.share" if options.fetch(:platform) == "ios"
   match(
     platform: options.fetch(:platform),
     type: options.fetch(:type),
     git_url: "git@github.com:Codetector1374/fastlane-#{repository}.git",
-    app_identifier: "app.chahua.chat",
+    app_identifier: app_identifiers,
     team_id: "9422PL3GFR",
     readonly: options.fetch(:readonly, true)
   )
@@ -114,7 +116,10 @@ lane :ci_artifacts do
         manageAppVersionAndBuildNumber: false,
         signingStyle: "manual",
         teamID: "9422PL3GFR",
-        provisioningProfiles: { "app.chahua.chat" => "match AppStore app.chahua.chat" }
+        provisioningProfiles: {
+          "app.chahua.chat" => "match AppStore app.chahua.chat",
+          "app.chahua.chat.share" => "match AppStore app.chahua.chat.share"
+        }
       },
       xcargs: "CURRENT_PROJECT_VERSION=#{version} DEVELOPMENT_TEAM=9422PL3GFR",
       buildlog_path: File.join(root, "build", "logs"),

@@ -24,6 +24,13 @@ final class PushNotificationCoordinator: ObservableObject {
     @Published private(set) var isUnregistering = false
     @Published private(set) var pendingNavigation: PushNotificationRoute?
 
+    private struct PendingQuickReply {
+        let id: UUID
+        let route: PushNotificationRoute
+        let text: String
+        let ownerUID: Int32
+    }
+
     private struct Registration: Codable, Equatable {
         let uid: Int32
         let token: String
@@ -47,6 +54,11 @@ final class PushNotificationCoordinator: ObservableObject {
     private var isSigningOut = false
     private var activeScenes: Set<UUID> = []
     private var visibleConversations: [UUID: ConversationKey] = [:]
+    private var quickReplySender:
+        (@MainActor @Sendable (Int32, PushNotificationRoute, String) async throws -> Void)?
+    private var pendingQuickReplies: [PendingQuickReply] = []
+    private var quickReplyTask: (id: UUID, task: Task<Void, Never>)?
+    private var quickReplyWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     init(
         api: (any PushSubscriptionProviding)?, namespace: String,
@@ -97,7 +109,10 @@ final class PushNotificationCoordinator: ObservableObject {
     }
 
     func setSession(uid: Int32?) {
-        guard self.uid != uid || uid == nil else { return }
+        guard self.uid != uid || uid == nil else {
+            Task { [weak self] in await self?.flushPendingQuickReplies() }
+            return
+        }
         let priorUID = self.uid ?? registration?.uid
         self.uid = uid
         generation &+= 1
@@ -111,6 +126,10 @@ final class PushNotificationCoordinator: ObservableObject {
         cleanupTask?.cancel()
         if uid == nil || (priorUID != nil && priorUID != uid) {
             pendingNavigation = nil
+            quickReplyTask?.task.cancel()
+            quickReplyTask = nil
+            finishQuickReplyWaiters(for: pendingQuickReplies.map(\.id))
+            pendingQuickReplies.removeAll()
             visibleConversations.removeAll()
             center.removeAllDeliveredNotifications()
             center.removeAllPendingNotificationRequests()
@@ -121,6 +140,7 @@ final class PushNotificationCoordinator: ObservableObject {
             return
         }
         authorizationTask = Task { [weak self] in await self?.refreshAuthorization() }
+        Task { [weak self] in await self?.flushPendingQuickReplies() }
     }
 
     func setSceneActive(id: UUID, active: Bool) {
@@ -351,6 +371,96 @@ final class PushNotificationCoordinator: ObservableObject {
     }
 
     func receiveResponse(_ route: PushNotificationRoute) { pendingNavigation = route }
+
+    func setQuickReplySender(
+        _ sender:
+            @escaping @MainActor @Sendable (Int32, PushNotificationRoute, String) async throws
+            -> Void
+    ) {
+        quickReplySender = sender
+        Task { [weak self] in await self?.flushPendingQuickReplies() }
+    }
+
+    /// Returns only after the reply is durable, is rejected for another account,
+    /// or session restoration does not resolve within the notification budget.
+    @discardableResult
+    func receiveQuickReply(_ route: PushNotificationRoute, userText: String) async -> Bool {
+        let text = userText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        // A response received before session restoration can only be associated
+        // with the last APNs registration. Dropping an unscoped reply prevents
+        // sending it through a subsequently chosen, unrelated account.
+        guard let ownerUID = uid ?? registration?.uid else {
+            logger.notice("Discarding unscoped notification quick reply")
+            return false
+        }
+        let id = UUID()
+        pendingQuickReplies.append(.init(id: id, route: route, text: text, ownerUID: ownerUID))
+        await flushPendingQuickReplies()
+        guard pendingQuickReplies.contains(where: { $0.id == id }) else {
+            return uid == ownerUID && !isSigningOut
+        }
+        await waitForQuickReplyHandoff(id)
+        return uid == ownerUID && !isSigningOut
+            && !pendingQuickReplies.contains(where: { $0.id == id })
+    }
+
+    private func flushPendingQuickReplies() async {
+        if let quickReplyTask {
+            await quickReplyTask.task.value
+            await flushPendingQuickReplies()
+            return
+        }
+        guard
+            uid != nil, !isSigningOut, quickReplySender != nil, !pendingQuickReplies.isEmpty
+        else { return }
+        let id = UUID()
+        let task = Task<Void, Never> { [weak self] in
+            await self?.sendPendingQuickReplies(taskID: id)
+        }
+        quickReplyTask = (id, task)
+        await task.value
+    }
+
+    private func sendPendingQuickReplies(taskID: UUID) async {
+        defer {
+            if quickReplyTask?.id == taskID { quickReplyTask = nil }
+        }
+        while let reply = pendingQuickReplies.first {
+            guard !isSigningOut, uid == reply.ownerUID, let sender = quickReplySender else {
+                return
+            }
+            do {
+                try await sender(reply.ownerUID, reply.route, reply.text)
+            } catch is CancellationError {
+                return
+            } catch {
+                // Keep the system-provided text until a future authenticated
+                // session handoff can safely enqueue it.
+                logger.error(
+                    "Notification quick reply enqueue failed: \(String(describing: error), privacy: .public)"
+                )
+                return
+            }
+            guard uid == reply.ownerUID, pendingQuickReplies.first?.id == reply.id else { return }
+            pendingQuickReplies.removeFirst()
+            finishQuickReplyWaiters(for: [reply.id])
+        }
+    }
+
+    private func waitForQuickReplyHandoff(_ id: UUID) async {
+        await withCheckedContinuation { continuation in
+            quickReplyWaiters[id] = continuation
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(20))
+                self?.finishQuickReplyWaiters(for: [id])
+            }
+        }
+    }
+
+    private func finishQuickReplyWaiters(for ids: [UUID]) {
+        for id in ids { quickReplyWaiters.removeValue(forKey: id)?.resume() }
+    }
 
     func takeNavigation() -> PushNotificationRoute? {
         guard uid != nil else { return nil }
