@@ -36,8 +36,14 @@ struct ChatDetailView: View {
     @State private var messageToDelete: MessageResponse?
     @State private var deleteError = false
     @State private var stickerToView: StickerSelection?
+    @State private var reactionDetailsMessage: ReactionDetailsSelection?
 
     private struct StickerSelection: Identifiable {
+        let id: String
+    }
+
+    private struct ReactionDetailsSelection: Identifiable {
+        let chatID: String
         let id: String
     }
 
@@ -99,6 +105,11 @@ struct ChatDetailView: View {
                 StickerPackSheet(
                     stickerID: selection.id, library: store.stickers,
                     currentUserID: model.currentUserID)
+            }
+            .sheet(item: $reactionDetailsMessage) { message in
+                ReactionDetailsView(chatID: message.chatID, messageID: message.id) {
+                    try await store.reactionDetails(chatID: message.chatID, messageID: message.id)
+                }
             }
             .alert(
                 "Unpin Message",
@@ -382,8 +393,17 @@ struct ChatDetailView: View {
 
     private var bubbleActions: TimelineBubbleActions {
         var actions = TimelineBubbleActions()
-        if let imageDetailPresenter { actions.openMedia = imageDetailPresenter.present }
+        if let imageDetailPresenter {
+            actions.openMedia = { gallery in
+                var gallery = gallery
+                gallery.conversationTitle = navigationTitle ?? chat.chatDisplayName
+                imageDetailPresenter.present(gallery)
+            }
+        }
         actions.openSticker = { stickerToView = StickerSelection(id: $0) }
+        actions.openReactionDetails = {
+            reactionDetailsMessage = ReactionDetailsSelection(chatID: $0.chatId, id: $0.id)
+        }
         actions.currentUserProfile = store.currentUserProfile
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
         actions.pinnedMessageIDs = Set(chatPins.map { $0.message.id })

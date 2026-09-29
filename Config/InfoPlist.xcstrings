@@ -1,6 +1,14 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "NSPhotoLibraryAddUsageDescription" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Save images to your Photo Library." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "将图片保存到你的照片图库。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "將圖片儲存至你的照片圖庫。" } }
+      }
+    },
     "CFBundleDisplayName" : {
       "extractionState" : "manual",
       "localizations" : {

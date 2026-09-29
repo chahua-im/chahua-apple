@@ -789,6 +789,61 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(order?["isAutoSort"] as? Bool, true)
     }
 
+    func testReactionDetailsEscapesOpaqueIDsAndDecodesFullReactorGroups() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (
+                200,
+                #"""
+                {
+                  "reactions": [
+                    {
+                      "emoji": "👍",
+                      "reactors": [
+                        {
+                          "uid": 42,
+                          "name": "Ada",
+                          "avatarUrl": "https://cdn.example/ada.png",
+                          "sortIndex": 3
+                        },
+                        {"uid": 7, "name": null, "avatarUrl": null, "sortIndex": null}
+                      ]
+                    },
+                    {"emoji": "🚀", "reactors": []}
+                  ]
+                }
+                """#
+            )
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate",
+            session: testSession())
+
+        let response = try await client.getReactionDetails(
+            chatID: "chat/opaque #1", messageID: "message/?#2")
+
+        XCTAssertEqual(response.reactions.map(\.emoji), ["👍", "🚀"])
+        XCTAssertEqual(response.reactions[0].reactors[0].uid, 42)
+        XCTAssertEqual(response.reactions[0].reactors[0].name, "Ada")
+        XCTAssertEqual(response.reactions[0].reactors[0].avatarUrl, "https://cdn.example/ada.png")
+        XCTAssertEqual(response.reactions[0].reactors[0].sortIndex, 3)
+        XCTAssertNil(response.reactions[0].reactors[1].name)
+        XCTAssertNil(response.reactions[0].reactors[1].avatarUrl)
+        XCTAssertNil(response.reactions[0].reactors[1].sortIndex)
+        XCTAssertEqual(response.reactions[1].reactors, [])
+
+        let request = try XCTUnwrap(requests.values.first)
+        let components = try XCTUnwrap(
+            URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(
+            components.percentEncodedPath,
+            "/chats/chat%2Fopaque%20%231/messages/message%2F%3F%232/reactions")
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+    }
+
     private func testSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

@@ -36,8 +36,15 @@
         private let backdrop = UIView()
         private let pager = ImageDetailPagerIOS()
         private let chrome = ImageDetailChromeIOS()
-        private let closeButton = UIButton(type: .system)
+        private let backButton = UIButton(type: .system)
+        private let titlePill = UIVisualEffectView(effect: nil)
+        private let titleLabel = UILabel()
+        private let sentAtLabel = UILabel()
+        private let moreButton = UIButton(type: .system)
         private let countLabel = UILabel()
+        private let feedbackPill = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemMaterialDark))
+        private let feedbackLabel = UILabel()
         private let previousButton = UIButton(type: .system)
         private let nextButton = UIButton(type: .system)
         private lazy var dismissPan = UIPanGestureRecognizer(
@@ -55,6 +62,16 @@
         private var dismissalStarted = false
         private var dismissalDelivered = false
         private var isTornDown = false
+
+        private enum SaveResult {
+            case saved(itemID: String, fileName: String)
+            case failed(String)
+        }
+
+        private var saveTask: Task<Void, Never>?
+        private var isSaving = false
+        private var deferredSaveResult: SaveResult?
+        private var feedbackDismissTask: Task<Void, Never>?
 
         private var canInteract: Bool {
             isVisible && applicationIsActive && !isPaging && !isTransitioning
@@ -115,8 +132,10 @@
             chrome.alpha = 0
             view.addSubview(chrome)
             configureButton(
-                closeButton, symbol: "xmark", label: AppLanguage.localized("Close image"),
-                action: #selector(closeTapped))
+                backButton, symbol: "chevron.backward", label: AppLanguage.localized("Back"),
+                action: #selector(backTapped))
+            configureTitlePill()
+            configureMoreButton()
             configureButton(
                 previousButton, symbol: "chevron.left",
                 label: AppLanguage.localized("Previous image"),
@@ -126,12 +145,13 @@
                 action: #selector(nextTapped))
             countLabel.textColor = .white
             countLabel.accessibilityIdentifier = "image-detail-position"
-            countLabel.font = .preferredFont(forTextStyle: .subheadline)
+            countLabel.font = .preferredFont(forTextStyle: .caption1)
             countLabel.adjustsFontForContentSizeCategory = true
             countLabel.textAlignment = .center
             countLabel.adjustsFontSizeToFitWidth = true
             countLabel.minimumScaleFactor = 0.75
             chrome.addSubview(countLabel)
+            configureFeedbackPill()
 
             dismissPan.delegate = self
             dismissPan.maximumNumberOfTouches = 1
@@ -168,7 +188,7 @@
                 guard let self, !self.dismissalStarted, !self.isTornDown else { return }
                 self.isTransitioning = false
                 self.updatePageStates()
-                UIAccessibility.post(notification: .screenChanged, argument: self.closeButton)
+                UIAccessibility.post(notification: .screenChanged, argument: self.backButton)
             }
             if UIAccessibility.isReduceMotionEnabled {
                 show()
@@ -208,16 +228,49 @@
                 if resized { page.layoutIfNeeded() }
             }
             let safe = view.safeAreaInsets
-            let top = safe.top + 8
-            let edge = max(12, safe.right + 8)
-            closeButton.frame = CGRect(x: size.width - edge - 44, y: top, width: 44, height: 44)
+            let leading = max(12, safe.left + 8)
+            let trailing = max(12, safe.right + 8)
+            let controlSize: CGFloat = 44
+            let headerY = safe.top + 8
+            let maximumPillWidth = max(
+                0, size.width - leading - trailing - (controlSize * 2) - 24)
+            let fittingPillSize = titlePill.systemLayoutSizeFitting(
+                CGSize(width: maximumPillWidth, height: UIView.layoutFittingCompressedSize.height),
+                withHorizontalFittingPriority: .fittingSizeLevel,
+                verticalFittingPriority: .fittingSizeLevel)
+            let pillSize = CGSize(
+                width: min(maximumPillWidth, max(controlSize, fittingPillSize.width)),
+                height: max(controlSize, fittingPillSize.height))
+            titlePill.frame = CGRect(
+                x: (size.width - pillSize.width) / 2, y: headerY, width: pillSize.width,
+                height: pillSize.height)
+            let buttonY = headerY + (pillSize.height - controlSize) / 2
+            backButton.frame = CGRect(
+                x: leading, y: buttonY, width: controlSize, height: controlSize)
+            moreButton.frame = CGRect(
+                x: size.width - trailing - controlSize, y: buttonY, width: controlSize,
+                height: controlSize)
+
+            let navigationY = size.height - safe.bottom - 56
             countLabel.frame = CGRect(
-                x: 64 + safe.left, y: top, width: max(0, size.width - 128 - safe.left - safe.right),
-                height: 44)
+                x: (size.width - 96) / 2, y: navigationY + 12, width: 96, height: 20)
+            let maximumFeedbackWidth = max(0, size.width - safe.left - safe.right - 48)
+            let fittingFeedbackSize = feedbackPill.systemLayoutSizeFitting(
+                CGSize(
+                    width: maximumFeedbackWidth, height: UIView.layoutFittingCompressedSize.height),
+                withHorizontalFittingPriority: .fittingSizeLevel,
+                verticalFittingPriority: .fittingSizeLevel)
+            let feedbackSize = CGSize(
+                width: min(maximumFeedbackWidth, fittingFeedbackSize.width),
+                height: fittingFeedbackSize.height)
+            feedbackPill.frame = CGRect(
+                x: (size.width - feedbackSize.width) / 2,
+                y: navigationY - feedbackSize.height - 12,
+                width: feedbackSize.width, height: feedbackSize.height)
             previousButton.frame = CGRect(
-                x: size.width / 2 - 64, y: size.height - safe.bottom - 56, width: 48, height: 44)
+                x: size.width / 2 - 120, y: navigationY, width: 48, height: 44)
             nextButton.frame = CGRect(
-                x: size.width / 2 + 16, y: size.height - safe.bottom - 56, width: 48, height: 44)
+                x: size.width / 2 + 72, y: navigationY, width: 48, height: 44)
             updatePageStates()
         }
 
@@ -252,6 +305,11 @@
             guard !isTornDown else { return }
             isTornDown = true
             isVisible = false
+            saveTask?.cancel()
+            saveTask = nil
+            deferredSaveResult = nil
+            feedbackDismissTask?.cancel()
+            feedbackDismissTask = nil
             NotificationCenter.default.removeObserver(self)
             guard isViewLoaded else { return }
             view.layer.removeAllAnimations()
@@ -269,20 +327,129 @@
             pages.removeAll()
         }
 
+        // UIKit's native glass APIs begin in iOS 26; earlier systems use standard button
+        // configuration and the title pill's system material rather than imitating glass.
+
         private func configureButton(
             _ button: UIButton, symbol: String, label: String, action: Selector
         ) {
-            var configuration = UIButton.Configuration.filled()
+            var configuration: UIButton.Configuration
+            if #available(iOS 26.0, *) {
+                configuration = .glass()
+            } else {
+                configuration = .filled()
+                configuration.baseBackgroundColor = UIColor(white: 0.16, alpha: 0.85)
+            }
             configuration.image = UIImage(
                 systemName: symbol,
                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))
             configuration.baseForegroundColor = .white
-            configuration.baseBackgroundColor = UIColor(white: 0.16, alpha: 0.85)
             configuration.cornerStyle = .capsule
             button.configuration = configuration
             button.accessibilityLabel = label
             button.addTarget(self, action: action, for: .touchUpInside)
             chrome.addSubview(button)
+        }
+
+        private func configureTitlePill() {
+            if #available(iOS 26.0, *) {
+                titlePill.effect = UIGlassEffect(style: .regular)
+            } else {
+                titlePill.effect = UIBlurEffect(style: .systemMaterialDark)
+            }
+            titlePill.clipsToBounds = true
+            titlePill.layer.cornerRadius = 22
+            titlePill.isAccessibilityElement = true
+
+            titleLabel.font = .preferredFont(forTextStyle: .headline)
+            titleLabel.adjustsFontForContentSizeCategory = true
+            titleLabel.textColor = .white
+            titleLabel.textAlignment = .center
+            titleLabel.numberOfLines = 1
+            titleLabel.adjustsFontSizeToFitWidth = true
+            titleLabel.minimumScaleFactor = 0.75
+
+            sentAtLabel.font = .preferredFont(forTextStyle: .subheadline)
+            sentAtLabel.adjustsFontForContentSizeCategory = true
+            sentAtLabel.textColor = UIColor.white.withAlphaComponent(0.8)
+            sentAtLabel.textAlignment = .center
+            sentAtLabel.numberOfLines = 1
+            sentAtLabel.adjustsFontSizeToFitWidth = true
+            sentAtLabel.minimumScaleFactor = 0.75
+
+            let labels = UIStackView(arrangedSubviews: [titleLabel, sentAtLabel])
+            labels.axis = .vertical
+            labels.alignment = .fill
+            labels.spacing = 2
+            labels.translatesAutoresizingMaskIntoConstraints = false
+            titlePill.contentView.addSubview(labels)
+            NSLayoutConstraint.activate([
+                labels.leadingAnchor.constraint(
+                    equalTo: titlePill.contentView.leadingAnchor, constant: 14),
+                labels.trailingAnchor.constraint(
+                    equalTo: titlePill.contentView.trailingAnchor, constant: -14),
+                labels.topAnchor.constraint(equalTo: titlePill.contentView.topAnchor, constant: 7),
+                labels.bottomAnchor.constraint(
+                    equalTo: titlePill.contentView.bottomAnchor, constant: -7),
+            ])
+            chrome.addSubview(titlePill)
+        }
+
+        private func configureMoreButton() {
+            moreButton.menu = UIMenu(children: [
+                UIAction(
+                    title: AppLanguage.localized("Save Image"),
+                    image: UIImage(systemName: "square.and.arrow.down")
+                ) { [weak self] _ in
+                    self?.saveSelectedImage()
+                }
+            ])
+            moreButton.showsMenuAsPrimaryAction = true
+            chrome.addSubview(moreButton)
+            updateMoreButtonConfiguration()
+        }
+
+        private func updateMoreButtonConfiguration() {
+            var configuration: UIButton.Configuration
+            if #available(iOS 26.0, *) {
+                configuration = .glass()
+            } else {
+                configuration = .filled()
+                configuration.baseBackgroundColor = UIColor(white: 0.16, alpha: 0.85)
+            }
+            configuration.image = UIImage(
+                systemName: "ellipsis",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))
+            configuration.baseForegroundColor = .white
+            configuration.cornerStyle = .capsule
+            moreButton.configuration = configuration
+            moreButton.accessibilityLabel = AppLanguage.localized("More actions")
+        }
+
+        private func configureFeedbackPill() {
+            feedbackPill.clipsToBounds = true
+            feedbackPill.layer.cornerRadius = 18
+            feedbackPill.alpha = 0
+            feedbackPill.isAccessibilityElement = true
+            feedbackPill.accessibilityElementsHidden = true
+            feedbackLabel.font = .preferredFont(forTextStyle: .body)
+            feedbackLabel.adjustsFontForContentSizeCategory = true
+            feedbackLabel.textColor = .white
+            feedbackLabel.textAlignment = .center
+            feedbackLabel.numberOfLines = 2
+            feedbackLabel.translatesAutoresizingMaskIntoConstraints = false
+            feedbackPill.contentView.addSubview(feedbackLabel)
+            NSLayoutConstraint.activate([
+                feedbackLabel.leadingAnchor.constraint(
+                    equalTo: feedbackPill.contentView.leadingAnchor, constant: 16),
+                feedbackLabel.trailingAnchor.constraint(
+                    equalTo: feedbackPill.contentView.trailingAnchor, constant: -16),
+                feedbackLabel.topAnchor.constraint(
+                    equalTo: feedbackPill.contentView.topAnchor, constant: 10),
+                feedbackLabel.bottomAnchor.constraint(
+                    equalTo: feedbackPill.contentView.bottomAnchor, constant: -10),
+            ])
+            chrome.addSubview(feedbackPill)
         }
 
         private func updatePageWindow() {
@@ -328,20 +495,39 @@
                 )
                 page.accessibilityElementsHidden = index != selectedIndex
             }
-            closeButton.isEnabled = canInteract
+            backButton.isEnabled = canInteract
+            moreButton.isEnabled = canInteract && !isSaving
             previousButton.isEnabled = canInteract && currentIsFit && selectedIndex > 0
             nextButton.isEnabled =
                 canInteract && currentIsFit && selectedIndex + 1 < gallery.items.count
         }
 
         private func updateChrome() {
+            let conversationTitle = gallery.conversationTitle?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            titleLabel.text =
+                conversationTitle?.isEmpty == false
+                ? conversationTitle : AppLanguage.localized("Image")
+            let sentAtText = gallery.sentAt?.formatted(
+                .dateTime.year().month(.abbreviated).day().hour().minute().locale(
+                    AppLanguage.selected.locale))
+            sentAtLabel.text = sentAtText
+            sentAtLabel.isHidden = sentAtText == nil
+            titlePill.accessibilityLabel = [titleLabel.text, sentAtText]
+                .compactMap { $0 }
+                .joined(separator: ", ")
+
             countLabel.text = AppLanguage.localized(
                 "\(selectedIndex + 1) of \(gallery.items.count)")
             countLabel.accessibilityLabel = AppLanguage.localized("Image")
             countLabel.accessibilityValue = countLabel.text
-            let showsPagingButtons = UIAccessibility.isVoiceOverRunning && gallery.items.count > 1
+            let hasMultipleImages = gallery.items.count > 1
+            countLabel.isHidden = !hasMultipleImages
+            countLabel.isAccessibilityElement = hasMultipleImages
+            let showsPagingButtons = UIAccessibility.isVoiceOverRunning && hasMultipleImages
             previousButton.isHidden = !showsPagingButtons
             nextButton.isHidden = !showsPagingButtons
+            updateMoreButtonConfiguration()
             updatePageStates()
         }
 
@@ -353,10 +539,116 @@
         @objc private func applicationBecameActive() {
             applicationIsActive = true
             updatePageStates()
+            presentDeferredSaveResultIfNeeded()
         }
-        @objc private func closeTapped() { _ = requestClose() }
+        @objc private func backTapped() { _ = requestClose() }
         @objc private func previousTapped() { _ = goToPage(selectedIndex - 1) }
         @objc private func nextTapped() { _ = goToPage(selectedIndex + 1) }
+
+        private func saveSelectedImage() {
+            guard !isSaving, canInteract, gallery.items.indices.contains(selectedIndex) else {
+                return
+            }
+            let item = gallery.items[selectedIndex]
+            isSaving = true
+            updateMoreButtonConfiguration()
+            updatePageStates()
+
+            saveTask = Task { [weak self] in
+                do {
+                    let saved = try await ImageDetailSave.save(item)
+                    guard !Task.isCancelled else { return }
+                    self?.finishSaving(
+                        saved ? .saved(itemID: item.id, fileName: item.fileName) : nil)
+                } catch is CancellationError {
+                    guard !Task.isCancelled else { return }
+                    self?.finishSaving(nil)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self?.finishSaving(.failed(error.localizedDescription))
+                }
+            }
+        }
+
+        private func finishSaving(_ result: SaveResult?) {
+            guard !isTornDown else { return }
+            isSaving = false
+            saveTask = nil
+            updateMoreButtonConfiguration()
+            updatePageStates()
+            guard let result else { return }
+            presentSaveResult(result)
+        }
+
+        private func presentDeferredSaveResultIfNeeded() {
+            guard let deferredSaveResult else { return }
+            self.deferredSaveResult = nil
+            presentSaveResult(deferredSaveResult)
+        }
+
+        private func presentSaveResult(_ result: SaveResult) {
+            guard !isTornDown, isVisible, applicationIsActive, view.window != nil else {
+                deferredSaveResult = result
+                return
+            }
+
+            switch result {
+            case .saved(let itemID, let fileName):
+                let isCurrentImage = gallery.items[selectedIndex].id == itemID
+                showFeedbackToast(
+                    isCurrentImage
+                        ? AppLanguage.localized("Image saved")
+                        : AppLanguage.localized("Saved \(fileName)"))
+            case .failed(let failure):
+                showFeedbackToast(
+                    failure.isEmpty
+                        ? AppLanguage.localized("The image couldn’t be saved. Please try again.")
+                        : failure)
+            }
+        }
+
+        private func showFeedbackToast(_ message: String) {
+            guard isViewLoaded else { return }
+            feedbackDismissTask?.cancel()
+            feedbackLabel.text = message
+            feedbackPill.accessibilityLabel = message
+            feedbackPill.accessibilityElementsHidden = false
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
+
+            let show = { self.feedbackPill.alpha = 1 }
+            if UIAccessibility.isReduceMotionEnabled {
+                show()
+            } else {
+                UIView.animate(
+                    withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseOut],
+                    animations: show)
+            }
+            UIAccessibility.post(notification: .announcement, argument: message)
+            feedbackDismissTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: .seconds(5))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.hideFeedbackToast()
+            }
+        }
+
+        private func hideFeedbackToast() {
+            guard !isTornDown else { return }
+            feedbackDismissTask = nil
+            feedbackPill.accessibilityElementsHidden = true
+            let hide = { self.feedbackPill.alpha = 0 }
+            if UIAccessibility.isReduceMotionEnabled {
+                hide()
+            } else {
+                UIView.animate(
+                    withDuration: 0.2, delay: 0, options: [.beginFromCurrentState, .curveEaseIn],
+                    animations: hide)
+            }
+        }
 
         private func accessibilityPage(_ direction: UIAccessibilityScrollDirection) -> Bool {
             switch direction {

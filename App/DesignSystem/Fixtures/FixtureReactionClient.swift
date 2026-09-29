@@ -38,6 +38,16 @@
             return try decoder.decode(
                 MessageResponse.self, from: JSONSerialization.data(withJSONObject: value))
         }
+
+        func getReactionDetails(chatID: String, messageID: String) async throws
+            -> ReactionDetailResponse
+        {
+            let message = try await getMessage(chatID: chatID, messageID: messageID)
+            return .init(
+                reactions: message.reactions.map {
+                    .init(emoji: $0.emoji, reactors: $0.reactors ?? [])
+                })
+        }
         func putReaction(chatID: String, messageID: String, emoji: String) async throws {
             try await mutate(chatID: chatID, messageID: messageID, emoji: emoji, adding: true)
         }

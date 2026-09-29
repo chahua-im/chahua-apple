@@ -467,6 +467,8 @@
                     ? nil : { [weak self] in self?.actions.openSticker?($0) },
                 openReply: actions.openReply == nil
                     ? nil : { [weak self] in self?.actions.openReply?($0) },
+                openReactionDetails: actions.openReactionDetails == nil
+                    ? nil : { [weak self] in self?.actions.openReactionDetails?($0) },
                 replyToMessage: actions.replyToMessage == nil
                     ? nil : { [weak self] in self?.actions.replyToMessage?($0) },
                 editMessage: actions.editMessage == nil

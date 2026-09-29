@@ -97,6 +97,10 @@ public protocol ChahuaAPIClient: Sendable {
     func putReaction(chatID: String, messageID: String, emoji: String) async throws
     func deleteReaction(chatID: String, messageID: String, emoji: String) async throws
 
+    /// Fetches every reactor for each emoji with `GET /chats/{chatID}/messages/{messageID}/reactions`.
+    func getReactionDetails(chatID: String, messageID: String) async throws
+        -> ReactionDetailResponse
+
     /// Chat-scoped pins; thread pin endpoints are not supported by the server.
     func listPins(chatID: String) async throws -> ListPinsResponse
     func createPin(chatID: String, messageID: String) async throws -> PinResponse

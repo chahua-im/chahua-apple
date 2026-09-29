@@ -189,6 +189,7 @@
                 case .edit: available = actions.editMessage != nil
                 case .delete: available = actions.deleteMessage != nil
                 case .thread: available = actions.openThread != nil
+                case .reactionDetails: available = actions.openReactionDetails != nil
                 default: available = true
                 }
                 let label = action.label(

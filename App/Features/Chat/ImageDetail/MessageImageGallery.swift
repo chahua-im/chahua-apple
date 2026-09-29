@@ -28,8 +28,13 @@ struct MessageImageGallery: Identifiable {
     let messageID: String
     let items: [MessageImageItem]
     let selectedIndex: Int
+    var conversationTitle: String?
+    let sentAt: Date?
 
-    init?(messageID: String, items: [MessageImageItem], selectedID: String) {
+    init?(
+        messageID: String, items: [MessageImageItem], selectedID: String,
+        sentAt: Date? = nil
+    ) {
         let images = items.filter { $0.contentType.lowercased().hasPrefix("image/") }
         guard let selectedIndex = images.firstIndex(where: { $0.id == selectedID }) else {
             return nil
@@ -37,15 +42,18 @@ struct MessageImageGallery: Identifiable {
         self.messageID = messageID
         self.items = images
         self.selectedIndex = selectedIndex
+        self.sentAt = sentAt
     }
 
     init?(entry: ConversationTimelineEntry, attachmentIndex: Int) {
         let items: [MessageImageItem]
         let messageID: String
+        let sentAt: Date
         switch entry {
         case .remote(let message):
             guard !message.isDeleted, message.messageType == .text else { return nil }
             messageID = message.id
+            sentAt = message.createdAt
             items = message.attachments.map {
                 MessageImageItem(
                     id: $0.id, url: URL(string: $0.url), contentType: $0.kind,
@@ -54,6 +62,7 @@ struct MessageImageGallery: Identifiable {
             }
         case .pending(let message):
             messageID = message.clientGeneratedID
+            sentAt = message.enqueuedAt
             items = message.attachments.map {
                 MessageImageItem(
                     id: $0.id, url: URL(fileURLWithPath: $0.uploadPath), contentType: $0.mimeType,
@@ -61,6 +70,8 @@ struct MessageImageGallery: Identifiable {
             }
         }
         guard items.indices.contains(attachmentIndex) else { return nil }
-        self.init(messageID: messageID, items: items, selectedID: items[attachmentIndex].id)
+        self.init(
+            messageID: messageID, items: items, selectedID: items[attachmentIndex].id,
+            sentAt: sentAt)
     }
 }

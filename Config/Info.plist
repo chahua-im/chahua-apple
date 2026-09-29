@@ -34,6 +34,8 @@
 	<string>Record and send voice messages.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Share and save photos and images</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save images to your Photo Library.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

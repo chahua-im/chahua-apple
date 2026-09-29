@@ -100,6 +100,17 @@ extension ChahuaClient {
         )
     }
 
+    /// Fetches every reactor for each emoji on a message.
+    public func getReactionDetails(chatID: String, messageID: String) async throws
+        -> ReactionDetailResponse
+    {
+        try await send(
+            HTTPRequestSpec(
+                method: .get, path: ["chats", chatID, "messages", messageID, "reactions"]),
+            decoding: ReactionDetailResponse.self
+        )
+    }
+
     /// Replaces the text of an existing message.
     public func updateMessage(
         chatID: String,

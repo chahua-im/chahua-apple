@@ -93,7 +93,7 @@ struct MessageActionPolicy {
             switch action {
             case .reply: return context.canWrite && !isPending ? .enabled : .hidden
             case .copyLink: return context.isDM ? .hidden : .unimplemented
-            case .reactionDetails: return hasReactions ? .unimplemented : .hidden
+            case .reactionDetails: return hasReactions && !isPending ? .enabled : .hidden
             default: return .hidden
             }
         }
@@ -128,7 +128,7 @@ struct MessageActionPolicy {
         case .save:
             applicable = messageType != .sticker
         case .reactionDetails:
-            applicable = hasReactions
+            return hasReactions ? .enabled : .hidden
         }
         return applicable ? .unimplemented : .hidden
     }

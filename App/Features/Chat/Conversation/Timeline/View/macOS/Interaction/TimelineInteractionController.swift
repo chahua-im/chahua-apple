@@ -311,6 +311,13 @@
                 else { return }
                 dismiss()
                 openThread(message.id)
+            case .reactionDetails:
+                guard let message = row.entry.remoteMessage,
+                    let openDetails = actions.openReactionDetails
+                else { return }
+                // Remove the overlay before SwiftUI starts the modal sheet's run loop.
+                dismiss(animated: false)
+                openDetails(message)
             default:
                 break  // Policy keeps unsupported actions visible but disabled.
             }

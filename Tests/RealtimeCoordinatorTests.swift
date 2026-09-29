@@ -440,6 +440,12 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
         throw APIError.unavailable
     }
+
+    func getReactionDetails(chatID: String, messageID: String) async throws
+        -> ReactionDetailResponse
+    {
+        throw APIError.unavailable
+    }
     func deleteMessage(chatID: String, messageID: String) async throws {
         throw APIError.unavailable
     }

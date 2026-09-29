@@ -114,6 +114,7 @@ final class MessageActionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.availability(of: .copy), .enabled)
         XCTAssertEqual(policy.availability(of: .delete), .hidden)
         XCTAssertEqual(policy.availability(of: .copyLink), .hidden)
+        XCTAssertEqual(policy.availability(of: .reactionDetails), .enabled)
     }
 
     func testPendingSystemAndDeletedMessagesCannotMutate() {
@@ -132,6 +133,7 @@ final class MessageActionPolicyTests: XCTestCase {
         XCTAssertEqual(deleted.actions, [.reply, .copyLink, .reactionDetails])
         XCTAssertEqual(deleted.availability(of: .reply), .enabled)
         XCTAssertEqual(deleted.availability(of: .copy), .hidden)
+        XCTAssertEqual(deleted.availability(of: .reactionDetails), .enabled)
         XCTAssertFalse(deleted.canReact)
     }
 
@@ -148,6 +150,14 @@ final class MessageActionPolicyTests: XCTestCase {
             messageType: .text, isDeleted: true,
             hasReactions: true, context: .init(isDM: true))
         XCTAssertEqual(deletedDeadDM.actions, [.reactionDetails])
+    }
+
+    func testReactionDetailsRequirePublishedReactions() {
+        let withoutReactions = MessageActionPolicy(messageType: .text, context: writable)
+        XCTAssertEqual(withoutReactions.availability(of: .reactionDetails), .hidden)
+        let pending = MessageActionPolicy(
+            messageType: .text, isPending: true, hasReactions: true, context: writable)
+        XCTAssertEqual(pending.availability(of: .reactionDetails), .hidden)
     }
 
     func testPersonalLimitAllowsRemovalButNotAnotherUsersReaction() throws {

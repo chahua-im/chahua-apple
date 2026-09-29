@@ -38,6 +38,14 @@
         private let viewport = MessageImageDetailMacContainer()
         private let chrome = MessageImageDetailMacContainer()
         private let closeButton = NSButton()
+        private let moreButton = NSButton()
+        private let headerBackground = NSVisualEffectView()
+        private let titleLabel = NSTextField(labelWithString: "")
+        private let timeLabel = NSTextField(labelWithString: "")
+        private var saveTask: Task<Void, Never>?
+        private let toastBackground = NSVisualEffectView()
+        private let toastLabel = NSTextField(wrappingLabelWithString: "")
+        private var toastDismissTask: Task<Void, Never>?
         private let previousButton = NSButton()
         private let nextButton = NSButton()
         private let countLabel = NSTextField(labelWithString: "")
@@ -101,8 +109,34 @@
             addSubview(chrome)
 
             configureButton(
-                closeButton, symbol: "xmark", label: AppLanguage.localized("Close image"),
+                closeButton, symbol: "chevron.left", label: AppLanguage.localized("Back"),
                 action: #selector(close))
+            configureButton(
+                moreButton, symbol: "ellipsis", label: AppLanguage.localized("More"),
+                action: #selector(showImageMenu))
+            headerBackground.material = .menu
+            headerBackground.blendingMode = .withinWindow
+            headerBackground.state = .active
+            headerBackground.wantsLayer = true
+            headerBackground.layer?.cornerRadius = 24
+            headerBackground.layer?.masksToBounds = true
+            chrome.addSubview(headerBackground)
+            titleLabel.stringValue = gallery.conversationTitle ?? AppLanguage.localized("Image")
+            titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+            titleLabel.textColor = .white
+            titleLabel.alignment = .center
+            titleLabel.lineBreakMode = .byTruncatingTail
+            headerBackground.addSubview(titleLabel)
+            if let sentAt = gallery.sentAt {
+                timeLabel.stringValue = sentAt.formatted(
+                    .dateTime.locale(AppLanguage.selected.locale)
+                        .year().month(.abbreviated).day().hour().minute())
+            }
+            timeLabel.font = .systemFont(ofSize: 12)
+            timeLabel.textColor = .secondaryLabelColor
+            timeLabel.alignment = .center
+            timeLabel.lineBreakMode = .byTruncatingTail
+            headerBackground.addSubview(timeLabel)
             configureButton(
                 previousButton, symbol: "chevron.left",
                 label: AppLanguage.localized("Previous image"),
@@ -120,7 +154,21 @@
             fileNameLabel.alignment = .center
             fileNameLabel.lineBreakMode = .byTruncatingMiddle
             chrome.addSubview(fileNameLabel)
-            closeButton.nextKeyView = previousButton
+            toastBackground.material = .hudWindow
+            toastBackground.blendingMode = .withinWindow
+            toastBackground.state = .active
+            toastBackground.wantsLayer = true
+            toastBackground.layer?.cornerRadius = 14
+            toastBackground.layer?.masksToBounds = true
+            toastBackground.isHidden = true
+            toastLabel.font = .systemFont(ofSize: 14, weight: .medium)
+            toastLabel.textColor = .white
+            toastLabel.alignment = .center
+            toastLabel.setAccessibilityIdentifier("image-save-result")
+            toastBackground.addSubview(toastLabel)
+            chrome.addSubview(toastBackground)
+            closeButton.nextKeyView = moreButton
+            moreButton.nextKeyView = previousButton
             previousButton.nextKeyView = nextButton
             nextButton.nextKeyView = closeButton
 
@@ -135,6 +183,8 @@
         deinit {
             NSWorkspace.shared.notificationCenter.removeObserver(self)
             wheelEndTask?.cancel()
+            saveTask?.cancel()
+            toastDismissTask?.cancel()
         }
 
         override func viewDidMoveToWindow() {
@@ -166,6 +216,10 @@
             animationGeneration += 1
             wheelEndTask?.cancel()
             wheelEndTask = nil
+            saveTask?.cancel()
+            saveTask = nil
+            toastDismissTask?.cancel()
+            toastDismissTask = nil
             NSWorkspace.shared.notificationCenter.removeObserver(self)
             for page in pages.values { page.cancel() }
             pages.removeAll()
@@ -249,7 +303,9 @@
             nextButton.isHidden = gallery.items.count == 1
             countLabel.stringValue = AppLanguage.localized(
                 "\(selectedIndex + 1) of \(gallery.items.count)")
+            countLabel.isHidden = gallery.items.count == 1
             fileNameLabel.stringValue = gallery.items[selectedIndex].fileName
+            moreButton.isEnabled = acceptsInteraction && saveTask == nil
             nextButton.nextKeyView =
                 activePage?.retryButton.isHidden == false ? activePage?.retryButton : closeButton
             activePage?.retryButton.nextKeyView = closeButton
@@ -266,15 +322,46 @@
             guard !isInvalidated else { return }
             backdrop.frame = bounds
             chrome.frame = bounds
+            // The overlay extends under the title bar; leave the native window controls their own row.
+            var headerTop: CGFloat = 16
+            if let trafficLight = window?.standardWindowButton(.closeButton),
+                !trafficLight.isHiddenOrHasHiddenAncestor
+            {
+                headerTop = max(
+                    headerTop, convert(trafficLight.bounds, from: trafficLight).maxY + 12)
+            }
+            let mediaTop = headerTop + 60
             viewport.frame = CGRect(
-                x: 16, y: 64, width: max(1, bounds.width - 32), height: max(1, bounds.height - 120))
-            closeButton.frame = CGRect(x: max(8, bounds.width - 56), y: 16, width: 40, height: 40)
-            countLabel.frame = CGRect(x: 64, y: 27, width: max(0, bounds.width - 128), height: 22)
+                x: 16, y: mediaTop, width: max(1, bounds.width - 32),
+                height: max(1, bounds.height - mediaTop - 68))
+            closeButton.frame = CGRect(x: 16, y: headerTop + 2, width: 44, height: 44)
+            moreButton.frame = CGRect(
+                x: max(72, bounds.width - 60), y: headerTop + 2, width: 44, height: 44)
+            let headerWidth = min(360, max(0, bounds.width - 152))
+            headerBackground.frame = CGRect(
+                x: (bounds.width - headerWidth) / 2, y: headerTop, width: headerWidth, height: 48)
+            // NSVisualEffectView is unflipped: the title is the upper row.
+            titleLabel.frame = CGRect(
+                x: 12, y: gallery.sentAt == nil ? 14 : 25,
+                width: max(0, headerWidth - 24), height: 20)
+            timeLabel.frame = CGRect(x: 12, y: 7, width: max(0, headerWidth - 24), height: 16)
+            countLabel.frame = CGRect(
+                x: 64, y: max(76, bounds.height - 60), width: max(0, bounds.width - 128), height: 20
+            )
             previousButton.frame = CGRect(x: 16, y: bounds.midY - 20, width: 40, height: 40)
             nextButton.frame = CGRect(
                 x: max(16, bounds.width - 56), y: bounds.midY - 20, width: 40, height: 40)
             fileNameLabel.frame = CGRect(
                 x: 32, y: max(64, bounds.height - 37), width: max(0, bounds.width - 64), height: 20)
+            let toastWidth = min(480, max(24, bounds.width - 48))
+            let textHeight =
+                toastLabel.cell?.cellSize(
+                    forBounds: CGRect(x: 0, y: 0, width: toastWidth - 24, height: 1000)
+                ).height ?? 20
+            toastBackground.frame = CGRect(
+                x: (bounds.width - toastWidth) / 2, y: max(76, bounds.height - 88 - textHeight),
+                width: toastWidth, height: textHeight + 24)
+            toastLabel.frame = CGRect(x: 12, y: 12, width: toastWidth - 24, height: textHeight)
             placePages(animated: false)
         }
 
@@ -342,6 +429,60 @@
         @objc private func close() { dismiss(downward: false) }
         @objc private func previousImage() { changePage(by: -1) }
         @objc private func nextImage() { changePage(by: 1) }
+
+        @objc private func showImageMenu() {
+            guard acceptsInteraction, saveTask == nil else { return }
+            let menu = NSMenu()
+            let save = NSMenuItem(
+                title: AppLanguage.localized("Save Image"), action: #selector(saveImage),
+                keyEquivalent: "")
+            save.image = NSImage(
+                systemSymbolName: "square.and.arrow.down", accessibilityDescription: nil)
+            save.target = self
+            menu.addItem(save)
+            menu.popUp(
+                positioning: nil, at: NSPoint(x: 0, y: moreButton.bounds.maxY), in: moreButton)
+        }
+
+        @objc private func saveImage() {
+            guard acceptsInteraction, saveTask == nil else { return }
+            let item = gallery.items[selectedIndex]
+            saveTask = Task { [weak self] in
+                do {
+                    let saved = try await ImageDetailSave.save(item)
+                    guard let self, !self.isInvalidated else { return }
+                    if saved { self.showSaveToast(AppLanguage.localized("Saved \(item.fileName)")) }
+                    self.saveTask = nil
+                    self.updateControls()
+                } catch {
+                    guard let self, !self.isInvalidated else { return }
+                    self.saveTask = nil
+                    self.updateControls()
+                    guard !(error is CancellationError) else { return }
+                    self.showSaveToast(error.localizedDescription)
+                }
+            }
+            updateControls()
+        }
+
+        private func showSaveToast(_ message: String) {
+            guard !isInvalidated, !isDismissing else { return }
+            toastDismissTask?.cancel()
+            toastLabel.stringValue = message
+            toastBackground.isHidden = false
+            needsLayout = true
+            NSAccessibility.post(
+                element: toastLabel, notification: .announcementRequested,
+                userInfo: [
+                    .announcement: message,
+                    .priority: NSAccessibilityPriorityLevel.high.rawValue,
+                ])
+            toastDismissTask = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                self?.toastBackground.isHidden = true
+                self?.toastDismissTask = nil
+            }
+        }
 
         override func magnify(with event: NSEvent) {
             guard acceptsInteraction, let page = activePage, page.hasImage else { return }

@@ -10,6 +10,10 @@ See the [setup guide](docs/setup.md) to prepare a development environment and sy
 
 iOS and macOS group consecutive non-system messages from the same sender within a calendar day, regardless of the time between messages. A date separator, unread separator, system message, or sender change starts a new group. The sender name appears on the first bubble of a group where sender names are enabled; the avatar appears on the final bubble. Adjacent bubbles have a 4-point vertical gap within a group and an 8-point gap between groups.
 
+Message actions offer **Reactions** for published messages with reactions. On iOS and macOS, the sheet loads the full reactor list and uses horizontally scrollable emoji/count tabs with an accent underline above compact avatar/name rows. **All** groups reactions by person; up to eight populated emoji groups get individual tabs, and **More** contains the remaining populated groups. Zero-reaction groups are omitted; an entirely empty response shows the empty state. Reactor rows do not open profiles. Loading failures offer Retry.
+
+The image viewer header shows Back, the chat/thread name above the message timestamp, and an overflow menu containing only **Save Image**. iOS requests add-only Photos access and saves the original image file; macOS uses a native Save panel with user-selected read/write access. Saving has no progress/status message, prevents duplicate requests, and reports success or failure with a transient accessible toast. Canceling the Save panel is silent. Video saving is not included.
+
 ## Notifications, camera, and incoming shares
 
 - iOS and macOS message notifications offer **Reply**. The server must send `aps.category: "chahua"`; the separate routing envelope remains unchanged. Replies target the notification's chat/thread through the account-scoped outbox without consuming the open composer draft.

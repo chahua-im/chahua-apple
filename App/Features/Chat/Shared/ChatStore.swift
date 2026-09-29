@@ -873,6 +873,22 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func reactionDetails(chatID: String, messageID: String) async throws -> ReactionDetailResponse {
+        try Task.checkCancellation()
+        let requestGeneration = generation
+        do {
+            let response = try await apiClient.getReactionDetails(
+                chatID: chatID, messageID: messageID)
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            return response
+        } catch {
+            guard generation == requestGeneration else { throw CancellationError() }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            throw error
+        }
+    }
+
     func groupInfo(chatID: String) async throws -> GroupInfoResponse {
         let requestGeneration = generation
         let response: GroupInfoResponse = try await performGroupRequest(

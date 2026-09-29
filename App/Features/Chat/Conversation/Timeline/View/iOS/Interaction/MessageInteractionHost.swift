@@ -136,6 +136,12 @@
                         {
                             self.target = nil
                             openThread(message.id)
+                        } else if action == .reactionDetails,
+                            let message = liveRow.entry.remoteMessage,
+                            let openDetails = actions.openReactionDetails
+                        {
+                            self.target = nil
+                            openDetails(message)
                         } else if action == .copy, let text = liveRow.entry.text {
                             UIPasteboard.general.string = text
                             self.target = nil

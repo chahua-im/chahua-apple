@@ -352,6 +352,12 @@ private actor HeldReactionAPI: ChahuaAPIClient {
         }
     }
 
+    func getReactionDetails(chatID: String, messageID: String) async throws
+        -> ReactionDetailResponse
+    {
+        throw APIError.unavailable
+    }
+
     func putReaction(chatID: String, messageID: String, emoji: String) async throws {
         try await mutate(.put(emoji))
     }

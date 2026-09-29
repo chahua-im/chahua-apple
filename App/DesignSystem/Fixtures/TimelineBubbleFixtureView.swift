@@ -24,6 +24,7 @@
         @State private var replyFocusRequest = 0
         @State private var scrollExperiment: TimelineDisplayScheduler?
         @State private var hasSelection = true
+        @State private var reactionDetailsMessage: MessageResponse?
 
         var body: some View {
             if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
@@ -135,6 +136,18 @@
             .navigationTitle(Text(verbatim: "Native bubble timeline"))
             .frame(minWidth: 300, minHeight: 400)
             .task { fixture.prepare() }
+            .sheet(
+                isPresented: Binding(
+                    get: { reactionDetailsMessage != nil },
+                    set: { if !$0 { reactionDetailsMessage = nil } })
+            ) {
+                if let message = reactionDetailsMessage {
+                    ReactionDetailsView(chatID: message.chatId, messageID: message.id) {
+                        try await fixture.reactionClient.getReactionDetails(
+                            chatID: message.chatId, messageID: message.id)
+                    }
+                }
+            }
             #if os(macOS)
                 .task {
                     if ProcessInfo.processInfo.arguments.contains("-fixture-autoscroll") {
@@ -297,6 +310,7 @@
             guard handlersEnabled else { return .init() }
             var result = TimelineBubbleActions()
             result.pendingReactionMessageIDs = fixture.reactions.pendingMessageIDs
+            result.openReactionDetails = { reactionDetailsMessage = $0 }
             result.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage else { return }
                 Task {
@@ -304,6 +318,8 @@
                 }
             }
             result.openMedia = { gallery in
+                var gallery = gallery
+                gallery.conversationTitle = "Native bubble timeline"
                 event = "Media: \(gallery.messageID), \(gallery.items.count) images"
                 imageDetailPresenter?.present(gallery)
             }

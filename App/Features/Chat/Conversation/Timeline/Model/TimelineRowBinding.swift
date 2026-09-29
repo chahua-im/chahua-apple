@@ -24,6 +24,7 @@ struct TimelineBubbleActions {
     var openMedia: ((MessageImageGallery) -> Void)?
     var openSticker: ((String) -> Void)?
     var openReply: ((String) -> Void)?
+    var openReactionDetails: ((MessageResponse) -> Void)?
     var replyToMessage: ((MessageResponse) -> Void)?
     var editMessage: ((MessageResponse) -> Void)?
     var togglePin: ((MessageResponse) -> Void)?
@@ -66,6 +67,7 @@ extension TimelineBubbleActions {
         (openMedia == nil) == (other.openMedia == nil)
             && (openSticker == nil) == (other.openSticker == nil)
             && (openReply == nil) == (other.openReply == nil)
+            && (openReactionDetails == nil) == (other.openReactionDetails == nil)
             && (replyToMessage == nil) == (other.replyToMessage == nil)
             && (editMessage == nil) == (other.editMessage == nil)
             && (togglePin == nil) == (other.togglePin == nil)

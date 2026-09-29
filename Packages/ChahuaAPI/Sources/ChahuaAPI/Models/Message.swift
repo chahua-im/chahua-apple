@@ -236,6 +236,26 @@ public struct ReactionReactor: Codable, Hashable, Sendable {
     public let sortIndex: Int32?
 }
 
+/// All reactors for each emoji on a message.
+public struct ReactionDetailResponse: Codable, Hashable, Sendable {
+    public let reactions: [ReactionDetailGroup]
+
+    public init(reactions: [ReactionDetailGroup]) {
+        self.reactions = reactions
+    }
+}
+
+/// The full reactor list for one emoji returned by a reaction-details request.
+public struct ReactionDetailGroup: Codable, Hashable, Sendable {
+    public let emoji: String
+    public let reactors: [ReactionReactor]
+
+    public init(emoji: String, reactors: [ReactionReactor]) {
+        self.emoji = emoji
+        self.reactors = reactors
+    }
+}
+
 public struct ThreadInfo: Codable, Hashable, Sendable {
     public let replyCount: Int64
 }
