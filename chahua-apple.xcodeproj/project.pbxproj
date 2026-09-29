@@ -881,6 +881,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
 				CODE_SIGN_ENTITLEMENTS = "Config/ShareExtension-iOS.entitlements";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 201;
 				DEAD_CODE_STRIPPING = YES;
