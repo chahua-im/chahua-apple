@@ -73,6 +73,7 @@
             mediaContext: AppMediaContext?,
             colorScheme: ColorScheme,
             messageTextSize: Int,
+            appLanguage: String,
             unreadBadgeColor: ConversationUnreadBadgeColor,
             headerInset: CGFloat,
             composerInset: CGFloat,
@@ -87,6 +88,7 @@
             tableController.mediaContext = mediaContext
             tableController.colorScheme = colorScheme
             tableController.messageTextSize = messageTextSize
+            tableController.appLanguage = appLanguage
             // The table applies these as contentInsets. Chrome only positions itself;
             // neither this controller nor its representable adds another safe area.
             tableController.headerInset = headerInset

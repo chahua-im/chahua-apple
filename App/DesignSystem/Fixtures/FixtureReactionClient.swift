@@ -7,7 +7,7 @@
     @MainActor
     final class FixtureReactionClient: ChahuaAPIClient {
         var failNextMutation = false
-        private var messages: [String: MessageResponse] = [:]
+        private var messages: [MessageID: MessageResponse] = [:]
         private let decoder: JSONDecoder = {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -22,10 +22,10 @@
         func install(_ messages: [MessageResponse]) {
             self.messages = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
         }
-        func deleteMessage(chatID: String, messageID: String) async throws {
+        func deleteMessage(chatID: String, messageID: MessageID) async throws {
             throw APIError.unavailable
         }
-        func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+        func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
             guard let message = messages[messageID], message.chatId == chatID else {
                 throw Failure.missingMessage
             }
@@ -39,7 +39,7 @@
                 MessageResponse.self, from: JSONSerialization.data(withJSONObject: value))
         }
 
-        func getReactionDetails(chatID: String, messageID: String) async throws
+        func getReactionDetails(chatID: String, messageID: MessageID) async throws
             -> ReactionDetailResponse
         {
             let message = try await getMessage(chatID: chatID, messageID: messageID)
@@ -48,14 +48,14 @@
                     .init(emoji: $0.emoji, reactors: $0.reactors ?? [])
                 })
         }
-        func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+        func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
             try await mutate(chatID: chatID, messageID: messageID, emoji: emoji, adding: true)
         }
-        func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+        func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
             try await mutate(chatID: chatID, messageID: messageID, emoji: emoji, adding: false)
         }
 
-        private func mutate(chatID: String, messageID: String, emoji: String, adding: Bool)
+        private func mutate(chatID: String, messageID: MessageID, emoji: String, adding: Bool)
             async throws
         {
             try await Task.sleep(for: .milliseconds(250))
@@ -165,13 +165,13 @@
             throw Failure.unexpectedOperation
         }
         func unmuteChat(chatID: String) async throws { throw Failure.unexpectedOperation }
-        func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+        func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
             throw Failure.unexpectedOperation
         }
         func markChatUnread(chatID: String) async throws -> ReadStateResponse {
             throw Failure.unexpectedOperation
         }
-        func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+        func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
             -> ReadStateResponse
         { throw Failure.unexpectedOperation }
         func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {

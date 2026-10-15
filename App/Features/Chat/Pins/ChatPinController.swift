@@ -8,7 +8,7 @@ final class ChatPinController: ObservableObject {
     @Published private(set) var pinsByChatID: [String: [PinResponse]] = [:]
     @Published private(set) var loadingChatIDs = Set<String>()
     @Published private(set) var failedChatIDs = Set<String>()
-    @Published private(set) var pendingMessageIDs = Set<String>()
+    @Published private(set) var pendingMessageIDs = Set<MessageID>()
     @Published var error: String?
 
     private let apiClient: any ChahuaAPIClient
@@ -22,14 +22,14 @@ final class ChatPinController: ObservableObject {
     private var snapshots: [UUID: Snapshot] = [:]
     // IDs are immutable: late add echoes must not resurrect removed pins/messages.
     private var removedPinIDs: [String: Set<String>] = [:]
-    private var deletedMessageIDs: [String: Set<String>] = [:]
+    private var deletedMessageIDs: [String: Set<MessageID>] = [:]
     private var expiryTask: Task<Void, Never>?
 
     private enum Change {
         case add(PinResponse)
         case remove(String)
         case update(MessageResponse)
-        case delete(Set<String>)
+        case delete(Set<MessageID>)
     }
 
     private struct Snapshot {
@@ -86,7 +86,7 @@ final class ChatPinController: ObservableObject {
     }
 
     func pin(_ message: MessageResponse) async {
-        guard !message.chatId.isEmpty, !message.id.isEmpty, message.replyRootId == nil,
+        guard !message.chatId.isEmpty, message.replyRootId == nil,
             !message.isDeleted,
             !pendingMessageIDs.contains(message.id), !Task.isCancelled
         else { return }
@@ -164,8 +164,7 @@ final class ChatPinController: ObservableObject {
             knownChatIDs.insert(payload.chatId)
             apply(.add(pin), chatID: payload.chatId)
         case .pinRemoved(let payload):
-            guard payload.threadRootId == nil, !payload.chatId.isEmpty, !payload.pinId.isEmpty,
-                !payload.messageId.isEmpty
+            guard payload.threadRootId == nil, !payload.chatId.isEmpty, !payload.pinId.isEmpty
             else { return }
             if let existing = pinsByChatID[payload.chatId]?.first(where: { $0.id == payload.pinId }
             ),
@@ -297,7 +296,7 @@ final class ChatPinController: ObservableObject {
     }
 
     private func validScope(_ pin: PinResponse, chatID: String) -> Bool {
-        !chatID.isEmpty && !pin.id.isEmpty && !pin.message.id.isEmpty && pin.chatId == chatID
+        !chatID.isEmpty && !pin.id.isEmpty && pin.chatId == chatID
             && pin.message.chatId == chatID && pin.threadRootId == nil
     }
 
@@ -311,7 +310,7 @@ final class ChatPinController: ObservableObject {
     private func normalized(_ pins: [PinResponse], chatID: String) -> [PinResponse] {
         let now = Date()
         var seenPinIDs = Set<String>()
-        var seenMessageIDs = Set<String>()
+        var seenMessageIDs = Set<MessageID>()
         return pins.filter {
             isLive($0, chatID: chatID, now: now)
         }.sorted {

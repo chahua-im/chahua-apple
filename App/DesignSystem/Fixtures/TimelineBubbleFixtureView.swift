@@ -99,7 +99,8 @@
                             model: model,
                             initialPosition: ProcessInfo.processInfo.environment[
                                 "CHAHUA_FIXTURE_MESSAGE"
-                            ].map(TimelineInitialPosition.message) ?? .liveEdge,
+                            ].flatMap(MessageID.init).map(TimelineInitialPosition.message)
+                                ?? .liveEdge,
                             actions: actions,
                             interactionContext: .init(
                                 canWrite: handlersEnabled, isAdmin: true, isThreadView: threadScope)
@@ -117,7 +118,8 @@
                                 model: model,
                                 initialPosition: ProcessInfo.processInfo.environment[
                                     "CHAHUA_FIXTURE_MESSAGE"
-                                ].map(TimelineInitialPosition.message) ?? .liveEdge,
+                                ].flatMap(MessageID.init).map(TimelineInitialPosition.message)
+                                    ?? .liveEdge,
                                 actions: interactiveActions
                             )
                             .id(ObjectIdentifier(model))
@@ -426,7 +428,7 @@
                         text: "Gallery \(count): caption with reply and thread",
                         attachments: attachments)
                     item["replyToMessage"] = [
-                        "id": "quoted-target", "clientGeneratedId": "quoted-client",
+                        "id": "999999999", "clientGeneratedId": "quoted-client",
                         "createdAt": "2026-09-01T12:00:00Z", "sender": sender(2),
                         "messageType": "text", "attachments": [["kind": "image/png"]],
                         "mentions": [], "isDeleted": false,
@@ -448,7 +450,7 @@
                         index: objects.count,
                         text: "A text reply with @[uid:2] and https://example.com")
                     item["replyToMessage"] = [
-                        "id": "fixture-0", "clientGeneratedId": "fixture-client-0",
+                        "id": "1", "clientGeneratedId": "fixture-client-0",
                         "createdAt": "2026-09-01T12:00:00Z", "sender": sender(2),
                         "messageType": "text", "attachments": [], "mentions": [],
                         "isDeleted": deleted, "message": "Hello",
@@ -481,7 +483,7 @@
                     ]
                     sticker["reactions"] = reactions
                     sticker["replyToMessage"] = [
-                        "id": "quoted-target", "clientGeneratedId": "quoted-client",
+                        "id": "999999999", "clientGeneratedId": "quoted-client",
                         "createdAt": "2026-09-01T12:00:00Z", "sender": sender(2),
                         "messageType": "text", "attachments": [], "mentions": [],
                         "isDeleted": false, "message": "A sticker reply uses the same preview.",
@@ -622,7 +624,8 @@
             Any]
         {
             [
-                "id": "fixture-\(index)", "clientGeneratedId": "fixture-client-\(index)",
+                // Message IDs are decimal snowflakes on the wire; index order is server order.
+                "id": "\(index + 1)", "clientGeneratedId": "fixture-client-\(index)",
                 "chatId": "bubble-fixtures", "messageType": "text",
                 "sender": sender(index % 2 == 0 ? 2 : 1),
                 "createdAt": ISO8601DateFormatter().string(

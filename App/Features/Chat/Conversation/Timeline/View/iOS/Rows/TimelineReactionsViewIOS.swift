@@ -34,8 +34,7 @@
                 addSubview(pill)
                 pills.append(pill)
             }
-            let pending = binding.actions.pendingReactionMessageIDs.contains(
-                row.entry.remoteMessage?.id ?? "")
+            let pending = binding.actions.isReacting(to: row.entry)
             let eligibility = MessageReactionEligibility(
                 canReact: !binding.context.isInteractionPreview
                     && MessageActionPolicy(row: row, context: binding.actions.interactionContext)

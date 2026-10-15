@@ -23,22 +23,21 @@ struct MessageInteractionSource {
 struct TimelineBubbleActions {
     var openMedia: ((MessageImageGallery) -> Void)?
     var openSticker: ((String) -> Void)?
-    var openReply: ((String) -> Void)?
+    var openReply: ((MessageID) -> Void)?
     var openReactionDetails: ((MessageResponse) -> Void)?
     var replyToMessage: ((MessageResponse) -> Void)?
     var editMessage: ((MessageResponse) -> Void)?
     var togglePin: ((MessageResponse) -> Void)?
-    var pinnedMessageIDs: Set<String> = []
-    var pendingPinMessageIDs: Set<String> = []
+    var pinnedMessageIDs: Set<MessageID> = []
+    var pendingPinMessageIDs: Set<MessageID> = []
     var deleteMessage: ((MessageResponse) -> Void)?
-    var openThread: ((String) -> Void)?
+    var openThread: ((MessageID) -> Void)?
     var openLink: ((URL) -> Void)?
     var openMention: ((Int32) -> Void)?
     var openFailedMessage: ((String) -> Void)?
     var openContextMenu: ((TimelineMessageRow, MessageInteractionSource) -> Void)?
     var toggleReaction: ((TimelineMessageRow, String) -> Void)?
-    var pendingReactionMessageIDs: Set<String> = []
-    var currentUserProfile: MeResponse?
+    var pendingReactionMessageIDs: Set<MessageID> = []
     var interactionContext = MessageInteractionContext()
     var modifiablePendingMessageIDs: Set<String> = []
     var blockPendingMessage: ((PendingOutgoingMessage) -> Void)?
@@ -83,7 +82,6 @@ extension TimelineBubbleActions {
             && (blockPendingMessage == nil) == (other.blockPendingMessage == nil)
             && (revokePendingMessage == nil) == (other.revokePendingMessage == nil)
             && pendingReactionMessageIDs == other.pendingReactionMessageIDs
-            && currentUserProfile == other.currentUserProfile
             && modifiablePendingMessageIDs == other.modifiablePendingMessageIDs
             && interactionContext == other.interactionContext
     }
@@ -92,9 +90,14 @@ extension TimelineBubbleActions {
         -> MessageInteractionContext
     {
         var result = base
-        let id = row.entry.serverID ?? ""
-        result.isPinned = pinnedMessageIDs.contains(id)
-        result.isUpdatingPin = togglePin == nil || pendingPinMessageIDs.contains(id)
+        let id = row.entry.serverID
+        result.isPinned = id.map(pinnedMessageIDs.contains) ?? false
+        result.isUpdatingPin = togglePin == nil || (id.map(pendingPinMessageIDs.contains) ?? false)
         return result
+    }
+
+    /// Pending sends have no server ID and cannot have a reaction request in flight.
+    func isReacting(to entry: ConversationTimelineEntry) -> Bool {
+        entry.serverID.map(pendingReactionMessageIDs.contains) ?? false
     }
 }

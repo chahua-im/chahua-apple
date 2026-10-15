@@ -1,40 +1,47 @@
-import ChahuaAPI
 import Foundation
 
-/// Geometry work only. Native hosts retain their own transaction and scroll ownership.
+/// Prepares one snapshot's rows. Native hosts retain their own transaction and scroll ownership.
+///
+/// Rows the cache already holds for this environment are reused when the preparation
+/// is created; only new or changed rows are built. A few changes (an append, an edit,
+/// a reaction) complete in one display turn; larger batches (opening, paging, resizing)
+/// yield after 4 ms so no frame blocks. Built rows land in the shared cache, so a
+/// preparation superseded by a newer revision does not lose its work.
 @MainActor
 final class TimelineLayoutPreparation {
+    static let sameTurnLimit = 8
+
     let snapshot: TimelineHostSnapshot
     let environment: TimelineLayoutEnvironment
-    let profile: MeResponse?
-    private var nextIndex = 0
-    private(set) var presentations: [TimelineRowID: TimelineRowPresentation] = [:]
-    private(set) var layouts: [TimelineRowID: TimelineRowLayout] = [:]
+    private(set) var rows: [TimelineRowID: PreparedRow] = [:]
+    private var changed: [Int] = []
+    private var nextChanged = 0
 
     init(
-        snapshot: TimelineHostSnapshot, environment: TimelineLayoutEnvironment, profile: MeResponse?
+        snapshot: TimelineHostSnapshot, environment: TimelineLayoutEnvironment,
+        cache: TimelineRowCache
     ) {
         self.snapshot = snapshot
         self.environment = environment
-        self.profile = profile
-        presentations.reserveCapacity(snapshot.rows.count)
-        layouts.reserveCapacity(snapshot.rows.count)
+        rows.reserveCapacity(snapshot.rows.count)
+        for (index, row) in snapshot.rows.enumerated() {
+            if let entry = cache.current(row, environment: environment) {
+                rows[row.id] = entry
+            } else {
+                changed.append(index)
+            }
+        }
     }
 
-    func advance(cache: TimelineLayoutCache, currentUserID: Int32?, isThreadTimeline: Bool) -> Bool
-    {
+    func advance(cache: TimelineRowCache) -> Bool {
+        let budgeted = changed.count > Self.sameTurnLimit
         let deadline = ProcessInfo.processInfo.systemUptime + 0.004
-        let end = min(snapshot.rows.count, nextIndex + 32)
-        while nextIndex < end {
-            let row = snapshot.rows[nextIndex]
-            let presentation = TimelineRowPresentation.make(
-                row: row, currentUserProfile: profile, currentUserID: currentUserID,
-                isThreadTimeline: isThreadTimeline, environment: environment)
-            presentations[row.id] = presentation
-            layouts[row.id] = cache.layout(for: presentation, environment: environment)
-            nextIndex += 1
-            if ProcessInfo.processInfo.systemUptime >= deadline { break }
+        while nextChanged < changed.count {
+            let row = snapshot.rows[changed[nextChanged]]
+            rows[row.id] = cache.prepared(row, environment: environment)
+            nextChanged += 1
+            if budgeted, ProcessInfo.processInfo.systemUptime >= deadline { break }
         }
-        return nextIndex == snapshot.rows.count
+        return nextChanged == changed.count
     }
 }

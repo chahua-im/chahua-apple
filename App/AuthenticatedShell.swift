@@ -72,7 +72,7 @@ struct AuthenticatedShell: View {
     private struct ThreadNavigation {
         let chat: ChatListItem
         let rootMessage: MessageResponse
-        var key: ConversationKey { .init(chatID: chat.id, threadID: rootMessage.id) }
+        var key: ConversationKey { .init(chatID: chat.id, threadID: rootMessage.id.description) }
         var title: String {
             let preview = messagePreview(rootMessage.replyPreview)
             return preview.isEmpty ? AppLanguage.localized("Thread") : preview
@@ -400,7 +400,7 @@ struct AuthenticatedShell: View {
         if let thread = openedThread, thread.key == key {
             ChatDetailView(
                 chat: thread.chat, currentUserID: me.uid, store: chatStore,
-                navigationTitle: thread.title, threadID: thread.rootMessage.id,
+                navigationTitle: thread.title, threadID: thread.rootMessage.id.description,
                 initialPosition: .liveEdge
             )
             .id(key)
@@ -592,7 +592,8 @@ struct AuthenticatedShell: View {
         guard let selectedConversationID else { return nil }
         if let threadID = selectedConversationID.threadID {
             let matches: (ThreadListItem) -> Bool = {
-                $0.chatId == selectedConversationID.chatID && $0.threadRootMessage.id == threadID
+                $0.chatId == selectedConversationID.chatID
+                    && $0.threadRootMessage.id.description == threadID
             }
             return
                 (chatStore.state.threads.first(where: matches)

@@ -5,13 +5,13 @@ import Foundation
 /// Serializes each message's reaction intent without speculative message snapshots.
 @MainActor
 final class MessageReactionController: ObservableObject {
-    @Published private(set) var pendingMessageIDs = Set<String>()
+    @Published private(set) var pendingMessageIDs = Set<MessageID>()
     @Published var error: String?
 
     private let apiClient: any ChahuaAPIClient
     private let messageStore: ConversationMessageStore
     private let onInvalidToken: @MainActor @Sendable () async -> Void
-    private var tasks: [String: Task<Void, Never>] = [:]
+    private var tasks: [MessageID: Task<Void, Never>] = [:]
     private var generation = 0
 
     init(

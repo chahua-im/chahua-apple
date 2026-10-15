@@ -13,6 +13,9 @@ import XCTest
 
 @MainActor
 final class OutgoingMessageQueueTests: XCTestCase {
+    /// Server IDs handed out by `response(_:)`, stable per client-generated ID.
+    private var serverIDs: [String: UInt64] = [:]
+
     func testStickerSnapshotsAndFailedThreadSendSurviveRestartWithoutConsumingDrafts() async throws
     {
         let h = try await openHarness(foreground: false)
@@ -23,7 +26,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
                 id: "media", url: "https://example.test/sticker.webp",
                 contentType: "image/webp", size: 123, width: 200, height: 150),
             name: "Wave", description: "A wave")
-        let reply = try TimelineTestFixtures.message(id: "quoted", at: 1).replyPreview
+        let reply = try TimelineTestFixtures.message(id: 100, at: 1).replyPreview
         try await h.queue.saveDraft(
             chatID: "chat", threadID: "thread", text: "unfinished",
             editRevision: 1, updatedAt: Date(), replyToMessage: reply)
@@ -100,7 +103,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
                 id: "media", url: "https://example.test/sticker.webp",
                 contentType: "image/webp", size: 123, width: 200, height: 150),
             name: nil, description: nil)
-        let reply = try TimelineTestFixtures.message(id: "quoted", at: 1).replyPreview
+        let reply = try TimelineTestFixtures.message(id: 100, at: 1).replyPreview
         drafts.setDraftText("keep typing", chatID: "chat", threadID: "thread")
         drafts.setDraftReply(reply, chatID: "chat", threadID: "thread")
         h.faults.failures = [.saveDraft]
@@ -149,12 +152,12 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertNil(requests[1].threadID)
         XCTAssertEqual(requests[2].threadID, "two")
         let wrongRoot = try TimelineTestFixtures.message(
-            id: "wrong", at: 1, clientGeneratedID: first.body.clientGeneratedId,
+            id: 1, at: 1, clientGeneratedID: first.body.clientGeneratedId,
             fields: ["replyRootId": "two"])
         let acceptedWrongRoot = await h.queue.acceptAcknowledgement(wrongRoot)
         XCTAssertFalse(acceptedWrongRoot)
         let wrongParent = try TimelineTestFixtures.message(
-            id: "wrong-parent", at: 1, clientGeneratedID: first.body.clientGeneratedId)
+            id: 2, at: 1, clientGeneratedID: first.body.clientGeneratedId)
         let acceptedWrongParent = await h.queue.acceptAcknowledgement(wrongParent)
         XCTAssertFalse(acceptedWrongParent)
         try await h.queue.retry(
@@ -403,12 +406,12 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let request = try await firstRequest(h.api)
         for invalid in [
             try TimelineTestFixtures.message(
-                id: "wrong-chat", chatID: "other", at: 1,
+                id: 1, chatID: "other", at: 1,
                 clientGeneratedID: request.body.clientGeneratedId),
             try TimelineTestFixtures.message(
-                id: "wrong-sender", senderID: 2, at: 1,
+                id: 2, senderID: 2, at: 1,
                 clientGeneratedID: request.body.clientGeneratedId),
-            try TimelineTestFixtures.message(id: "empty-id", at: 1, clientGeneratedID: ""),
+            try TimelineTestFixtures.message(id: 3, at: 1, clientGeneratedID: ""),
         ] {
             let handled = await h.queue.acceptAcknowledgement(invalid)
             XCTAssertFalse(handled)
@@ -430,7 +433,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         try await h.queue.enqueueText(chatID: "chat", text: "A", clearedDraftRevision: 1)
         let pending = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
         let message = try TimelineTestFixtures.message(
-            id: "history", at: 1, clientGeneratedID: pending.clientGeneratedID)
+            id: 1, at: 1, clientGeneratedID: pending.clientGeneratedID)
         let handled = await h.queue.acceptAcknowledgement(message)
         XCTAssertTrue(handled)
         await h.queue.setForegroundActive(true)
@@ -512,7 +515,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
 
     func testFailedReplyKeepsTargetAcrossRestartAndRetry() async throws {
         let h = try await openHarness()
-        let reply = try TimelineTestFixtures.message(id: "target", at: 0).replyPreview
+        let reply = try TimelineTestFixtures.message(id: 100, at: 0).replyPreview
         try await h.queue.enqueueText(
             chatID: "chat", text: "answer", clearedDraftRevision: 1, replyToMessage: reply)
         try await eventually { await h.api.requests().count == 1 }
@@ -547,7 +550,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         try await h.queue.enqueueText(chatID: "chat", text: "first", clearedDraftRevision: 1)
         try await eventually { await h.api.requests().count == 1 }
         let first = try await firstRequest(h.api)
-        let reply = try TimelineTestFixtures.message(id: "quoted", at: 1).replyPreview
+        let reply = try TimelineTestFixtures.message(id: 100, at: 1).replyPreview
         drafts.setDraftText("send despite autosave failure", chatID: "chat")
         drafts.setDraftReply(reply, chatID: "chat")
         h.faults.failures = [.saveDraft]
@@ -604,7 +607,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         _ = try await enqueueABC(h)
         let first = try await firstRequest(h.api)
         let message = try response(first)
-        var delivered: [String] = []
+        var delivered: [MessageID] = []
         let observation = h.queue.events.sink {
             if case .acknowledged(_, let response) = $0 { delivered.append(response.id) }
         }
@@ -753,19 +756,21 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await h.queue.retryStorage()
 
         let history = try [
-            TimelineTestFixtures.message(id: "before-draft", at: 0),
-            TimelineTestFixtures.message(id: "after-draft", at: 2),
-            TimelineTestFixtures.message(id: "incoming", senderID: 2, at: 3),
+            TimelineTestFixtures.message(id: 1, at: 0),
+            TimelineTestFixtures.message(id: 2, at: 2),
+            TimelineTestFixtures.message(id: 3, senderID: 2, at: 3),
         ]
         let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
         let native = TimelineRowView(frame: .zero)
-        var actions = TimelineBubbleActions()
-        actions.currentUserProfile = profile
+        let actions = TimelineBubbleActions()
         func assertSenderVisible(remote: [MessageResponse]) throws -> TimelineMessageRow {
-            let projection = chatStore.conversationMessages.projection(
-                for: "chat", remoteMessages: remote, includePendingOutgoing: true)
+            // Model order: confirmed messages, then unacknowledged sends in outbox order.
+            let confirmedIDs = Set(remote.map(\.clientGeneratedId))
+            let pending = chatStore.conversationMessages.pending(chatID: "chat").filter {
+                !confirmedIDs.contains($0.clientGeneratedID)
+            }
             let rows = TimelineRowsBuilder(currentUserID: 1, isGroupChat: true, calendar: .current)
-                .build(projection.entries)
+                .build(remote.map(ConversationTimelineEntry.remote) + pending.map { .pending($0) })
             let row = try XCTUnwrap(
                 rows.compactMap { row -> TimelineMessageRow? in
                     guard case .message(let message) = row,
@@ -775,7 +780,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
                 }.first)
             XCTAssertEqual(row.groupPosition, .single)
             let presentation = TimelineRowPresentation.make(
-                row: .message(row), currentUserProfile: profile, currentUserID: 1,
+                row: .message(row), currentUserID: 1,
                 isThreadTimeline: false, environment: environment)
             XCTAssertEqual(presentation.title?.name, "Ada")
             let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
@@ -805,7 +810,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let pending = try assertSenderVisible(remote: history)
         XCTAssertEqual(pending.entry.displayState, .queued)
         let acknowledgement = try TimelineTestFixtures.message(
-            id: "confirmed-media", at: 5, text: "Caption",
+            id: 4, at: 5, text: "Caption",
             clientGeneratedID: composition.clientGeneratedID,
             fields: [
                 "hasAttachments": true,
@@ -833,7 +838,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         try await h.queue.enqueueText(chatID: "other", text: "other send", clearedDraftRevision: 1)
         try await h.queue.saveDraft(
             chatID: "chat", text: "parent draft", editRevision: 2, updatedAt: Date())
-        let reply = try TimelineTestFixtures.message(id: "target", at: 0).replyPreview
+        let reply = try TimelineTestFixtures.message(id: 100, at: 0).replyPreview
         let caption = "keep this caption\n世界"
         try await h.queue.saveDraft(
             chatID: "chat", threadID: "thread", text: caption, editRevision: 2,
@@ -950,9 +955,12 @@ final class OutgoingMessageQueueTests: XCTestCase {
     }
 
     private func response(_ request: HeldQueueAPI.Request) throws -> MessageResponse {
-        try TimelineTestFixtures.message(
-            id: "server-\(request.body.clientGeneratedId)", chatID: request.chatID, at: 1,
-            type: request.body.messageType, clientGeneratedID: request.body.clientGeneratedId,
+        let clientID = request.body.clientGeneratedId
+        let id = serverIDs[clientID] ?? UInt64(serverIDs.count + 1)
+        serverIDs[clientID] = id
+        return try TimelineTestFixtures.message(
+            id: id, chatID: request.chatID, at: 1,
+            type: request.body.messageType, clientGeneratedID: clientID,
             fields: request.threadID.map { ["replyRootId": $0] } ?? [:])
     }
 
@@ -1137,31 +1145,31 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
         throw APIError.unavailable
     }
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+    func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         throw APIError.unavailable
     }
 
-    func getReactionDetails(chatID: String, messageID: String) async throws
+    func getReactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse
     {
         throw APIError.unavailable
     }
-    func deleteMessage(chatID: String, messageID: String) async throws {
+    func deleteMessage(chatID: String, messageID: MessageID) async throws {
         throw APIError.unavailable
     }
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+    func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }
     func markChatUnread(chatID: String) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+    func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
     { throw APIError.unavailable }
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
 

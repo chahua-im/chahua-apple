@@ -1,34 +1,48 @@
 import ChahuaAPI
 
-/// The loaded, chronologically ordered slice of one conversation.
+/// The loaded slice of one conversation, in server order: ascending `MessageID`.
+///
+/// Snowflake IDs are the server's message order, so order is established once at
+/// insertion and no mutation re-sorts the window. Server-ID lookups binary-search
+/// `messages`; the only side index maps client-generated IDs to server IDs, which
+/// does not depend on array positions and is never rebuilt.
 struct TimelineWindow: Equatable {
     private(set) var messages: [MessageResponse] = []
-    private var indexByStableKey: [ConversationMessageStableKey: Int] = [:]
-    private var indexByServerID: [String: Int] = [:]
-    private(set) var olderCursor: String?
-    private(set) var newerCursor: String?
+    private var serverIDByClientID: [String: MessageID] = [:]
+    private(set) var olderCursor: MessageID?
+    private(set) var newerCursor: MessageID?
 
     var isAtLiveEdge: Bool { newerCursor == nil }
     var hasOlder: Bool { olderCursor != nil }
     var count: Int { messages.count }
-    /// Identities in this loaded slice, independent of any other window.
-    var stableKeys: Set<ConversationMessageStableKey> { Set(indexByStableKey.keys) }
 
-    func index(of stableKey: ConversationMessageStableKey) -> Int? { indexByStableKey[stableKey] }
+    func index(of stableKey: ConversationMessageStableKey) -> Int? {
+        switch stableKey {
+        case .server(let id):
+            guard let index = index(ofServerID: id), messages[index].clientGeneratedId.isEmpty
+            else { return nil }
+            return index
+        case .clientGenerated(let clientID):
+            return serverIDByClientID[clientID].flatMap(index(ofServerID:))
+        }
+    }
 
-    func index(ofServerID id: String) -> Int? { indexByServerID[id] }
+    func index(ofServerID id: MessageID) -> Int? {
+        let index = firstIndex(notBefore: id)
+        return index < messages.count && messages[index].id == id ? index : nil
+    }
 
     func index(matching message: MessageResponse) -> Int? {
-        indexByServerID[message.id]
+        index(ofServerID: message.id)
             ?? (message.clientGeneratedId.isEmpty
-                ? nil : indexByStableKey[message.timelineStableKey])
+                ? nil : index(of: .clientGenerated(message.clientGeneratedId)))
     }
 
     mutating func replace(
         with page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }
     ) {
         messages = []
-        rebuildIndexes()
+        serverIDByClientID = [:]
         mergeAuthoritative(page.messages.filter(accepting))
         olderCursor = page.olderCursor
         newerCursor = page.newerCursor
@@ -64,9 +78,7 @@ struct TimelineWindow: Equatable {
         // A duplicate create is not a mutable snapshot, even in a historical window.
         guard index(matching: message) == nil else { return .duplicate }
         guard isAtLiveEdge else { return .deferred }
-        messages.append(message)
-        messages = Self.chronological(messages)
-        rebuildIndexes()
+        insert(message)
         return .appended
     }
 
@@ -74,54 +86,20 @@ struct TimelineWindow: Equatable {
     mutating func upsert(_ message: MessageResponse) -> Bool {
         guard let index = index(matching: message) else { return false }
         replaceRecord(at: index, with: message)
-        messages = Self.chronological(messages)
-        rebuildIndexes()
         return true
     }
 
-    private mutating func mergeAuthoritative(_ incoming: [MessageResponse]) {
-        for message in incoming {
-            if let index = index(matching: message) {
-                replaceRecord(at: index, with: message)
-            } else {
-                let index = messages.count
-                messages.append(message)
-                indexByServerID[message.id] = index
-                indexByStableKey[message.timelineStableKey] = index
-            }
-        }
-        messages = Self.chronological(messages)
-        rebuildIndexes()
-    }
-
-    private mutating func replaceRecord(at index: Int, with message: MessageResponse) {
-        let conflictingIndex = indexByStableKey[message.timelineStableKey]
-        let previous = messages[index]
-        indexByServerID.removeValue(forKey: previous.id)
-        indexByStableKey.removeValue(forKey: previous.timelineStableKey)
-        messages[index] = message
-        if let conflictingIndex, conflictingIndex != index {
-            messages.remove(at: conflictingIndex)
-            rebuildIndexes()
-        } else {
-            indexByServerID[message.id] = index
-            indexByStableKey[message.timelineStableKey] = index
-        }
-    }
-
     @discardableResult
-    mutating func remove(serverID: String) -> Bool {
-        guard let index = indexByServerID[serverID] else { return false }
-        messages.remove(at: index)
-        rebuildIndexes()
+    mutating func remove(serverID: MessageID) -> Bool {
+        guard let index = index(ofServerID: serverID) else { return false }
+        unregister(messages.remove(at: index))
         return true
     }
 
     @discardableResult
     mutating func remove(stableKey: ConversationMessageStableKey) -> Bool {
-        guard let index = indexByStableKey[stableKey] else { return false }
-        messages.remove(at: index)
-        rebuildIndexes()
+        guard let index = index(of: stableKey) else { return false }
+        unregister(messages.remove(at: index))
         return true
     }
 
@@ -138,29 +116,131 @@ struct TimelineWindow: Equatable {
         let removedCount = count - maximum
         switch side {
         case .oldest:
+            for message in messages[..<removedCount] { unregister(message) }
             messages.removeFirst(removedCount)
             olderCursor = messages.first?.id
         case .newest:
+            for message in messages[(count - removedCount)...] { unregister(message) }
             messages.removeLast(removedCount)
             newerCursor = messages.last?.id
         }
-        rebuildIndexes()
         return removedCount
     }
 
-    static func chronological(_ page: [MessageResponse]) -> [MessageResponse] {
-        page.sorted {
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.timelineStableKey.sortValue < $1.timelineStableKey.sortValue
+    /// Replaces known records in place and merges unknown ones in one ordered pass.
+    /// Within a page, a later record for the same identity wins.
+    private mutating func mergeAuthoritative(_ incoming: [MessageResponse]) {
+        var additionsByID: [MessageID: MessageResponse] = [:]
+        var additionIDByClientID: [String: MessageID] = [:]
+        for message in incoming {
+            if let index = index(matching: message) {
+                replaceRecord(at: index, with: message)
+                continue
+            }
+            if !message.clientGeneratedId.isEmpty {
+                if let previous = additionIDByClientID[message.clientGeneratedId],
+                    previous != message.id
+                {
+                    additionsByID.removeValue(forKey: previous)
+                }
+                additionIDByClientID[message.clientGeneratedId] = message.id
+            }
+            if let previous = additionsByID[message.id], !previous.clientGeneratedId.isEmpty,
+                previous.clientGeneratedId != message.clientGeneratedId
+            {
+                additionIDByClientID.removeValue(forKey: previous.clientGeneratedId)
+            }
+            additionsByID[message.id] = message
+        }
+        guard !additionsByID.isEmpty else { return }
+        // Only the page-sized additions are sorted; the loaded window is already ordered.
+        let additions = additionsByID.values.sorted { $0.id < $1.id }
+        for message in additions { register(message) }
+        if let last = messages.last, last.id > additions[0].id {
+            messages = Self.merged(messages, additions)
+        } else {
+            messages.append(contentsOf: additions)
         }
     }
 
-    private mutating func rebuildIndexes() {
-        indexByStableKey = Dictionary(
-            uniqueKeysWithValues: messages.enumerated().map {
-                ($0.element.timelineStableKey, $0.offset)
-            })
-        indexByServerID = Dictionary(
-            uniqueKeysWithValues: messages.enumerated().map { ($0.element.id, $0.offset) })
+    /// Replaces a record found by server or client identity. An acknowledgement can
+    /// carry a different server ID for the same client identity; it moves to that
+    /// ID's position, which is the only way an existing record can change order.
+    private mutating func replaceRecord(at index: Int, with message: MessageResponse) {
+        let previous = messages[index]
+        unregister(previous)
+        guard previous.id == message.id else {
+            messages.remove(at: index)
+            removeClientIdentityConflict(with: message)
+            insert(message)
+            return
+        }
+        messages[index] = message
+        removeClientIdentityConflict(with: message)
+        register(message)
+    }
+
+    /// Server identity wins: another record holding this client identity is dropped.
+    private mutating func removeClientIdentityConflict(with message: MessageResponse) {
+        guard !message.clientGeneratedId.isEmpty,
+            let other = serverIDByClientID[message.clientGeneratedId], other != message.id,
+            let index = index(ofServerID: other)
+        else { return }
+        unregister(messages.remove(at: index))
+    }
+
+    private mutating func insert(_ message: MessageResponse) {
+        // Live messages almost always carry the newest ID: append without searching.
+        if let last = messages.last, last.id > message.id {
+            messages.insert(message, at: firstIndex(notBefore: message.id))
+        } else {
+            messages.append(message)
+        }
+        register(message)
+    }
+
+    private mutating func register(_ message: MessageResponse) {
+        guard !message.clientGeneratedId.isEmpty else { return }
+        serverIDByClientID[message.clientGeneratedId] = message.id
+    }
+
+    private mutating func unregister(_ message: MessageResponse) {
+        guard !message.clientGeneratedId.isEmpty,
+            serverIDByClientID[message.clientGeneratedId] == message.id
+        else { return }
+        serverIDByClientID.removeValue(forKey: message.clientGeneratedId)
+    }
+
+    /// First position whose ID is not less than `id`.
+    private func firstIndex(notBefore id: MessageID) -> Int {
+        var low = 0
+        var high = messages.count
+        while low < high {
+            let middle = (low + high) / 2
+            if messages[middle].id < id { low = middle + 1 } else { high = middle }
+        }
+        return low
+    }
+
+    /// Linear merge of two ID-ordered sequences with disjoint IDs.
+    private static func merged(_ lhs: [MessageResponse], _ rhs: [MessageResponse])
+        -> [MessageResponse]
+    {
+        var result: [MessageResponse] = []
+        result.reserveCapacity(lhs.count + rhs.count)
+        var left = lhs.startIndex
+        var right = rhs.startIndex
+        while left < lhs.endIndex, right < rhs.endIndex {
+            if lhs[left].id < rhs[right].id {
+                result.append(lhs[left])
+                left += 1
+            } else {
+                result.append(rhs[right])
+                right += 1
+            }
+        }
+        result.append(contentsOf: lhs[left...])
+        result.append(contentsOf: rhs[right...])
+        return result
     }
 }

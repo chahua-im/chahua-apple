@@ -36,7 +36,8 @@ extension ChahuaClient {
                 method: .delete, path: ["chats", chatID, "threads", threadID, "archive"]))
     }
 
-    public func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+    public func markThreadRead(chatID: String, threadID: String, messageID: MessageID)
+        async throws
         -> ReadStateResponse
     {
         try await send(

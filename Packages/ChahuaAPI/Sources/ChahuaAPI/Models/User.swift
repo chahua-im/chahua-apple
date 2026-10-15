@@ -4,6 +4,23 @@ public struct User: Codable, Hashable, Sendable {
     public let name: String?
     public let avatarUrl: String?
     public let userGroup: UserGroupTagInfo?
+
+    public init(
+        uid: Int32, gender: Int32, name: String?, avatarUrl: String?, userGroup: UserGroupTagInfo?
+    ) {
+        self.uid = uid
+        self.gender = gender
+        self.name = name
+        self.avatarUrl = avatarUrl
+        self.userGroup = userGroup
+    }
+}
+
+extension MeResponse {
+    /// The signed-in user in message-sender form, e.g. for sends not yet acknowledged.
+    public var asSender: User {
+        User(uid: uid, gender: gender, name: username, avatarUrl: avatarUrl, userGroup: userGroup)
+    }
 }
 
 public struct UserGroupTagInfo: Codable, Hashable, Sendable {

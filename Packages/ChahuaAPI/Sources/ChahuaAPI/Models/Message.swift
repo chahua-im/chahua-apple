@@ -2,12 +2,12 @@ import Foundation
 
 /// Full message record returned by chat message endpoints.
 ///
-/// Cache this value by its opaque `id` under its `chatId`. A list or reply
+/// Cache this value by its `id` under its `chatId`. A list or reply
 /// preview is represented by `MessagePreview` and must not be treated as a
 /// complete message record.
 public struct MessageResponse: Codable, Hashable, Sendable {
-    /// Stable server message identifier.
-    public let id: String
+    /// Stable server message identifier; ascending order is server message order.
+    public let id: MessageID
     /// Opaque identifier of the owning chat.
     public let chatId: String
     /// Caller-provided idempotency identifier from the send request.
@@ -30,7 +30,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
+        id = try container.decode(MessageID.self, forKey: .id)
         chatId = try container.decode(String.self, forKey: .chatId)
         clientGeneratedId = try container.decode(String.self, forKey: .clientGeneratedId)
         messageType = try container.decode(MessageType.self, forKey: .messageType)
@@ -104,7 +104,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         return copy
     }
 
-    public func redactingReplyPreview(messageIDs: Set<String>) -> Self {
+    public func redactingReplyPreview(messageIDs: Set<MessageID>) -> Self {
         guard let preview = replyToMessage, messageIDs.contains(preview.id) else { return self }
         var copy = self
         copy.replyToMessage = preview.redactedForDeletion()
@@ -124,7 +124,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
 /// It carries display context only; fetch `MessageResponse` values for a
 /// timeline or cache.
 public struct MessagePreview: Codable, Hashable, Sendable {
-    public let id: String
+    public let id: MessageID
     public let clientGeneratedId: String
     public let createdAt: Date
     public let sender: User
@@ -266,10 +266,10 @@ public struct ThreadInfo: Codable, Hashable, Sendable {
 /// `prevCursor` remain for backend compatibility only.
 public struct ListMessagesResponse: Codable, Hashable, Sendable {
     public let messages: [MessageResponse]
-    public let olderCursor: String?
-    public let newerCursor: String?
-    public let nextCursor: String?
-    public let prevCursor: String?
+    public let olderCursor: MessageID?
+    public let newerCursor: MessageID?
+    public let nextCursor: MessageID?
+    public let prevCursor: MessageID?
 }
 
 /// JSON body accepted by `POST /chats/{chatID}/messages`.
@@ -282,7 +282,7 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
     public var clientGeneratedId: String
     public var message: String?
     public var attachmentIds: [String]
-    public var replyToId: String?
+    public var replyToId: MessageID?
     public var stickerId: String?
 
     public init(
@@ -290,7 +290,7 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
         clientGeneratedId: String,
         message: String? = nil,
         attachmentIds: [String] = [],
-        replyToId: String? = nil,
+        replyToId: MessageID? = nil,
         stickerId: String? = nil
     ) {
         self.messageType = messageType

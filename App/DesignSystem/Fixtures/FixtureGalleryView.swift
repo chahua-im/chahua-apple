@@ -94,7 +94,7 @@ struct FixtureGalleryView: View {
             layoutDirection: layoutDirection
         )
         let presentation = TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: nil, isThreadTimeline: false,
+            row: row, currentUserID: nil, isThreadTimeline: false,
             environment: environment)
         let layout = layoutCache.layout(for: presentation, environment: environment)
         return TimelineRowRepresentable(

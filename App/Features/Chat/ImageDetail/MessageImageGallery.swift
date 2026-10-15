@@ -52,7 +52,7 @@ struct MessageImageGallery: Identifiable {
         switch entry {
         case .remote(let message):
             guard !message.isDeleted, message.messageType == .text else { return nil }
-            messageID = message.id
+            messageID = message.id.description
             sentAt = message.createdAt
             items = message.attachments.map {
                 MessageImageItem(

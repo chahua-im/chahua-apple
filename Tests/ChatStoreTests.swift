@@ -9,7 +9,7 @@ final class ChatStoreTests: XCTestCase {
     func testArchiveKeepsParentIndependentAndFencesStaleRefresh() async throws {
         let parent = ChatListItem(
             id: "chat", name: "Group", unreadCount: 7, archived: false, kind: .group)
-        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: "root")
+        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: 1)
         let api = FakeChatAPI(
             threadResults: [.success(.init(threads: [thread]))],
             archiveResults: [
@@ -27,9 +27,9 @@ final class ChatStoreTests: XCTestCase {
         await store.loadActiveThreads()
 
         await store.performListAction(
-            .archive, conversation: .init(chatID: "chat", threadID: "root"))
+            .archive, conversation: .init(chatID: "chat", threadID: "1"))
         XCTAssertTrue(store.state.threads.isEmpty)
-        XCTAssertEqual(store.state.archivedThreads.first?.threadRootMessage.id, "root")
+        XCTAssertEqual(store.state.archivedThreads.first?.threadRootMessage.id, MessageID(1))
         XCTAssertEqual(store.state.archivedThreads.first?.archived, true)
         XCTAssertEqual(store.state.chats, [parent])
 
@@ -54,9 +54,9 @@ final class ChatStoreTests: XCTestCase {
         await store.performListAction(.unarchive, conversation: .init(chatID: "chat"))
         XCTAssertEqual(store.state.chats, [parent])
         XCTAssertTrue(store.state.archivedChats.isEmpty)
-        XCTAssertEqual(store.state.archivedThreads.first?.threadRootMessage.id, "root")
+        XCTAssertEqual(store.state.archivedThreads.first?.threadRootMessage.id, MessageID(1))
         await store.performListAction(
-            .unarchive, conversation: .init(chatID: "chat", threadID: "root"))
+            .unarchive, conversation: .init(chatID: "chat", threadID: "1"))
         XCTAssertEqual(store.state.threads, [thread])
         XCTAssertTrue(store.state.archivedThreads.isEmpty)
         XCTAssertEqual(store.state.chats, [parent])
@@ -71,9 +71,9 @@ final class ChatStoreTests: XCTestCase {
             id: "other", name: "Other", unreadCount: 2, archived: false, kind: .group)
         let archivedTarget = ChatListItem(
             id: "chat", name: "Group", unreadCount: 3, archived: true, kind: .group)
-        let activeThread = try ScopeTestFixtures.thread(chatID: "chat", id: "active")
+        let activeThread = try ScopeTestFixtures.thread(chatID: "chat", id: 1)
         let archivedThread = try ScopeTestFixtures.thread(
-            chatID: "chat", id: "archived", archived: true)
+            chatID: "chat", id: 2, archived: true)
         let api = FakeChatAPI(
             threadResults: [.success(.init(threads: [activeThread]))],
             archivedChatResults: [.success(.init(chats: [archivedTarget]))],
@@ -116,10 +116,10 @@ final class ChatStoreTests: XCTestCase {
     }
 
     func testMuteGroupPreservesPreviewAndReadStateAndUnmuteUnarchives() async throws {
-        let message = try TimelineTestFixtures.message(id: "latest", at: 2)
+        let message = try TimelineTestFixtures.message(id: 2, at: 2)
         let chat = ChatListItem(
             id: "chat", name: "Group", lastMessageAt: Date(timeIntervalSince1970: 2),
-            unreadCount: 7, lastReadMessageId: "read", lastMessage: message.replyPreview,
+            unreadCount: 7, lastReadMessageId: MessageID(1), lastMessage: message.replyPreview,
             archived: true, kind: .group)
         let mutedUntil = Date(timeIntervalSince1970: 3_600)
         let api = FakeChatAPI(
@@ -151,12 +151,12 @@ final class ChatStoreTests: XCTestCase {
     }
 
     func testMarkUnreadRewindsOnlyItsArchivedChatAndPreservesStateOnFailure() async throws {
-        let message = try TimelineTestFixtures.message(id: "latest", at: 2)
+        let message = try TimelineTestFixtures.message(id: 2, at: 2)
         let chat = ChatListItem(
             id: "chat", unreadCount: 0, lastReadMessageId: message.id,
             lastMessage: message.replyPreview, archived: true, kind: .group)
         let other = ChatListItem(id: "other", unreadCount: 4, archived: false, kind: .group)
-        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: "root")
+        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: 1)
         let api = FakeChatAPI(
             chatResults: [.success(.init(chats: [other]))],
             threadResults: [.success(.init(threads: [thread]))],
@@ -173,7 +173,7 @@ final class ChatStoreTests: XCTestCase {
             chatID: "chat", currentUserID: 1, isGroupChat: true, source: store,
             messageStore: store.conversationMessages)
         store.registerTimeline(model)
-        var readNotifications: [String] = []
+        var readNotifications: [MessageID] = []
         store.onNotificationRead = { _, id in readNotifications.append(id) }
         await store.loadActiveChats()
         await store.loadActiveThreads()
@@ -202,14 +202,14 @@ final class ChatStoreTests: XCTestCase {
     func testReadResponseUpdatesOnlyItsArchivedConversationBadge() async throws {
         let parent = ChatListItem(
             id: "chat", name: "Group", unreadCount: 7, archived: true, kind: .group)
-        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: "root", archived: true)
+        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: 1, archived: true)
         let api = FakeChatAPI(
             archivedChatResults: [.success(.init(chats: [parent]))],
             archivedThreadResults: [.success(.init(threads: [thread]))],
             readResults: [
-                .success(.init(lastReadMessageId: "reply", unreadCount: 0)),
-                .success(.init(lastReadMessageId: "message", unreadCount: 2)),
-                .success(.init(lastReadMessageId: "unlisted-reply", unreadCount: 3)),
+                .success(.init(lastReadMessageId: MessageID(2), unreadCount: 0)),
+                .success(.init(lastReadMessageId: MessageID(3), unreadCount: 2)),
+                .success(.init(lastReadMessageId: MessageID(4), unreadCount: 3)),
             ])
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
@@ -218,7 +218,7 @@ final class ChatStoreTests: XCTestCase {
             messageStore: store.conversationMessages)
         let threadModel = ConversationTimelineModel(
             chatID: "chat", currentUserID: 1, isGroupChat: true, source: store,
-            messageStore: store.conversationMessages, threadID: "root")
+            messageStore: store.conversationMessages, threadID: "1")
         let unlistedModel = ConversationTimelineModel(
             chatID: "chat", currentUserID: 1, isGroupChat: true, source: store,
             messageStore: store.conversationMessages, threadID: "unlisted")
@@ -229,18 +229,18 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(resolvedParent, parent)
         XCTAssertEqual(parentModel.jumpUnreadCount, 7)
         XCTAssertEqual(threadModel.jumpUnreadCount, thread.unreadCount)
-        try await store.markRead(chatID: "chat", threadID: "root", messageID: "reply")
-        XCTAssertEqual(store.state.archivedThreads.first?.lastReadMessageId, "reply")
+        try await store.markRead(chatID: "chat", threadID: "1", messageID: MessageID(2))
+        XCTAssertEqual(store.state.archivedThreads.first?.lastReadMessageId, MessageID(2))
         XCTAssertEqual(store.state.archivedThreads.first?.unreadCount, 0)
         XCTAssertEqual(store.state.archivedChats.first, parent)
         XCTAssertEqual(parentModel.jumpUnreadCount, 7)
         XCTAssertEqual(threadModel.jumpUnreadCount, 0)
-        try await store.markRead(chatID: "chat", threadID: nil, messageID: "message")
-        XCTAssertEqual(store.state.archivedChats.first?.lastReadMessageId, "message")
+        try await store.markRead(chatID: "chat", threadID: nil, messageID: MessageID(3))
+        XCTAssertEqual(store.state.archivedChats.first?.lastReadMessageId, MessageID(3))
         XCTAssertEqual(store.state.archivedChats.first?.unreadCount, 2)
-        XCTAssertEqual(store.state.archivedThreads.first?.lastReadMessageId, "reply")
+        XCTAssertEqual(store.state.archivedThreads.first?.lastReadMessageId, MessageID(2))
         XCTAssertEqual(parentModel.jumpUnreadCount, 2)
-        try await store.markRead(chatID: "chat", threadID: "unlisted", messageID: "unlisted-reply")
+        try await store.markRead(chatID: "chat", threadID: "unlisted", messageID: MessageID(4))
         XCTAssertEqual(unlistedModel.jumpUnreadCount, 3)
         XCTAssertEqual(threadModel.jumpUnreadCount, 0)
         XCTAssertEqual(parentModel.jumpUnreadCount, 2)
@@ -248,13 +248,13 @@ final class ChatStoreTests: XCTestCase {
 
     func testReadReceiptFencesListSnapshotStartedBeforeAcknowledgement() async throws {
         let api = FakeChatAPI(
-            readResults: [.success(.init(lastReadMessageId: "read", unreadCount: 0))],
+            readResults: [.success(.init(lastReadMessageId: MessageID(1), unreadCount: 0))],
             suspendChatRequests: true)
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
         let refresh = Task { await store.refreshActiveChats() }
         await api.waitForChatRequest()
-        try await store.markRead(chatID: "chat", threadID: nil, messageID: "read")
+        try await store.markRead(chatID: "chat", threadID: nil, messageID: MessageID(1))
         await api.resumeChatRequest(
             with: .success(
                 .init(chats: [
@@ -266,12 +266,13 @@ final class ChatStoreTests: XCTestCase {
             with: .success(
                 .init(chats: [
                     ChatListItem(
-                        id: "chat", unreadCount: 0, lastReadMessageId: "read", archived: false,
+                        id: "chat", unreadCount: 0, lastReadMessageId: MessageID(1),
+                        archived: false,
                         kind: .group)
                 ])))
         await refresh.value
         XCTAssertEqual(store.state.chats.first?.unreadCount, 0)
-        XCTAssertEqual(store.state.chats.first?.lastReadMessageId, "read")
+        XCTAssertEqual(store.state.chats.first?.lastReadMessageId, MessageID(1))
     }
 
     func testLoadActiveChatsPreservesServerOrder() async {
@@ -356,11 +357,11 @@ final class ChatStoreTests: XCTestCase {
 
     func testArchivedPaginationAndFailedRefreshPreserveBothModes() async throws {
         let active = chat(id: "active")
-        let activeThread = try ScopeTestFixtures.thread(id: "active")
+        let activeThread = try ScopeTestFixtures.thread(id: 1)
         let first = ChatListItem(id: "first", unreadCount: 2, archived: true, kind: .group)
         let second = ChatListItem(id: "second", unreadCount: 1, archived: true, kind: .group)
-        let firstThread = try ScopeTestFixtures.thread(id: "first", archived: true)
-        let secondThread = try ScopeTestFixtures.thread(id: "second", archived: true)
+        let firstThread = try ScopeTestFixtures.thread(id: 2, archived: true)
+        let secondThread = try ScopeTestFixtures.thread(id: 3, archived: true)
         let api = FakeChatAPI(
             chatResults: [.success(.init(chats: [active]))],
             threadResults: [.success(.init(threads: [activeThread]))],
@@ -524,7 +525,7 @@ final class ChatStoreTests: XCTestCase {
     }
 
     func testDeletionFailureRetainsContentAndSuccessRedactsSharedDraftReferences() async throws {
-        let message = try TimelineTestFixtures.message(id: "target", at: 1, text: "private content")
+        let message = try TimelineTestFixtures.message(id: 1, at: 1, text: "private content")
         let api = FakeChatAPI(
             messageResults: ["chat": [.success(try TimelineTestFixtures.page([message]))]],
             deleteResults: [.failure(FakeChatAPIError.failed), .success(())])
@@ -577,10 +578,7 @@ final class ChatStoreTests: XCTestCase {
         await queue.activate(uid: 1)
         XCTAssertEqual(store.drafts.draftText(chatID: "other"), "unsent draft")
         XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "")
-        let entries = store.conversationMessages.projection(
-            for: "chat", remoteMessages: [], includePendingOutgoing: true
-        ).entries
-        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(store.conversationMessages.pending(chatID: "chat").count, 1)
         await queue.deactivate()
     }
 
@@ -693,7 +691,7 @@ final class ChatStoreTests: XCTestCase {
 
     func testEditsDuringLocalEnqueueSurviveItsClearedSnapshotAndAutosave() async throws {
         let h = try await openDraftHarness()
-        let reply = try TimelineTestFixtures.message(id: "target", at: 0).replyPreview
+        let reply = try TimelineTestFixtures.message(id: 1, at: 0).replyPreview
         h.store.drafts.setDraftReply(reply, chatID: "chat")
         h.store.drafts.setDraftText("send this", chatID: "chat")
         h.probe.onEnqueue = {
@@ -718,7 +716,7 @@ final class ChatStoreTests: XCTestCase {
 
     func testFailedLocalEnqueueKeepsDraftAndRetryEnqueuesExactlyOnce() async throws {
         let h = try await openDraftHarness()
-        let reply = try TimelineTestFixtures.message(id: "target", at: 0).replyPreview
+        let reply = try TimelineTestFixtures.message(id: 1, at: 0).replyPreview
         h.store.drafts.setDraftReply(reply, chatID: "chat")
         h.store.drafts.setDraftText("keep this", chatID: "chat")
         await h.store.drafts.flushDraft(chatID: "chat")
@@ -750,8 +748,8 @@ final class ChatStoreTests: XCTestCase {
 
     func testReplyOnlyDraftRestoresAndLocalReplyChangesSurviveStaleSnapshots() async throws {
         let h = try await openDraftHarness()
-        let original = try TimelineTestFixtures.message(id: "original", at: 0).replyPreview
-        let replacement = try TimelineTestFixtures.message(id: "replacement", at: 1).replyPreview
+        let original = try TimelineTestFixtures.message(id: 1, at: 0).replyPreview
+        let replacement = try TimelineTestFixtures.message(id: 2, at: 1).replyPreview
         h.store.drafts.setDraftReply(original, chatID: "chat")
         await h.store.drafts.flushAll()
         await h.queue.deactivate()
@@ -781,7 +779,7 @@ final class ChatStoreTests: XCTestCase {
 
     func testDeletedReplyTargetsStayRedactedAfterOutboxRefresh() async throws {
         let h = try await openDraftHarness()
-        let target = try TimelineTestFixtures.message(id: "target", at: 0, text: "private content")
+        let target = try TimelineTestFixtures.message(id: 1, at: 0, text: "private content")
         h.store.drafts.setDraftReply(target.replyPreview, chatID: "chat")
         h.store.drafts.setDraftText("queued answer", chatID: "chat")
         let submitted = await h.store.drafts.submitDraft(chatID: "chat")
@@ -794,11 +792,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), redacted)
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "next answer")
         await h.store.drafts.flushDraft(chatID: "chat")
-        let refreshed = h.store.conversationMessages.projection(
-            for: "chat", remoteMessages: [], includePendingOutgoing: true)
-        guard case .pending(let pending) = try XCTUnwrap(refreshed.entries.first) else {
-            return XCTFail("Expected the queued reply")
-        }
+        let pending = try XCTUnwrap(h.store.conversationMessages.pending(chatID: "chat").first)
         XCTAssertEqual(pending.replyToMessage, redacted)
         XCTAssertEqual(pending.body.replyToId, target.id)
         h.store.drafts.setDraftReply(target.replyPreview, chatID: "chat")
@@ -853,14 +847,12 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(submitted)
         let pending = try XCTUnwrap(queue.pendingMessages(chatID: "chat").first)
         let remote = try TimelineTestFixtures.message(
-            id: "remote", at: 1, text: pending.text, clientGeneratedID: pending.clientGeneratedID)
+            id: 1, at: 1, text: pending.text, clientGeneratedID: pending.clientGeneratedID)
         await api.appendMessageResult(chatID: "chat", page: try TimelineTestFixtures.page([remote]))
         let page = try await store.fetchMessages(chatID: "chat")
         XCTAssertTrue(queue.pendingMessages(chatID: "chat").isEmpty)
-        let projection = store.conversationMessages.projection(
-            for: "chat", remoteMessages: page.messages, includePendingOutgoing: true)
-        XCTAssertEqual(
-            projection.entries.map(\.stableKey), [.clientGenerated(pending.clientGeneratedID)])
+        XCTAssertEqual(page.messages.map(\.clientGeneratedId), [pending.clientGeneratedID])
+        XCTAssertTrue(store.conversationMessages.pending(chatID: "chat").isEmpty)
         await queue.deactivate()
         store.reset()
         await queue.activate(uid: 1)
@@ -868,8 +860,8 @@ final class ChatStoreTests: XCTestCase {
         await queue.deactivate()
     }
     func testThreadPaginationDeduplicatesAndFailedRefreshRetainsCompleteSnapshot() async throws {
-        let first = try ScopeTestFixtures.thread(id: "first")
-        let second = try ScopeTestFixtures.thread(id: "second")
+        let first = try ScopeTestFixtures.thread(id: 1)
+        let second = try ScopeTestFixtures.thread(id: 2)
         let api = FakeChatAPI(threadResults: [
             .success(.init(threads: [first], nextCursor: "next")),
             .success(.init(threads: [first, second])),
@@ -887,8 +879,8 @@ final class ChatStoreTests: XCTestCase {
     }
 
     func testChatsOnlyRefreshDoesNotDiscardPendingRealtimeMembershipRefresh() async throws {
-        let first = try ScopeTestFixtures.thread(id: "first")
-        let archived = try ScopeTestFixtures.thread(id: "first", archived: true)
+        let first = try ScopeTestFixtures.thread(id: 1)
+        let archived = try ScopeTestFixtures.thread(id: 1, archived: true)
         let api = FakeChatAPI(
             chatResults: [.success(.init(chats: [])), .success(.init(chats: []))],
             threadResults: [.success(.init(threads: [first])), .success(.init(threads: []))],
@@ -900,7 +892,7 @@ final class ChatStoreTests: XCTestCase {
         await store.applyRealtimeEvent(
             .threadMembershipChanged(
                 .init(
-                    threadRootId: "first", chatId: "chat")), currentUserID: 1)
+                    threadRootId: "1", chatId: "chat")), currentUserID: 1)
         await store.refreshActiveChats()
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         while store.state.archivedThreads != [archived] || !store.state.threads.isEmpty {
@@ -1024,16 +1016,16 @@ actor FakeChatAPI: ChahuaAPIClient {
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
         throw APIError.unavailable
     }
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+    func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         throw APIError.unavailable
     }
 
-    func getReactionDetails(chatID: String, messageID: String) async throws
+    func getReactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse
     {
         throw APIError.unavailable
     }
-    func deleteMessage(chatID: String, messageID: String) async throws {
+    func deleteMessage(chatID: String, messageID: MessageID) async throws {
         guard !deleteResults.isEmpty else { throw APIError.unavailable }
         try deleteResults.removeFirst().get()
     }
@@ -1061,7 +1053,7 @@ actor FakeChatAPI: ChahuaAPIClient {
         guard !unmuteResults.isEmpty else { throw APIError.unavailable }
         try unmuteResults.removeFirst().get()
     }
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+    func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
         guard !readResults.isEmpty else { throw APIError.unavailable }
         return try readResults.removeFirst().get()
     }
@@ -1069,16 +1061,16 @@ actor FakeChatAPI: ChahuaAPIClient {
         guard !unreadResults.isEmpty else { throw APIError.unavailable }
         return try unreadResults.removeFirst().get()
     }
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+    func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
     {
         guard !readResults.isEmpty else { throw APIError.unavailable }
         return try readResults.removeFirst().get()
     }
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
     func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }

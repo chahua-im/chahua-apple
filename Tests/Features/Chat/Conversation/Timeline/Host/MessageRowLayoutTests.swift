@@ -9,7 +9,7 @@
     final class MessageRowLayoutTests: XCTestCase {
         func testVoiceDurationSharesTimestampRowWithoutOverlapAtNarrowAndLargeTextSizes() throws {
             let message = try TimelineTestFixtures.message(
-                id: "voice-footer", at: 1, type: .audio,
+                id: 1, at: 1, type: .audio,
                 fields: [
                     "message": NSNull(), "hasAttachments": true,
                     "attachments": [
@@ -30,8 +30,7 @@
                     timelineWidth: width, bodySize: body, captionSize: caption,
                     caption2Size: caption)
                 let presentation = TimelineRowPresentation.make(
-                    row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
-                    environment: environment)
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
                 let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
                 let audio = try XCTUnwrap(layout.frames[.audio])
                 let timestamp = try XCTUnwrap(layout.frames[.metadata])
@@ -50,7 +49,7 @@
         func testReactionsStayBelowBubbleAndAvatarOnBothSides() async throws {
             for outgoing in [false, true] {
                 let message = try TimelineTestFixtures.message(
-                    id: "accessories", senderID: outgoing ? 1 : 2, at: 0,
+                    id: 1, senderID: outgoing ? 1 : 2, at: 0,
                     fields: [
                         "message": "Body with a final line\nFinal visible line",
                         "threadInfo": ["replyCount": 7],
@@ -73,8 +72,8 @@
                         captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
                         caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize)
                     let presentation = TimelineRowPresentation.make(
-                        row: row, currentUserProfile: nil, currentUserID: 1,
-                        isThreadTimeline: false, environment: environment)
+                        row: row, currentUserID: 1, isThreadTimeline: false,
+                        environment: environment)
                     let layout = TimelineLayoutEngine().layout(
                         presentation, environment: environment)
                     let bubble = try XCTUnwrap(layout.frames[.bubble])
@@ -129,7 +128,7 @@
 
         func testThreadFooterReservesTheCompleteLabelAndDisappearsInThreadTimeline() throws {
             let message = try TimelineTestFixtures.message(
-                id: "thread-footer", senderID: 2, at: 0,
+                id: 1, senderID: 2, at: 0,
                 fields: ["message": "Hi", "threadInfo": ["replyCount": 14]])
             for outgoing in [false, true] {
                 let row = TimelineRow.message(
@@ -140,8 +139,8 @@
                     let environment = TimelineLayoutEnvironment.current(
                         timelineWidth: 600, bodySize: fontSize)
                     let presentation = TimelineRowPresentation.make(
-                        row: row, currentUserProfile: nil,
-                        currentUserID: 1, isThreadTimeline: false, environment: environment)
+                        row: row, currentUserID: 1, isThreadTimeline: false,
+                        environment: environment)
                     let layout = TimelineLayoutEngine().layout(
                         presentation, environment: environment)
                     let footer = try XCTUnwrap(layout.frames[.thread])
@@ -162,8 +161,8 @@
                     XCTAssertLessThanOrEqual(items[1].maxX, items[2].minX)
 
                     let threadPresentation = TimelineRowPresentation.make(
-                        row: row, currentUserProfile: nil,
-                        currentUserID: 1, isThreadTimeline: true, environment: environment)
+                        row: row, currentUserID: 1, isThreadTimeline: true, environment: environment
+                    )
                     let threadLayout = TimelineLayoutEngine().layout(
                         threadPresentation, environment: environment)
                     XCTAssertNil(threadLayout.frames[.thread])
@@ -172,8 +171,8 @@
         }
 
         func testThreadFooterUsesCurrentMessageAndIsReadOnlyInPreview() throws {
-            var opened: [String] = []
-            func binding(id: String, preview: Bool = false, hasThread: Bool = true) throws
+            var opened: [MessageID] = []
+            func binding(id: UInt64, preview: Bool = false, hasThread: Bool = true) throws
                 -> TimelineRowBinding
             {
                 var fields: [String: Any] = ["message": "Thread root"]
@@ -186,8 +185,7 @@
                         showsSenderName: false))
                 let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
                 let presentation = TimelineRowPresentation.make(
-                    row: row, currentUserProfile: nil,
-                    currentUserID: 1, isThreadTimeline: false, environment: environment)
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
                 var actions = TimelineBubbleActions()
                 actions.openThread = { opened.append($0) }
                 return .init(
@@ -199,7 +197,7 @@
             func buttons(in view: NSView) -> [NSButton] {
                 (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
             }
-            let first = try binding(id: "first")
+            let first = try binding(id: 1)
             let native = TimelineBubbleContentView(
                 frame: CGRect(origin: .zero, size: try XCTUnwrap(first.layout.frames[.bubble]).size)
             )
@@ -210,20 +208,20 @@
                     $0.accessibilityLabel() == first.presentation.threadLabel
                 })
             button.performClick(nil)
-            native.bind(try binding(id: "second"))
+            native.bind(try binding(id: 2))
             button.performClick(nil)
-            XCTAssertEqual(opened, ["first", "second"])
-            native.bind(try binding(id: "preview", preview: true))
+            XCTAssertEqual(opened, [MessageID(1), MessageID(2)])
+            native.bind(try binding(id: 3, preview: true))
             XCTAssertFalse(button.isHidden)
             button.performClick(nil)
-            native.bind(try binding(id: "no-thread", hasThread: false))
+            native.bind(try binding(id: 4, hasThread: false))
             button.performClick(nil)
-            XCTAssertEqual(opened, ["first", "second"])
+            XCTAssertEqual(opened, [MessageID(1), MessageID(2)])
         }
 
         func testReusedRowPreservesSameMessageSelectionButResetsForAnotherMessage() async throws {
-            var opened: [String] = []
-            func binding(id: String, width: CGFloat) throws -> TimelineRowBinding {
+            var opened: [UInt64] = []
+            func binding(id: UInt64, width: CGFloat) throws -> TimelineRowBinding {
                 let message = try TimelineTestFixtures.message(
                     id: id, senderID: 2, at: 0, text: "Hello https://example.com")
                 let row = TimelineRow.message(
@@ -232,8 +230,7 @@
                         showsSenderName: true))
                 let environment = TimelineLayoutEnvironment.current(timelineWidth: width)
                 let presentation = TimelineRowPresentation.make(
-                    row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
-                    environment: environment)
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
                 var actions = TimelineBubbleActions()
                 actions.openLink = { _ in opened.append(id) }
                 return .init(
@@ -241,7 +238,7 @@
                     layout: TimelineLayoutEngine().layout(presentation, environment: environment),
                     context: .init(currentUserID: 1), actions: actions, mediaContext: nil)
             }
-            let first = try binding(id: "first", width: 600)
+            let first = try binding(id: 1, width: 600)
             let cell = TimelineTableCellView(frame: CGRect(origin: .zero, size: first.layout.size))
             let window = NSWindow(
                 contentRect: cell.frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -255,7 +252,7 @@
             let initialText = try XCTUnwrap(textView(in: cell))
             initialText.setSelectedRange(NSRange(location: 0, length: 5))
 
-            let resized = try binding(id: "first", width: 400)
+            let resized = try binding(id: 1, width: 400)
             window.setContentSize(resized.layout.size)
             cell.bind(resized)
             try await Task.sleep(for: .milliseconds(50))
@@ -263,7 +260,7 @@
             XCTAssertEqual(
                 try XCTUnwrap(textView(in: cell)).selectedRange(), NSRange(location: 0, length: 5))
 
-            cell.bind(try binding(id: "second", width: 400))
+            cell.bind(try binding(id: 2, width: 400))
             try await Task.sleep(for: .milliseconds(50))
             cell.layoutSubtreeIfNeeded()
             let reusedText = try XCTUnwrap(textView(in: cell))
@@ -274,7 +271,7 @@
             _ = reusedText.delegate?.textView?(
                 reusedText, clickedOnLink: URL(string: "https://example.com")!, at: 6)
             XCTAssertEqual(
-                opened, ["second"], "Reused content must dispatch the current message's action.")
+                opened, [2], "Reused content must dispatch the current message's action.")
         }
 
         func testReusingReplyableRowForDeletedSystemMessageRemovesHoverAction() throws {
@@ -286,7 +283,7 @@
             window.contentView = nativeRow
             window.makeKeyAndOrderFront(nil)
             defer { window.close() }
-            var replies: [String] = []
+            var replies: [MessageID] = []
             var actions = TimelineBubbleActions()
             actions.replyToMessage = { replies.append($0.id) }
             actions.interactionContext = .init(canWrite: true)
@@ -297,7 +294,7 @@
                     trackingNumber: 0, userData: nil))
             for system in [false, true] {
                 let message = try TimelineTestFixtures.message(
-                    id: system ? "system" : "text", at: 0,
+                    id: system ? 2 : 1, at: 0,
                     fields: ["messageType": system ? "system" : "text", "isDeleted": system])
                 let row = TimelineRow.message(
                     .init(
@@ -305,8 +302,7 @@
                         groupPosition: .single, showsSenderName: true))
                 let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
                 let presentation = TimelineRowPresentation.make(
-                    row: row, currentUserProfile: nil,
-                    currentUserID: 1, isThreadTimeline: false, environment: environment)
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
                 nativeRow.bind(
                     .init(
                         presentation: presentation,
@@ -325,7 +321,7 @@
                         "System rows must not expose a zero-sized reply action after reuse.")
                 } else {
                     try XCTUnwrap(buttons.first).performClick(nil)
-                    XCTAssertEqual(replies, ["text"])
+                    XCTAssertEqual(replies, [MessageID(1)])
                 }
             }
         }
@@ -346,14 +342,13 @@
             actions.interactionContext = .init(canWrite: true)
             let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
             let rows = try (0..<2).map { index -> TimelineRowView in
-                let message = try TimelineTestFixtures.message(id: "hover-\(index)", at: index)
+                let message = try TimelineTestFixtures.message(id: UInt64(index + 1), at: index)
                 let row = TimelineRow.message(
                     .init(
                         entry: .remote(message), isOutgoing: false,
                         groupPosition: .single, showsSenderName: true))
                 let presentation = TimelineRowPresentation.make(
-                    row: row, currentUserProfile: nil,
-                    currentUserID: 1, isThreadTimeline: false, environment: environment)
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
                 let view = TimelineRowView(
                     frame: CGRect(x: 0, y: index * 100, width: 600, height: 100))
                 document.addSubview(view)

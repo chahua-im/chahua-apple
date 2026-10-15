@@ -190,7 +190,7 @@ final class MessageTextLayoutTests: XCTestCase {
 
     func testShortHeaderlessBubbleCentersTextAndTimestampAtAvatarHeight() throws {
         let message = try TimelineTestFixtures.message(
-            id: "short-avatar", senderID: 1, at: 1, fields: ["message": "得很多年"])
+            id: 1, senderID: 1, at: 1, fields: ["message": "得很多年"])
         let row = TimelineRow.message(
             .init(
                 entry: .remote(message), isOutgoing: true, groupPosition: .last,
@@ -198,7 +198,7 @@ final class MessageTextLayoutTests: XCTestCase {
         let environment = TimelineLayoutEnvironment.current(
             timelineWidth: 360, bodySize: 14, avatarSize: 52)
         let presentation = TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: 1,
+            row: row, currentUserID: 1,
             isThreadTimeline: false, environment: environment)
         let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
         let bubble = try XCTUnwrap(layout.frames[.bubble])
@@ -211,7 +211,7 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(bubble.maxY - text.maxY, TimelineRowMetrics.textVerticalInset)
         let standardEnvironment = TimelineLayoutEnvironment.current(timelineWidth: 360)
         let standardPresentation = TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: 1,
+            row: row, currentUserID: 1,
             isThreadTimeline: false, environment: standardEnvironment)
         let standard = TimelineLayoutEngine().layout(
             standardPresentation, environment: standardEnvironment)
@@ -222,14 +222,14 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertEqual(standardInk.midY, standardBubble.midY, accuracy: 0.5)
 
         let tallMessage = try TimelineTestFixtures.message(
-            id: "tall-avatar", senderID: 1, at: 2,
+            id: 2, senderID: 1, at: 2,
             fields: ["message": "One\nTwo\nThree\nFour"])
         let tallRow = TimelineRow.message(
             .init(
                 entry: .remote(tallMessage), isOutgoing: true, groupPosition: .last,
                 showsSenderName: false))
         let tallPresentation = TimelineRowPresentation.make(
-            row: tallRow, currentUserProfile: nil, currentUserID: 1,
+            row: tallRow, currentUserID: 1,
             isThreadTimeline: false, environment: environment)
         let tallLayout = TimelineLayoutEngine().layout(
             tallPresentation, environment: environment)
@@ -244,7 +244,7 @@ final class MessageTextLayoutTests: XCTestCase {
 
     func testImageCaptionUsesAvailableLastLineForTimestamp() throws {
         let message = try TimelineTestFixtures.message(
-            id: "image-caption", at: 1,
+            id: 1, at: 1,
             fields: [
                 "message": "Short caption",
                 "hasAttachments": true,
@@ -262,7 +262,7 @@ final class MessageTextLayoutTests: XCTestCase {
                 showsSenderName: false))
         let environment = TimelineLayoutEnvironment.current(timelineWidth: 360)
         let presentation = TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: 1,
+            row: row, currentUserID: 1,
             isThreadTimeline: false, environment: environment)
         let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
         let bubble = try XCTUnwrap(layout.frames[.bubble])
@@ -353,7 +353,7 @@ final class MessageTextLayoutTests: XCTestCase {
 
     func testStandaloneMetadataKeepsItsDrawingHeightWhenSectionEdgesSnapToPixels() throws {
         let message = try TimelineTestFixtures.message(
-            id: "metadata-only", senderID: 2, at: 0,
+            id: 1, senderID: 2, at: 0,
             hour: 0, minute: 17, fields: ["message": ""])
         let row = TimelineRow.message(
             .init(
@@ -361,7 +361,7 @@ final class MessageTextLayoutTests: XCTestCase {
                 groupPosition: .single, showsSenderName: false))
         let environment = TimelineLayoutEnvironment.current(timelineWidth: 320, displayScale: 1.1)
         let presentation = TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: 1,
+            row: row, currentUserID: 1,
             isThreadTimeline: false, environment: environment)
         let metadata = try XCTUnwrap(presentation.metadata)
         let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
@@ -411,7 +411,7 @@ final class MessageTextLayoutTests: XCTestCase {
         geometry: MessageTextGeometry, metadata: MessageMetadata?
     ) {
         let message = try TimelineTestFixtures.message(
-            id: "selectable", senderID: 2, at: 0, hour: 12, minute: 34, fields: ["message": text])
+            id: 1, senderID: 2, at: 0, hour: 12, minute: 34, fields: ["message": text])
         let row = TimelineRow.message(
             .init(
                 entry: .remote(message), isOutgoing: false, groupPosition: .single,
@@ -420,7 +420,7 @@ final class MessageTextLayoutTests: XCTestCase {
             timelineWidth: width + 24 + 2 * (36 + 8), bodySize: 14,
             timeZone: TimeZone(secondsFromGMT: 0)!)
         let presentation = TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
+            row: row, currentUserID: 1, isThreadTimeline: false,
             environment: environment)
         let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
         return (try XCTUnwrap(layout.textGeometry), presentation.metadata)

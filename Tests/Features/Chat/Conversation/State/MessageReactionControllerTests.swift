@@ -270,7 +270,7 @@ final class MessageReactionControllerTests: XCTestCase {
     }
 
     private func message(reactions: [[String: Any]] = []) throws -> MessageResponse {
-        try TimelineTestFixtures.message(id: "message", at: 1, fields: ["reactions": reactions])
+        try TimelineTestFixtures.message(id: 1, at: 1, fields: ["reactions": reactions])
     }
 
     private func reactionEvent(_ message: MessageResponse) -> RealtimeServerEvent {
@@ -338,12 +338,12 @@ private actor HeldReactionAPI: ChahuaAPIClient {
         mutations.removeValue(forKey: index)?.resume(with: result)
     }
 
-    func deleteMessage(chatID: String, messageID: String) async throws {
+    func deleteMessage(chatID: String, messageID: MessageID) async throws {
         throw APIError.unavailable
     }
 
     // Deliberately completes even after cancellation to exercise session fencing.
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+    func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         let index = recorded.count
         recorded.append(.get)
         return try await withCheckedThrowingContinuation {
@@ -352,17 +352,17 @@ private actor HeldReactionAPI: ChahuaAPIClient {
         }
     }
 
-    func getReactionDetails(chatID: String, messageID: String) async throws
+    func getReactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse
     {
         throw APIError.unavailable
     }
 
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         try await mutate(.put(emoji))
     }
 
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         try await mutate(.delete(emoji))
     }
 
@@ -436,13 +436,13 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
         -> MessageResponse
     { throw APIError.unavailable }
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+    func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }
     func markChatUnread(chatID: String) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+    func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
     { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse

@@ -14,7 +14,7 @@ final class ChatDraftStore: ObservableObject {
     private var composingDrafts = Set<ConversationKey>()
     private var deferredDraftFlushes = Set<ConversationKey>()
     private var pendingDraftSaves: [ConversationKey: Task<Void, Never>] = [:]
-    private var deletedReplyIDs: [String: Set<String>] = [:]
+    private var deletedReplyIDs: [String: Set<MessageID>] = [:]
 
     private let outgoingQueue: OutgoingMessageQueue
     private var generation = 0
@@ -62,7 +62,7 @@ final class ChatDraftStore: ObservableObject {
         scheduleDraftSave(key: key)
     }
 
-    func redactReplyTargets(_ messageIDs: Set<String>, chatID: String) {
+    func redactReplyTargets(_ messageIDs: Set<MessageID>, chatID: String) {
         deletedReplyIDs[chatID, default: []].formUnion(messageIDs)
         for key in draftReplies.keys where key.chatID == chatID {
             guard let reply = draftReplies[key], !reply.isDeleted, messageIDs.contains(reply.id)

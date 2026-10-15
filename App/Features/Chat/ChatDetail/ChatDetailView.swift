@@ -44,7 +44,7 @@ struct ChatDetailView: View {
 
     private struct ReactionDetailsSelection: Identifiable {
         let chatID: String
-        let id: String
+        let id: MessageID
     }
 
     init(
@@ -404,7 +404,6 @@ struct ChatDetailView: View {
         actions.openReactionDetails = {
             reactionDetailsMessage = ReactionDetailsSelection(chatID: $0.chatId, id: $0.id)
         }
-        actions.currentUserProfile = store.currentUserProfile
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
         actions.pinnedMessageIDs = Set(chatPins.map { $0.message.id })
         actions.pendingPinMessageIDs = pins.pendingMessageIDs

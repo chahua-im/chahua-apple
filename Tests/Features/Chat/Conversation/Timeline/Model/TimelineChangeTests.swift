@@ -8,11 +8,11 @@ final class TimelineChangeTests: XCTestCase {
     func testPrependReloadsPriorFirstMessageWhenItsGroupingChanges() throws {
         let builder = makeBuilder()
         let old = builder.build([
-            try TimelineTestFixtures.message(id: "2", senderID: 2, at: 10)
+            try TimelineTestFixtures.message(id: 2, senderID: 2, at: 10)
         ])
         let new = builder.build([
-            try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
-            try TimelineTestFixtures.message(id: "2", senderID: 2, at: 10),
+            try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0),
+            try TimelineTestFixtures.message(id: 2, senderID: 2, at: 10),
         ])
 
         XCTAssertEqual(
@@ -28,11 +28,11 @@ final class TimelineChangeTests: XCTestCase {
     func testRemovalUsesOldRowIndex() throws {
         let builder = makeBuilder()
         let old = builder.build([
-            try TimelineTestFixtures.message(id: "1", at: 0),
-            try TimelineTestFixtures.message(id: "2", at: 10),
+            try TimelineTestFixtures.message(id: 1, at: 0),
+            try TimelineTestFixtures.message(id: 2, at: 10),
         ])
         let new = builder.build([
-            try TimelineTestFixtures.message(id: "2", at: 10)
+            try TimelineTestFixtures.message(id: 2, at: 10)
         ])
         XCTAssertEqual(
             TimelineChange.compute(from: old, to: new),
@@ -43,7 +43,7 @@ final class TimelineChangeTests: XCTestCase {
 
     func testIdenticalRowsProduceEmptyIncrementalChange() throws {
         let rows = makeBuilder().build([
-            try TimelineTestFixtures.message(id: "1", at: 0)
+            try TimelineTestFixtures.message(id: 1, at: 0)
         ])
 
         XCTAssertTrue(TimelineChange.compute(from: rows, to: rows).isEmpty)

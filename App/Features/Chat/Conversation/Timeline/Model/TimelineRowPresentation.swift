@@ -68,10 +68,12 @@ struct TimelineRowPresentation {
         }
     }
 
+    /// A pure function of its arguments: hosts reuse a presentation while `row` and
+    /// `environment` are unchanged. Any new input must enter through one of them.
     @MainActor
     static func make(
-        row: TimelineRow, currentUserProfile: MeResponse?, currentUserID: Int32?,
-        isThreadTimeline: Bool, environment: TimelineLayoutEnvironment
+        row: TimelineRow, currentUserID: Int32?, isThreadTimeline: Bool,
+        environment: TimelineLayoutEnvironment
     ) -> Self {
         var title: TitleContent?
         var reply: MessagePreview?
@@ -104,19 +106,15 @@ struct TimelineRowPresentation {
                         standaloneText!,
                         author: remote?.sender.name.flatMap { $0.isEmpty ? nil : $0 }))
             } else {
-                let sender = remote?.sender
-                let profile =
-                    remote == nil && message.isOutgoing
-                        && currentUserProfile?.uid == message.entry.senderID
-                    ? currentUserProfile : nil
+                let sender = message.entry.sender
                 let name =
-                    sender?.name.flatMap { $0.isEmpty ? nil : $0 } ?? profile?.username
+                    sender?.name.flatMap { $0.isEmpty ? nil : $0 }
                     ?? "User \(message.entry.senderID)"
                 title =
                     message.showsSenderName && !sticker
                     ? .init(
-                        name: name, userGroup: sender?.userGroup ?? profile?.userGroup,
-                        genderGlyph: (sender?.gender ?? profile?.gender) == 2 ? "♀" : "♂") : nil
+                        name: name, userGroup: sender?.userGroup,
+                        genderGlyph: sender?.gender == 2 ? "♀" : "♂") : nil
                 sections.append(
                     .grouping(
                         outgoing: message.isOutgoing, position: message.groupPosition,
@@ -166,11 +164,9 @@ struct TimelineRowPresentation {
                             .media(
                                 dimensions, category: dimensions.count > 1 ? "gallery" : "single"))
                     }
-                    let formatter = DateFormatter()
-                    formatter.locale = Locale(
-                        identifier: environment.localeIdentifier + "@hours=h23")
-                    formatter.timeZone = TimeZone(identifier: environment.timeZoneIdentifier)
-                    formatter.dateFormat = "HH:mm"
+                    let formatter = Self.formatter(
+                        .time, locale: environment.localeIdentifier + "@hours=h23",
+                        timeZone: environment.timeZoneIdentifier)
                     let time =
                         formatter.string(from: message.entry.createdAt)
                         + (remote?.isEdited == true ? " " + AppLanguage.localized("(Edited)") : "")
@@ -203,10 +199,9 @@ struct TimelineRowPresentation {
                 }
             }
         case .dateSeparator(let date):
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: environment.localeIdentifier)
-            formatter.timeZone = TimeZone(identifier: environment.timeZoneIdentifier)
-            formatter.setLocalizedDateFormatFromTemplate("MMMdyyyy")
+            let formatter = Self.formatter(
+                .day, locale: environment.localeIdentifier,
+                timeZone: environment.timeZoneIdentifier)
             standaloneText = formatter.string(from: date.day)
             sections = [.kind("date"), .standalone(standaloneText!, author: nil)]
         case .unreadSeparator:
@@ -217,6 +212,32 @@ struct TimelineRowPresentation {
             row: row, environment: environment, title: title, reply: reply, metadata: metadata,
             metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText,
             layoutKey: .init(sections: sections))
+    }
+
+    private enum FormatterStyle { case time, day }
+    private struct FormatterKey: Hashable {
+        let style: FormatterStyle
+        let locale: String
+        let timeZone: String
+    }
+    /// DateFormatter construction is expensive; one per style/locale/zone suffices.
+    @MainActor private static var formatters: [FormatterKey: DateFormatter] = [:]
+
+    @MainActor
+    private static func formatter(_ style: FormatterStyle, locale: String, timeZone: String)
+        -> DateFormatter
+    {
+        let key = FormatterKey(style: style, locale: locale, timeZone: timeZone)
+        if let formatter = formatters[key] { return formatter }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: locale)
+        formatter.timeZone = TimeZone(identifier: timeZone)
+        switch style {
+        case .time: formatter.dateFormat = "HH:mm"
+        case .day: formatter.setLocalizedDateFormatFromTemplate("MMMdyyyy")
+        }
+        formatters[key] = formatter
+        return formatter
     }
 
     static func reactionOrder(_ lhs: ReactionSummary, _ rhs: ReactionSummary) -> Bool {

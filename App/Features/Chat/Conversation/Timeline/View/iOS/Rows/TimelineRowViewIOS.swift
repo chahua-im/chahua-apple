@@ -196,15 +196,10 @@
                     content.addSubview(view)
                     avatar = view
                 }
-                let profile =
-                    row.entry.remoteMessage == nil
-                        && binding.actions.currentUserProfile?.uid == row.entry.senderID
-                    ? binding.actions.currentUserProfile : nil
+                let sender = row.entry.sender
                 let name =
-                    row.entry.remoteMessage?.sender.name.flatMap { $0.isEmpty ? nil : $0 }
-                    ?? profile?.username ?? "User \(row.entry.senderID)"
-                let url = (row.entry.remoteMessage?.sender.avatarUrl ?? profile?.avatarUrl).flatMap(
-                    URL.init(string:))
+                    sender?.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(row.entry.senderID)"
+                let url = sender?.avatarUrl.flatMap(URL.init(string:))
                 avatar?.isHidden = false
                 avatar?.configure(
                     url: url, name: name, userID: row.entry.senderID,

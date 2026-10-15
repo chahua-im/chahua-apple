@@ -14,7 +14,7 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
     public let replyCount: Int64
     public let lastReplyAt: Date
     public let unreadCount: Int64
-    public let lastReadMessageId: String?
+    public let lastReadMessageId: MessageID?
     public let subscribedAt: Date
     public let archived: Bool
 
@@ -28,7 +28,7 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         replyCount: Int64,
         lastReplyAt: Date,
         unreadCount: Int64,
-        lastReadMessageId: String? = nil,
+        lastReadMessageId: MessageID? = nil,
         subscribedAt: Date,
         archived: Bool
     ) {

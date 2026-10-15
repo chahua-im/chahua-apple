@@ -2,10 +2,6 @@ import ChahuaAPI
 import Combine
 import Foundation
 
-struct ConversationProjection: Hashable {
-    let entries: [ConversationTimelineEntry]
-}
-
 enum ConversationChange {
     case pendingChanged(chatID: String)
     case realtime(RealtimeServerEvent)
@@ -18,7 +14,7 @@ final class ConversationMessageStore: ObservableObject {
     let changes = PassthroughSubject<ConversationChange, Never>()
 
     private var pendingOutgoing: [ConversationKey: [PendingOutgoingMessage]] = [:]
-    private var deletedReplyIDs: [String: Set<String>] = [:]
+    private var deletedReplyIDs: [String: Set<MessageID>] = [:]
     private var receiveRevision: UInt64 = 0
     private struct Snapshot {
         let chatID: String
@@ -144,26 +140,10 @@ final class ConversationMessageStore: ObservableObject {
         changes.send(.reset)
     }
 
-    func projection(
-        for chatID: String,
-        threadID: String? = nil,
-        remoteMessages: [MessageResponse],
-        includePendingOutgoing: Bool
-    ) -> ConversationProjection {
-        var entriesByKey: [ConversationMessageStableKey: ConversationTimelineEntry] = [:]
-        for message in remoteMessages { entriesByKey[message.timelineStableKey] = .remote(message) }
-        if includePendingOutgoing {
-            for pending in pendingOutgoing[
-                ConversationKey(chatID: chatID, threadID: threadID), default: []]
-            where entriesByKey[.clientGenerated(pending.clientGeneratedID)] == nil {
-                entriesByKey[.clientGenerated(pending.clientGeneratedID)] = .pending(pending)
-            }
-        }
-        return ConversationProjection(
-            entries: entriesByKey.values.sorted {
-                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-                return $0.stableKey.sortValue < $1.stableKey.sortValue
-            })
+    /// Unacknowledged sends for one conversation in outbox (enqueue) order. They have no
+    /// server position yet, so a timeline shows them after every confirmed message.
+    func pending(chatID: String, threadID: String? = nil) -> [PendingOutgoingMessage] {
+        pendingOutgoing[ConversationKey(chatID: chatID, threadID: threadID), default: []]
     }
 
     private func normalizingReply(_ pending: PendingOutgoingMessage) -> PendingOutgoingMessage {
@@ -175,7 +155,7 @@ final class ConversationMessageStore: ObservableObject {
         return pending
     }
 
-    private func redactPendingReplies(_ messageIDs: Set<String>, chatID: String) {
+    private func redactPendingReplies(_ messageIDs: Set<MessageID>, chatID: String) {
         deletedReplyIDs[chatID, default: []].formUnion(messageIDs)
         for key in pendingOutgoing.keys where key.chatID == chatID {
             pendingOutgoing[key] = pendingOutgoing[key, default: []].map(normalizingReply)

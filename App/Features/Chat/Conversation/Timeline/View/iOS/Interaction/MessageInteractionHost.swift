@@ -95,8 +95,7 @@
                         self.target = nil
                         actions.revokePendingMessage?(pending)
                     },
-                    isReacting: actions.pendingReactionMessageIDs.contains(
-                        row.entry.serverID ?? ""),
+                    isReacting: actions.isReacting(to: row.entry),
                     onReaction: { emoji in
                         guard let liveRow = selectedRow,
                             MessageActionPolicy(row: liveRow, context: context).canReact
@@ -178,8 +177,8 @@
                     source.presentation.row == .message(row)
                     ? source.presentation
                     : TimelineRowPresentation.make(
-                        row: .message(row), currentUserProfile: actions.currentUserProfile,
-                        currentUserID: currentUserID, isThreadTimeline: context.isThreadView,
+                        row: .message(row), currentUserID: currentUserID,
+                        isThreadTimeline: context.isThreadView,
                         environment: source.presentation.environment)
                 let layout =
                     presentation.layoutKey == source.presentation.layoutKey

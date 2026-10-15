@@ -93,7 +93,7 @@ Keep the existing separation:
 - Stable message identity, row construction, presentation, and geometry remain shared. UIKit and AppKit render native row sections directly.
 - `TimelineCollectionViewController` owns the iOS scroll/layout integration.
 - `TimelineTableViewController` owns the macOS scroll/layout integration.
-- `TimelineLayoutEngine` and `TimelineLayoutCache` prepare exact row/section geometry; `TimelineChange` drives native row updates.
+- `TimelineLayoutEngine` and `TimelineLayoutCache` prepare exact row/section geometry; `TimelineRowCache` reuses a row's presentation and geometry until its row value or layout environment changes, so a revision rebuilds only new or changed rows; `TimelineChange` drives native row updates.
 
 The native hosts require platform-specific code and careful measurement lifecycle management. They are not automatically bug-free. However, they give us direct control of row updates, layout, content offsets, and native input callbacks at the layer responsible for those operations. That is a better fit for exact anchoring and interruption-safe navigation.
 

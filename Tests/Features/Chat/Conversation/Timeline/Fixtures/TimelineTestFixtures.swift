@@ -24,7 +24,7 @@ enum TimelineTestFixtures {
         ) -> TimelineRowLayout {
             let environment = environment(width: width, parent: parent)
             let presentation = TimelineRowPresentation.make(
-                row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
+                row: row, currentUserID: 1, isThreadTimeline: false,
                 environment: environment)
             return cache.layout(for: presentation, environment: environment)
         }
@@ -52,14 +52,15 @@ enum TimelineTestFixtures {
         ) -> TimelineRowLayout {
             let environment = environment(width: width, parent: parent)
             let presentation = TimelineRowPresentation.make(
-                row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
+                row: row, currentUserID: 1, isThreadTimeline: false,
                 environment: environment)
             return cache.layout(for: presentation, environment: environment)
         }
     #endif
 
+    /// `id` is the server message ID; ascending IDs are server (timeline) order.
     static func message(
-        id: String,
+        id: UInt64,
         chatID: String = "chat",
         senderID: Int32 = 1,
         senderName: String? = "Ada",
@@ -91,8 +92,8 @@ enum TimelineTestFixtures {
 
     static func page(
         _ messages: [MessageResponse],
-        olderCursor: String? = nil,
-        newerCursor: String? = nil
+        olderCursor: MessageID? = nil,
+        newerCursor: MessageID? = nil
     ) throws -> ListMessagesResponse {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -100,7 +101,7 @@ enum TimelineTestFixtures {
         return try decoder.decode(
             ListMessagesResponse.self,
             from: Data(
-                "{\"messages\":\(messagesJSON),\"olderCursor\":\(jsonString(olderCursor)),\"newerCursor\":\(jsonString(newerCursor))}"
+                "{\"messages\":\(messagesJSON),\"olderCursor\":\(jsonString(olderCursor?.description)),\"newerCursor\":\(jsonString(newerCursor?.description))}"
                     .utf8)
         )
     }

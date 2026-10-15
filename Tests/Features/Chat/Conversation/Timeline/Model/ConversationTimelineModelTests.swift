@@ -11,17 +11,17 @@ final class ConversationTimelineModelTests: XCTestCase {
     func testReplyJumpReusesLoadedTargetAndLoadsMissingHistory() async throws {
         let (model, source, _) = try makeModel(pages: [
             .success(try livePage(ids: 10...12)),
-            .success(try historyPage(ids: 1...3, newerCursor: "3")),
+            .success(try historyPage(ids: 1...3, newerCursor: MessageID(3))),
         ])
         await model.open()
-        await model.jumpToMessage("11")
+        await model.jumpToMessage(MessageID(11))
         XCTAssertEqual(source.queries.count, 1)
         XCTAssertFalse(model.state.live.followsLatest)
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .reveal(.message(.clientGenerated("client-11")), animated: true, highlight: true))
-        await model.jumpToMessage("2")
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "2", "3"])
+        await model.jumpToMessage(MessageID(2))
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1), MessageID(2), MessageID(3)])
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .reveal(.message(.clientGenerated("client-2")), animated: false, highlight: true))
@@ -30,32 +30,34 @@ final class ConversationTimelineModelTests: XCTestCase {
     func testFailedReplyJumpKeepsHistoryAndCanBeRetried() async throws {
         let (model, _, _) = try makeModel(pages: [
             .success(try livePage(ids: 10...12)), .failure(StubError()),
-            .success(try historyPage(ids: 1...3, newerCursor: "3")),
+            .success(try historyPage(ids: 1...3, newerCursor: MessageID(3))),
         ])
         await model.open()
-        await model.jumpToMessage("2")
+        await model.jumpToMessage(MessageID(2))
         XCTAssertEqual(model.state.content, .ready)
-        XCTAssertEqual(model.state.repositionFailure, .message("2"))
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["10", "11", "12"])
-        await model.jumpToMessage("2")
+        XCTAssertEqual(model.state.repositionFailure, .message(MessageID(2)))
+        XCTAssertEqual(
+            remoteMessages(model).map(\.id), [MessageID(10), MessageID(11), MessageID(12)])
+        await model.jumpToMessage(MessageID(2))
         XCTAssertNil(model.state.repositionFailure)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "2", "3"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1), MessageID(2), MessageID(3)])
     }
 
     func testLoadedReplyJumpSupersedesAnInFlightHistoryJump() async throws {
         let (model, source, _) = try makeModel(pages: [
             .success(try livePage(ids: 10...12)),
-            .success(try historyPage(ids: 1...3, newerCursor: "3")),
+            .success(try historyPage(ids: 1...3, newerCursor: MessageID(3))),
         ])
         await model.open()
         source.holdNextRequest()
-        let oldJump = Task { await model.jumpToMessage("2") }
+        let oldJump = Task { await model.jumpToMessage(MessageID(2)) }
         await source.waitUntilHeld()
-        await model.jumpToMessage("11")
+        await model.jumpToMessage(MessageID(11))
         source.release()
         await oldJump.value
         XCTAssertEqual(model.state.content, .ready)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["10", "11", "12"])
+        XCTAssertEqual(
+            remoteMessages(model).map(\.id), [MessageID(10), MessageID(11), MessageID(12)])
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .reveal(.message(.clientGenerated("client-11")), animated: true, highlight: true))
@@ -68,7 +70,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         XCTAssertEqual(model.state.content, .ready)
         XCTAssertTrue(model.isAtLiveEdge)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)])
         XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
     }
 
@@ -82,7 +84,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         await model.retryInitial()
         XCTAssertEqual(model.state.content, .ready)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1)])
     }
 
     func testRestoredFailedRowsRemainVisibleWhileInitialHistoryLoadsAndFails() async throws {
@@ -118,7 +120,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testAtomicAcknowledgementDuringInitialLoadingSurvivesFailureAndRetry() async throws {
         let acknowledged = try TimelineTestFixtures.message(
-            id: "server", at: 1, clientGeneratedID: "send")
+            id: 1, at: 1, clientGeneratedID: "send")
         let (model, source, _) = try makeModel(pages: [
             .failure(StubError()), .success(try TimelineTestFixtures.page([acknowledged])),
         ])
@@ -134,21 +136,21 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         source.store.replacePending(chatID: "chat", with: [], acknowledging: acknowledged)
         XCTAssertEqual(model.state.content, .loadingInitial)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
         source.store.apply(
-            .message(try TimelineTestFixtures.message(id: "unrelated", senderID: 2, at: 2)))
+            .message(try TimelineTestFixtures.message(id: 2, senderID: 2, at: 2)))
         XCTAssertEqual(
-            remoteMessages(model).map(\.id), ["server"],
+            remoteMessages(model).map(\.id), [MessageID(1)],
             "Only matched acknowledgements are exposed before history succeeds")
         source.release()
         await loading.value
         XCTAssertEqual(model.state.content, .initialLoadFailed)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
 
         source.holdNextRequest()
         let retrying = Task { await model.retryInitial() }
         await source.waitUntilHeld()
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
         source.release()
         await retrying.value
         XCTAssertEqual(
@@ -159,7 +161,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testAcknowledgementAfterInitialFailureRemainsDeliveredUntilSnapshot() async throws {
         let acknowledged = try TimelineTestFixtures.message(
-            id: "server", at: 1, clientGeneratedID: "send")
+            id: 1, at: 1, clientGeneratedID: "send")
         let (model, source, _) = try makeModel(pages: [
             .failure(StubError()), .success(try TimelineTestFixtures.page([acknowledged])),
         ])
@@ -168,10 +170,10 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.store.replacePending(chatID: "chat", with: [], acknowledging: acknowledged)
         source.store.replacePending(chatID: "chat", with: [])
         XCTAssertEqual(model.state.content, .initialLoadFailed)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
         await model.retryInitial()
         XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [.clientGenerated("send")])
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["server"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
     }
 
     func testRevealAfterDurableEnqueueReusesNearbyLiveWindowWithoutWritingAgain() async throws {
@@ -197,7 +199,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testScheduledRevealAfterSendDoesNotWaitForLiveEdgeFetch() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .success(try livePage(ids: 1...3)),
         ])
         await model.loadInitial()
@@ -216,17 +218,17 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testLiveMessageOffLiveEdgeIsDeferredAndMakesJumpAvailable() async throws {
         let (model, source, updates) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2"))
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2)))
         ])
         await model.loadInitial()
         XCTAssertFalse(model.isAtLiveEdge)
         let updatesBefore = updates.value.count
 
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "3", senderID: 2, at: 3)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 3, senderID: 2, at: 3)))
 
         XCTAssertTrue(model.showsJumpToLatest)
         XCTAssertEqual(
-            model.rows.compactMap(\.messageID), ["1", "2"],
+            model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)],
             "history view must not render the deferred message")
         XCTAssertEqual(
             updates.value.count, updatesBefore,
@@ -237,10 +239,10 @@ final class ConversationTimelineModelTests: XCTestCase {
         let (model, source, updates) = try makeModel(pages: [.success(try livePage(ids: 1...1))])
         await model.loadInitial()
 
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "2", senderID: 2, at: 2)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 2, senderID: 2, at: 2)))
 
         XCTAssertFalse(model.showsJumpToLatest)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)])
         XCTAssertTrue(updates.value.last?.animateFollowing == true)
     }
 
@@ -256,24 +258,24 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertFalse(model.state.live.isPinnedToBottom)
         XCTAssertTrue(model.showsJumpToLatest, "Moving away from the bottom reveals the shortcut.")
 
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "2", senderID: 2, at: 2)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 2, senderID: 2, at: 2)))
 
         XCTAssertFalse(updates.value.last?.animateFollowing == true)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)])
         XCTAssertNil(updates.value.last?.pendingScroll)
     }
 
     func testPinnedViewportDoesNotClearUnreadBeforeServerConfirmation() async throws {
         let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1...1))])
         await model.loadInitial()
-        model.updateReadState(unreadCount: 1, lastReadMessageID: "1")
+        model.updateReadState(unreadCount: 1, lastReadMessageID: MessageID(1))
         model.scrollRequestDidFinish(id: model.updates.value.pendingScroll!.id)
         model.userScrollBegan()
         model.viewportDidChange(
             .init(
                 firstVisibleIndex: 0, lastVisibleIndex: 0, distanceToTop: 0, distanceToBottom: 500,
                 height: 400), reason: .user, revision: model.updates.value.revision)
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "2", senderID: 2, at: 2)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 2, senderID: 2, at: 2)))
         XCTAssertEqual(model.jumpUnreadCount, 1)
 
         model.viewportDidChange(
@@ -291,13 +293,13 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testJumpToLiveEdgeFromHistoryReplaysDeferredArrivalNewerThanServerPage() async throws {
         let (model, source, updates) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .success(try livePage(ids: 98...99)),
         ])
         await model.loadInitial()
-        // Arrives after the server page's newest (99 @ 01:39) and is absent from that page.
+        // Newer than the server page's newest ID (99) and absent from that page.
         source.store.apply(
-            .message(try TimelineTestFixtures.message(id: "100", senderID: 2, at: 40, minute: 1)))
+            .message(try TimelineTestFixtures.message(id: 100, senderID: 2, at: 40, minute: 1)))
         XCTAssertTrue(model.showsJumpToLatest)
 
         await model.jumpToLiveEdge()
@@ -308,54 +310,59 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertTrue(model.state.live.followsLatest)
         XCTAssertNil(source.queries.last?.after)
         XCTAssertNil(source.queries.last?.before)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["98", "99", "100"])
+        XCTAssertEqual(
+            model.rows.compactMap(\.messageID), [MessageID(98), MessageID(99), MessageID(100)])
         XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
     }
 
     func testJumpToLiveEdgeDropsDeferredArrivalOlderThanNewWindow() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .success(try livePage(ids: 98...99)),
         ])
         await model.loadInitial()
-        // Predates 98 @ 01:38: replaying it would render above a history gap.
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "3", senderID: 2, at: 3)))
+        // Older than ID 98: replaying it would render above a history gap.
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 3, senderID: 2, at: 3)))
 
         await model.jumpToLiveEdge()
 
         XCTAssertEqual(
-            model.rows.compactMap(\.messageID), ["98", "99"],
+            model.rows.compactMap(\.messageID), [MessageID(98), MessageID(99)],
             "stale deferred entry must not be injected above the gap")
     }
 
     func testInitialOpenUsesHTTPRatherThanEventsFromAPriorScreen() async throws {
         let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 98...99))])
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "100", at: 40, minute: 1)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 100, at: 40, minute: 1)))
         await model.open()
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["98", "99"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(98), MessageID(99)])
     }
 
     func testLatestSnapshotReconcilesDeferredCreatesByIdentityAndRetainsEqualTimeArrivals()
         async throws
     {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .success(try livePage(ids: 98...99)),
         ])
         await model.loadInitial()
         source.store.apply(
-            .message(try TimelineTestFixtures.message(id: "99", senderID: 2, at: 39, minute: 1)))
+            .message(try TimelineTestFixtures.message(id: 99, senderID: 2, at: 39, minute: 1)))
         source.store.apply(
-            .message(try TimelineTestFixtures.message(id: "99b", senderID: 2, at: 39, minute: 1)))
+            .message(try TimelineTestFixtures.message(id: 100, senderID: 2, at: 39, minute: 1)))
         await model.jumpToLiveEdge()
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["98", "99", "99b"])
+        XCTAssertEqual(
+            model.rows.compactMap(\.messageID), [MessageID(98), MessageID(99), MessageID(100)])
     }
 
     func testJumpToLiveEdgeFailureIsAnOverlayThatKeepsPagingAlive() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 10...11, olderCursor: "10", newerCursor: "11")),
+            .success(
+                try historyPage(
+                    ids: 10...11, olderCursor: MessageID(10), newerCursor: MessageID(11))),
             .failure(StubError()),
-            .success(try historyPage(ids: 8...9, olderCursor: "8", newerCursor: "9")),
+            .success(
+                try historyPage(ids: 8...9, olderCursor: MessageID(8), newerCursor: MessageID(9))),
         ])
         await model.loadInitial()
 
@@ -363,7 +370,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         XCTAssertEqual(model.state.content, .ready, "failure must not park the lifecycle")
         XCTAssertEqual(model.state.repositionFailure, .liveEdge)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["10", "11"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(10), MessageID(11)])
 
         // Paging is still live while the failure banner is showing.
         model.viewportDidChange(
@@ -372,8 +379,10 @@ final class ConversationTimelineModelTests: XCTestCase {
                 distanceToBottom: 5_000, height: 400), reason: .user,
             revision: model.updates.value.revision)
         await source.drain()
-        XCTAssertEqual(source.queries.last?.before, "10")
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["8", "9", "10", "11"])
+        XCTAssertEqual(source.queries.last?.before, MessageID(10))
+        XCTAssertEqual(
+            model.rows.compactMap(\.messageID),
+            [MessageID(8), MessageID(9), MessageID(10), MessageID(11)])
         XCTAssertEqual(model.state.repositionFailure, .liveEdge, "paging does not clear the banner")
 
         model.dismissRepositionFailure()
@@ -383,19 +392,20 @@ final class ConversationTimelineModelTests: XCTestCase {
     func testInitialLoadAroundMissingTargetSurfacesOverlayAndStaysReady() async throws {
         let (model, _, updates) = try makeModel(pages: [.success(try livePage(ids: 1...2))])
 
-        await model.loadInitial(position: .message("404"))
+        await model.loadInitial(position: .message(MessageID(404)))
 
         XCTAssertEqual(model.state.content, .ready)
-        XCTAssertEqual(model.state.repositionFailure, .message("404"))
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertEqual(model.state.repositionFailure, .message(MessageID(404)))
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)])
         XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
     }
 
     func testOlderEdgeFailureIsSurfacedAndRetryable() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 10...11, olderCursor: "10", newerCursor: nil)),
+            .success(try historyPage(ids: 10...11, olderCursor: MessageID(10), newerCursor: nil)),
             .failure(StubError()),
-            .success(try historyPage(ids: 8...9, olderCursor: "8", newerCursor: "9")),
+            .success(
+                try historyPage(ids: 8...9, olderCursor: MessageID(8), newerCursor: MessageID(9))),
         ])
         await model.loadInitial()
 
@@ -405,7 +415,7 @@ final class ConversationTimelineModelTests: XCTestCase {
                 height: 400), reason: .user, revision: model.updates.value.revision)
         await source.drain()
         XCTAssertEqual(model.state.older, .failed)
-        XCTAssertEqual(source.queries.last?.before, "10")
+        XCTAssertEqual(source.queries.last?.before, MessageID(10))
 
         model.viewportDidChange(
             .init(
@@ -416,12 +426,14 @@ final class ConversationTimelineModelTests: XCTestCase {
         model.retryOlder()
         await source.drain()
         XCTAssertEqual(model.state.older, .idle)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["8", "9", "10", "11"])
+        XCTAssertEqual(
+            model.rows.compactMap(\.messageID),
+            [MessageID(8), MessageID(9), MessageID(10), MessageID(11)])
     }
 
     func testInitialSnapshotReplaysEditReactionAndDeletionBeforePublishing() async throws {
         let old = try TimelineTestFixtures.message(
-            id: "1", at: 1, text: "old",
+            id: 1, at: 1, text: "old",
             fields: [
                 "hasAttachments": true,
                 "attachments": [
@@ -431,7 +443,7 @@ final class ConversationTimelineModelTests: XCTestCase {
                     ]
                 ],
             ])
-        let edited = try TimelineTestFixtures.message(id: "1", at: 1, text: "new")
+        let edited = try TimelineTestFixtures.message(id: 1, at: 1, text: "new")
         let (model, source, updates) = try makeModel(pages: [
             .success(try TimelineTestFixtures.page([old]))
         ])
@@ -441,7 +453,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.store.apply(.messageUpdated(edited))
         source.store.apply(
             .reactionUpdated(
-                .init(messageId: "1", chatId: "chat", reactions: try reactionFixture())))
+                .init(messageId: MessageID(1), chatId: "chat", reactions: try reactionFixture())))
         source.store.apply(.messageDeleted(edited.redactedForDeletion()))
         source.release()
         await loading.value
@@ -458,10 +470,12 @@ final class ConversationTimelineModelTests: XCTestCase {
     }
 
     func testOlderPageReplaysUnknownEditWithoutLosingRowsOutsideFetchedScope() async throws {
-        let old = try TimelineTestFixtures.message(id: "1", at: 1, text: "old")
-        let edited = try TimelineTestFixtures.message(id: "1", at: 1, text: "new")
+        let old = try TimelineTestFixtures.message(id: 1, at: 1, text: "old")
+        let edited = try TimelineTestFixtures.message(id: 1, at: 1, text: "new")
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 10...11, olderCursor: "10", newerCursor: "11")),
+            .success(
+                try historyPage(
+                    ids: 10...11, olderCursor: MessageID(10), newerCursor: MessageID(11))),
             .success(try TimelineTestFixtures.page([old])),
         ])
         await model.loadInitial()
@@ -470,17 +484,19 @@ final class ConversationTimelineModelTests: XCTestCase {
         await source.waitUntilHeld()
         source.store.apply(.messageUpdated(edited))
         XCTAssertEqual(
-            model.rows.compactMap(\.messageID), ["10", "11"], "An unknown edit is not a create")
+            model.rows.compactMap(\.messageID), [MessageID(10), MessageID(11)],
+            "An unknown edit is not a create")
         source.release()
         await source.drain()
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "10", "11"])
+        XCTAssertEqual(
+            remoteMessages(model).map(\.id), [MessageID(1), MessageID(10), MessageID(11)])
         XCTAssertEqual(remoteMessages(model).first?.message, "new")
     }
 
     func testLaterHTTPMayReplaceAnEventReceivedBeforeThatRequest() async throws {
-        let old = try TimelineTestFixtures.message(id: "1", at: 1, text: "old")
-        let new = try TimelineTestFixtures.message(id: "1", at: 1, text: "new")
-        let authoritative = try TimelineTestFixtures.message(id: "1", at: 1, text: "authoritative")
+        let old = try TimelineTestFixtures.message(id: 1, at: 1, text: "old")
+        let new = try TimelineTestFixtures.message(id: 1, at: 1, text: "new")
+        let authoritative = try TimelineTestFixtures.message(id: 1, at: 1, text: "authoritative")
         let (model, source, _) = try makeModel(pages: [
             .success(try TimelineTestFixtures.page([old])),
             .success(try TimelineTestFixtures.page([authoritative])),
@@ -496,7 +512,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         async throws
     {
         let acknowledged = try TimelineTestFixtures.message(
-            id: "1", at: 1, clientGeneratedID: "send")
+            id: 1, at: 1, clientGeneratedID: "send")
         for websocketFirst in [true, false] {
             let (model, source, updates) = try makeModel(pages: [
                 .success(try TimelineTestFixtures.page([acknowledged]))
@@ -510,16 +526,16 @@ final class ConversationTimelineModelTests: XCTestCase {
             await loading.value
             if !websocketFirst { source.store.apply(.message(acknowledged)) }
             XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [.clientGenerated("send")])
-            XCTAssertEqual(remoteMessages(model).map(\.id), ["1"])
+            XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
             XCTAssertFalse(updates.value.contains { $0.animateFollowing })
         }
     }
 
     func testDuplicateCreateAndLateAcknowledgementCannotUndoEditOrDelete() async throws {
         let created = try TimelineTestFixtures.message(
-            id: "1", at: 1, text: "old", clientGeneratedID: "send")
+            id: 1, at: 1, text: "old", clientGeneratedID: "send")
         let edited = try TimelineTestFixtures.message(
-            id: "1", at: 1, text: "new", clientGeneratedID: "send")
+            id: 1, at: 1, text: "new", clientGeneratedID: "send")
         let (model, source, _) = try makeModel(pages: [
             .success(try TimelineTestFixtures.page([])),
             .success(try TimelineTestFixtures.page([created])),
@@ -545,13 +561,13 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.store.apply(.messageUpdated(edited))
         source.store.apply(
             .reactionUpdated(
-                .init(messageId: "1", chatId: "chat", reactions: try reactionFixture())))
+                .init(messageId: MessageID(1), chatId: "chat", reactions: try reactionFixture())))
         XCTAssertTrue(
             model.rows.isEmpty, "Late events and acknowledgements must not restore deleted rows")
         await model.reconcileAfterReconnect()
         XCTAssertTrue(model.rows.isEmpty, "A stale HTTP snapshot must not restore a deleted row")
-        await model.jumpToMessage("1")
-        XCTAssertEqual(model.state.repositionFailure, .message("1"))
+        await model.jumpToMessage(MessageID(1))
+        XCTAssertEqual(model.state.repositionFailure, .message(MessageID(1)))
         XCTAssertTrue(model.rows.isEmpty, "A reply jump cannot target a removed bubble")
     }
 
@@ -559,7 +575,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         async throws
     {
         let uploaded = try TimelineTestFixtures.message(
-            id: "voice", at: 1, type: .audio, clientGeneratedID: "send",
+            id: 1, at: 1, type: .audio, clientGeneratedID: "send",
             fields: [
                 "message": NSNull(), "hasAttachments": true,
                 "attachments": [
@@ -571,7 +587,7 @@ final class ConversationTimelineModelTests: XCTestCase {
                 ],
             ])
         let published = try TimelineTestFixtures.message(
-            id: "voice", at: 1, type: .audio, clientGeneratedID: "send",
+            id: 1, at: 1, type: .audio, clientGeneratedID: "send",
             fields: [
                 "message": NSNull(), "hasAttachments": true,
                 "attachments": [
@@ -587,12 +603,12 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.store.acknowledge(uploaded)
         let reactions = try reactionFixture()
         source.store.apply(
-            .reactionUpdated(.init(messageId: "voice", chatId: "chat", reactions: reactions)))
+            .reactionUpdated(.init(messageId: MessageID(1), chatId: "chat", reactions: reactions)))
         source.store.apply(.message(published))
         source.store.acknowledge(uploaded)
 
         let messages = remoteMessages(model)
-        XCTAssertEqual(messages.map(\.id), ["voice"])
+        XCTAssertEqual(messages.map(\.id), [MessageID(1)])
         XCTAssertEqual(messages.first?.attachments.first?.url, "https://media.example/voice.ogg")
         XCTAssertEqual(messages.first?.reactions, reactions)
 
@@ -603,7 +619,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testTwoModelsHaveIndependentHistoryGapsAndJumpAvailability() async throws {
         let source = ScriptedTimelineSource(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .success(try livePage(ids: 1...2)),
             .success(try livePage(ids: 3...3)),
         ])
@@ -615,16 +631,16 @@ final class ConversationTimelineModelTests: XCTestCase {
             messageStore: source.store)
         await historical.open()
         await latest.open()
-        let created = try TimelineTestFixtures.message(id: "3", at: 3)
+        let created = try TimelineTestFixtures.message(id: 3, at: 3)
         source.store.apply(.message(created))
         source.store.apply(.message(created))
         source.store.apply(
             .messageUpdated(
-                try TimelineTestFixtures.message(id: "1", at: 1, text: "edited in both")))
+                try TimelineTestFixtures.message(id: 1, at: 1, text: "edited in both")))
         source.store.apply(
-            .messageDeleted(try TimelineTestFixtures.message(id: "2", at: 2).redactedForDeletion()))
-        XCTAssertEqual(remoteMessages(historical).map(\.id), ["1"])
-        XCTAssertEqual(remoteMessages(latest).map(\.id), ["1", "3"])
+            .messageDeleted(try TimelineTestFixtures.message(id: 2, at: 2).redactedForDeletion()))
+        XCTAssertEqual(remoteMessages(historical).map(\.id), [MessageID(1)])
+        XCTAssertEqual(remoteMessages(latest).map(\.id), [MessageID(1), MessageID(3)])
         for model in [historical, latest] {
             XCTAssertEqual(remoteMessages(model).first?.message, "edited in both")
         }
@@ -632,40 +648,40 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertFalse(latest.showsJumpToLatest)
         await historical.jumpToLiveEdge()
         XCTAssertEqual(
-            remoteMessages(historical).map(\.id), ["3"],
+            remoteMessages(historical).map(\.id), [MessageID(3)],
             "A latest replacement must not bridge the old history gap")
-        XCTAssertEqual(remoteMessages(latest).map(\.id), ["1", "3"])
+        XCTAssertEqual(remoteMessages(latest).map(\.id), [MessageID(1), MessageID(3)])
     }
 
     func testDeferredMutationsRemainWindowLocalUntilLatestClosesTheGap() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...1, newerCursor: "1")),
+            .success(try historyPage(ids: 1...1, newerCursor: MessageID(1))),
             .success(try livePage(ids: 2...2)),
         ])
         await model.open()
-        let created = try TimelineTestFixtures.message(id: "3", at: 3, text: "old")
+        let created = try TimelineTestFixtures.message(id: 3, at: 3, text: "old")
         source.store.apply(.message(created))
         source.store.apply(
-            .messageUpdated(try TimelineTestFixtures.message(id: "3", at: 3, text: "edited")))
+            .messageUpdated(try TimelineTestFixtures.message(id: 3, at: 3, text: "edited")))
         source.store.apply(.messageDeleted(created.redactedForDeletion()))
         source.store.apply(.message(created))
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
         XCTAssertTrue(model.showsJumpToLatest)
         await model.jumpToLiveEdge()
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["2"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(2)])
     }
 
     func testEmptyLatestSnapshotDiscardsOldDeferredRowsButReplaysInFlightCreate() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...1, newerCursor: "1")),
+            .success(try historyPage(ids: 1...1, newerCursor: MessageID(1))),
             .success(try TimelineTestFixtures.page([])),
         ])
         await model.open()
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "2", at: 2)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 2, at: 2)))
         source.holdNextRequest()
         let jumping = Task { await model.jumpToLiveEdge() }
         await source.waitUntilHeld()
-        let fresh = try TimelineTestFixtures.message(id: "3", at: 3)
+        let fresh = try TimelineTestFixtures.message(id: 3, at: 3)
         source.store.apply(.message(fresh))
         source.store.apply(.messageDeleted(fresh.redactedForDeletion()))
         source.release()
@@ -684,15 +700,15 @@ final class ConversationTimelineModelTests: XCTestCase {
         await opening.value
         await recovering.value
         XCTAssertEqual(source.queries.count, 1)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
     }
 
     func testThreadScopeFiltersHTTPAndLiveRepliesWithoutLosingRootMetadata() async throws {
-        let root = try TimelineTestFixtures.message(id: "root", at: 1)
+        let root = try TimelineTestFixtures.message(id: 1, at: 1)
         let reply = try TimelineTestFixtures.message(
-            id: "reply", at: 2, fields: ["replyRootId": "root"])
+            id: 2, at: 2, fields: ["replyRootId": "1"])
         let other = try TimelineTestFixtures.message(
-            id: "other", at: 3, fields: ["replyRootId": "elsewhere"])
+            id: 3, at: 3, fields: ["replyRootId": "elsewhere"])
         let page = try TimelineTestFixtures.page([root, reply, other])
         let source = ScriptedTimelineSource(pages: [.success(page), .success(page)])
         let chat = ConversationTimelineModel(
@@ -700,47 +716,49 @@ final class ConversationTimelineModelTests: XCTestCase {
             messageStore: source.store)
         let thread = ConversationTimelineModel(
             chatID: "chat", currentUserID: 1, isGroupChat: true, source: source,
-            messageStore: source.store, threadID: "root")
+            messageStore: source.store, threadID: "1")
         await chat.open()
         await thread.open()
         source.store.apply(
             .message(
                 try TimelineTestFixtures.message(
-                    id: "reply2", at: 4, fields: ["replyRootId": "root"])))
+                    id: 4, at: 4, fields: ["replyRootId": "1"])))
         source.store.apply(
             .threadUpdate(
                 .init(
-                    threadRootId: "root", chatId: "chat", lastReplyAt: root.createdAt, replyCount: 2
+                    threadRootId: "1", chatId: "chat", lastReplyAt: root.createdAt, replyCount: 2
                 )))
-        XCTAssertEqual(remoteMessages(chat).map(\.id), ["root"])
-        XCTAssertEqual(remoteMessages(thread).map(\.id), ["root", "reply", "reply2"])
+        XCTAssertEqual(remoteMessages(chat).map(\.id), [MessageID(1)])
+        XCTAssertEqual(
+            remoteMessages(thread).map(\.id), [MessageID(1), MessageID(2), MessageID(4)])
         XCTAssertEqual(remoteMessages(chat).first?.threadInfo?.replyCount, 2)
         XCTAssertEqual(remoteMessages(thread).first?.message, root.message)
     }
 
     func testBulkDeletionRedactsReplyPreviewsAndEmptyReactionArrayClearsKnownRecord() async throws {
-        let root = try TimelineTestFixtures.message(id: "1", at: 1)
+        let root = try TimelineTestFixtures.message(id: 1, at: 1)
         let preview: [String: Any] = [
             "id": "1", "clientGeneratedId": "client-1", "createdAt": "2026-09-01T00:00:01Z",
             "sender": ["uid": 1, "gender": 0], "messageType": "text", "message": "secret",
             "attachments": [["kind": "image/png"]], "mentions": [], "isDeleted": false,
         ]
         let reply = try TimelineTestFixtures.message(
-            id: "2", at: 2, fields: ["replyToMessage": preview])
+            id: 2, at: 2, fields: ["replyToMessage": preview])
         let (model, source, _) = try makeModel(pages: [
             .success(try TimelineTestFixtures.page([root, reply]))
         ])
         await model.open()
         source.store.apply(
             .reactionUpdated(
-                .init(messageId: "2", chatId: "chat", reactions: try reactionFixture())))
+                .init(messageId: MessageID(2), chatId: "chat", reactions: try reactionFixture())))
         XCTAssertEqual(remoteMessages(model).last?.reactions.first?.count, 3)
-        source.store.apply(.reactionUpdated(.init(messageId: "2", chatId: "chat", reactions: [])))
         source.store.apply(
-            .messagesBulkDeleted(.init(chatId: "chat", messageIds: ["1", "missing"])))
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["2"])
+            .reactionUpdated(.init(messageId: MessageID(2), chatId: "chat", reactions: [])))
+        source.store.apply(
+            .messagesBulkDeleted(.init(chatId: "chat", messageIds: [MessageID(1), MessageID(99)])))
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(2)])
         let quoted = try XCTUnwrap(remoteMessages(model).last?.replyToMessage)
-        XCTAssertEqual(quoted.id, "1")
+        XCTAssertEqual(quoted.id, MessageID(1))
         XCTAssertTrue(quoted.isDeleted)
         XCTAssertNil(quoted.message)
         XCTAssertTrue(quoted.attachments.isEmpty)
@@ -757,21 +775,23 @@ final class ConversationTimelineModelTests: XCTestCase {
         ])
         await model.open()
         model.close()
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "4", at: 4)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 4, at: 4)))
         await model.open()
         XCTAssertEqual(source.queries.count, 2)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["3"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(3)])
     }
 
     func testRecoveryRetainsVisibleRowsThenReplaysAroundAnchorWithoutJumping() async throws {
-        let old = try TimelineTestFixtures.message(id: "11", at: 11, text: "old")
+        let old = try TimelineTestFixtures.message(id: 11, at: 11, text: "old")
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 10...12, newerCursor: "12")),
-            .success(try TimelineTestFixtures.page([old], olderCursor: "11", newerCursor: "11")),
+            .success(try historyPage(ids: 10...12, newerCursor: MessageID(12))),
+            .success(
+                try TimelineTestFixtures.page(
+                    [old], olderCursor: MessageID(11), newerCursor: MessageID(11))),
         ])
         await model.open()
         model.userScrollBegan()
-        let anchorIndex = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "11" })
+        let anchorIndex = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(11) })
         model.viewportDidChange(
             .init(
                 firstVisibleIndex: anchorIndex, lastVisibleIndex: anchorIndex, distanceToTop: 5_000,
@@ -780,15 +800,16 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.holdNextRequest()
         let recovering = Task { await model.reconcileAfterReconnect() }
         await source.waitUntilHeld()
-        XCTAssertEqual(source.queries.last?.around, "11")
+        XCTAssertEqual(source.queries.last?.around, MessageID(11))
         XCTAssertEqual(model.state.content, .ready)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["10", "11", "12"])
+        XCTAssertEqual(
+            remoteMessages(model).map(\.id), [MessageID(10), MessageID(11), MessageID(12)])
         source.store.apply(
-            .messageUpdated(try TimelineTestFixtures.message(id: "11", at: 11, text: "new")))
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "13", at: 13)))
+            .messageUpdated(try TimelineTestFixtures.message(id: 11, at: 11, text: "new")))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 13, at: 13)))
         source.release()
         await recovering.value
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["11"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(11)])
         XCTAssertEqual(remoteMessages(model).first?.message, "new")
         XCTAssertTrue(model.showsJumpToLatest)
         XCTAssertFalse(model.state.live.followsLatest)
@@ -799,14 +820,14 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testRecoveryFailureKeepsRowsAndEmptyRetryDoesNotResurrectOldContent() async throws {
         let (model, _, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .failure(StubError()), .success(try TimelineTestFixtures.page([])),
         ])
         await model.open()
         model.userScrollBegan()
         await model.reconcileAfterReconnect()
         XCTAssertTrue(model.state.reconciliationFailed)
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "2"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1), MessageID(2)])
         await model.reconcileAfterReconnect()
         XCTAssertFalse(model.state.reconciliationFailed)
         XCTAssertTrue(remoteMessages(model).isEmpty)
@@ -816,7 +837,7 @@ final class ConversationTimelineModelTests: XCTestCase {
     func testNavigationSupersedesSuspendedRecoveryAndCloseInvalidatesInitialResponse() async throws
     {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "2")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .success(try livePage(ids: 1...2)),
             .success(try livePage(ids: 10...11)),
             .success(try livePage(ids: 20...21)),
@@ -828,7 +849,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         await model.jumpToLiveEdge()
         source.release()
         await recovering.value
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["10", "11"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(10), MessageID(11)])
         model.close()
         source.holdNextRequest()
         let reopening = Task { await model.open() }
@@ -850,28 +871,28 @@ final class ConversationTimelineModelTests: XCTestCase {
         await source.waitUntilHeld()
         recovering.cancel()
         await source.drain()
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "2", at: 2)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 2, at: 2)))
         source.release()
         await recovering.value
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["1", "2"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1), MessageID(2)])
         await model.reconcileAfterReconnect()
-        XCTAssertEqual(remoteMessages(model).map(\.id), ["3"])
+        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(3)])
     }
 
     func testUnreadEntryAtSettledLiveBottomMarksVisibleMessagesWithoutShowingJump() async throws {
-        var reads: [String] = []
+        var reads: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...3))],
             markRead: { reads.append($0) })
-        model.updateReadState(unreadCount: 2, lastReadMessageID: "1")
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
         model.setReadTrackingActive(true)
-        await model.open(position: .unread(after: "1"))
+        await model.open(position: .unread(after: MessageID(1)))
         XCTAssertFalse(model.showsJumpToLatest, "Wait for actual geometry before showing a jump.")
         let request = try XCTUnwrap(model.updates.value.pendingScroll)
         let viewport = TimelineViewport(
             firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1,
             distanceToTop: 0, distanceToBottom: 0, height: 600,
-            fullyVisibleMessageIDs: ["1", "2", "3"])
+            fullyVisibleMessageIDs: [MessageID(1), MessageID(2), MessageID(3)])
         model.viewportDidChange(viewport, reason: .layout, revision: model.updates.value.revision)
         XCTAssertFalse(
             model.state.live.followsLatest, "An unfinished reveal still owns navigation.")
@@ -880,21 +901,22 @@ final class ConversationTimelineModelTests: XCTestCase {
         model.viewportDidChange(
             viewport, reason: .programmatic, revision: model.updates.value.revision)
         await source.drain()
-        XCTAssertEqual(reads, ["3"], "Entering reads through the last fully visible message.")
+        XCTAssertEqual(
+            reads, [MessageID(3)], "Entering reads through the last fully visible message.")
         XCTAssertTrue(model.state.live.isPinnedToBottom)
         XCTAssertTrue(model.state.live.followsLatest)
         XCTAssertFalse(
             model.showsJumpToLatest, "Unread metadata does not mean the viewport is away.")
-        model.updateReadState(unreadCount: 0, lastReadMessageID: "3")
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "4", senderID: 2, at: 4)))
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(3))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 4, senderID: 2, at: 4)))
         XCTAssertTrue(model.updates.value.animateFollowing)
     }
 
     func testUnreadEntryAtHistoricalWindowBottomDoesNotFollowLatest() async throws {
         let (model, _, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...3, newerCursor: "newer"))
+            .success(try historyPage(ids: 1...3, newerCursor: MessageID(3)))
         ])
-        await model.open(position: .unread(after: "2"))
+        await model.open(position: .unread(after: MessageID(2)))
         model.scrollRequestDidFinish(id: try XCTUnwrap(model.updates.value.pendingScroll).id)
         model.viewportDidChange(
             .init(
@@ -907,12 +929,12 @@ final class ConversationTimelineModelTests: XCTestCase {
     }
 
     func testUnreadEntryRevealsFrozenBoundaryAndPreservesOlderPagination() async throws {
-        let read = try TimelineTestFixtures.message(id: "zz-read", at: 2)
-        let unread = try TimelineTestFixtures.message(id: "aa-unread", at: 3)
+        let read = try TimelineTestFixtures.message(id: 2, at: 2)
+        let unread = try TimelineTestFixtures.message(id: 3, at: 3)
         let (model, source, _) = try makeModel(pages: [
             .success(
                 try TimelineTestFixtures.page(
-                    [read, unread], olderCursor: "older", newerCursor: nil)),
+                    [read, unread], olderCursor: MessageID(2), newerCursor: nil)),
             .success(try livePage(ids: 1...1)),
         ])
         await model.open(position: .unread(after: read.id))
@@ -924,24 +946,25 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertFalse(model.state.live.followsLatest)
         model.retryOlder()
         await source.drain()
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "live", at: 4)))
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 4, at: 4)))
         let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
         XCTAssertEqual(model.rows[boundary - 1].messageID, read.id)
         XCTAssertEqual(model.rows[boundary + 1].messageID, unread.id)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", read.id, unread.id, "live"])
+        XCTAssertEqual(
+            model.rows.compactMap(\.messageID), [MessageID(1), read.id, unread.id, MessageID(4)])
     }
 
     func testUnreadEntryFetchesBeyondBoundaryAtEndOfAroundPage() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "forward")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             .success(try livePage(ids: 3...4)),
         ])
-        await model.open(position: .unread(after: "2"))
+        await model.open(position: .unread(after: MessageID(2)))
 
-        XCTAssertEqual(source.queries.map(\.after), [nil, "forward"])
+        XCTAssertEqual(source.queries.map(\.after), [nil, MessageID(2)])
         let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
-        XCTAssertEqual(model.rows[boundary - 1].messageID, "2")
-        XCTAssertEqual(model.rows[boundary + 1].messageID, "3")
+        XCTAssertEqual(model.rows[boundary - 1].messageID, MessageID(2))
+        XCTAssertEqual(model.rows[boundary + 1].messageID, MessageID(3))
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .reveal(.unreadSeparator, animated: false, highlight: false))
@@ -949,43 +972,47 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testUnreadWithoutCursorSeeksOldestPageWithoutRetainingEntireHistory() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 5...6, olderCursor: "middle", newerCursor: nil)),
-            .success(try historyPage(ids: 3...4, olderCursor: "oldest", newerCursor: "newest")),
-            .success(try historyPage(ids: 1...2, newerCursor: "middle-forward")),
-            .success(try historyPage(ids: 3...4, newerCursor: "newest")),
+            .success(try historyPage(ids: 5...6, olderCursor: MessageID(5), newerCursor: nil)),
+            .success(
+                try historyPage(ids: 3...4, olderCursor: MessageID(3), newerCursor: MessageID(4))),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
+            .success(try historyPage(ids: 3...4, newerCursor: MessageID(4))),
         ])
         await model.open(position: .unread(after: nil))
 
-        XCTAssertEqual(source.queries.map(\.before), [nil, "middle", "oldest"])
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertEqual(source.queries.map(\.before), [nil, MessageID(5), MessageID(3)])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)])
         XCTAssertFalse(model.isAtLiveEdge)
         let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
-        XCTAssertEqual(model.rows[boundary + 1].messageID, "1")
+        XCTAssertEqual(model.rows[boundary + 1].messageID, MessageID(1))
         model.retryNewer()
         await source.drain()
-        XCTAssertEqual(source.queries.last?.after, "middle-forward")
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2", "3", "4"])
+        XCTAssertEqual(source.queries.last?.after, MessageID(2))
+        XCTAssertEqual(
+            model.rows.compactMap(\.messageID),
+            [MessageID(1), MessageID(2), MessageID(3), MessageID(4)])
         XCTAssertEqual(model.rows.firstIndex { $0.id == .unreadSeparator }, boundary)
     }
 
     func testMissingUnreadTargetUsesAccessibleBeginningAndStillMarksVisibleMessages() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [
-                .success(try historyPage(ids: 3...4, olderCursor: "older", newerCursor: nil)),
-                .success(try historyPage(ids: 1...2, newerCursor: "newer")),
+                .success(try historyPage(ids: 3...4, olderCursor: MessageID(3), newerCursor: nil)),
+                .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
             ], markRead: { marked.append($0) })
         model.setReadTrackingActive(true)
-        await model.open(position: .unread(after: "deleted-opaque-cursor"))
+        await model.open(position: .unread(after: MessageID(99)))
 
-        XCTAssertEqual(source.queries.first?.around, "deleted-opaque-cursor")
+        XCTAssertEqual(source.queries.first?.around, MessageID(99))
         let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
-        XCTAssertEqual(model.rows[boundary + 1].messageID, "1")
-        reportVisible(["1", "2"], to: model)
+        XCTAssertEqual(model.rows[boundary + 1].messageID, MessageID(1))
+        reportVisible([MessageID(1), MessageID(2)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["2"], "The monotonic server endpoint resolves an unknown baseline.")
         XCTAssertEqual(
-            model.rows[boundary + 1].messageID, "1",
+            marked, [MessageID(2)], "The monotonic server endpoint resolves an unknown baseline.")
+        XCTAssertEqual(
+            model.rows[boundary + 1].messageID, MessageID(1),
             "A successful receipt does not move the entry boundary.")
         model.close()
     }
@@ -996,12 +1023,12 @@ final class ConversationTimelineModelTests: XCTestCase {
             .success(try livePage(ids: 1...2)),
             .failure(StubError()),
         ])
-        await model.open(position: .unread(after: "deleted"))
+        await model.open(position: .unread(after: MessageID(99)))
         XCTAssertEqual(model.state.content, .ready)
         XCTAssertEqual(source.queries.count, 2)
         XCTAssertTrue(model.rows.contains { $0.id == .unreadSeparator })
 
-        await model.open(position: .unread(after: "unavailable"))
+        await model.open(position: .unread(after: MessageID(100)))
         XCTAssertEqual(model.state.content, .initialLoadFailed)
         XCTAssertEqual(source.queries.count, 3)
     }
@@ -1016,7 +1043,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertTrue(model.rows.isEmpty)
         XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: false))
 
-        await model.open(position: .unread(after: "2"))
+        await model.open(position: .unread(after: MessageID(2)))
         XCTAssertFalse(model.rows.contains { $0.id == .unreadSeparator })
         XCTAssertTrue(model.state.live.followsLatest)
     }
@@ -1024,14 +1051,14 @@ final class ConversationTimelineModelTests: XCTestCase {
     func testEmptyAroundResponseDoesNotHideAccessibleUnreadHistory() async throws {
         let (model, source, _) = try makeModel(pages: [
             .success(try TimelineTestFixtures.page([])),
-            .success(try historyPage(ids: 3...4, olderCursor: "older", newerCursor: nil)),
-            .success(try historyPage(ids: 1...2, newerCursor: "newer")),
+            .success(try historyPage(ids: 3...4, olderCursor: MessageID(3), newerCursor: nil)),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
         ])
-        await model.open(position: .unread(after: "missing"))
+        await model.open(position: .unread(after: MessageID(99)))
 
         XCTAssertEqual(model.state.content, .ready)
-        XCTAssertEqual(source.queries.map(\.before), [nil, nil, "older"])
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["1", "2"])
+        XCTAssertEqual(source.queries.map(\.before), [nil, nil, MessageID(3)])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)])
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .reveal(.unreadSeparator, animated: false, highlight: false))
@@ -1039,23 +1066,24 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testUnreadSeekRejectsRepeatedCursorInsteadOfPublishingWrongBeginning() async throws {
         let (model, _, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 3...4, olderCursor: "stuck", newerCursor: nil)),
-            .success(try historyPage(ids: 1...2, olderCursor: "stuck", newerCursor: "newer")),
+            .success(try historyPage(ids: 3...4, olderCursor: MessageID(3), newerCursor: nil)),
+            .success(
+                try historyPage(ids: 1...2, olderCursor: MessageID(3), newerCursor: MessageID(2))),
         ])
         await model.open(position: .unread(after: nil))
         XCTAssertEqual(model.state.content, .initialLoadFailed)
         XCTAssertFalse(model.rows.contains { $0.id == .unreadSeparator })
     }
 
-    func testEntryReadIsImmediateThenDwellUsesStableFullyVisibleCandidateWithoutLexicalOrdering()
+    func testEntryReadIsImmediateThenDwellUsesStableFullyVisibleCandidate()
         async throws
     {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let messages = [
-            try TimelineTestFixtures.message(id: "z", at: 1),
-            try TimelineTestFixtures.message(id: "a", at: 2),
-            try TimelineTestFixtures.message(id: "m", at: 3),
-            try TimelineTestFixtures.message(id: "b", at: 4),
+            try TimelineTestFixtures.message(id: 1, at: 1),
+            try TimelineTestFixtures.message(id: 2, at: 2),
+            try TimelineTestFixtures.message(id: 3, at: 3),
+            try TimelineTestFixtures.message(id: 4, at: 4),
         ]
         let (model, source, _) = try makeModel(
             pages: [.success(try TimelineTestFixtures.page(messages))],
@@ -1065,92 +1093,101 @@ final class ConversationTimelineModelTests: XCTestCase {
         reportVisible([], to: model)
         await source.drain()
         XCTAssertTrue(marked.isEmpty, "Opening must not mark an unseen latest message.")
-        reportVisible(["z"], to: model)
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["z"], "The first eligible visible candidate bypasses dwell.")
-        reportVisible(["z", "a"], to: model)
+        XCTAssertEqual(
+            marked, [MessageID(1)], "The first eligible visible candidate bypasses dwell.")
+        reportVisible([MessageID(1), MessageID(2)], to: model)
         try await Task.sleep(for: .milliseconds(300))
-        reportVisible(["a", "m"], to: model)
+        reportVisible([MessageID(2), MessageID(3)], to: model)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(
-            marked, ["z"], "Changing the latest fully visible message restarts subsequent dwell.")
-        reportVisible(["m"], to: model)
+            marked, [MessageID(1)],
+            "Changing the latest fully visible message restarts subsequent dwell.")
+        reportVisible([MessageID(3)], to: model)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(
-            marked, ["z", "m"],
+            marked, [MessageID(1), MessageID(3)],
             "Repeated geometry reports for the same candidate do not restart dwell.")
-        reportVisible(["a"], to: model)
+        reportVisible([MessageID(2)], to: model)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["z", "m"], "Scrolling backwards cannot regress local progress.")
-        reportVisible(["b"], to: model)
+        XCTAssertEqual(
+            marked, [MessageID(1), MessageID(3)],
+            "Scrolling backwards cannot regress local progress.")
+        reportVisible([MessageID(4)], to: model)
         try await Task.sleep(for: .milliseconds(200))
         reportVisible([], to: model)
         try await Task.sleep(for: .milliseconds(400))
-        XCTAssertEqual(marked, ["z", "m"], "Losing all fully visible rows cancels dwell.")
+        XCTAssertEqual(
+            marked, [MessageID(1), MessageID(3)], "Losing all fully visible rows cancels dwell.")
         model.close()
     }
 
     func testReadDwellCancelsForInactiveStaleInvalidAndClosedViewports() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...2))], markRead: { marked.append($0) })
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1"])
-        reportVisible(["2"], to: model)
+        XCTAssertEqual(marked, [MessageID(1)])
+        reportVisible([MessageID(2)], to: model)
         model.setReadTrackingActive(false)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1"])
+        XCTAssertEqual(marked, [MessageID(1)])
 
         model.setReadTrackingActive(true)
-        reportVisible(["2"], to: model, revision: model.updates.value.revision - 1)
+        reportVisible([MessageID(2)], to: model, revision: model.updates.value.revision - 1)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1"], "Activation requires a fresh matching host viewport.")
-        reportVisible(["2"], to: model)
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "3", at: 3)))
+        XCTAssertEqual(
+            marked, [MessageID(1)], "Activation requires a fresh matching host viewport.")
+        reportVisible([MessageID(2)], to: model)
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 3, at: 3)))
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1"], "Publication invalidates the previous viewport's dwell.")
+        XCTAssertEqual(
+            marked, [MessageID(1)], "Publication invalidates the previous viewport's dwell.")
 
-        reportVisible(["3"], to: model)
+        reportVisible([MessageID(3)], to: model)
         model.viewportDidChange(.empty, reason: .layout, revision: model.updates.value.revision)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1"], "A fully obscured host cancels the previous candidate.")
-        reportVisible(["3"], to: model)
+        XCTAssertEqual(
+            marked, [MessageID(1)], "A fully obscured host cancels the previous candidate.")
+        reportVisible([MessageID(3)], to: model)
         model.close()
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1"])
+        XCTAssertEqual(marked, [MessageID(1)])
     }
 
     func testReadRequestsSerializeAndRevalidateQueuedCandidates() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         var releaseFirst: CheckedContinuation<Void, Never>?
         let (model, source, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...3))],
             markRead: { id in
                 marked.append(id)
-                if id == "1" { await withCheckedContinuation { releaseFirst = $0 } }
+                if id == MessageID(1) { await withCheckedContinuation { releaseFirst = $0 } }
             })
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1"])
-        reportVisible(["2"], to: model)
+        XCTAssertEqual(marked, [MessageID(1)])
+        reportVisible([MessageID(2)], to: model)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1"], "A mature candidate waits for the in-flight receipt.")
-        reportVisible(["3"], to: model)
+        XCTAssertEqual(
+            marked, [MessageID(1)], "A mature candidate waits for the in-flight receipt.")
+        reportVisible([MessageID(3)], to: model)
         releaseFirst?.resume()
         await source.drain()
-        XCTAssertEqual(marked, ["1"], "An obsolete mature candidate must not be sent.")
+        XCTAssertEqual(marked, [MessageID(1)], "An obsolete mature candidate must not be sent.")
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1", "3"])
+        XCTAssertEqual(marked, [MessageID(1), MessageID(3)])
         model.close()
     }
 
     func testReadFailureRetriesOnlyAfterAnotherStableViewport() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let (model, _, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...1))],
             markRead: { id in
@@ -1159,90 +1196,92 @@ final class ConversationTimelineModelTests: XCTestCase {
             })
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         try await Task.sleep(for: .milliseconds(1_100))
-        XCTAssertEqual(marked, ["1"], "Failures cannot trigger an automatic retry loop.")
-        reportVisible(["1"], to: model)
+        XCTAssertEqual(marked, [MessageID(1)], "Failures cannot trigger an automatic retry loop.")
+        reportVisible([MessageID(1)], to: model)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1", "1"])
+        XCTAssertEqual(marked, [MessageID(1), MessageID(1)])
         model.close()
     }
 
     func testExistingWindowScrollCancelsDwellUntilFreshCompletedViewport() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...3))], markRead: { marked.append($0) })
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1"])
-        reportVisible(["2"], to: model)
+        XCTAssertEqual(marked, [MessageID(1)])
+        reportVisible([MessageID(2)], to: model)
         await model.jumpToLiveEdge()
         XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: true))
 
         var duringAnimation = TimelineViewport(
             firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1, distanceToTop: 0,
             distanceToBottom: 0, height: 400)
-        duringAnimation.fullyVisibleMessageIDs = ["2"]
+        duringAnimation.fullyVisibleMessageIDs = [MessageID(2)]
         model.viewportDidChange(
             duringAnimation, reason: .programmatic, revision: model.updates.value.revision)
         try await Task.sleep(for: .milliseconds(600))
         XCTAssertEqual(
-            marked, ["1"], "A scroll command invalidates old geometry even without changing rows.")
+            marked, [MessageID(1)],
+            "A scroll command invalidates old geometry even without changing rows.")
 
-        reportVisible(["3"], to: model)
+        reportVisible([MessageID(3)], to: model)
         await source.drain()
         XCTAssertEqual(
-            marked, ["1"], "A jump does not reset the entry-only immediate read allowance.")
+            marked, [MessageID(1)], "A jump does not reset the entry-only immediate read allowance."
+        )
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1", "3"])
+        XCTAssertEqual(marked, [MessageID(1), MessageID(3)])
         model.close()
     }
 
     func testJumpVisibilityTracksActualViewportNotScrollDirectionOrUnreadMetadata() async throws {
         let (model, _, _) = try makeModel(pages: [.success(try livePage(ids: 1...5))])
         await model.open()
-        reportVisible(["4"], to: model)
+        reportVisible([MessageID(4)], to: model)
         model.userScrollBegan()
-        reportVisible(["3"], to: model, reason: .user)
+        reportVisible([MessageID(3)], to: model, reason: .user)
         XCTAssertTrue(model.showsJumpToLatest, "Scrolling upward leaves the live bottom.")
-        reportVisible(["4"], to: model, reason: .layout)
+        reportVisible([MessageID(4)], to: model, reason: .layout)
         XCTAssertTrue(model.showsJumpToLatest, "Layout updates retain actual viewport position.")
-        reportVisible(["5"], to: model, reason: .user, distanceToBottom: 0)
+        reportVisible([MessageID(5)], to: model, reason: .user, distanceToBottom: 0)
         XCTAssertFalse(model.showsJumpToLatest, "The absolute latest edge has nowhere to jump.")
-        model.updateReadState(unreadCount: 2, lastReadMessageID: "3")
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(3))
         XCTAssertFalse(
             model.showsJumpToLatest, "Unread metadata cannot show a button at the bottom.")
-        model.updateReadState(unreadCount: 0, lastReadMessageID: "5")
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(5))
         XCTAssertFalse(model.showsJumpToLatest)
     }
 
     func testJumpUsesChangingReadBoundaryWhileUnreadSeparatorStaysFrozen() async throws {
         let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 1...5))])
-        model.updateReadState(unreadCount: 3, lastReadMessageID: "2")
-        await model.open(position: .unread(after: "2"))
-        reportVisible(["1"], to: model)
+        model.updateReadState(unreadCount: 3, lastReadMessageID: MessageID(2))
+        await model.open(position: .unread(after: MessageID(2)))
+        reportVisible([MessageID(1)], to: model)
         await model.jumpTowardLatest()
-        let firstBoundary = try XCTUnwrap(model.rows.first { $0.messageID == "2" }?.id)
+        let firstBoundary = try XCTUnwrap(model.rows.first { $0.messageID == MessageID(2) }?.id)
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent, .readBoundary(firstBoundary, animated: true))
-        reportVisible(["2"], to: model)
+        reportVisible([MessageID(2)], to: model)
         await model.jumpTowardLatest()
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent, .bottom(animated: true),
             "A repeat click at the read boundary reaches latest.")
 
-        reportVisible(["1"], to: model)
-        model.updateReadState(unreadCount: 1, lastReadMessageID: "4")
+        reportVisible([MessageID(1)], to: model)
+        model.updateReadState(unreadCount: 1, lastReadMessageID: MessageID(4))
         await model.jumpTowardLatest()
-        let currentBoundary = try XCTUnwrap(model.rows.first { $0.messageID == "4" }?.id)
+        let currentBoundary = try XCTUnwrap(model.rows.first { $0.messageID == MessageID(4) }?.id)
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .readBoundary(currentBoundary, animated: true))
         let separator = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
         XCTAssertEqual(
-            model.rows[separator + 1].messageID, "3",
+            model.rows[separator + 1].messageID, MessageID(3),
             "Read receipts must not move the entry separator.")
         XCTAssertEqual(model.jumpUnreadCount, 1)
         XCTAssertEqual(source.queries.count, 1, "Loaded read boundaries reuse the native window.")
@@ -1250,46 +1289,46 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testJumpLoadsUnreadBoundaryThenAbsoluteLatestAcrossDisjointWindows() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "older-window")),
-            .success(try historyPage(ids: 40...42, newerCursor: "boundary-window")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
+            .success(try historyPage(ids: 40...42, newerCursor: MessageID(42))),
             .success(try livePage(ids: 98...99)),
         ])
-        model.updateReadState(unreadCount: 9, lastReadMessageID: "41")
-        await model.open(position: .message("1"))
-        reportVisible(["2"], to: model)
+        model.updateReadState(unreadCount: 9, lastReadMessageID: MessageID(41))
+        await model.open(position: .message(MessageID(1)))
+        reportVisible([MessageID(2)], to: model)
         await model.jumpTowardLatest()
-        let boundary = try XCTUnwrap(model.rows.first { $0.messageID == "41" }?.id)
+        let boundary = try XCTUnwrap(model.rows.first { $0.messageID == MessageID(41) }?.id)
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent, .readBoundary(boundary, animated: false))
-        XCTAssertEqual(source.queries.last?.around, "41")
-        reportVisible(["41"], to: model)
+        XCTAssertEqual(source.queries.last?.around, MessageID(41))
+        reportVisible([MessageID(41)], to: model)
         await model.jumpTowardLatest()
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["98", "99"])
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(98), MessageID(99)])
         XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: false))
         XCTAssertTrue(model.isAtLiveEdge)
     }
 
     func testUnavailableUnreadBoundarySilentlyFallsBackToLatest() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...2, newerCursor: "more")),
-            .success(try historyPage(ids: 40...41, newerCursor: "more")),
+            .success(try historyPage(ids: 1...2, newerCursor: MessageID(2))),
+            .success(try historyPage(ids: 40...41, newerCursor: MessageID(41))),
             .success(try livePage(ids: 98...99)),
         ])
-        model.updateReadState(unreadCount: 3, lastReadMessageID: "deleted")
-        await model.open(position: .message("1"))
-        reportVisible(["2"], to: model)
+        model.updateReadState(unreadCount: 3, lastReadMessageID: MessageID(39))
+        await model.open(position: .message(MessageID(1)))
+        reportVisible([MessageID(2)], to: model)
         await model.jumpTowardLatest()
-        XCTAssertEqual(source.queries[1].around, "deleted")
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["98", "99"])
+        XCTAssertEqual(source.queries[1].around, MessageID(39))
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(98), MessageID(99)])
         XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: false))
         XCTAssertNil(model.state.repositionFailure)
     }
 
     func testJumpDoesNotGoBackToUnreadBoundaryBeforeTheVisibleWindow() async throws {
         let (model, source, _) = try makeModel(pages: [.success(try livePage(ids: 98...99))])
-        model.updateReadState(unreadCount: 2, lastReadMessageID: "50")
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(50))
         await model.open()
-        reportVisible(["98"], to: model)
+        reportVisible([MessageID(98)], to: model)
         await model.jumpTowardLatest()
         XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: true))
         XCTAssertEqual(source.queries.count, 1)
@@ -1297,19 +1336,19 @@ final class ConversationTimelineModelTests: XCTestCase {
 
     func testUnreadBadgeUsesAuthoritativeMetadataWithoutAddingDeferredArrivals() async throws {
         let (model, source, _) = try makeModel(pages: [
-            .success(try historyPage(ids: 1...3, newerCursor: "more"))
+            .success(try historyPage(ids: 1...3, newerCursor: MessageID(3)))
         ])
-        model.updateReadState(unreadCount: 8, lastReadMessageID: "1")
-        await model.open(position: .unread(after: "1"))
-        reportVisible(["2"], to: model)
-        source.store.apply(.message(try TimelineTestFixtures.message(id: "4", at: 4)))
+        model.updateReadState(unreadCount: 8, lastReadMessageID: MessageID(1))
+        await model.open(position: .unread(after: MessageID(1)))
+        reportVisible([MessageID(2)], to: model)
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 4, at: 4)))
         XCTAssertEqual(
             model.jumpUnreadCount, 8,
             "The same incoming message is already included in server unread metadata.")
-        model.updateReadState(unreadCount: 5, lastReadMessageID: "2")
+        model.updateReadState(unreadCount: 5, lastReadMessageID: MessageID(2))
         XCTAssertEqual(
             model.jumpUnreadCount, 5, "A read confirmation updates the current conversation badge.")
-        model.updateReadState(unreadCount: 0, lastReadMessageID: "4")
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(4))
         XCTAssertEqual(model.jumpUnreadCount, 0)
         XCTAssertTrue(
             model.showsJumpToLatest,
@@ -1317,30 +1356,31 @@ final class ConversationTimelineModelTests: XCTestCase {
     }
 
     func testHistoricalEntryRefreshesVisibleReadWithoutRegressingSubsequentProgress() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...5))], markRead: { marked.append($0) })
-        model.updateReadState(unreadCount: 1, lastReadMessageID: "4")
+        model.updateReadState(unreadCount: 1, lastReadMessageID: MessageID(4))
         model.setReadTrackingActive(true)
-        await model.open(position: .message("2"))
-        reportVisible(["2"], to: model)
+        await model.open(position: .message(MessageID(2)))
+        reportVisible([MessageID(2)], to: model)
         await source.drain()
         XCTAssertEqual(
-            marked, ["2"],
+            marked, [MessageID(2)],
             "Historical entry refreshes the server using only the actual visible candidate.")
-        reportVisible(["3"], to: model)
+        reportVisible([MessageID(3)], to: model)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["2"], "The entry refresh cannot lower the known read watermark.")
-        reportVisible(["5"], to: model)
+        XCTAssertEqual(
+            marked, [MessageID(2)], "The entry refresh cannot lower the known read watermark.")
+        reportVisible([MessageID(5)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["2"])
+        XCTAssertEqual(marked, [MessageID(2)])
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["2", "5"])
+        XCTAssertEqual(marked, [MessageID(2), MessageID(5)])
         model.close()
     }
 
     func testReactivationKeepsDwellButReopeningAllowsAnotherImmediateVisibleRead() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [
                 .success(try livePage(ids: 1...4)),
@@ -1348,49 +1388,50 @@ final class ConversationTimelineModelTests: XCTestCase {
             ], markRead: { marked.append($0) })
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1"])
+        XCTAssertEqual(marked, [MessageID(1)])
         model.setReadTrackingActive(false)
         model.setReadTrackingActive(true)
-        reportVisible(["2"], to: model)
+        reportVisible([MessageID(2)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1"], "Foreground activation is not a new conversation entry.")
+        XCTAssertEqual(
+            marked, [MessageID(1)], "Foreground activation is not a new conversation entry.")
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1", "2"])
+        XCTAssertEqual(marked, [MessageID(1), MessageID(2)])
         model.close()
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["3"], to: model)
+        reportVisible([MessageID(3)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1", "2", "3"])
-        reportVisible(["4"], to: model)
+        XCTAssertEqual(marked, [MessageID(1), MessageID(2), MessageID(3)])
+        reportVisible([MessageID(4)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1", "2", "3"])
+        XCTAssertEqual(marked, [MessageID(1), MessageID(2), MessageID(3)])
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["1", "2", "3", "4"])
+        XCTAssertEqual(marked, [MessageID(1), MessageID(2), MessageID(3), MessageID(4)])
         model.close()
     }
 
     func testCancelledEntryReadDoesNotConsumeFirstValidActiveViewport() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...2))], markRead: { marked.append($0) })
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         model.setReadTrackingActive(false)
         model.setReadTrackingActive(true)
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
         XCTAssertEqual(
-            marked, ["1"],
+            marked, [MessageID(1)],
             "Cancellation before sending must leave the fresh visible candidate eligible.")
         model.close()
     }
 
     func testReopenedEntryImmediateReadWaitsForCancelledInFlightWrite() async throws {
-        var marked: [String] = []
+        var marked: [MessageID] = []
         var releaseFirst: CheckedContinuation<Void, Never>?
         let (model, source, _) = try makeModel(
             pages: [
@@ -1399,69 +1440,70 @@ final class ConversationTimelineModelTests: XCTestCase {
             ],
             markRead: { id in
                 marked.append(id)
-                if id == "1" { await withCheckedContinuation { releaseFirst = $0 } }
+                if id == MessageID(1) { await withCheckedContinuation { releaseFirst = $0 } }
             })
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["1"], to: model)
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["1"])
+        XCTAssertEqual(marked, [MessageID(1)])
         model.close()
         model.setReadTrackingActive(true)
         await model.open()
-        reportVisible(["2"], to: model)
+        reportVisible([MessageID(2)], to: model)
         await source.drain()
         XCTAssertEqual(
-            marked, ["1"],
+            marked, [MessageID(1)],
             "Cancelled callbacks may ignore cancellation; entries cannot overlap writes.")
         releaseFirst?.resume()
         await source.drain()
         XCTAssertEqual(
-            marked, ["1", "2"],
+            marked, [MessageID(1), MessageID(2)],
             "The first visible candidate in the new entry needs no dwell after serialization.")
         model.close()
     }
 
     func testThreadReadMetadataAndImmediateReadStayScopedWhileJumpGoesToLatest() async throws {
-        var marked: [String] = []
-        let root = try TimelineTestFixtures.message(id: "root", at: 1)
+        var marked: [MessageID] = []
+        let root = try TimelineTestFixtures.message(id: 1, at: 1)
         let reply = try TimelineTestFixtures.message(
-            id: "reply", at: 2, fields: ["replyRootId": "root"])
+            id: 2, at: 2, fields: ["replyRootId": "1"])
         let latest = try TimelineTestFixtures.message(
-            id: "latest", at: 3, fields: ["replyRootId": "root"])
-        let parentOnly = try TimelineTestFixtures.message(id: "parent-only", at: 4)
+            id: 3, at: 3, fields: ["replyRootId": "1"])
+        let parentOnly = try TimelineTestFixtures.message(id: 4, at: 4)
         let (model, source, _) = try makeModel(
             pages: [.success(try TimelineTestFixtures.page([root, reply, latest, parentOnly]))],
-            threadID: "root", markRead: { marked.append($0) }
+            threadID: "1", markRead: { marked.append($0) }
         )
-        model.updateReadState(unreadCount: 2, lastReadMessageID: "root")
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
         model.setReadTrackingActive(true)
-        await model.open(position: .unread(after: "root"))
-        reportVisible(["root"], to: model)
+        await model.open(position: .unread(after: MessageID(1)))
+        reportVisible([MessageID(1)], to: model)
         await source.drain()
         XCTAssertEqual(
-            marked, ["root"],
+            marked, [MessageID(1)],
             "The first visible thread cursor refreshes read state immediately, even when unchanged."
         )
-        reportVisible(["reply"], to: model)
+        reportVisible([MessageID(2)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, ["root"], "Thread progress after entry still requires dwell.")
+        XCTAssertEqual(marked, [MessageID(1)], "Thread progress after entry still requires dwell.")
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, ["root", "reply"])
-        model.updateReadState(unreadCount: 1, lastReadMessageID: "reply")
-        reportVisible(["root"], to: model)
+        XCTAssertEqual(marked, [MessageID(1), MessageID(2)])
+        model.updateReadState(unreadCount: 1, lastReadMessageID: MessageID(2))
+        reportVisible([MessageID(1)], to: model)
         await model.jumpTowardLatest()
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent, .bottom(animated: true),
             "Thread jump does not stop at the chat-only read boundary.")
         XCTAssertEqual(model.jumpUnreadCount, 1)
-        XCTAssertEqual(model.rows.compactMap(\.messageID), ["root", "reply", "latest"])
-        XCTAssertEqual(source.queries.first?.threadID, "root")
+        XCTAssertEqual(
+            model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2), MessageID(3)])
+        XCTAssertEqual(source.queries.first?.threadID, "1")
         model.close()
     }
 
     private func reportVisible(
-        _ ids: [String], to model: ConversationTimelineModel, revision: Int? = nil,
+        _ ids: [MessageID], to model: ConversationTimelineModel, revision: Int? = nil,
         reason: TimelineViewportChangeReason = .layout, distanceToBottom: CGFloat = 5_000
     ) {
         if let request = model.updates.value.pendingScroll {
@@ -1506,7 +1548,7 @@ final class ConversationTimelineModelTests: XCTestCase {
     private func makeModel(
         pages: [Result<ListMessagesResponse, Error>],
         threadID: String? = nil,
-        markRead: (@MainActor (String) async throws -> Void)? = nil
+        markRead: (@MainActor (MessageID) async throws -> Void)? = nil
     ) throws -> (
         ConversationTimelineModel, ScriptedTimelineSource,
         CurrentValueSubject<[TimelineHostSnapshot], Never>
@@ -1531,12 +1573,12 @@ final class ConversationTimelineModelTests: XCTestCase {
     }
 
     private func historyPage(
-        ids: ClosedRange<Int>, olderCursor: String? = nil, newerCursor: String?
+        ids: ClosedRange<Int>, olderCursor: MessageID? = nil, newerCursor: MessageID?
     ) throws -> ListMessagesResponse {
         try TimelineTestFixtures.page(
             ids.map {
                 try TimelineTestFixtures.message(
-                    id: "\($0)", senderID: Int32($0 % 2 + 1), at: $0 % 60, minute: $0 / 60)
+                    id: UInt64($0), senderID: Int32($0 % 2 + 1), at: $0 % 60, minute: $0 / 60)
             },
             olderCursor: olderCursor,
             newerCursor: newerCursor

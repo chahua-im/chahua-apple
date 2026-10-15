@@ -35,12 +35,6 @@
                 guard !actions.hasSameRendering(as: oldValue) else { return }
                 rowActions = makeRowActions()
                 guard isViewLoaded else { return }
-                if actions.currentUserProfile != oldValue.currentUserProfile {
-                    profileNeedsPreparation = true
-                    latestSnapshot = model.updates.value
-                    preparation = nil
-                    requestDisplayUpdate()
-                }
                 refreshVisibleRoots()
             }
         }
@@ -81,13 +75,20 @@
                 view.setNeedsLayout()
             }
         }
-        private let layoutCache = TimelineLayoutCache()
-        private var presentations: [TimelineRowID: TimelineRowPresentation] = [:]
-        private var installedLayouts: [TimelineRowID: TimelineRowLayout] = [:]
+        var appLanguage = AppLanguage.selected.rawValue {
+            didSet {
+                guard appLanguage != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
+        private lazy var rowCache = TimelineRowCache(
+            currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil)
+        /// Prepared rows backing `rows`; on-demand measurement may refresh individual entries.
+        private var preparedRows: [TimelineRowID: PreparedRow] = [:]
         private var preparation: TimelineLayoutPreparation?
         private var layoutEnvironment: TimelineLayoutEnvironment?
         private var displayScheduler: TimelineDisplayScheduler!
-        private var profileNeedsPreparation = false
         private var unsettledRows: Set<TimelineRowID> = []
         private var heightChanges = IndexSet()
         private var completingSnapshot: TimelineHostSnapshot?
@@ -201,7 +202,7 @@
                     layoutEnvironment = currentEnvironment
                     unsettledRows = Set(rows.map(\.id))
                     for index in visibleRowIndexes {
-                        let oldHeight = installedLayouts[rows[index].id]?.size.height
+                        let oldHeight = preparedRows[rows[index].id]?.layout.size.height
                         let layout = exactLayout(for: rows[index])
                         if oldHeight != layout.size.height { heightChanges.insert(index) }
                     }
@@ -273,7 +274,7 @@
             let row = rows[indexPath.item]
             let layout =
                 unsettledRows.contains(row.id)
-                ? installedLayouts[row.id] ?? exactLayout(for: row) : exactLayout(for: row)
+                ? preparedRows[row.id]?.layout ?? exactLayout(for: row) : exactLayout(for: row)
             return .init(width: width, height: layout.size.height)
         }
 
@@ -303,33 +304,29 @@
                 avatarSize: UIFontMetrics(forTextStyle: .body).scaledValue(
                     for: 36, compatibleWith: traits),
                 layoutDirection: view.effectiveUserInterfaceLayoutDirection == .rightToLeft
-                    ? .rightToLeft : .leftToRight)
+                    ? .rightToLeft : .leftToRight, language: appLanguage)
         }
 
         private func exactLayout(for row: TimelineRow) -> TimelineRowLayout {
             let environment = layoutEnvironment ?? currentEnvironment
             guard environment.timelineWidth.isFinite, environment.timelineWidth > 0 else {
-                return installedLayouts[row.id] ?? .empty
+                return preparedRows[row.id]?.layout ?? .empty
             }
-            if let presentation = presentations[row.id], presentation.environment == environment,
-                presentation.row == row, let layout = installedLayouts[row.id]
+            let entry: PreparedRow
+            if let installed = preparedRows[row.id], installed.environment == environment,
+                installed.row == row
             {
-                unsettledRows.remove(row.id)
-                return layout
+                entry = installed
+            } else {
+                entry = rowCache.prepared(row, environment: environment)
+                preparedRows[row.id] = entry
             }
-            let presentation = TimelineRowPresentation.make(
-                row: row, currentUserProfile: actions.currentUserProfile,
-                currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil,
-                environment: environment)
-            let layout = layoutCache.layout(for: presentation, environment: environment)
-            presentations[row.id] = presentation
-            installedLayouts[row.id] = layout
             unsettledRows.remove(row.id)
-            return layout
+            return entry.layout
         }
 
         private func bind(_ cell: TimelineCollectionViewCell, row: TimelineRow) {
-            let oldHeight = installedLayouts[row.id]?.size.height
+            let oldHeight = preparedRows[row.id]?.layout.size.height
             let layout = exactLayout(for: row)
             if oldHeight != layout.size.height,
                 let index = rows.firstIndex(where: { $0.id == row.id })
@@ -337,7 +334,7 @@
                 heightChanges.insert(index)
                 requestDisplayUpdate()
             }
-            guard let presentation = presentations[row.id] else { return }
+            guard let presentation = preparedRows[row.id]?.presentation else { return }
             cell.rowView.bind(
                 .init(
                     presentation: presentation, layout: layout, context: rowContext(for: row),
@@ -434,7 +431,7 @@
             var count = 0
             applying = true
             for index in candidates where unsettledRows.contains(rows[index].id) {
-                let previousHeight = installedLayouts[rows[index].id]?.size.height
+                let previousHeight = preparedRows[rows[index].id]?.layout.size.height
                 let height = exactLayout(for: rows[index]).size.height
                 if previousHeight != height { heightChanges.insert(index) }
                 count += 1
@@ -488,7 +485,6 @@
                 toggleReaction: actions.toggleReaction == nil
                     ? nil : { [weak self] in self?.actions.toggleReaction?($0, $1) },
                 pendingReactionMessageIDs: actions.pendingReactionMessageIDs,
-                currentUserProfile: actions.currentUserProfile,
                 interactionContext: actions.interactionContext,
                 modifiablePendingMessageIDs: actions.modifiablePendingMessageIDs,
                 blockPendingMessage: actions.blockPendingMessage == nil
@@ -567,7 +563,7 @@
                     || old.snapshot.windowRevision != newest.windowRevision
             {
                 let retained = Set(rows.map(\.id)).union(newest.rows.map(\.id))
-                layoutCache.remove(Set(old.snapshot.rows.map(\.id)).subtracting(retained))
+                rowCache.remove(Set(old.snapshot.rows.map(\.id)).subtracting(retained))
                 preparation = nil
             }
             latestSnapshot = newest
@@ -585,24 +581,17 @@
                     let needsRows =
                         installedRevision != snapshot.revision
                         || installedWindowRevision != snapshot.windowRevision
-                        || profileNeedsPreparation
                     if needsRows {
                         let environment = currentEnvironment
                         if preparation?.snapshot.revision != snapshot.revision
                             || preparation?.snapshot.windowRevision != snapshot.windowRevision
                             || preparation?.environment != environment
-                            || preparation?.profile != actions.currentUserProfile
                         {
                             preparation = TimelineLayoutPreparation(
-                                snapshot: snapshot, environment: environment,
-                                profile: actions.currentUserProfile)
+                                snapshot: snapshot, environment: environment, cache: rowCache)
                         }
                         guard let work = preparation else { break }
-                        guard
-                            work.advance(
-                                cache: layoutCache, currentUserID: model.currentUserID,
-                                isThreadTimeline: model.threadID != nil)
-                        else {
+                        guard work.advance(cache: rowCache) else {
                             requestDisplayUpdate()
                             break
                         }
@@ -621,7 +610,6 @@
                     if needsRows, let work = preparation {
                         installRows(snapshot, prepared: work)
                         preparation = nil
-                        profileNeedsPreparation = false
                     }
                     if applying { break }
                     if needsRows {
@@ -657,19 +645,20 @@
                 geometry == currentGeometry ? capturePosition() : (position ?? capturePosition())
             heightChanges.removeAll()
             for (index, row) in snapshot.rows.enumerated() {
-                if installedLayouts[row.id]?.size.height != prepared.layouts[row.id]?.size.height {
-                    heightChanges.insert(index)
-                }
+                // Insertions are sized by the batch update; only surviving rows can resize.
+                guard let old = preparedRows[row.id], let new = prepared.rows[row.id], old !== new,
+                    old.layout.size.height != new.layout.size.height
+                else { continue }
+                heightChanges.insert(index)
             }
-            presentations = prepared.presentations
-            installedLayouts = prepared.layouts
+            preparedRows = prepared.rows
             layoutEnvironment = prepared.environment
             unsettledRows.removeAll()
             let reset = installedWindowRevision != snapshot.windowRevision || installedRevision < 0
             let change =
                 reset ? TimelineChange.reset : TimelineChange.compute(from: rows, to: snapshot.rows)
             let removed = Set(rows.map(\.id)).subtracting(Set(snapshot.rows.map(\.id)))
-            layoutCache.remove(removed)
+            rowCache.remove(removed)
 
             UIView.performWithoutAnimation {
                 switch change {
@@ -960,7 +949,7 @@
             let visible = visibleItems.map(\.indexPath.item)
             let unobscured = unobscuredViewport
             let fullyVisibleMessageIDs = visibleItems.sorted { $0.indexPath < $1.indexPath }
-                .compactMap { item -> String? in
+                .compactMap { item -> MessageID? in
                     guard !unobscured.isEmpty, unobscured.contains(item.frame) else { return nil }
                     return rows[item.indexPath.item].messageID
                 }

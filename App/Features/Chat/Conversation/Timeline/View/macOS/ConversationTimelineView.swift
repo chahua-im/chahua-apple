@@ -11,6 +11,7 @@
         @Environment(\.isChatSplitResizing) private var isSplitResizing
         @AppStorage(MessageTextSizePreference.storageKey)
         private var messageTextSize = MessageTextSizePreference.defaultValue
+        @AppStorage(AppLanguage.storageKey) private var appLanguage = AppLanguage.system.rawValue
         @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
         private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
             .rawValue
@@ -42,6 +43,7 @@
                 mediaContext: mediaContext,
                 colorScheme: colorScheme,
                 messageTextSize: messageTextSize,
+                appLanguage: appLanguage,
                 unreadBadgeColor: unreadBadgeColor,
                 headerInset: chatHeaderInset,
                 composerInset: chatComposerInset,

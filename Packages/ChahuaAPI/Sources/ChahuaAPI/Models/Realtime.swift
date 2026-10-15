@@ -79,20 +79,20 @@ public enum RealtimeServerEvent: Decodable, Sendable {
 
 public struct BulkDeletedPayload: Decodable, Sendable {
     public let chatId: String
-    public let messageIds: [String]
+    public let messageIds: [MessageID]
 
-    public init(chatId: String, messageIds: [String]) {
+    public init(chatId: String, messageIds: [MessageID]) {
         self.chatId = chatId
         self.messageIds = messageIds
     }
 }
 
 public struct ReactionUpdatePayload: Decodable, Sendable {
-    public let messageId: String
+    public let messageId: MessageID
     public let chatId: String
     public let reactions: [ReactionSummary]
 
-    public init(messageId: String, chatId: String, reactions: [ReactionSummary]) {
+    public init(messageId: MessageID, chatId: String, reactions: [ReactionSummary]) {
         self.messageId = messageId
         self.chatId = chatId
         self.reactions = reactions
@@ -146,12 +146,12 @@ public struct ThreadMembershipChangedPayload: Decodable, Sendable {
 public struct PinUpdatePayload: Decodable, Sendable {
     public let chatId: String
     public let pinId: String
-    public let messageId: String
+    public let messageId: MessageID
     public let threadRootId: String?
     public let pin: PinResponse?
 
     public init(
-        chatId: String, pinId: String, messageId: String, threadRootId: String? = nil,
+        chatId: String, pinId: String, messageId: MessageID, threadRootId: String? = nil,
         pin: PinResponse? = nil
     ) {
         self.chatId = chatId

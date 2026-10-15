@@ -4,12 +4,12 @@ import SwiftUI
 
 struct ReactionDetailsView: View {
     let chatID: String
-    let messageID: String
+    let messageID: MessageID
     let load: () async throws -> ReactionDetailResponse
 
     init(
         chatID: String,
-        messageID: String,
+        messageID: MessageID,
         load: @escaping () async throws -> ReactionDetailResponse
     ) {
         self.chatID = chatID
@@ -235,7 +235,7 @@ private enum ReactionDetailsLoadState {
 
 private struct ReactionDetailsRequestInput: Hashable {
     let chatID: String
-    let messageID: String
+    let messageID: MessageID
 }
 
 private struct ReactionDetailsRequestKey: Hashable {

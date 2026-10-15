@@ -84,26 +84,26 @@ public protocol ChahuaAPIClient: Sendable {
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
 
     /// Fetches authoritative, current-recipient state with `GET /chats/{chatID}/messages/{messageID}`.
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse
+    func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse
 
     /// Replaces the text of an existing message with `PATCH /chats/{chatID}/messages/{messageID}`.
-    func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody) async throws
+    func updateMessage(chatID: String, messageID: MessageID, body: UpdateMessageBody) async throws
         -> MessageResponse
 
     /// Recalls a published message for all participants with `DELETE /chats/{chatID}/messages/{messageID}`.
-    func deleteMessage(chatID: String, messageID: String) async throws
+    func deleteMessage(chatID: String, messageID: MessageID) async throws
 
     /// Idempotent reaction mutation at `/chats/{chatID}/messages/{messageID}/reactions/{emoji}`.
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws
+    func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws
+    func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws
 
     /// Fetches every reactor for each emoji with `GET /chats/{chatID}/messages/{messageID}/reactions`.
-    func getReactionDetails(chatID: String, messageID: String) async throws
+    func getReactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse
 
     /// Chat-scoped pins; thread pin endpoints are not supported by the server.
     func listPins(chatID: String) async throws -> ListPinsResponse
-    func createPin(chatID: String, messageID: String) async throws -> PinResponse
+    func createPin(chatID: String, messageID: MessageID) async throws -> PinResponse
     func deletePin(chatID: String, pinID: String) async throws
 
     /// Sticker library snapshots and flat sticker/pack detail responses.
@@ -152,13 +152,13 @@ public protocol ChahuaAPIClient: Sendable {
         -> MessageResponse
 
     /// Advances the current member's read cursor with `POST /chats/{chatID}/read`.
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse
+    func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse
 
     /// Rewinds a chat's read cursor with `POST /chats/{chatID}/unread`.
     func markChatUnread(chatID: String) async throws -> ReadStateResponse
 
     /// Advances a subscribed thread's read cursor without marking its parent chat read.
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+    func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
 }
 
@@ -184,7 +184,7 @@ extension ChahuaAPIClient {
             id: id, upload: upload, emoji: emoji, name: nil, description: nil)
     }
 
-    public func updateMessage(chatID: String, messageID: String, body: UpdateMessageBody)
+    public func updateMessage(chatID: String, messageID: MessageID, body: UpdateMessageBody)
         async throws -> MessageResponse
     {
         throw APIError.unavailable
@@ -194,7 +194,7 @@ extension ChahuaAPIClient {
         throw APIError.unavailable
     }
 
-    public func createPin(chatID: String, messageID: String) async throws -> PinResponse {
+    public func createPin(chatID: String, messageID: MessageID) async throws -> PinResponse {
         throw APIError.unavailable
     }
 

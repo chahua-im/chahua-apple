@@ -14,6 +14,8 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     let body: CreateMessageBody
     let enqueuedAt: Date
     let senderID: Int32
+    /// The sender as displayed until acknowledgement, so a row never consults the session.
+    var sender: User? = nil
     var state: State
     var replyToMessage: MessagePreview? = nil
     var attachments: [LocalOutgoingAttachment] = []

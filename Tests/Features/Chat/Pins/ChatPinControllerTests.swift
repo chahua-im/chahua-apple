@@ -144,7 +144,7 @@ final class ChatPinControllerTests: XCTestCase {
         let controller = ChatPinController(apiClient: api, onInvalidToken: {})
         let wrong = PinResponse(
             id: "wrong", chatId: "another",
-            message: try TimelineTestFixtures.message(id: "wrong", at: 1), pinnedBy: 1,
+            message: try TimelineTestFixtures.message(id: 9, at: 1), pinnedBy: 1,
             pinnedAt: Date())
         let load = Task { await controller.load(chatID: "chat") }
         await api.waitForRequests(1)
@@ -165,10 +165,11 @@ final class ChatPinControllerTests: XCTestCase {
         XCTAssertNil(controller.error)
     }
 
+    /// The pinned message's server ID is `second`, so ID order matches `createdAt` order.
     private func pin(_ id: String, second: Int, expiresAt: Date? = nil) throws -> PinResponse {
         PinResponse(
             id: "pin-\(id)", chatId: "chat",
-            message: try TimelineTestFixtures.message(id: id, at: second), pinnedBy: 1,
+            message: try TimelineTestFixtures.message(id: UInt64(second), at: second), pinnedBy: 1,
             pinnedAt: Date(), expiresAt: expiresAt)
     }
 
@@ -215,7 +216,7 @@ private actor HeldPinAPI: ChahuaAPIClient {
         }
     }
 
-    func createPin(chatID: String, messageID: String) async throws -> PinResponse {
+    func createPin(chatID: String, messageID: MessageID) async throws -> PinResponse {
         let index = requestCount
         requestCount += 1
         return try await withCheckedThrowingContinuation {
@@ -294,13 +295,13 @@ private actor HeldPinAPI: ChahuaAPIClient {
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
         -> MessageResponse
     { throw APIError.unavailable }
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+    func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }
     func markChatUnread(chatID: String) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+    func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
     { throw APIError.unavailable }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
@@ -308,22 +309,22 @@ private actor HeldPinAPI: ChahuaAPIClient {
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse {
         throw APIError.unavailable
     }
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+    func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         throw APIError.unavailable
     }
 
-    func getReactionDetails(chatID: String, messageID: String) async throws
+    func getReactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse
     {
         throw APIError.unavailable
     }
-    func deleteMessage(chatID: String, messageID: String) async throws {
+    func deleteMessage(chatID: String, messageID: MessageID) async throws {
         throw APIError.unavailable
     }
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }

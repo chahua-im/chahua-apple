@@ -46,12 +46,6 @@
                 guard !actions.hasSameRendering(as: oldValue) else { return }
                 rowActions = makeRowActions()
                 guard isViewLoaded else { return }
-                if actions.currentUserProfile != oldValue.currentUserProfile {
-                    latestSnapshot = model.updates.value
-                    profileNeedsPreparation = true
-                    preparation = nil
-                    requestDisplayUpdate()
-                }
                 refreshVisibleRoots()
             }
         }
@@ -83,6 +77,13 @@
                 requestDisplayUpdate()
             }
         }
+        var appLanguage = AppLanguage.selected.rawValue {
+            didSet {
+                guard appLanguage != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
         var headerInset: CGFloat = 0 {
             didSet {
                 guard headerInset != oldValue, isViewLoaded else { return }
@@ -97,13 +98,13 @@
                 view.needsLayout = true
             }
         }
-        private let layoutCache = TimelineLayoutCache()
-        private var presentations: [TimelineRowID: TimelineRowPresentation] = [:]
-        private var installedLayouts: [TimelineRowID: TimelineRowLayout] = [:]
+        private lazy var rowCache = TimelineRowCache(
+            currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil)
+        /// Prepared rows backing `rows`; on-demand measurement may refresh individual entries.
+        private var preparedRows: [TimelineRowID: PreparedRow] = [:]
         private var preparation: TimelineLayoutPreparation?
         private var layoutEnvironment: TimelineLayoutEnvironment?
         private var displayScheduler: TimelineDisplayScheduler!
-        private var profileNeedsPreparation = false
         private var cancellable: AnyCancellable?
         private var highlightedRowID: TimelineRowID?
         private var highlightTask: Task<Void, Never>?
@@ -267,7 +268,7 @@
             for cell in rowView.subviews.compactMap({ $0 as? TimelineTableCellView }) {
                 cell.rowView.setVisible(false)
                 guard let id = cell.rowView.binding?.presentation.row.id,
-                    presentations[id] != nil
+                    preparedRows[id] != nil
                 else {
                     cell.clear()
                     continue
@@ -341,7 +342,7 @@
                 caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize
                     * relativeScale,
                 layoutDirection: view.userInterfaceLayoutDirection == .rightToLeft
-                    ? .rightToLeft : .leftToRight)
+                    ? .rightToLeft : .leftToRight, language: appLanguage)
         }
 
         private func exactLayout(for row: TimelineRow, allowingStaleOffscreen: Bool = false)
@@ -349,36 +350,31 @@
         {
             let environment = layoutEnvironment ?? currentEnvironment
             guard environment.timelineWidth.isFinite, environment.timelineWidth > 0 else {
-                return installedLayouts[row.id] ?? .empty
+                return preparedRows[row.id]?.layout ?? .empty
             }
-            if let presentation = presentations[row.id], presentation.environment == environment,
-                presentation.row == row, let layout = installedLayouts[row.id]
+            if let installed = preparedRows[row.id], installed.environment == environment,
+                installed.row == row
             {
-                return layout
+                return installed.layout
             }
-            if allowingStaleOffscreen, needsFullHeightRefresh, let layout = installedLayouts[row.id]
+            if allowingStaleOffscreen, needsFullHeightRefresh, let installed = preparedRows[row.id]
             {
-                return layout
+                return installed.layout
             }
-            let presentation = TimelineRowPresentation.make(
-                row: row, currentUserProfile: actions.currentUserProfile,
-                currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil,
-                environment: environment)
-            let layout = layoutCache.layout(for: presentation, environment: environment)
-            presentations[row.id] = presentation
-            installedLayouts[row.id] = layout
-            return layout
+            let entry = rowCache.prepared(row, environment: environment)
+            preparedRows[row.id] = entry
+            return entry.layout
         }
 
         private func bind(_ cell: TimelineTableCellView, row: TimelineRow) {
-            let oldHeight = installedLayouts[row.id]?.size.height
+            let oldHeight = preparedRows[row.id]?.layout.size.height
             let layout = exactLayout(for: row)
             if let oldHeight, oldHeight != layout.size.height,
                 let index = rows.firstIndex(where: { $0.id == row.id })
             {
                 exposedHeightChanges.insert(index)
             }
-            guard let presentation = presentations[row.id] else { return }
+            guard let presentation = preparedRows[row.id]?.presentation else { return }
             cell.bind(
                 .init(
                     presentation: presentation, layout: layout, context: rowContext(for: row),
@@ -426,7 +422,7 @@
                     || old.snapshot.windowRevision != newest.windowRevision
             {
                 let retained = Set(rows.map(\.id)).union(newest.rows.map(\.id))
-                layoutCache.remove(Set(old.snapshot.rows.map(\.id)).subtracting(retained))
+                rowCache.remove(Set(old.snapshot.rows.map(\.id)).subtracting(retained))
                 preparation = nil
             }
             latestSnapshot = newest
@@ -454,23 +450,16 @@
             if let snapshot = latestSnapshot,
                 snapshot.revision != installedRevision
                     || snapshot.windowRevision != installedWindowRevision
-                    || profileNeedsPreparation
             {
                 if preparation?.snapshot.revision != snapshot.revision
                     || preparation?.snapshot.windowRevision != snapshot.windowRevision
                     || preparation?.environment != environment
-                    || preparation?.profile != actions.currentUserProfile
                 {
                     preparation = TimelineLayoutPreparation(
-                        snapshot: snapshot, environment: environment,
-                        profile: actions.currentUserProfile)
+                        snapshot: snapshot, environment: environment, cache: rowCache)
                 }
                 guard let work = preparation else { return }
-                guard
-                    work.advance(
-                        cache: layoutCache, currentUserID: model.currentUserID,
-                        isThreadTimeline: model.threadID != nil)
-                else {
+                guard work.advance(cache: rowCache) else {
                     requestDisplayUpdate()
                     return
                 }
@@ -515,16 +504,14 @@
                     exposedHeightChanges.removeAll()
                     if let work = prepared {
                         for (index, row) in work.snapshot.rows.enumerated() {
-                            if installedLayouts[row.id]?.size.height
-                                != work.layouts[row.id]?.size.height
-                            {
-                                changedHeights.insert(index)
-                            }
+                            // Insertions are sized by the table update; only surviving rows resize.
+                            guard let old = preparedRows[row.id], let new = work.rows[row.id],
+                                old !== new, old.layout.size.height != new.layout.size.height
+                            else { continue }
+                            changedHeights.insert(index)
                         }
-                        presentations = work.presentations
-                        installedLayouts = work.layouts
+                        preparedRows = work.rows
                         needsFullHeightRefresh = false
-                        profileNeedsPreparation = false
                         settlingHeights = false
                         liveResizeRows.removeAll()
                     } else {
@@ -539,7 +526,7 @@
                         where heightsChanged
                             || !liveResizeRows.contains(index) && needsFullHeightRefresh
                         {
-                            let oldHeight = installedLayouts[rows[index].id]?.size.height
+                            let oldHeight = preparedRows[rows[index].id]?.layout.size.height
                             let layout = exactLayout(for: rows[index])
                             liveResizeRows.insert(index)
                             if oldHeight != layout.size.height { changedHeights.insert(index) }
@@ -607,7 +594,7 @@
             let reset = installedRevision < 0 || installedWindowRevision != snapshot.windowRevision
             let change =
                 reset ? TimelineChange.reset : TimelineChange.compute(from: rows, to: snapshot.rows)
-            layoutCache.remove(oldIDs.subtracting(newIDs))
+            rowCache.remove(oldIDs.subtracting(newIDs))
             switch change {
             case .reset:
                 rows = snapshot.rows
@@ -877,7 +864,7 @@
                 let index = heightSettlementOrder[nextHeightSettlementRow]
                 nextHeightSettlementRow += 1
                 if !liveResizeRows.contains(index) {
-                    let previousHeight = installedLayouts[rows[index].id]?.size.height
+                    let previousHeight = preparedRows[rows[index].id]?.layout.size.height
                     let height = exactLayout(for: rows[index]).size.height
                     liveResizeRows.insert(index)
                     if previousHeight != height { changed.insert(index) }
@@ -952,7 +939,6 @@
                 toggleReaction: actions.toggleReaction == nil
                     ? nil : { [weak self] in self?.actions.toggleReaction?($0, $1) },
                 pendingReactionMessageIDs: actions.pendingReactionMessageIDs,
-                currentUserProfile: actions.currentUserProfile,
                 interactionContext: actions.interactionContext,
                 modifiablePendingMessageIDs: actions.modifiablePendingMessageIDs,
                 blockPendingMessage: actions.blockPendingMessage == nil
@@ -1074,7 +1060,7 @@
                 width: max(0, visible.width - insets.left - insets.right),
                 height: max(0, visible.height - insets.top - insets.bottom)
             )
-            var fullyVisibleMessageIDs: [String] = []
+            var fullyVisibleMessageIDs: [MessageID] = []
             if hasVisibleRows, !unobscured.isEmpty {
                 for index in range.location..<min(NSMaxRange(range), rows.count) {
                     guard let id = rows[index].messageID,

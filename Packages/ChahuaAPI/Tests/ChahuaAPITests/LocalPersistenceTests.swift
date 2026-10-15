@@ -23,7 +23,7 @@ final class LocalPersistenceTests: XCTestCase {
         let saved = try await store!.saveDraft(
             chatID: "chat", threadID: "thread", text: "keep this draft",
             editRevision: attached.draft.editRevision + 1, updatedAt: Date(),
-            replyToMessage: preview(id: "draft-reply"))
+            replyToMessage: preview(id: 101))
         let sticker = MessageStickerResponse(
             id: "sticker", emoji: "wave", createdAt: Date(timeIntervalSince1970: 1),
             isFavorited: true,
@@ -31,7 +31,7 @@ final class LocalPersistenceTests: XCTestCase {
                 id: "media", url: "https://example.test/sticker.webp",
                 contentType: "image/webp", size: 123, width: 200, height: 150),
             name: "Wave", description: "A wave")
-        let reply = preview(id: "sticker-reply")
+        let reply = preview(id: 102)
         let enqueued = try await store!.enqueueSticker(
             chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: "selected-sticker",
             sticker: sticker, enqueuedAt: Date(timeIntervalSince1970: 2), replyToMessage: reply)
@@ -68,7 +68,7 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(imageClaim.message?.body.messageType, .text)
         XCTAssertEqual(imageClaim.message?.body.message, "keep this draft")
         XCTAssertEqual(imageClaim.message?.body.attachmentIds, ["uploaded-image"])
-        XCTAssertEqual(imageClaim.message?.body.replyToId, "draft-reply")
+        XCTAssertEqual(imageClaim.message?.body.replyToId, MessageID(101))
         XCTAssertNil(imageClaim.message?.body.stickerId)
     }
 
@@ -115,7 +115,7 @@ final class LocalPersistenceTests: XCTestCase {
             UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let reply = hasReplyContext ? preview(id: "quoted") : nil
+        let reply = hasReplyContext ? preview(id: 103) : nil
         let replyData = try reply.map { try JSONEncoder().encode($0) }
         do {
             let legacy = try DatabaseQueue(
@@ -200,7 +200,7 @@ final class LocalPersistenceTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let reply = preview(id: "quoted")
+        let reply = preview(id: 103)
         var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
         _ = try await store!.enqueueText(
             chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: "queued",
@@ -296,8 +296,8 @@ final class LocalPersistenceTests: XCTestCase {
         let scope = LocalStorageScope(
             apiBaseURL: URL(string: "https://example.com/api")!, userID: 1)
         let directory = scope.directory(under: root)
-        let reply = preview(id: "original")
-        let nextReply = preview(id: "next")
+        let reply = preview(id: 104)
+        let nextReply = preview(id: 105)
         var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
         _ = try await store!.saveDraft(
             chatID: "chat", text: "hello\n世界", editRevision: 1, updatedAt: Date(),
@@ -626,7 +626,7 @@ final class LocalPersistenceTests: XCTestCase {
         let attached = try await store!.setCompositionAttachments(
             chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision,
             attachments: [preparing, uploading], compressionEnabled: true)
-        let reply = preview(id: "target")
+        let reply = preview(id: 106)
         let saved = try await store!.saveDraft(
             chatID: "chat", text: "keep this caption",
             editRevision: attached.draft.editRevision + 1,
@@ -880,9 +880,10 @@ final class LocalPersistenceTests: XCTestCase {
             width: 10, height: 10, byteCount: 3)
     }
 
-    private func preview(id: String) -> MessagePreview {
+    private func preview(id: UInt64) -> MessagePreview {
         MessagePreview(
-            id: id, clientGeneratedId: "client-\(id)", createdAt: Date(timeIntervalSince1970: 1),
+            id: MessageID(id), clientGeneratedId: "client-\(id)",
+            createdAt: Date(timeIntervalSince1970: 1),
             sender: User(uid: 2, gender: 0, name: "Ada", avatarUrl: nil, userGroup: nil),
             messageType: .text, attachments: [], mentions: [], isDeleted: false,
             message: "Reply to \(id)", sticker: nil

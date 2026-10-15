@@ -148,11 +148,11 @@
             messageType: String = "text", environment: TimelineLayoutEnvironment
         ) throws -> TimelineRowPresentation {
             let message = try TimelineTestFixtures.message(
-                id: "reply-layout", senderID: outgoing ? 1 : 2, at: 0, text: "Reply body",
+                id: 2, senderID: outgoing ? 1 : 2, at: 0, text: "Reply body",
                 fields: [
                     "messageType": messageType,
                     "replyToMessage": [
-                        "id": "quoted-message", "clientGeneratedId": "quoted-client",
+                        "id": "1", "clientGeneratedId": "quoted-client",
                         "createdAt": "2026-09-01T00:00:00Z",
                         "sender": ["uid": 3, "gender": 0, "name": author],
                         "messageType": "text", "message": quotedText,
@@ -164,8 +164,7 @@
                     entry: .remote(message), isOutgoing: outgoing, groupPosition: .single,
                     showsSenderName: showsSenderName))
             return TimelineRowPresentation.make(
-                row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
-                environment: environment)
+                row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
         }
 
         private func bannerHeight(

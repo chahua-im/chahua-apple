@@ -62,7 +62,7 @@ enum DesignSystemFixtures {
             decoder.dateDecodingStrategy = .iso8601
             return cases.enumerated().map { index, item in
                 let object: [String: Any] = [
-                    "id": "bubble-\(index)", "chatId": "bubble-fixtures",
+                    "id": "\(index + 1)", "chatId": "bubble-fixtures",
                     "clientGeneratedId": "bubble-client-\(index)",
                     "messageType": index == 15 ? "image" : index == 16 ? "system" : "text",
                     "sender": [

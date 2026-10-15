@@ -9,7 +9,7 @@ final class ChatPinSelectionTests: XCTestCase {
         let pins = try [30, 20, 10].map { second in
             PinResponse(
                 id: "pin-\(second)", chatId: "chat",
-                message: try TimelineTestFixtures.message(id: "\(second)", at: second),
+                message: try TimelineTestFixtures.message(id: UInt64(second), at: second),
                 pinnedBy: 1, pinnedAt: TimelineTestFixtures.date(second: 40))
         }
         XCTAssertNil(ChatPinSelection.activePin(in: [], bottomVisibleMessageDate: nil))

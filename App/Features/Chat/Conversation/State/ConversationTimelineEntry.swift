@@ -12,7 +12,7 @@ enum ConversationTimelineEntry: Hashable {
         }
     }
 
-    var serverID: String? {
+    var serverID: MessageID? {
         guard case .remote(let message) = self else { return nil }
         return message.id
     }
@@ -28,6 +28,14 @@ enum ConversationTimelineEntry: Hashable {
         switch self {
         case .remote(let message): message.sender.uid
         case .pending(let pending): pending.senderID
+        }
+    }
+
+    /// Display identity of the sender; nil only for a pending send without a known profile.
+    var sender: User? {
+        switch self {
+        case .remote(let message): message.sender
+        case .pending(let pending): pending.sender
         }
     }
 
@@ -78,18 +86,11 @@ enum ConversationTimelineEntry: Hashable {
 }
 
 extension ConversationMessageStableKey {
-    init(clientGeneratedID: String, fallbackServerID: String? = nil) {
+    init(clientGeneratedID: String, fallbackServerID: MessageID? = nil) {
         if clientGeneratedID.isEmpty, let fallbackServerID {
             self = .server(fallbackServerID)
         } else {
             self = .clientGenerated(clientGeneratedID)
-        }
-    }
-
-    var sortValue: String {
-        switch self {
-        case .clientGenerated(let value): "c:\(value)"
-        case .server(let value): "s:\(value)"
         }
     }
 }

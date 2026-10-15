@@ -5,13 +5,15 @@ import XCTest
 
 final class RealtimeModelTests: XCTestCase {
     private let largeID = "9007199254740993"
+    /// Above 2^53: exact only if the wire string is parsed as an integer, not a Double.
+    private let largeMessageID = MessageID(9_007_199_254_740_993)
     private let timestamp = "2026-09-01T12:34:56.123Z"
 
     func testMessageVariantsPreserveOpaqueIDsAndOptionalContext() throws {
         guard case .message(let created) = try event("message", messageJSON) else {
             return XCTFail("Expected message")
         }
-        XCTAssertEqual(created.id, largeID)
+        XCTAssertEqual(created.id, largeMessageID)
         XCTAssertEqual(created.mentions, [])
         XCTAssertNil(created.replyRootId)
         XCTAssertNil(created.replyToMessage)
@@ -35,14 +37,14 @@ final class RealtimeModelTests: XCTestCase {
                 "messagesBulkDeleted", #"{"chatId":"42","messageIds":["9007199254740993","9"]}"#)
         else { return XCTFail("Expected bulk delete") }
         XCTAssertEqual(bulk.chatId, "42")
-        XCTAssertEqual(bulk.messageIds, [largeID, "9"])
+        XCTAssertEqual(bulk.messageIds, [largeMessageID, MessageID(9)])
         guard
             case .reactionUpdated(let reaction) = try event(
                 "reactionUpdated",
                 #"{"messageId":"9007199254740993","chatId":"42","reactions":[{"emoji":"like","count":7,"reactors":[{"uid":2}]}]}"#
             )
         else { return XCTFail("Expected reactions") }
-        XCTAssertEqual(reaction.messageId, largeID)
+        XCTAssertEqual(reaction.messageId, largeMessageID)
         XCTAssertEqual(reaction.reactions[0].count, 7)
         XCTAssertNil(reaction.reactions[0].reactedByMe)
         guard
@@ -82,7 +84,7 @@ final class RealtimeModelTests: XCTestCase {
                 "pinAdded",
                 "{\"chatId\":\"42\",\"pinId\":\"7\",\"messageId\":\"\(largeID)\",\"pin\":\(pin)}")
         else { return XCTFail("Expected pin added") }
-        XCTAssertEqual(added.pin?.message.id, largeID)
+        XCTAssertEqual(added.pin?.message.id, largeMessageID)
         XCTAssertEqual(added.pin?.pinnedBy, 2)
         XCTAssertNil(added.pin?.expiresAt)
         XCTAssertNil(added.threadRootId)
@@ -201,9 +203,9 @@ final class RealtimeModelTests: XCTestCase {
         let data = messageJSON.replacingOccurrences(
             of: "\"replyToMessage\":null", with: "\"replyToMessage\":\(preview)")
         let original = try JSONCoding.decoder.decode(MessageResponse.self, from: Data(data.utf8))
-        let redacted = original.redactingReplyPreview(messageIDs: ["8"])
+        let redacted = original.redactingReplyPreview(messageIDs: [MessageID(8)])
         XCTAssertEqual(redacted.message, original.message)
-        XCTAssertEqual(redacted.replyToMessage?.id, "8")
+        XCTAssertEqual(redacted.replyToMessage?.id, MessageID(8))
         XCTAssertEqual(redacted.replyToMessage?.sender, original.replyToMessage?.sender)
         XCTAssertEqual(redacted.replyToMessage?.createdAt, original.replyToMessage?.createdAt)
         XCTAssertEqual(redacted.replyToMessage?.isDeleted, true)
@@ -211,7 +213,7 @@ final class RealtimeModelTests: XCTestCase {
         XCTAssertNil(redacted.replyToMessage?.sticker)
         XCTAssertEqual(redacted.replyToMessage?.attachments, [])
         XCTAssertEqual(redacted.replyToMessage?.mentions, [])
-        XCTAssertEqual(original.redactingReplyPreview(messageIDs: ["unknown"]), original)
+        XCTAssertEqual(original.redactingReplyPreview(messageIDs: [MessageID(9)]), original)
     }
 
     private var messageJSON: String {

@@ -18,7 +18,7 @@ struct MessageComposerView: View {
     var replyToMessage: MessagePreview? = nil
     var replyFocusRequest = 0
     var onCancelReply: (() -> Void)? = nil
-    var onOpenReply: ((String) -> Void)? = nil
+    var onOpenReply: ((MessageID) -> Void)? = nil
     var editingMessage: MessageResponse? = nil
     var onCancelEdit: (() -> Void)? = nil
     var onRequestEditLastMessage: (() -> Bool)? = nil

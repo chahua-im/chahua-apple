@@ -42,7 +42,7 @@ final class PushNotificationTests: XCTestCase {
         notifications.setSession(uid: 1)
         let route = try XCTUnwrap(notifications.takeNavigation())
         XCTAssertEqual(route.conversation, ConversationKey(chatID: "42", threadID: "100"))
-        XCTAssertEqual(route.messageID, "101")
+        XCTAssertEqual(route.messageID, MessageID(101))
         XCTAssertNil(notifications.takeNavigation())
     }
 
@@ -252,11 +252,15 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertEqual(chat.groupingIdentifier, "chat_42")
         XCTAssertEqual(reply.groupingIdentifier, "chat_42_thread_100")
         XCTAssertEqual(mention.groupingIdentifier, "chat_42_thread_101")
-        XCTAssertEqual(reply.messageID, "9007199254740994")
-        XCTAssertFalse(reply.isRead(through: "9007199254740995", in: chat.conversation))
-        XCTAssertFalse(reply.isRead(through: "9007199254740995", in: mention.conversation))
-        XCTAssertFalse(reply.isRead(through: "9007199254740993", in: reply.conversation))
-        XCTAssertTrue(reply.isRead(through: "9007199254740994", in: reply.conversation))
+        XCTAssertEqual(reply.messageID, MessageID(9_007_199_254_740_994))
+        XCTAssertFalse(
+            reply.isRead(through: MessageID(9_007_199_254_740_995), in: chat.conversation))
+        XCTAssertFalse(
+            reply.isRead(through: MessageID(9_007_199_254_740_995), in: mention.conversation))
+        XCTAssertFalse(
+            reply.isRead(through: MessageID(9_007_199_254_740_993), in: reply.conversation))
+        XCTAssertTrue(
+            reply.isRead(through: MessageID(9_007_199_254_740_994), in: reply.conversation))
     }
 
     func testMalformedPayloadCannotBecomeNavigation() {

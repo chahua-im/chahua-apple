@@ -1,3 +1,4 @@
+import ChahuaAPI
 import Foundation
 
 enum TimelineScrollIntent: Equatable {
@@ -32,7 +33,7 @@ struct TimelineViewport: Equatable {
     var distanceToTop: CGFloat
     var distanceToBottom: CGFloat
     var height: CGFloat
-    var fullyVisibleMessageIDs: [String] = []
+    var fullyVisibleMessageIDs: [MessageID] = []
 
     static let empty = TimelineViewport(
         firstVisibleIndex: nil,

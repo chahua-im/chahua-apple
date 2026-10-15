@@ -37,7 +37,7 @@ final class MediaHostingTests: XCTestCase {
         MediaImageURLProtocol.install(fixture)
         defer { MediaImageURLProtocol.remove(fixture) }
         let message = try TimelineTestFixtures.message(
-            id: "hosted-avatar", senderID: 2, at: 0,
+            id: 1, senderID: 2, at: 0,
             fields: [
                 "sender": [
                     "uid": 2, "gender": 0, "name": "Remote sender",
@@ -50,8 +50,7 @@ final class MediaHostingTests: XCTestCase {
                 showsSenderName: true))
         let environment = TimelineLayoutEnvironment.current(timelineWidth: 400)
         let presentation = TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
-            environment: environment)
+            row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
         let cache = TimelineLayoutCache()
         let layout = cache.layout(for: presentation, environment: environment)
         XCTAssertNotNil(layout.frames[.avatar])

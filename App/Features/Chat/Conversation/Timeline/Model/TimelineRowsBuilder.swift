@@ -39,7 +39,7 @@ enum TimelineRow: Hashable, Identifiable {
         }
     }
 
-    var messageID: String? {
+    var messageID: MessageID? {
         guard case .message(let row) = self else { return nil }
         return row.entry.serverID
     }
@@ -55,14 +55,16 @@ struct TimelineRowsBuilder {
     var isGroupChat: Bool
 
     var calendar: Calendar
-    func build(_ messages: [MessageResponse], unreadBeforeMessageID: String? = nil) -> [TimelineRow]
+    func build(_ messages: [MessageResponse], unreadBeforeMessageID: MessageID? = nil)
+        -> [TimelineRow]
     {
         build(
             messages.map(ConversationTimelineEntry.remote),
             unreadBeforeMessageID: unreadBeforeMessageID)
     }
 
-    func build(_ entries: [ConversationTimelineEntry], unreadBeforeMessageID: String? = nil)
+    /// `entries` are confirmed messages in server order followed by pending sends.
+    func build(_ entries: [ConversationTimelineEntry], unreadBeforeMessageID: MessageID? = nil)
         -> [TimelineRow]
     {
         guard !entries.isEmpty else { return [] }
@@ -78,7 +80,10 @@ struct TimelineRowsBuilder {
             let entry = entries[index]
             let day = calendar.startOfDay(for: entry.createdAt)
             let ordinalDay = calendar.ordinality(of: .day, in: .era, for: day)!
-            if previousDay != ordinalDay {
+            // Separators only advance: a pending send created on an earlier day (or a
+            // cross-node timestamp at midnight) stays under the current separator rather
+            // than emitting a second separator with the same row identity.
+            if previousDay.map({ ordinalDay > $0 }) ?? true {
                 rows.append(.dateSeparator(.init(day: day, ordinalDay: ordinalDay)))
                 previousDay = ordinalDay
             }

@@ -477,7 +477,7 @@ final class PushNotificationCoordinator: ObservableObject {
         return [.banner, .list, .sound, .badge]
     }
 
-    func didRead(conversation: ConversationKey, through messageID: String) {
+    func didRead(conversation: ConversationKey, through messageID: MessageID) {
         let requestGeneration = generation
         Task { [weak self] in
             guard let self else { return }
@@ -503,7 +503,7 @@ final class PushNotificationCoordinator: ObservableObject {
             guard let self else { return }
             let delivered = await self.center.deliveredNotifications()
             guard !Task.isCancelled, self.generation == requestGeneration else { return }
-            var watermarks: [ConversationKey: String] = [:]
+            var watermarks: [ConversationKey: MessageID] = [:]
             if state.chatListLoadPhase == .loaded {
                 for chat in state.chats {
                     watermarks[.init(chatID: chat.id, threadID: nil)] = chat.lastReadMessageId
@@ -511,9 +511,7 @@ final class PushNotificationCoordinator: ObservableObject {
             }
             if state.threadListLoadPhase == .loaded {
                 for thread in state.threads {
-                    watermarks[
-                        .init(chatID: thread.chatId, threadID: thread.threadRootMessage.id)] =
-                        thread.lastReadMessageId
+                    watermarks[thread.conversationKey] = thread.lastReadMessageId
                 }
             }
             let identifiers = delivered.compactMap { notification -> String? in

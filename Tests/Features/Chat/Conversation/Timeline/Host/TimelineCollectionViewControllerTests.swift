@@ -11,8 +11,8 @@
 
         func testDeletionRemovesNativeRowsAndEmptyDateSeparators() async throws {
             let messages = try [
-                TimelineTestFixtures.message(id: "first", at: 0),
-                TimelineTestFixtures.message(id: "second", at: 86_400),
+                TimelineTestFixtures.message(id: 1, at: 0),
+                TimelineTestFixtures.message(id: 2, at: 86_400),
             ]
             let store = ConversationMessageStore()
             let source = BubbleSource(page: try TimelineTestFixtures.page(messages))
@@ -37,12 +37,12 @@
             store.apply(.messageDeleted(messages[1].redactedForDeletion()))
             try await Task.sleep(for: .milliseconds(100))
             controller.view.layoutIfNeeded()
-            XCTAssertEqual(model.rows.compactMap(\.messageID), ["first"])
+            XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1)])
             XCTAssertEqual(
                 collection.numberOfItems(inSection: 0), 2, "Remove the bubble and its now-empty day"
             )
 
-            store.apply(.messagesBulkDeleted(.init(chatId: "chat", messageIds: ["first"])))
+            store.apply(.messagesBulkDeleted(.init(chatId: "chat", messageIds: [MessageID(1)])))
             try await Task.sleep(for: .milliseconds(100))
             controller.view.layoutIfNeeded()
             XCTAssertTrue(model.rows.isEmpty)
@@ -53,7 +53,7 @@
 
         func testPreviewPreservesImageOnlyAndOversizedBubbleGeometry() async throws {
             let image = try TimelineTestFixtures.message(
-                id: "image-preview", at: 0,
+                id: 1, at: 0,
                 fields: [
                     "message": NSNull(), "hasAttachments": true,
                     "attachments": [
@@ -65,7 +65,7 @@
                     ],
                 ])
             let long = try TimelineTestFixtures.message(
-                id: "long-preview", at: 0,
+                id: 2, at: 0,
                 fields: [
                     "message": String(
                         repeating: "A long message must retain its exact wrapping and width.\n",
@@ -120,14 +120,15 @@
         func testSameDayPrependAndViewportChangesPreserveReaderPosition() async throws {
             let messages = try (0..<50).map {
                 try TimelineTestFixtures.message(
-                    id: "\($0)", senderID: 2, at: $0,
+                    id: UInt64($0), senderID: 2, at: $0,
                     text: String(
                         repeating: "A wrapping message keeps its position while history loads. ",
                         count: 3)
                 )
             }
             let source = CollectionHistorySource(
-                initial: try TimelineTestFixtures.page(Array(messages[20...]), olderCursor: "20"),
+                initial: try TimelineTestFixtures.page(
+                    Array(messages[20...]), olderCursor: MessageID(20)),
                 older: try TimelineTestFixtures.page(Array(messages[..<20]))
             )
             let model = ConversationTimelineModel(
@@ -189,7 +190,7 @@
             XCTAssertEqual(
                 model.state.older, .loading,
                 "Prefetch must start during the gesture, not only at its end")
-            let messageID = try XCTUnwrap(model.rows.first { $0.messageID == "20" }).id
+            let messageID = try XCTUnwrap(model.rows.first { $0.messageID == MessageID(20) }).id
             func messageOffset() throws -> CGFloat {
                 let index = try XCTUnwrap(model.rows.firstIndex { $0.id == messageID })
                 let frame = try XCTUnwrap(
@@ -199,7 +200,7 @@
             }
             let offset = try messageOffset()
             for _ in 0..<50 {
-                if model.rows.contains(where: { $0.messageID == "0" }),
+                if model.rows.contains(where: { $0.messageID == MessageID(0) }),
                     collection.numberOfItems(inSection: 0) == model.rows.count
                 {
                     break
@@ -234,7 +235,7 @@
         func testUnreadEntrySurvivesHeaderGeometryChangeAtScrollCompletion() async throws {
             let messages = try (0..<50).map {
                 try TimelineTestFixtures.message(
-                    id: "\($0)", senderID: 2, at: $0, text: "Unread entry message \($0)")
+                    id: UInt64($0), senderID: 2, at: $0, text: "Unread entry message \($0)")
             }
             let model = ConversationTimelineModel(
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
@@ -285,9 +286,9 @@
 
         func testShortUnreadEntryReadsVisibleMessagesWithoutShowingJump() async throws {
             let messages = try (1...3).map {
-                try TimelineTestFixtures.message(id: "\($0)", senderID: 2, at: $0)
+                try TimelineTestFixtures.message(id: UInt64($0), senderID: 2, at: $0)
             }
-            var reads: [String] = []
+            var reads: [MessageID] = []
             let model = ConversationTimelineModel(
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
                 source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
@@ -309,9 +310,9 @@
             parent.view.addSubview(controller.view)
             controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
             controller.didMove(toParent: parent)
-            model.updateReadState(unreadCount: 2, lastReadMessageID: "1")
+            model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
             model.setReadTrackingActive(true)
-            await model.loadInitial(position: .unread(after: "1"))
+            await model.loadInitial(position: .unread(after: MessageID(1)))
             controller.viewDidLayoutSubviews()
             try await Task.sleep(for: .milliseconds(200))
             let collection = try XCTUnwrap(
@@ -321,7 +322,8 @@
                 collection.contentSize.height,
                 collection.bounds.height - collection.adjustedContentInset.top
                     - collection.adjustedContentInset.bottom)
-            XCTAssertEqual(reads, ["3"], "The entry scroll must report its settled visible row.")
+            XCTAssertEqual(
+                reads, [MessageID(3)], "The entry scroll must report its settled visible row.")
             XCTAssertTrue(model.state.live.isPinnedToBottom)
             XCTAssertFalse(model.showsJumpToLatest)
         }
@@ -329,7 +331,7 @@
         func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
             let messages = try (0..<16).map {
                 try TimelineTestFixtures.message(
-                    id: "opaque-\(100 - $0)", senderID: 2, at: $0, text: "Visible message \($0)")
+                    id: UInt64($0 + 1), senderID: 2, at: $0, text: "Visible message \($0)")
             }
             let pending = PendingOutgoingMessage(
                 chatID: "chat", clientGeneratedID: "pending",
@@ -339,7 +341,7 @@
             )
             let store = ConversationMessageStore()
             store.replacePending(chatID: "chat", with: [pending])
-            var reads: [String] = []
+            var reads: [MessageID] = []
             let model = ConversationTimelineModel(
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
                 source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
@@ -442,13 +444,13 @@
             try await Task.sleep(for: .milliseconds(650))
             XCTAssertEqual(
                 reads, [messages[7].id, messages[15].id],
-                "Pending rows cannot advance read progress; opaque IDs remain in timeline order.")
+                "Pending rows cannot advance read progress.")
         }
 
         func testRowHeightsFollowWidthAndDynamicTypeWhileReadingHistory() async throws {
             let messages = try (0..<15).map {
                 try TimelineTestFixtures.message(
-                    id: "\($0)", senderID: 2, at: $0,
+                    id: UInt64($0), senderID: 2, at: $0,
                     text: String(
                         repeating: "A long message must wrap without overlapping the next row. ",
                         count: 5)
@@ -478,13 +480,13 @@
                 controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
             // The 800-point fixture can extend beyond a phone window; that is not a safe-area inset.
             collection.contentInsetAdjustmentBehavior = .never
-            let textPaths = try ["0", "2"].map { messageID in
+            let textPaths = try [MessageID(0), MessageID(2)].map { messageID in
                 IndexPath(
                     item: try XCTUnwrap(model.rows.firstIndex { $0.messageID == messageID }),
                     section: 0)
             }
             // The fixture measurer lacks the host's message-size preference; test rendered cells.
-            var heightsByMessageID: [String: [CGFloat]] = [:]
+            var heightsByMessageID: [MessageID: [CGFloat]] = [:]
             model.userScrollBegan()
             collection.setContentOffset(CGPoint(x: 0, y: 120), animated: false)
 
@@ -527,7 +529,7 @@
                     "Message \(messageID) must reflow again when its available width grows.")
             }
 
-            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "2" })
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(2) })
             let path = IndexPath(item: index, section: 0)
             collection.scrollToItem(at: path, at: .top, animated: false)
             collection.layoutIfNeeded()
@@ -548,7 +550,7 @@
 
         func testReplyMediaRowsKeepGeometryWhenOnlyViewportHeightChanges() async throws {
             let message = try TimelineTestFixtures.message(
-                id: "reply-media", senderID: 2, at: 0,
+                id: 2, senderID: 2, at: 0,
                 fields: [
                     "message": "Caption below the quoted message.",
                     "hasAttachments": true,
@@ -560,7 +562,7 @@
                         ]
                     ],
                     "replyToMessage": [
-                        "id": "quoted", "clientGeneratedId": "quoted-client",
+                        "id": "1", "clientGeneratedId": "quoted-client",
                         "createdAt": "2026-09-01T00:00:00Z",
                         "sender": ["uid": 3, "gender": 0, "name": "Quoted sender"],
                         "messageType": "text", "attachments": [], "mentions": [],
@@ -588,7 +590,7 @@
             let collection = try XCTUnwrap(
                 controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
             collection.contentInsetAdjustmentBehavior = .never
-            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "reply-media" })
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(2) })
             let path = IndexPath(item: index, section: 0)
             var heights: [CGFloat] = []
             for height: CGFloat in [800, 400, 800] {
@@ -611,7 +613,7 @@
         func testReactionExpansionAndRemovalReflowFollowingMessages() async throws {
             let messages = try (0..<4).map {
                 try TimelineTestFixtures.message(
-                    id: "reaction-\($0)", senderID: 2, at: $0, text: "Message \($0)")
+                    id: UInt64($0), senderID: 2, at: $0, text: "Message \($0)")
             }
             let store = ConversationMessageStore()
             let model = ConversationTimelineModel(
@@ -651,7 +653,7 @@
             }
             let initial = try frames()
             let reacted = try TimelineTestFixtures.message(
-                id: messages[1].id, senderID: 2, at: 1,
+                id: messages[1].id.rawValue, senderID: 2, at: 1,
                 fields: [
                     "reactions": ["👍", "❤️", "🎉", "👀", "😂", "🔥", "👏", "💯"].map {
                         ["emoji": $0, "count": 12, "reactedByMe": false] as [String: Any]

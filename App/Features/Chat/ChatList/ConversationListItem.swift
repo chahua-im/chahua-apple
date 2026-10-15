@@ -57,7 +57,7 @@ enum ConversationListItem: Hashable, Identifiable {
         switch self {
         case .chat(let chat): .init(chatID: chat.id)
         case .thread(let thread):
-            .init(chatID: thread.chatId, threadID: thread.threadRootMessage.id)
+            thread.conversationKey
         }
     }
 
@@ -85,7 +85,7 @@ enum ConversationListItem: Hashable, Identifiable {
         }
     }
 
-    var readThroughMessageID: String? {
+    var readThroughMessageID: MessageID? {
         switch self {
         case .chat(let chat): chat.lastMessage?.id
         case .thread(let thread): thread.lastReply?.id
@@ -142,6 +142,13 @@ enum ConversationListItem: Hashable, Identifiable {
             if $0.id.chatID != $1.id.chatID { return $0.id.chatID < $1.id.chatID }
             return ($0.id.threadID ?? "") < ($1.id.threadID ?? "")
         }
+    }
+}
+
+extension ThreadListItem {
+    /// Threads are scoped by their root message ID in its wire (decimal) form.
+    var conversationKey: ConversationKey {
+        .init(chatID: chatId, threadID: threadRootMessage.id.description)
     }
 }
 

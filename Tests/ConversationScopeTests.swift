@@ -17,13 +17,13 @@ final class ConversationScopeTests: XCTestCase {
         let archivedDM = ChatListItem(
             id: "archived-dm", lastMessageAt: Date(timeIntervalSince1970: 45), unreadCount: 1,
             archived: true, kind: .dm)
-        let thread = try ScopeTestFixtures.thread(chatID: "group", id: "root", at: 40)
+        let thread = try ScopeTestFixtures.thread(chatID: "group", id: 1, at: 40)
         let archivedThread = try ScopeTestFixtures.thread(
-            chatID: "group", id: "archived-root", at: 50, archived: true)
+            chatID: "group", id: 2, at: 50, archived: true)
         let chats = [group, archived, dm, archivedDM]
         let threads = [archivedThread, thread]
         let parentKey = ConversationKey(chatID: "group")
-        let threadKey = ConversationKey(chatID: "group", threadID: "root")
+        let threadKey = ConversationKey(chatID: "group", threadID: "1")
         XCTAssertEqual(
             ConversationListItem.entries(chats: chats, threads: threads, scope: .messages).map(
                 \.id), [threadKey, .init(chatID: "dm"), parentKey])
@@ -53,7 +53,7 @@ final class ConversationScopeTests: XCTestCase {
                 chats: chats, threads: threads, scope: .messages, archived: true
             ).map(\.id),
             [
-                .init(chatID: "group", threadID: "archived-root"), .init(chatID: "archived-dm"),
+                .init(chatID: "group", threadID: "2"), .init(chatID: "archived-dm"),
                 .init(chatID: "archived"),
             ])
         XCTAssertEqual(
@@ -93,7 +93,7 @@ final class ConversationScopeTests: XCTestCase {
 
     func testHidingThreadsFromMessagesKeepsThreadsBadgeAndArchivedChatCounts() throws {
         let thread = try ScopeTestFixtures.thread(
-            chatID: "chat", id: "root", unreadCount: 3)
+            chatID: "chat", id: 1, unreadCount: 3)
         let chats = [
             ChatListItem(id: "chat", unreadCount: 1, archived: false, kind: .group),
             ChatListItem(id: "archived", unreadCount: 2, archived: true, kind: .dm),
@@ -119,29 +119,20 @@ final class ConversationScopeTests: XCTestCase {
                     body: .init(messageType: .text, clientGeneratedId: id, message: id),
                     enqueuedAt: Date(), senderID: 1, state: .queued))
         }
-        let parent = store.projection(for: "chat", remoteMessages: [], includePendingOutgoing: true)
-        let first = store.projection(
-            for: "chat", threadID: "one", remoteMessages: [], includePendingOutgoing: true)
-        XCTAssertEqual(parent.entries.map(\.stableKey), [.clientGenerated("parent")])
-        XCTAssertEqual(first.entries.map(\.stableKey), [.clientGenerated("one")])
+        XCTAssertEqual(store.pending(chatID: "chat").map(\.clientGeneratedID), ["parent"])
+        XCTAssertEqual(
+            store.pending(chatID: "chat", threadID: "one").map(\.clientGeneratedID), ["one"])
         let acknowledged = try TimelineTestFixtures.message(
-            id: "remote", at: 1, clientGeneratedID: "one", fields: ["replyRootId": "one"])
+            id: 1, at: 1, clientGeneratedID: "one", fields: ["replyRootId": "one"])
         store.apply(.message(acknowledged))
-        XCTAssertTrue(
-            store.projection(
-                for: "chat", threadID: "one", remoteMessages: [], includePendingOutgoing: true
-            ).entries.isEmpty)
+        XCTAssertTrue(store.pending(chatID: "chat", threadID: "one").isEmpty)
         XCTAssertEqual(
-            store.projection(
-                for: "chat", threadID: "two", remoteMessages: [], includePendingOutgoing: true
-            ).entries.map(\.stableKey), [.clientGenerated("two")])
-        XCTAssertEqual(
-            store.projection(for: "chat", remoteMessages: [], includePendingOutgoing: true).entries
-                .map(\.stableKey), [.clientGenerated("parent")])
+            store.pending(chatID: "chat", threadID: "two").map(\.clientGeneratedID), ["two"])
+        XCTAssertEqual(store.pending(chatID: "chat").map(\.clientGeneratedID), ["parent"])
     }
     func testMessagePreviewsExpandMentionsInSharedRenderer() throws {
         let message = try TimelineTestFixtures.message(
-            id: "mentioned", at: 1,
+            id: 1, at: 1,
             text: "Hi 👋 @[uid:2], @[uid:9], @[uid:2], @[uid:nope]",
             fields: [
                 "mentions": [
@@ -165,7 +156,7 @@ final class ConversationScopeTests: XCTestCase {
     func testMessagePreviewCollapsesNewlineRunsWithoutChangingBodyOrOrdinarySpaces() throws {
         let body = "First\nsecond\r\n\r\nthird\n\n\n@[uid:2]\u{2028}\u{2029}last  words"
         let message = try TimelineTestFixtures.message(
-            id: "multiline-preview", at: 1,
+            id: 1, at: 1,
             fields: [
                 "message": body,
                 "mentions": [["uid": 2, "gender": 0, "username": "Ada\n\nLovelace"]],
@@ -178,9 +169,9 @@ final class ConversationScopeTests: XCTestCase {
     }
 
     func testThreadPreviewUsesLatestReplyThenRootMessageFallback() throws {
-        let root = try TimelineTestFixtures.message(id: "root", at: 1, text: "Root message")
+        let root = try TimelineTestFixtures.message(id: 1, at: 1, text: "Root message")
             .replyPreview
-        let reply = try TimelineTestFixtures.message(id: "reply", at: 2, text: "Latest reply")
+        let reply = try TimelineTestFixtures.message(id: 2, at: 2, text: "Latest reply")
             .replyPreview
 
         func thread(lastReply: MessagePreview?) -> ConversationListItem {
@@ -204,7 +195,7 @@ final class ConversationScopeTests: XCTestCase {
 @MainActor
 enum ScopeTestFixtures {
     static func thread(
-        chatID: String = "chat", id: String, at: TimeInterval = 40, archived: Bool = false,
+        chatID: String = "chat", id: UInt64, at: TimeInterval = 40, archived: Bool = false,
         unreadCount: Int64 = 0
     ) throws -> ThreadListItem {
         let message = try TimelineTestFixtures.message(id: id, chatID: chatID, at: 1)

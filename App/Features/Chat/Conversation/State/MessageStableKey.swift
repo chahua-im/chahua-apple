@@ -7,7 +7,7 @@ import ChahuaAPI
 /// row identity prevents the acknowledgement from becoming a delete/insert.
 enum ConversationMessageStableKey: Hashable {
     case clientGenerated(String)
-    case server(String)
+    case server(MessageID)
 
     init(_ message: MessageResponse) {
         if message.clientGeneratedId.isEmpty {

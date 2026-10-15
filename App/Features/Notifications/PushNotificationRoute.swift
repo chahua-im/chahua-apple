@@ -6,7 +6,7 @@ struct PushNotificationRoute: Identifiable, Equatable, Sendable {
     let id: UUID
     let chatID: String
     let threadID: String?
-    let messageID: String
+    let messageID: MessageID
 
     var conversation: ConversationKey { .init(chatID: chatID, threadID: threadID) }
     var groupingIdentifier: String {
@@ -17,7 +17,8 @@ struct PushNotificationRoute: Identifiable, Equatable, Sendable {
             let type = data["type"] as? String,
             ["newMessage", "mention", "reply"].contains(type),
             let chatID = data["chatId"] as? String, Self.validID(chatID),
-            let messageID = data["messageId"] as? String, Self.validID(messageID)
+            let rawMessageID = data["messageId"] as? String, Self.validID(rawMessageID),
+            let messageID = MessageID(rawMessageID)
         else { return nil }
         let threadID: String?
         if let value = data["threadRootId"], !(value is NSNull) {
@@ -39,10 +40,7 @@ struct PushNotificationRoute: Identifiable, Equatable, Sendable {
             && Int64(value).map { $0 > 0 } == true
     }
 
-    func isRead(through messageID: String, in conversation: ConversationKey) -> Bool {
-        guard self.conversation == conversation,
-            let watermark = Int64(messageID), let message = Int64(self.messageID)
-        else { return false }
-        return message <= watermark
+    func isRead(through watermark: MessageID, in conversation: ConversationKey) -> Bool {
+        self.conversation == conversation && messageID <= watermark
     }
 }

@@ -35,18 +35,27 @@ final class ChatStore: ObservableObject {
         didSet {
             stickers.setAccount(currentUserProfile?.uid)
             stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? [])
+            guard currentUserProfile != oldValue else { return }
+            // Pending rows carry the sender captured in their projection.
+            for key in outgoingQueue.snapshots.keys
+            where !outgoingQueue.pendingMessages(chatID: key.chatID, threadID: key.threadID).isEmpty
+            {
+                conversationMessages.replacePending(
+                    chatID: key.chatID, threadID: key.threadID,
+                    with: pendingProjection(chatID: key.chatID, threadID: key.threadID))
+            }
         }
     }
     @Published private(set) var pendingListActions = [ConversationKey: ConversationListAction]()
     @Published var listActionError: String?
-    @Published private(set) var deletingMessageIDs = Set<String>()
+    @Published private(set) var deletingMessageIDs = Set<MessageID>()
     let conversationMessages = ConversationMessageStore()
     let outgoingQueue: OutgoingMessageQueue
     let reactions: MessageReactionController
     let pins: ChatPinController
     let drafts: ChatDraftStore
     let stickers: StickerLibrary
-    var onNotificationRead: ((ConversationKey, String) -> Void)?
+    var onNotificationRead: ((ConversationKey, MessageID) -> Void)?
     private var outgoingObservation: AnyCancellable?
     private var storageObservation: AnyCancellable?
     private var outgoingRevisions: [ConversationKey: Int64] = [:]
@@ -230,6 +239,9 @@ final class ChatStore: ObservableObject {
                     message: message.messageType == .text ? message.text : nil,
                     replyToId: message.replyToMessage?.id, stickerId: message.sticker?.id),
                 enqueuedAt: message.enqueuedAt, senderID: message.senderID,
+                sender: currentUserProfile.flatMap {
+                    $0.uid == message.senderID ? $0.asSender : nil
+                },
                 state: state, replyToMessage: message.replyToMessage,
                 attachments: message.attachments, dispatchClaimed: message.dispatchClaimed,
                 editRevision: message.editRevision, sticker: message.sticker
@@ -337,19 +349,12 @@ final class ChatStore: ObservableObject {
                     dirtyLists.insert(list)
                     return
                 }
-                let keys = Set(
-                    threads.lazy.map {
-                        ConversationKey(chatID: $0.chatId, threadID: $0.threadRootMessage.id)
-                    })
+                let keys = Set(threads.lazy.map(\.conversationKey))
                 if list.archived {
-                    state.threads.removeAll {
-                        keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id))
-                    }
+                    state.threads.removeAll { keys.contains($0.conversationKey) }
                     state.archivedThreads = threads
                 } else {
-                    state.archivedThreads.removeAll {
-                        keys.contains(.init(chatID: $0.chatId, threadID: $0.threadRootMessage.id))
-                    }
+                    state.archivedThreads.removeAll { keys.contains($0.conversationKey) }
                     state.threads = threads
                 }
             }
@@ -409,9 +414,7 @@ final class ChatStore: ObservableObject {
                 throw CancellationError()
             }
             for thread in response.threads where thread.archived == archived {
-                let key = ConversationKey(
-                    chatID: thread.chatId, threadID: thread.threadRootMessage.id)
-                if seen.insert(key).inserted { threads.append(thread) }
+                if seen.insert(thread.conversationKey).inserted { threads.append(thread) }
             }
             cursor = response.nextCursor
             if let cursor, !cursors.insert(cursor).inserted {
@@ -507,7 +510,9 @@ final class ChatStore: ObservableObject {
                         to: latest, archived: archived, mutedUntil: archived ? .distantFuture : nil)
                 case .thread(let original):
                     let latest =
-                        thread(chatID: original.chatId, threadID: original.threadRootMessage.id)
+                        thread(
+                            chatID: original.chatId,
+                            threadID: original.threadRootMessage.id.description)
                         ?? original
                     install(
                         ThreadListItem(
@@ -570,9 +575,11 @@ final class ChatStore: ObservableObject {
     }
 
     private func thread(chatID: String, threadID: String) -> ThreadListItem? {
-        state.threads.first { $0.chatId == chatID && $0.threadRootMessage.id == threadID }
+        state.threads.first {
+            $0.chatId == chatID && $0.threadRootMessage.id.description == threadID
+        }
             ?? state.archivedThreads.first {
-                $0.chatId == chatID && $0.threadRootMessage.id == threadID
+                $0.chatId == chatID && $0.threadRootMessage.id.description == threadID
             }
     }
 
@@ -873,7 +880,9 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func reactionDetails(chatID: String, messageID: String) async throws -> ReactionDetailResponse {
+    func reactionDetails(chatID: String, messageID: MessageID) async throws
+        -> ReactionDetailResponse
+    {
         try Task.checkCancellation()
         let requestGeneration = generation
         do {
@@ -1013,7 +1022,7 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func markRead(chatID: String, threadID: String?, messageID: String) async throws {
+    func markRead(chatID: String, threadID: String?, messageID: MessageID) async throws {
         try Task.checkCancellation()
         let requestGeneration = generation
         do {

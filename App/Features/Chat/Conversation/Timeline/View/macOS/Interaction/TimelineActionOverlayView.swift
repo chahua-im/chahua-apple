@@ -107,7 +107,7 @@
             }
 
             let policy = MessageActionPolicy(row: row, context: context)
-            let isReacting = actions.pendingReactionMessageIDs.contains(row.entry.serverID ?? "")
+            let isReacting = actions.isReacting(to: row.entry)
             let eligibility = MessageReactionEligibility(
                 canReact: policy.canReact && actions.toggleReaction != nil,
                 isReacting: isReacting, reactions: row.entry.remoteMessage?.reactions ?? [])

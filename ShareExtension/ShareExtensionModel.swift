@@ -407,7 +407,7 @@ final class ShareExtensionModel: ObservableObject {
                     : nil
             destinations.append(
                 .thread(
-                    chatID: thread.chatId, threadID: root.id,
+                    chatID: thread.chatId, threadID: root.id.description,
                     title: Self.previewText(root, fallback: "Message"),
                     subtitle: Self.previewText(thread.lastReply ?? root, fallback: "Message"),
                     activityDate: thread.lastReplyAt,

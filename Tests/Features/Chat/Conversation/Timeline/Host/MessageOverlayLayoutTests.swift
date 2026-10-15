@@ -12,7 +12,7 @@
                 (false, false, 900.0), (true, true, 900.0), (false, false, 360.0),
             ] {
                 let message = try TimelineTestFixtures.message(
-                    id: "overlay-size", senderID: outgoing ? 1 : 2, at: 0,
+                    id: 1, senderID: outgoing ? 1 : 2, at: 0,
                     text:
                         "The original message keeps its full width. Model: DeepSeek-V4.1-Flash-Expires-On-0910. Reactions and actions remain in a compact, translucent menu."
                 )
@@ -26,6 +26,7 @@
                     actions: .init(), interactionContext: .init(canWrite: true, isAdmin: true),
                     mediaContext: nil, colorScheme: dark ? .dark : .light,
                     messageTextSize: MessageTextSizePreference.defaultValue,
+                    appLanguage: AppLanguage.selected.rawValue,
                     unreadBadgeColor: .default,
                     headerInset: 0, composerInset: 0, isSplitResizing: false)
                 let size = CGSize(width: width, height: 650)

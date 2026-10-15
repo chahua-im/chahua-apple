@@ -14,7 +14,7 @@ struct ThreadDetailView: View {
                 ChatDetailView(
                     chat: chat, currentUserID: currentUserID, store: store,
                     navigationTitle: threadTitle,
-                    threadID: thread.threadRootMessage.id,
+                    threadID: thread.threadRootMessage.id.description,
                     initialPosition: thread.unreadCount > 0
                         ? .unread(after: thread.lastReadMessageId)
                         : .liveEdge)

@@ -246,7 +246,7 @@
             }
             let eligibility = MessageReactionEligibility(
                 canReact: MessageActionPolicy(row: row, context: context).canReact,
-                isReacting: actions.pendingReactionMessageIDs.contains(row.entry.serverID ?? ""),
+                isReacting: actions.isReacting(to: row.entry),
                 reactions: row.entry.remoteMessage?.reactions ?? [])
             guard eligibility.canToggle(emoji), let toggle = actions.toggleReaction else {
                 refresh()

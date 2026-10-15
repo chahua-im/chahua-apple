@@ -26,7 +26,7 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
     /// Server-calculated unread count for the current member.
     public let unreadCount: Int64
     /// Current member's last-read message ID.
-    public let lastReadMessageId: String?
+    public let lastReadMessageId: MessageID?
     /// Summary of the latest message, not a complete cached message.
     public let lastMessage: MessagePreview?
     /// Current member's mute expiry.
@@ -44,7 +44,7 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         avatar: String? = nil,
         lastMessageAt: Date? = nil,
         unreadCount: Int64,
-        lastReadMessageId: String? = nil,
+        lastReadMessageId: MessageID? = nil,
         lastMessage: MessagePreview? = nil,
         mutedUntil: Date? = nil,
         archived: Bool,

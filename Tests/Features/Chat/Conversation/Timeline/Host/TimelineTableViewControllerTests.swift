@@ -12,7 +12,7 @@
             let page = try TimelineTestFixtures.page(
                 (0..<80).map {
                     try TimelineTestFixtures.message(
-                        id: "\($0)", at: $0,
+                        id: UInt64($0), at: $0,
                         text: String(repeating: "A message beneath the floating header. ", count: 4)
                     )
                 })
@@ -91,8 +91,8 @@
 
         func testSelectingAnotherMessageClearsPreviousBubbleSelection() async throws {
             let page = try TimelineTestFixtures.page([
-                TimelineTestFixtures.message(id: "first", at: 0, text: "first bubble"),
-                TimelineTestFixtures.message(id: "second", at: 1, text: "second bubble"),
+                TimelineTestFixtures.message(id: 1, at: 0, text: "first bubble"),
+                TimelineTestFixtures.message(id: 2, at: 1, text: "second bubble"),
             ])
             let model = ConversationTimelineModel(
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
@@ -110,15 +110,15 @@
             try await waitForDisplay(controller, model: model)
             let table = try XCTUnwrap(
                 timelineScrollView(in: controller.view)?.documentView as? NSTableView)
-            func text(_ id: String) throws -> AppKitMessageTextView {
+            func text(_ id: MessageID) throws -> AppKitMessageTextView {
                 let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == id })
                 let cell = try XCTUnwrap(
                     table.view(atColumn: 0, row: index, makeIfNecessary: true))
                 cell.layoutSubtreeIfNeeded()
                 return try XCTUnwrap(textViews(in: cell).first as? AppKitMessageTextView)
             }
-            let first = try text("first")
-            let second = try text("second")
+            let first = try text(MessageID(1))
+            let second = try text(MessageID(2))
             first.setSelectedRange(NSRange(location: 0, length: 5))
             second.setSelectedRange(NSRange(location: 0, length: 6))
             XCTAssertEqual(first.selectedRange().length, 0)
@@ -155,7 +155,7 @@
         func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
             let messages = try (0..<16).map {
                 try TimelineTestFixtures.message(
-                    id: "opaque-\(100 - $0)", senderID: 2, at: $0, text: "Visible message \($0)")
+                    id: UInt64($0 + 1), senderID: 2, at: $0, text: "Visible message \($0)")
             }
             let pending = PendingOutgoingMessage(
                 chatID: "chat", clientGeneratedID: "pending",
@@ -166,7 +166,7 @@
             let store = ConversationMessageStore()
             store.replacePending(chatID: "chat", with: [pending])
             let page = try TimelineTestFixtures.page(messages)
-            var reads: [String] = []
+            var reads: [MessageID] = []
             let model = ConversationTimelineModel(
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
                 source: HistorySource(initial: page, older: page), messageStore: store,
@@ -260,7 +260,7 @@
             try await Task.sleep(for: .milliseconds(650))
             XCTAssertEqual(
                 reads, [messages[7].id, messages[15].id],
-                "Pending rows cannot advance read progress; opaque IDs remain in timeline order.")
+                "Pending rows cannot advance read progress.")
         }
 
         func testUserScrollLoadsHistoryButLayoutDoesNot() async throws {
@@ -282,8 +282,8 @@
         func testLiveArrivalDuringInitialScrollCompletionIsRenderedWithoutAnotherLayout()
             async throws
         {
-            let page = try TimelineTestFixtures.page([TimelineTestFixtures.message(id: "0", at: 0)])
-            let live = try TimelineTestFixtures.message(id: "1", at: 1)
+            let page = try TimelineTestFixtures.page([TimelineTestFixtures.message(id: 0, at: 0)])
+            let live = try TimelineTestFixtures.message(id: 1, at: 1)
             let store = ConversationMessageStore()
             let model = ConversationTimelineModel(
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
@@ -310,7 +310,7 @@
 
             await model.loadInitial()
             try await waitForDisplay(controller, model: model)
-            XCTAssertEqual(model.rows.compactMap(\.messageID), ["0", "1"])
+            XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(0), MessageID(1)])
             XCTAssertEqual(
                 table.numberOfRows, model.rows.count,
                 "A reentrant live update must not wait for an unrelated future layout")
@@ -355,7 +355,7 @@
                     object["isEdited"] = true
                     object["threadInfo"] = ["replyCount": 7]
                     object["replyToMessage"] = [
-                        "id": "quoted-target", "clientGeneratedId": "quoted-client",
+                        "id": "1", "clientGeneratedId": "quoted-client",
                         "createdAt": object["createdAt"]!, "sender": object["sender"]!,
                         "messageType": "text",
                         "message": "A long quoted message "
@@ -543,7 +543,7 @@
             XCTAssertEqual(selected.last, "updated:failed-b")
 
             let acknowledgement = try TimelineTestFixtures.message(
-                id: "delivered-a", at: 0, clientGeneratedID: "failed-a", fields: ["message": text]
+                id: 1, at: 0, clientGeneratedID: "failed-a", fields: ["message": text]
             )
             store.replacePending(chatID: "chat", with: [pending[1]], acknowledging: acknowledgement)
             controller.view.layoutSubtreeIfNeeded()
@@ -599,7 +599,7 @@
             check: (NSView, NSTextView, NSBitmapImageRep) -> Void
         ) async throws {
             let base = try TimelineTestFixtures.message(
-                id: "visible-text", senderID: senderID, at: 0, text: "Fixture")
+                id: 2, senderID: senderID, at: 0, text: "Fixture")
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             var object = try XCTUnwrap(
@@ -637,7 +637,7 @@
                 let scroll = try XCTUnwrap(
                     controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
                 let table = try XCTUnwrap(scroll.documentView as? NSTableView)
-                let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "visible-text" })
+                let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(2) })
                 table.scrollRowToVisible(index)
                 let cell = try XCTUnwrap(table.view(atColumn: 0, row: index, makeIfNecessary: true))
                 cell.layoutSubtreeIfNeeded()
@@ -778,7 +778,7 @@
             let page = try TimelineTestFixtures.page(
                 (0..<40).map {
                     try TimelineTestFixtures.message(
-                        id: "\($0)", senderID: 2, at: $0,
+                        id: UInt64($0), senderID: 2, at: $0,
                         text: String(
                             repeating: "Wrapping text during interactive resizing. ", count: 4))
                 })
@@ -858,7 +858,7 @@
             let page = try TimelineTestFixtures.page(
                 (0..<80).map {
                     try TimelineTestFixtures.message(
-                        id: "\($0)", senderID: 2, at: $0,
+                        id: UInt64($0), senderID: 2, at: $0,
                         text: String(repeating: "Wrapping text during divider dragging. ", count: 6)
                     )
                 })
@@ -904,7 +904,7 @@
                 return
             }
             let measurer = TimelineLayoutCache()
-            let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
+            let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(0) })
             let originalHeight = table.rect(ofRow: offscreen).height
             XCTAssertGreaterThan(originalHeight, 0)
             XCTAssertEqual(
@@ -914,7 +914,7 @@
                     cache: measurer
                 ).size.height,
                 accuracy: 1)
-            let anchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "20" })
+            let anchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(20) })
             model.userScrollBegan()
             scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: anchor).minY + 12))
             scroll.reflectScrolledClipView(scroll.contentView)
@@ -960,7 +960,7 @@
 
             // Moving to previously offscreen rows at an unchanged width must still
             // replace their temporary heights before presenting the new viewport.
-            let newAnchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "50" })
+            let newAnchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(50) })
             scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: newAnchor).minY + 12))
             scroll.reflectScrolledClipView(scroll.contentView)
             NotificationCenter.default.post(
@@ -1012,7 +1012,7 @@
             let page = try TimelineTestFixtures.page(
                 (0..<40).map {
                     try TimelineTestFixtures.message(
-                        id: "\($0)", senderID: 2, at: $0,
+                        id: UInt64($0), senderID: 2, at: $0,
                         text: String(
                             repeating: "Wrapping text during overlapping resize interactions. ",
                             count: 5))
@@ -1035,7 +1035,7 @@
             let scroll = try XCTUnwrap(
                 controller.view.subviews.compactMap { $0 as? NSScrollView }.first)
             let table = try XCTUnwrap(scroll.documentView as? NSTableView)
-            let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
+            let offscreen = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(0) })
             let measurer = TimelineLayoutCache()
 
             for splitEndsFirst in [true, false] {
@@ -1084,7 +1084,7 @@
             let page = try TimelineTestFixtures.page(
                 (0..<120).map {
                     try TimelineTestFixtures.message(
-                        id: "\($0)", senderID: 2, at: $0,
+                        id: UInt64($0), senderID: 2, at: $0,
                         text: String(
                             repeating: "Text that reflows across multiple settlement batches. ",
                             count: 6))
@@ -1103,8 +1103,8 @@
             try await waitForDisplay(controller, model: model)
             let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
             let table = try XCTUnwrap(scroll.documentView as? NSTableView)
-            let first = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "0" })
-            let anchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "50" })
+            let first = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(0) })
+            let anchor = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(50) })
             let originalHeight = table.rect(ofRow: first).height
             model.userScrollBegan()
             scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: anchor).minY + 12))
@@ -1118,7 +1118,7 @@
             try await waitForDisplay(controller, model: model)
             controller.isSplitResizing = false
             let edited = try TimelineTestFixtures.message(
-                id: "90", senderID: 2, at: 90,
+                id: 90, senderID: 2, at: 90,
                 text: String(
                     repeating: "Edited while native height correction restores the reader. ",
                     count: 20))
@@ -1179,7 +1179,7 @@
             let page = try TimelineTestFixtures.page(
                 (0..<40).map {
                     try TimelineTestFixtures.message(
-                        id: "\($0)", senderID: 2, at: $0,
+                        id: UInt64($0), senderID: 2, at: $0,
                         text: String(
                             repeating: "Wrapping text changes the height of this message. ",
                             count: 4)
@@ -1213,7 +1213,7 @@
                 "A height-only resize must keep the latest message attached to the bottom")
 
             model.userScrollBegan()
-            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == "10" })
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(10) })
             scroll.contentView.scroll(to: NSPoint(x: 0, y: table.rect(ofRow: index).minY + 12))
             scroll.reflectScrolledClipView(scroll.contentView)
             NotificationCenter.default.post(
@@ -1239,7 +1239,7 @@
         func testUserScrollCancelsAnimatedJumpWithoutLaterMovement() async throws {
             let page = try TimelineTestFixtures.page(
                 (0..<25).map {
-                    try TimelineTestFixtures.message(id: "\($0)", at: $0)
+                    try TimelineTestFixtures.message(id: UInt64($0), at: $0)
                 })
             let model = ConversationTimelineModel(
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
@@ -1280,17 +1280,18 @@
         }
 
         private func checkSameDayPrepend(scrollY: CGFloat) async throws {
-            func page(_ ids: ClosedRange<Int>, olderCursor: String?) throws -> ListMessagesResponse
+            func page(_ ids: ClosedRange<Int>, olderCursor: MessageID?) throws
+                -> ListMessagesResponse
             {
                 try TimelineTestFixtures.page(
                     ids.map {
                         try TimelineTestFixtures.message(
-                            id: "\($0)", at: $0 % 60, hour: 12, minute: $0 / 60)
+                            id: UInt64($0), at: $0 % 60, hour: 12, minute: $0 / 60)
                     }, olderCursor: olderCursor)
             }
             let source = PagedHistorySource(pages: [
-                try page(60...109, olderCursor: "60"),
-                try page(10...59, olderCursor: "10"),
+                try page(60...109, olderCursor: MessageID(60)),
+                try page(10...59, olderCursor: MessageID(10)),
                 try page(0...9, olderCursor: nil),
             ])
             var calendar = Calendar(identifier: .gregorian)
@@ -1333,7 +1334,7 @@
 
             let loaded = expectation(description: "first older page installed")
             let subscription = model.updates
-                .filter { $0.rows.contains { $0.messageID == "10" } }
+                .filter { $0.rows.contains { $0.messageID == MessageID(10) } }
                 .first()
                 .sink { _ in loaded.fulfill() }
             defer { subscription.cancel() }
@@ -1345,7 +1346,7 @@
             controller.view.layoutSubtreeIfNeeded()
             controller.viewDidLayout()
             try await waitForDisplay(controller, model: model)
-            XCTAssertEqual(source.queries.compactMap(\.before), ["60"])
+            XCTAssertEqual(source.queries.compactMap(\.before), [MessageID(60)])
             let newIndex = try XCTUnwrap(model.rows.firstIndex { $0.id == messageID })
             let offsetAfter =
                 tableView.rect(ofRow: newIndex).minY - scrollView.documentVisibleRect.minY
@@ -1364,14 +1365,14 @@
             if model.state.older == .loading {
                 let nextLoaded = expectation(description: "unexpected second older page installed")
                 let nextSubscription = model.updates
-                    .filter { $0.rows.contains { $0.messageID == "0" } }
+                    .filter { $0.rows.contains { $0.messageID == MessageID(0) } }
                     .first()
                     .sink { _ in nextLoaded.fulfill() }
                 defer { nextSubscription.cancel() }
                 await fulfillment(of: [nextLoaded], timeout: 2)
             }
             XCTAssertEqual(
-                source.queries.compactMap(\.before), ["60"],
+                source.queries.compactMap(\.before), [MessageID(60)],
                 "Without further upward movement, restoring the reader should prevent another page request"
             )
         }
@@ -1379,7 +1380,7 @@
         func testTimelineHasNoHorizontalScrollRangeAfterResizing() async throws {
             let page = try TimelineTestFixtures.page(
                 (10...59).map {
-                    try TimelineTestFixtures.message(id: "\($0)", at: $0)
+                    try TimelineTestFixtures.message(id: UInt64($0), at: $0)
                 })
             let source = HistorySource(initial: page, older: page)
             let model = ConversationTimelineModel(
@@ -1416,11 +1417,11 @@
 
         private func checkHistoryScroll(legacyMouse: Bool) async throws {
             let messages = try (10...59).map {
-                try TimelineTestFixtures.message(id: "\($0)", at: $0)
+                try TimelineTestFixtures.message(id: UInt64($0), at: $0)
             }
-            let older = try TimelineTestFixtures.message(id: "9", at: 9)
+            let older = try TimelineTestFixtures.message(id: 9, at: 9)
             let source = HistorySource(
-                initial: try TimelineTestFixtures.page(messages, olderCursor: "10"),
+                initial: try TimelineTestFixtures.page(messages, olderCursor: MessageID(10)),
                 older: try TimelineTestFixtures.page([older])
             )
             let model = ConversationTimelineModel(
@@ -1451,7 +1452,9 @@
 
             let loaded = expectation(description: "older message is rendered")
             let subscription = model.updates.sink { snapshot in
-                if snapshot.rows.contains(where: { $0.messageID == "9" }) { loaded.fulfill() }
+                if snapshot.rows.contains(where: { $0.messageID == MessageID(9) }) {
+                    loaded.fulfill()
+                }
             }
             defer { subscription.cancel() }
             // AppKit documents that legacy wheels send didLiveScroll without willStart.
@@ -1465,8 +1468,8 @@
             XCTAssertEqual(model.state.older, .loading)
             await fulfillment(of: [loaded], timeout: 2)
             XCTAssertEqual(source.queries.count, 2)
-            XCTAssertEqual(source.queries.last?.before, "10")
-            XCTAssertEqual(model.rows.compactMap(\.messageID), ["9"] + messages.map(\.id))
+            XCTAssertEqual(source.queries.last?.before, MessageID(10))
+            XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(9)] + messages.map(\.id))
             XCTAssertFalse(model.state.live.followsLatest)
             XCTAssertGreaterThan(
                 scrollView.documentVisibleRect.minY, 0,

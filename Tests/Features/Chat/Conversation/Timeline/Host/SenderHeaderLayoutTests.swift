@@ -104,7 +104,7 @@ final class SenderHeaderLayoutTests: XCTestCase {
 
     #endif
 
-    func testQueuedSenderUsesLiveProfileUntilAcknowledgement() throws {
+    func testQueuedSenderUsesItsCapturedSenderUntilAcknowledgement() throws {
         let profile = try JSONDecoder().decode(
             MeResponse.self,
             from: Data(
@@ -114,27 +114,25 @@ final class SenderHeaderLayoutTests: XCTestCase {
                   "userGroup": {"groupId": 7, "name": "Staff", "chatGroupColor": "#112233", "chatGroupColorDark": "#aabbcc"}
                 }
                 """#.utf8))
-        let pending = PendingOutgoingMessage(
+        var pending = PendingOutgoingMessage(
             chatID: "chat", clientGeneratedID: "queued-sender",
             body: .init(messageType: .text, clientGeneratedId: "queued-sender", message: "Hi"),
             enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1, state: .queued
         )
         let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
-        func make(_ entry: ConversationTimelineEntry, profile: MeResponse?)
-            -> TimelineRowPresentation
-        {
+        func make(_ entry: ConversationTimelineEntry) -> TimelineRowPresentation {
             TimelineRowPresentation.make(
                 row: .message(
                     .init(
                         entry: entry, isOutgoing: true, groupPosition: .single,
                         showsSenderName: true)),
-                currentUserProfile: profile, currentUserID: 1, isThreadTimeline: false,
-                environment: environment
+                currentUserID: 1, isThreadTimeline: false, environment: environment
             )
         }
 
-        XCTAssertEqual(make(.pending(pending), profile: nil).title?.name, "User 1")
-        let queued = try XCTUnwrap(make(.pending(pending), profile: profile).title)
+        XCTAssertEqual(make(.pending(pending)).title?.name, "User 1")
+        pending.sender = profile.asSender
+        let queued = try XCTUnwrap(make(.pending(pending)).title)
         XCTAssertEqual(queued.name, "Local name")
         XCTAssertEqual(queued.genderGlyph, "♀")
         XCTAssertEqual(queued.groupName, "Staff")
@@ -142,11 +140,11 @@ final class SenderHeaderLayoutTests: XCTestCase {
         XCTAssertEqual(queued.userGroup?.chatGroupColorDark, "#aabbcc")
 
         let acknowledgement = try TimelineTestFixtures.message(
-            id: "confirmed-sender", senderID: 1, at: 0,
+            id: 1, senderID: 1, at: 0,
             clientGeneratedID: pending.clientGeneratedID,
             fields: ["sender": ["uid": 1, "gender": 1, "name": "", "userGroup": NSNull()]]
         )
-        let confirmed = try XCTUnwrap(make(.remote(acknowledgement), profile: profile).title)
+        let confirmed = try XCTUnwrap(make(.remote(acknowledgement)).title)
         XCTAssertEqual(
             confirmed.name, "User 1",
             "An empty authoritative name must not resurrect the local profile name.")
@@ -155,7 +153,7 @@ final class SenderHeaderLayoutTests: XCTestCase {
         XCTAssertNil(confirmed.userGroup)
     }
 
-    func testLegacyProfileWithoutGroupDoesNotStyleAnotherSender() throws {
+    func testLegacyProfileWithoutGroupCapturesNoGroup() throws {
         let profile = try JSONDecoder().decode(
             MeResponse.self,
             from: Data(
@@ -163,27 +161,24 @@ final class SenderHeaderLayoutTests: XCTestCase {
                 {"uid": 1, "username": "Local name", "gender": 2, "stickerPackOrder": [], "permissions": []}
                 """#.utf8))
         XCTAssertNil(profile.userGroup)
-        let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
-        for senderID: Int32 in [1, 2] {
-            let pending = PendingOutgoingMessage(
-                chatID: "chat", clientGeneratedID: "queued-\(senderID)",
-                body: .init(
-                    messageType: .text, clientGeneratedId: "queued-\(senderID)", message: "Hi"),
-                enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: senderID, state: .queued
-            )
-            let presentation = TimelineRowPresentation.make(
-                row: .message(
-                    .init(
-                        entry: .pending(pending), isOutgoing: true, groupPosition: .single,
-                        showsSenderName: true)),
-                currentUserProfile: profile, currentUserID: 1, isThreadTimeline: false,
-                environment: environment
-            )
-            let title = try XCTUnwrap(presentation.title)
-            XCTAssertEqual(title.name, senderID == 1 ? "Local name" : "User 2")
-            XCTAssertEqual(title.genderGlyph, senderID == 1 ? "♀" : "♂")
-            XCTAssertNil(title.groupName)
-        }
+        var pending = PendingOutgoingMessage(
+            chatID: "chat", clientGeneratedID: "queued-1",
+            body: .init(messageType: .text, clientGeneratedId: "queued-1", message: "Hi"),
+            enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1, state: .queued
+        )
+        pending.sender = profile.asSender
+        let presentation = TimelineRowPresentation.make(
+            row: .message(
+                .init(
+                    entry: .pending(pending), isOutgoing: true, groupPosition: .single,
+                    showsSenderName: true)),
+            currentUserID: 1, isThreadTimeline: false,
+            environment: .current(timelineWidth: 600)
+        )
+        let title = try XCTUnwrap(presentation.title)
+        XCTAssertEqual(title.name, "Local name")
+        XCTAssertEqual(title.genderGlyph, "♀")
+        XCTAssertNil(title.groupName)
     }
 
     func testUnconstrainedHeaderFitsFullNameGroupAndGender() throws {
@@ -298,7 +293,7 @@ final class SenderHeaderLayoutTests: XCTestCase {
     ) throws -> TimelineRowPresentation {
         let senderID: Int32 = outgoing ? 1 : 2
         let message = try TimelineTestFixtures.message(
-            id: "sender-header", senderID: senderID, at: 0,
+            id: 1, senderID: senderID, at: 0,
             fields: [
                 "message": "Hi",
                 "sender": [
@@ -312,7 +307,7 @@ final class SenderHeaderLayoutTests: XCTestCase {
                 showsSenderName: true
             ))
         return TimelineRowPresentation.make(
-            row: row, currentUserProfile: nil, currentUserID: 1, isThreadTimeline: false,
+            row: row, currentUserID: 1, isThreadTimeline: false,
             environment: environment
         )
     }

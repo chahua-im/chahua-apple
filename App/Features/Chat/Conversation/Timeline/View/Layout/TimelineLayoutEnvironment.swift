@@ -10,6 +10,8 @@ struct TimelineLayoutEnvironment: Hashable {
     let localeIdentifier: String
     let timeZoneIdentifier: String
     let layoutDirection: LayoutDirection
+    /// In-app language selection: presentation strings localize through it, not the locale.
+    let language: String
 
     var centralWidth: CGFloat {
         max(
@@ -22,12 +24,13 @@ struct TimelineLayoutEnvironment: Hashable {
         timelineWidth: CGFloat, displayScale: CGFloat = 2, bodySize: CGFloat = 17,
         captionSize: CGFloat = 12, caption2Size: CGFloat = 11, avatarSize: CGFloat = 36,
         locale: Locale = .current, timeZone: TimeZone = .current,
-        layoutDirection: LayoutDirection = .leftToRight
+        layoutDirection: LayoutDirection = .leftToRight,
+        language: String = AppLanguage.selected.rawValue
     ) -> Self {
         .init(
             timelineWidth: timelineWidth, displayScale: displayScale, bodySize: bodySize,
             captionSize: captionSize, caption2Size: caption2Size, avatarSize: avatarSize,
             localeIdentifier: locale.identifier, timeZoneIdentifier: timeZone.identifier,
-            layoutDirection: layoutDirection)
+            layoutDirection: layoutDirection, language: language)
     }
 }

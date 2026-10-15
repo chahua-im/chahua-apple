@@ -1,3 +1,4 @@
+import ChahuaAPI
 import Foundation
 
 struct ConversationTimelineState: Equatable {
@@ -12,7 +13,7 @@ struct ConversationTimelineState: Equatable {
 
     enum RepositionTarget: Equatable {
         case liveEdge
-        case message(String)
+        case message(MessageID)
     }
 
     enum Edge: Equatable {

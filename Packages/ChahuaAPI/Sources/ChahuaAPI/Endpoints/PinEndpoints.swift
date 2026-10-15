@@ -9,7 +9,7 @@ public struct ListPinsResponse: Decodable, Sendable {
 }
 
 private struct CreatePinBody: Encodable {
-    let messageId: String
+    let messageId: MessageID
 }
 
 extension ChahuaClient {
@@ -20,7 +20,7 @@ extension ChahuaClient {
         )
     }
 
-    public func createPin(chatID: String, messageID: String) async throws -> PinResponse {
+    public func createPin(chatID: String, messageID: MessageID) async throws -> PinResponse {
         try await send(
             HTTPRequestSpec.json(
                 .post, ["chats", chatID, "pins"], body: CreatePinBody(messageId: messageID)),

@@ -7,46 +7,53 @@ import XCTest
 
 @MainActor
 final class ConversationMessageStoreTests: XCTestCase {
-    func testQueuedMessageImmediatelyAppearsAsSendingProjectionEntry() throws {
+    func testQueuedMessageImmediatelyAppearsAsSendingPendingEntry() throws {
         let store = ConversationMessageStore()
         store.enqueue(pending(id: "send-1", state: .queued))
         store.markSending(chatID: "chat", clientGeneratedID: "send-1")
 
-        let projection = store.projection(
-            for: "chat", remoteMessages: [], includePendingOutgoing: true)
+        let entries = store.pending(chatID: "chat").map(ConversationTimelineEntry.pending)
 
-        XCTAssertEqual(projection.entries.count, 1)
-        XCTAssertEqual(projection.entries[0].stableKey, .clientGenerated("send-1"))
-        XCTAssertEqual(projection.entries[0].displayState, .sending)
-        XCTAssertNil(projection.entries[0].serverID)
+        XCTAssertEqual(entries.map(\.stableKey), [.clientGenerated("send-1")])
+        XCTAssertEqual(entries.first?.displayState, .sending)
+        XCTAssertNil(entries.first?.serverID)
     }
 
-    func testAcknowledgementReplacesPendingEntryUnderSameStableKey() throws {
+    func testPendingSendsKeepOutboxOrderRegardlessOfEnqueueTime() throws {
+        let store = ConversationMessageStore()
+        store.replacePending(
+            chatID: "chat",
+            with: [
+                pending(id: "first", state: .sending, enqueuedAt: 20),
+                pending(id: "second", state: .queued, enqueuedAt: 10),
+            ])
+
+        XCTAssertEqual(store.pending(chatID: "chat").map(\.clientGeneratedID), ["first", "second"])
+    }
+
+    func testAcknowledgementRemovesPendingAndKeepsTheClientStableKey() throws {
         let store = ConversationMessageStore()
         store.enqueue(pending(id: "send-1", state: .sending))
         let acknowledgement = try TimelineTestFixtures.message(
-            id: "server-2",
+            id: 2,
             at: 2,
             clientGeneratedID: "send-1"
         )
 
         store.acknowledge(acknowledgement)
-        let projection = store.projection(
-            for: "chat", remoteMessages: [acknowledgement], includePendingOutgoing: true)
 
-        XCTAssertEqual(projection.entries.count, 1)
-        XCTAssertEqual(projection.entries[0].stableKey, .clientGenerated("send-1"))
-        XCTAssertEqual(projection.entries[0].serverID, "server-2")
-        XCTAssertEqual(projection.entries[0].displayState, .delivered)
+        XCTAssertTrue(store.pending(chatID: "chat").isEmpty)
+        XCTAssertEqual(acknowledgement.timelineStableKey, .clientGenerated("send-1"))
+        XCTAssertEqual(ConversationTimelineEntry.remote(acknowledgement).displayState, .delivered)
     }
 
     func testOverlappingSnapshotTokensObserveOnlyTheirOwnChatAndRequestSuffix() throws {
         let store = ConversationMessageStore()
         let first = store.beginSnapshot(chatID: "chat")
-        let message = try TimelineTestFixtures.message(id: "1", at: 1)
+        let message = try TimelineTestFixtures.message(id: 1, at: 1)
         store.apply(.message(message))
         let second = store.beginSnapshot(chatID: "chat")
-        store.apply(.message(try TimelineTestFixtures.message(id: "other", chatID: "other", at: 2)))
+        store.apply(.message(try TimelineTestFixtures.message(id: 2, chatID: "other", at: 2)))
         store.apply(.messageUpdated(message))
         XCTAssertEqual(eventNames(store.eventsDuringSnapshot(first)), ["create", "update"])
         XCTAssertEqual(eventNames(store.eventsDuringSnapshot(second)), ["update"])
@@ -64,23 +71,19 @@ final class ConversationMessageStoreTests: XCTestCase {
         let store = ConversationMessageStore()
         store.enqueue(pending(id: "send-1", state: .sending))
         let acknowledgement = try TimelineTestFixtures.message(
-            id: "server", at: 2, clientGeneratedID: "send-1")
-        var projections: [ConversationProjection] = []
+            id: 2, at: 2, clientGeneratedID: "send-1")
+        var observed: [(pending: [String], acknowledged: MessageID?)] = []
         let observation = store.changes.sink { change in
-            let remote: [MessageResponse]
-            if case .realtime(.message(let message)) = change {
-                remote = [message]
-            } else {
-                remote = []
-            }
-            projections.append(
-                store.projection(for: "chat", remoteMessages: remote, includePendingOutgoing: true))
+            var acknowledged: MessageID?
+            if case .realtime(.message(let message)) = change { acknowledged = message.id }
+            observed.append(
+                (store.pending(chatID: "chat").map(\.clientGeneratedID), acknowledged))
         }
         defer { observation.cancel() }
         store.acknowledge(acknowledgement)
-        XCTAssertEqual(
-            projections.map { $0.entries.map(\.stableKey) }, [[.clientGenerated("send-1")]])
-        XCTAssertEqual(projections.first?.entries.first?.displayState, .delivered)
+        XCTAssertEqual(observed.count, 1)
+        XCTAssertEqual(observed.first?.pending, [])
+        XCTAssertEqual(observed.first?.acknowledged, MessageID(2))
     }
 
     func testCommittedBatchAcknowledgementPublishesSuccessorStateAndJournalsOneAtomicIngress()
@@ -96,17 +99,12 @@ final class ConversationMessageStoreTests: XCTestCase {
         let token = store.beginSnapshot(chatID: "chat")
         defer { store.endSnapshot(token) }
         let acknowledgement = try TimelineTestFixtures.message(
-            id: "server", at: 2, clientGeneratedID: "send-1")
-        var projections: [ConversationProjection] = []
+            id: 2, at: 2, clientGeneratedID: "send-1")
+        var observed: [(pending: [PendingOutgoingMessage], acknowledged: MessageID?)] = []
         let observation = store.changes.sink { change in
-            let remote: [MessageResponse]
-            if case .realtime(.message(let message)) = change {
-                remote = [message]
-            } else {
-                remote = []
-            }
-            projections.append(
-                store.projection(for: "chat", remoteMessages: remote, includePendingOutgoing: true))
+            var acknowledged: MessageID?
+            if case .realtime(.message(let message)) = change { acknowledged = message.id }
+            observed.append((store.pending(chatID: "chat"), acknowledged))
         }
         defer { observation.cancel() }
 
@@ -114,18 +112,12 @@ final class ConversationMessageStoreTests: XCTestCase {
             chatID: "chat", with: [pending(id: "send-2", state: .failed)],
             acknowledging: acknowledgement)
 
-        XCTAssertEqual(projections.count, 1)
-        let entries = try XCTUnwrap(projections.first).entries
-        XCTAssertEqual(
-            Set(entries.map(\.stableKey)), [.clientGenerated("send-1"), .clientGenerated("send-2")])
-        XCTAssertEqual(
-            entries.first { $0.stableKey == .clientGenerated("send-1") }?.displayState, .delivered)
-        XCTAssertEqual(
-            entries.first { $0.stableKey == .clientGenerated("send-2") }?.displayState, .failed)
+        XCTAssertEqual(observed.count, 1)
+        let state = try XCTUnwrap(observed.first)
+        XCTAssertEqual(state.acknowledged, MessageID(2))
+        XCTAssertEqual(state.pending.map(\.clientGeneratedID), ["send-2"])
+        XCTAssertEqual(state.pending.first?.state, .failed)
         XCTAssertEqual(eventNames(store.eventsDuringSnapshot(token)), ["create"])
-        XCTAssertEqual(
-            store.projection(for: "chat", remoteMessages: [], includePendingOutgoing: true).entries
-                .map(\.stableKey), [.clientGenerated("send-2")])
     }
 
     private func eventNames(_ events: [RealtimeServerEvent]) -> [String] {
@@ -138,13 +130,14 @@ final class ConversationMessageStoreTests: XCTestCase {
         }
     }
 
-    private func pending(id: String, state: PendingOutgoingMessage.State) -> PendingOutgoingMessage
-    {
+    private func pending(
+        id: String, state: PendingOutgoingMessage.State, enqueuedAt second: TimeInterval = 0
+    ) -> PendingOutgoingMessage {
         PendingOutgoingMessage(
             chatID: "chat",
             clientGeneratedID: id,
             body: CreateMessageBody(messageType: .text, clientGeneratedId: id, message: "hello"),
-            enqueuedAt: Date(timeIntervalSince1970: 1_788_220_800),
+            enqueuedAt: Date(timeIntervalSince1970: 1_788_220_800 + second),
             senderID: 1,
             state: state
         )

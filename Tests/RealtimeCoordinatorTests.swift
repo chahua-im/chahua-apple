@@ -437,19 +437,19 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
         throw APIError.unavailable
     }
-    func getMessage(chatID: String, messageID: String) async throws -> MessageResponse {
+    func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         throw APIError.unavailable
     }
 
-    func getReactionDetails(chatID: String, messageID: String) async throws
+    func getReactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse
     {
         throw APIError.unavailable
     }
-    func deleteMessage(chatID: String, messageID: String) async throws {
+    func deleteMessage(chatID: String, messageID: MessageID) async throws {
         throw APIError.unavailable
     }
-    func markChatRead(chatID: String, messageID: String) async throws -> ReadStateResponse {
+    func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }
     func markChatUnread(chatID: String) async throws -> ReadStateResponse {
@@ -465,13 +465,13 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
         throw APIError.unavailable
     }
     func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
-    func markThreadRead(chatID: String, threadID: String, messageID: String) async throws
+    func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
     { throw APIError.unavailable }
-    func putReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
-    func deleteReaction(chatID: String, messageID: String, emoji: String) async throws {
+    func deleteReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         throw APIError.unavailable
     }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {

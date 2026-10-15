@@ -15,22 +15,23 @@ final class TimelineRowsBuilderTests: XCTestCase {
 
     func testBuildInsertsDateSeparatorsAtDayBoundaries() throws {
         let rows = builder().build([
-            try TimelineTestFixtures.message(id: "1", at: 0),
-            try TimelineTestFixtures.message(id: "2", at: 1, dayOffset: 1),
+            try TimelineTestFixtures.message(id: 1, at: 0),
+            try TimelineTestFixtures.message(id: 2, at: 1, dayOffset: 1),
         ])
 
         XCTAssertEqual(rows.count, 4)
         XCTAssertEqual(rows.compactMap(dateRow).map(\.ordinalDay).count, 2)
-        XCTAssertEqual(rows.compactMap(messageRow).map(\.entry.serverID), ["1", "2"])
+        XCTAssertEqual(
+            rows.compactMap(messageRow).map(\.entry.serverID), [MessageID(1), MessageID(2)])
         XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.single, .single])
     }
 
     func testBuildKeepsContiguousSenderGroupedAcrossMinutes() throws {
         let rows = builder().build([
-            try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
-            try TimelineTestFixtures.message(id: "2", senderID: 2, at: 30),
-            try TimelineTestFixtures.message(id: "3", senderID: 2, at: 45),
-            try TimelineTestFixtures.message(id: "4", senderID: 2, at: 0, minute: 6),
+            try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0),
+            try TimelineTestFixtures.message(id: 2, senderID: 2, at: 30),
+            try TimelineTestFixtures.message(id: 3, senderID: 2, at: 45),
+            try TimelineTestFixtures.message(id: 4, senderID: 2, at: 0, minute: 6),
         ])
         let messages = rows.compactMap(messageRow)
         XCTAssertEqual(messages.map(\.groupPosition), [.first, .middle, .middle, .last])
@@ -40,11 +41,11 @@ final class TimelineRowsBuilderTests: XCTestCase {
     func testSameSenderBubblesUseFourPointGapAndOneAvatar() throws {
         for body in ["Hi", String(repeating: "A longer message for row geometry. ", count: 8)] {
             let rows = builder().build([
-                try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0, text: body),
+                try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0, text: body),
                 try TimelineTestFixtures.message(
-                    id: "2", senderID: 2, at: 0, minute: 6, text: body),
+                    id: 2, senderID: 2, at: 0, minute: 6, text: body),
                 try TimelineTestFixtures.message(
-                    id: "3", senderID: 3, at: 10, minute: 6, text: body),
+                    id: 3, senderID: 3, at: 10, minute: 6, text: body),
             ]).compactMap(messageRow)
             XCTAssertEqual(rows.map(\.groupPosition), [.first, .last, .single])
             XCTAssertEqual(rows.map(\.showsSenderName), [true, false, true])
@@ -53,8 +54,8 @@ final class TimelineRowsBuilderTests: XCTestCase {
             let layouts = rows.map { row in
                 engine.layout(
                     TimelineRowPresentation.make(
-                        row: .message(row), currentUserProfile: nil, currentUserID: 1,
-                        isThreadTimeline: false, environment: environment),
+                        row: .message(row), currentUserID: 1, isThreadTimeline: false,
+                        environment: environment),
                     environment: environment)
             }
             XCTAssertNil(layouts[0].frames[.avatar])
@@ -76,9 +77,9 @@ final class TimelineRowsBuilderTests: XCTestCase {
 
     func testSystemMessageBreaksGrouping() throws {
         let rows = builder().build([
-            try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0),
-            try TimelineTestFixtures.message(id: "2", senderID: 2, at: 10, type: .system),
-            try TimelineTestFixtures.message(id: "3", senderID: 2, at: 20),
+            try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0),
+            try TimelineTestFixtures.message(id: 2, senderID: 2, at: 10, type: .system),
+            try TimelineTestFixtures.message(id: 3, senderID: 2, at: 20),
         ])
 
         XCTAssertEqual(
@@ -87,9 +88,9 @@ final class TimelineRowsBuilderTests: XCTestCase {
 
     func testBuildShowsSenderNamesAtTheStartOfEveryNonSystemGroup() throws {
         let rows = builder().build([
-            try TimelineTestFixtures.message(id: "1", senderID: 1, at: 0),
-            try TimelineTestFixtures.message(id: "2", senderID: 2, at: 10),
-            try TimelineTestFixtures.message(id: "3", senderID: 2, at: 20),
+            try TimelineTestFixtures.message(id: 1, senderID: 1, at: 0),
+            try TimelineTestFixtures.message(id: 2, senderID: 2, at: 10),
+            try TimelineTestFixtures.message(id: 3, senderID: 2, at: 20),
         ])
         let messages = rows.compactMap(messageRow)
 
@@ -99,14 +100,14 @@ final class TimelineRowsBuilderTests: XCTestCase {
 
     func testMessageRowUsesClientGeneratedIDAsItsStableIdentity() throws {
         let message = try TimelineTestFixtures.message(
-            id: "server-9",
+            id: 9,
             at: 0,
             clientGeneratedID: "send-9"
         )
         let rows = builder().build([message])
 
         XCTAssertEqual(rows[1].id, .message(.clientGenerated("send-9")))
-        XCTAssertEqual(rows[1].messageID, "server-9")
+        XCTAssertEqual(rows[1].messageID, MessageID(9))
     }
 
     func testPendingMessageProducesAStableSendingRowWithoutServerID() {
@@ -128,7 +129,7 @@ final class TimelineRowsBuilderTests: XCTestCase {
 
     func testDirectMessageSenderMetadataMatchesPlatformContract() throws {
         let rows = builder(isGroupChat: false).build([
-            try TimelineTestFixtures.message(id: "1", senderID: 2, at: 0)
+            try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0)
         ])
 
         #if os(macOS)
@@ -140,15 +141,15 @@ final class TimelineRowsBuilderTests: XCTestCase {
 
     func testUnreadBoundaryBreaksSenderGroupingWithoutChangingMessageIdentity() throws {
         let messages = [
-            try TimelineTestFixtures.message(id: "read", senderID: 2, at: 0),
-            try TimelineTestFixtures.message(id: "unread", senderID: 2, at: 10),
-            try TimelineTestFixtures.message(id: "next", senderID: 2, at: 20),
+            try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0),
+            try TimelineTestFixtures.message(id: 2, senderID: 2, at: 10),
+            try TimelineTestFixtures.message(id: 3, senderID: 2, at: 20),
         ]
-        let rows = builder().build(messages, unreadBeforeMessageID: "unread")
+        let rows = builder().build(messages, unreadBeforeMessageID: MessageID(2))
         let separator = try XCTUnwrap(rows.firstIndex { $0.id == .unreadSeparator })
 
-        XCTAssertEqual(rows[separator - 1].messageID, "read")
-        XCTAssertEqual(rows[separator + 1].messageID, "unread")
+        XCTAssertEqual(rows[separator - 1].messageID, MessageID(1))
+        XCTAssertEqual(rows[separator + 1].messageID, MessageID(2))
         XCTAssertNil(rows[separator].messageID)
         XCTAssertEqual(rows.compactMap(messageRow).map(\.groupPosition), [.single, .first, .last])
         XCTAssertEqual(rows.compactMap(messageRow).map(\.showsSenderName), [true, true, false])
