@@ -211,6 +211,8 @@ struct MessageComposerView: View {
                             .frame(width: 44, height: 44)
                             .contentShape(Circle())
                     }
+                    // Preserve Camera → Photos → Files even when the menu opens upward.
+                    .menuOrder(.fixed)
                     .disabled(!canAcquire)
                     .accessibilityLabel(
                         editingMessage == nil
