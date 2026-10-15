@@ -384,6 +384,27 @@ final class ChahuaAPITests: XCTestCase {
             ])
     }
 
+    func testThreadSubscriptionUsesSubscribeRouteForStatusAndMutations() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return request.httpMethod == "GET"
+                ? (200, #"{"subscribed":true,"archived":true}"#) : (204, "")
+        }
+        let client = ChahuaClient(
+            configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
+            session: testSession()
+        )
+
+        let status = try await client.threadSubscriptionStatus(chatID: "10", threadID: "80")
+        try await client.subscribeThread(chatID: "10", threadID: "80")
+
+        XCTAssertEqual(status, ThreadSubscriptionStatus(subscribed: true, archived: true))
+        XCTAssertEqual(requests.values.map(\.httpMethod), ["GET", "PUT"])
+        XCTAssertEqual(
+            Set(requests.values.map { $0.url?.path }), ["/chats/10/threads/80/subscribe"])
+    }
+
     func testSendThreadMessageUsesThreadRouteAndPreservesMessageBody() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in

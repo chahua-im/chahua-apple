@@ -194,6 +194,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var onSearch: (() -> Void)?
     /// The phone header splits the identity and trailing controls into separate toolbar items.
     var part: Part = .full
+    /// The trailing slot holds its own control (e.g. the thread subscription menu)
+    /// rather than a decorative avatar.
+    var trailingIsControl = false
     @ViewBuilder var avatar: () -> Avatar
 
     enum Part { case full, identity, trailing }
@@ -289,14 +292,15 @@ struct ChatFloatingHeader<Avatar: View>: View {
     /// A circular glass control matching the back button; the avatar fills it
     /// with a thin glass rim, like Telegram's title-bar avatar.
     private var avatarLabel: some View {
-        avatar()
+        let isInteractive = onOpenInfo != nil || trailingIsControl
+        return avatar()
             .frame(width: Self.avatarDiameter, height: Self.avatarDiameter)
             .clipShape(Circle())
             .frame(width: 44, height: 44)
             .contentShape(Circle())
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: onOpenInfo != nil))
+            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: isInteractive))
             .clipShape(Circle())
-            .accessibilityHidden(onOpenInfo == nil)
+            .accessibilityHidden(!isInteractive)
     }
 
     /// Avatar diameter inside the 44 pt glass circle; callers size their avatar to this.
@@ -370,6 +374,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
         var isMuted = false
         var onOpenInfo: (() -> Void)?
         var onSearch: (() -> Void)?
+        var trailingIsControl = false
         @ViewBuilder var avatar: () -> Avatar
 
         func body(content: Content) -> some View {
@@ -407,7 +412,8 @@ struct ChatFloatingHeader<Avatar: View>: View {
         private func header(_ part: ChatFloatingHeader<Avatar>.Part) -> some View {
             ChatFloatingHeader(
                 title: title, subtitle: subtitle, isMuted: isMuted,
-                onOpenInfo: onOpenInfo, onSearch: onSearch, part: part, avatar: avatar)
+                onOpenInfo: onOpenInfo, onSearch: onSearch, part: part,
+                trailingIsControl: trailingIsControl, avatar: avatar)
         }
     }
 #endif

@@ -902,6 +902,38 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.state.archivedThreads, [archived])
         XCTAssertTrue(store.state.threads.isEmpty)
     }
+
+    func testThreadSubscriptionChangesMoveListsOnlyAfterServerAcceptance() async throws {
+        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: 1)
+        let api = FakeChatAPI(
+            threadResults: [.success(.init(threads: [thread]))],
+            archiveResults: [.success(()), .failure(FakeChatAPIError.failed), .success(())])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.cancelRealtimeRecovery() }
+        await store.loadActiveThreads()
+
+        let archived = try await store.changeThreadSubscription(
+            .archive, chatID: "chat", threadID: "1")
+        XCTAssertEqual(archived, ThreadSubscriptionStatus(subscribed: true, archived: true))
+        XCTAssertTrue(store.state.threads.isEmpty)
+        XCTAssertEqual(store.state.archivedThreads, [thread.withArchived(true)])
+
+        do {
+            _ = try await store.changeThreadSubscription(
+                .unarchive, chatID: "chat", threadID: "1")
+            XCTFail("A rejected unarchive must surface its failure")
+        } catch {
+            XCTAssertTrue(store.state.threads.isEmpty)
+            XCTAssertEqual(store.state.archivedThreads, [thread.withArchived(true)])
+        }
+
+        let restored = try await store.changeThreadSubscription(
+            .unarchive, chatID: "chat", threadID: "1")
+        XCTAssertEqual(restored, ThreadSubscriptionStatus(subscribed: true, archived: false))
+        XCTAssertEqual(store.state.threads, [thread])
+        XCTAssertTrue(store.state.archivedThreads.isEmpty)
+    }
 }
 
 private enum FakeChatAPIError: Error { case failed }

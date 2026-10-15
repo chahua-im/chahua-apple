@@ -112,6 +112,7 @@ struct AuthenticatedShell: View {
 
     @State private var openedThread: ThreadNavigation?
     @State private var threadPath: [ConversationKey] = []
+    @State private var threadSubscription: ThreadSubscriptionModel?
 
     var body: some View {
         GeometryReader { geometry in
@@ -157,6 +158,14 @@ struct AuthenticatedShell: View {
             reportVisibleConversation()
         }
         .onChange(of: visibleConversation) { _, _ in reportVisibleConversation() }
+        .onChange(of: headerThreadKey, initial: true) { _, key in
+            guard threadSubscription?.key != key else { return }
+            threadSubscription = key.flatMap { key in
+                key.threadID.map {
+                    ThreadSubscriptionModel(chatID: key.chatID, threadID: $0, store: chatStore)
+                }
+            }
+        }
         .onDisappear {
             isVisible = false
             notifications.setVisibleConversation(sceneID: notificationSceneID, conversation: nil)
@@ -218,9 +227,10 @@ struct AuthenticatedShell: View {
                             onClose: isSplit && threadPath.isEmpty
                                 ? { selectConversation(nil) } : nil,
                             onOpenInfo: infoAction,
-                            onSearch: searchAction
+                            onSearch: searchAction,
+                            trailingIsControl: headerThreadKey != nil
                         ) {
-                            selectedAvatar
+                            headerTrailing(for: headerThreadKey)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12)
@@ -262,9 +272,10 @@ struct AuthenticatedShell: View {
                                     subtitle: key.threadID == nil ? headerSubtitle : nil,
                                     isMuted: key.threadID == nil && headerChatIsMuted,
                                     onOpenInfo: key.threadID == nil ? infoAction : nil,
-                                    onSearch: searchAction
+                                    onSearch: searchAction,
+                                    trailingIsControl: key.threadID != nil
                                 ) {
-                                    selectedAvatar
+                                    headerTrailing(for: key)
                                 })
                         case .group(let route):
                             groupDestination(route)
@@ -620,6 +631,22 @@ struct AuthenticatedShell: View {
             return navigation.chat?.chatDisplayName ?? AppLanguage.localized("Loading conversation")
         }
         return selectedConversation?.title ?? ""
+    }
+
+    /// The thread whose title bar is visible, opened from a timeline, the thread
+    /// list, a notification, or search; `nil` while a chat is visible.
+    private var headerThreadKey: ConversationKey? {
+        if let key = threadPath.last { return key }
+        return selectedConversationID?.threadID == nil ? nil : selectedConversationID
+    }
+
+    /// Threads show their subscription control where chats show their avatar.
+    @ViewBuilder private func headerTrailing(for key: ConversationKey?) -> some View {
+        if let key, key.threadID != nil, let model = threadSubscription, model.key == key {
+            ThreadSubscriptionMenu(model: model)
+        } else {
+            selectedAvatar
+        }
     }
 
     @ViewBuilder private var selectedAvatar: some View {

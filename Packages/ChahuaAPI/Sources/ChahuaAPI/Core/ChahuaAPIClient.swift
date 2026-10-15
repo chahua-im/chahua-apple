@@ -52,6 +52,13 @@ public protocol ChahuaAPIClient: Sendable {
     /// Restores only this thread subscription, leaving its parent chat unchanged (204).
     func unarchiveThread(chatID: String, threadID: String) async throws
 
+    /// Reads the current user's subscription with `GET /chats/{chatID}/threads/{threadID}/subscribe`.
+    func threadSubscriptionStatus(chatID: String, threadID: String) async throws
+        -> ThreadSubscriptionStatus
+
+    /// Subscribes to a thread (204); the server also subscribes repliers and mentioned members.
+    func subscribeThread(chatID: String, threadID: String) async throws
+
     /// Mutes chat notifications with `PUT /group/{chatID}/mute`.
     ///
     /// A `nil` duration requests the server's indefinite mute; a non-`nil`
@@ -201,6 +208,16 @@ extension ChahuaAPIClient {
     public func searchMessages(chatID: String, query: SearchMessagesQuery) async throws
         -> SearchMessagesResponse
     {
+        throw APIError.unavailable
+    }
+
+    public func threadSubscriptionStatus(chatID: String, threadID: String) async throws
+        -> ThreadSubscriptionStatus
+    {
+        throw APIError.unavailable
+    }
+
+    public func subscribeThread(chatID: String, threadID: String) async throws {
         throw APIError.unavailable
     }
 

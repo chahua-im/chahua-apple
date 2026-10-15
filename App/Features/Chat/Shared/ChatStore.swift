@@ -514,17 +514,7 @@ final class ChatStore: ObservableObject {
                             chatID: original.chatId,
                             threadID: original.threadRootMessage.id.description)
                         ?? original
-                    install(
-                        ThreadListItem(
-                            chatId: latest.chatId, chatName: latest.chatName,
-                            chatAvatar: latest.chatAvatar,
-                            threadRootMessage: latest.threadRootMessage,
-                            participants: latest.participants,
-                            lastReply: latest.lastReply, replyCount: latest.replyCount,
-                            lastReplyAt: latest.lastReplyAt,
-                            unreadCount: latest.unreadCount,
-                            lastReadMessageId: latest.lastReadMessageId,
-                            subscribedAt: latest.subscribedAt, archived: archived))
+                    install(latest.withArchived(archived))
                 }
             case .mute, .unmute:
                 // Threads have no independent mute API. Never mutate their parent.
@@ -581,6 +571,65 @@ final class ChatStore: ObservableObject {
             ?? state.archivedThreads.first {
                 $0.chatId == chatID && $0.threadRootMessage.id.description == threadID
             }
+    }
+
+    /// Emits a thread whenever the current user's subscription may have changed:
+    /// explicit membership changes and new replies (which auto-subscribe repliers
+    /// and mentioned members). Payloads carry no state; listeners re-read it.
+    let threadSubscriptionInvalidations = PassthroughSubject<ConversationKey, Never>()
+
+    func threadSubscriptionStatus(chatID: String, threadID: String) async throws
+        -> ThreadSubscriptionStatus
+    {
+        try Task.checkCancellation()
+        let requestGeneration = generation
+        do {
+            let status = try await apiClient.threadSubscriptionStatus(
+                chatID: chatID, threadID: threadID)
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            return status
+        } catch {
+            guard generation == requestGeneration else { throw CancellationError() }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            throw error
+        }
+    }
+
+    /// Applies a thread-detail subscription change and returns the resulting state.
+    ///
+    /// Serialized with list swipe actions for the same chat; thread lists move only
+    /// after the server accepts the change, then refresh to pick up new rows.
+    func changeThreadSubscription(
+        _ change: ThreadSubscriptionChange, chatID: String, threadID: String
+    ) async throws -> ThreadSubscriptionStatus {
+        let requestGeneration = generation
+        let status: ThreadSubscriptionStatus = try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            do {
+                switch change {
+                case .subscribe:
+                    try await self.apiClient.subscribeThread(chatID: chatID, threadID: threadID)
+                    return ThreadSubscriptionStatus(subscribed: true, archived: false)
+                case .archive:
+                    try await self.apiClient.archiveThread(chatID: chatID, threadID: threadID)
+                    return ThreadSubscriptionStatus(subscribed: true, archived: true)
+                case .unarchive:
+                    try await self.apiClient.unarchiveThread(chatID: chatID, threadID: threadID)
+                    return ThreadSubscriptionStatus(subscribed: true, archived: false)
+                }
+            } catch {
+                guard self.generation == requestGeneration else { throw CancellationError() }
+                if case APIError.invalidToken = error { await self.onInvalidToken() }
+                throw error
+            }
+        }
+        guard generation == requestGeneration else { throw CancellationError() }
+        if let listed = thread(chatID: chatID, threadID: threadID) {
+            install(listed.withArchived(status.archived))
+        }
+        invalidateChatList()
+        return status
     }
 
     private func install(_ chat: ChatListItem) {
@@ -740,17 +789,21 @@ final class ChatStore: ObservableObject {
             conversationMessages.apply(event)
             invalidateChatList()
             scheduleRecovery(chatID: payload.chatId)
-        case .threadUpdate:
+        case .threadUpdate(let payload):
             conversationMessages.apply(event)
             invalidateChatList()
+            threadSubscriptionInvalidations.send(
+                ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId))
         case .chatArchiveStateChanged(let payload):
             if let chat = chat(id: payload.chatId) {
                 applyArchiveState(
                     to: chat, archived: payload.archived, mutedUntil: payload.mutedUntil)
             }
             invalidateChatList()
-        case .threadMembershipChanged:
+        case .threadMembershipChanged(let payload):
             invalidateChatList()
+            threadSubscriptionInvalidations.send(
+                ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId))
         case .friendRequestResolved, .friendshipRemoved:
             invalidateChatList()
         case .stickerPackOrderUpdated(let payload):

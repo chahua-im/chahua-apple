@@ -24,6 +24,20 @@ public struct ListThreadsQuery: Sendable, Equatable {
     }
 }
 
+/// The current user's subscription to one thread, from `GET .../subscribe`.
+///
+/// Only subscribed threads appear in `GET /threads`; `archived` selects which list.
+/// A thread the user never subscribed to reports `false` for both fields.
+public struct ThreadSubscriptionStatus: Codable, Hashable, Sendable {
+    public let subscribed: Bool
+    public let archived: Bool
+
+    public init(subscribed: Bool, archived: Bool) {
+        self.subscribed = subscribed
+        self.archived = archived
+    }
+}
+
 extension ChahuaClient {
     public func archiveThread(chatID: String, threadID: String) async throws {
         try await send(
@@ -34,6 +48,22 @@ extension ChahuaClient {
         try await send(
             HTTPRequestSpec(
                 method: .delete, path: ["chats", chatID, "threads", threadID, "archive"]))
+    }
+
+    public func threadSubscriptionStatus(chatID: String, threadID: String) async throws
+        -> ThreadSubscriptionStatus
+    {
+        try await send(
+            HTTPRequestSpec(
+                method: .get, path: ["chats", chatID, "threads", threadID, "subscribe"]),
+            decoding: ThreadSubscriptionStatus.self
+        )
+    }
+
+    public func subscribeThread(chatID: String, threadID: String) async throws {
+        try await send(
+            HTTPRequestSpec(
+                method: .put, path: ["chats", chatID, "threads", threadID, "subscribe"]))
     }
 
     public func markThreadRead(chatID: String, threadID: String, messageID: MessageID)
