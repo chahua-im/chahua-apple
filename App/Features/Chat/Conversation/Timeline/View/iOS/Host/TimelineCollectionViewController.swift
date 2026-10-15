@@ -155,6 +155,11 @@
             collectionView.verticalScrollIndicatorInsets.top = headerInset
             collectionView.contentInset.bottom = composerInset
             collectionView.verticalScrollIndicatorInsets.bottom = composerInset
+            // Under the phone navigation bar, the system draws a progressive (soft)
+            // blur rather than a hard-edged backdrop.
+            if #available(iOS 26, *) {
+                collectionView.topEdgeEffect.style = .soft
+            }
             collectionView.register(
                 TimelineCollectionViewCell.self, forCellWithReuseIdentifier: "timeline")
             displayScheduler = TimelineDisplayScheduler(view: view)

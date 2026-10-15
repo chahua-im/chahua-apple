@@ -185,35 +185,49 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
 /// In-content chrome shared by the adaptive conversation and its diagnostic surface.
 struct ChatFloatingHeader<Avatar: View>: View {
     let title: String
+    var subtitle: String?
+    var isMuted = false
     var onBack: (() -> Void)?
     var onClose: (() -> Void)?
     var onOpenInfo: (() -> Void)?
+    /// Search lives on the info page; the header only binds ⌘F, with no visible button.
     var onSearch: (() -> Void)?
+    /// The phone header splits the identity and trailing controls into separate toolbar items.
+    var part: Part = .full
     @ViewBuilder var avatar: () -> Avatar
 
+    enum Part { case full, identity, trailing }
+
     var body: some View {
-        #if os(macOS)
-            HStack(spacing: 8) {
-                navigationControl
-                identity
-                searchControl
-            }
-            .frame(maxWidth: .infinity)
-        #else
-            let hasControls = onBack != nil || onClose != nil || onSearch != nil
-            ZStack {
-                // Symmetric insets keep the identity centered between edge controls.
-                identity
-                    .padding(.horizontal, hasControls ? 52 : 0)
-                if hasControls {
+        switch part {
+        case .identity:
+            identity
+        case .trailing:
+            trailingControls
+                .background { searchShortcut }
+        case .full:
+            #if os(macOS)
+                HStack(spacing: 8) {
+                    navigationControl
+                    identity
+                    trailingControls
+                }
+                .frame(maxWidth: .infinity)
+                .background { searchShortcut }
+            #else
+                ZStack {
+                    // Symmetric insets keep the identity centered between edge controls.
+                    identity
+                        .padding(.horizontal, 52)
                     HStack {
                         navigationControl
                         Spacer(minLength: 0)
-                        searchControl
+                        trailingControls
                     }
                 }
-            }
-        #endif
+                .background { searchShortcut }
+            #endif
+        }
     }
 
     @ViewBuilder
@@ -221,7 +235,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
         if let onOpenInfo {
             Button(action: onOpenInfo) { identityLabel }
                 .buttonStyle(.plain)
-                .accessibilityHint("Open group information")
+                .accessibilityHint("Open chat information")
                 .accessibilityIdentifier("group-info-button")
         } else {
             identityLabel
@@ -229,25 +243,75 @@ struct ChatFloatingHeader<Avatar: View>: View {
     }
 
     private var identityLabel: some View {
-        HStack(spacing: 8) {
-            avatar()
-                .fixedSize()
-                .accessibilityHidden(true)
-            Text(title)
-                .font(.headline)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityAddTraits(.isHeader)
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .accessibilityAddTraits(.isHeader)
+                if isMuted {
+                    Image(systemName: "speaker.slash.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Muted")
+                }
+            }
+            if let subtitle {
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .padding(.leading, 6)
-        .padding(.trailing, 14)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 4)
+        .frame(minHeight: 44)
         #if os(macOS)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        #else
-            .frame(minHeight: 44)
+            .frame(maxWidth: .infinity)
         #endif
         .contentShape(Capsule())
         .modifier(ChatGlassSurface(cornerRadius: 24, isInteractive: onOpenInfo != nil))
+    }
+
+    @ViewBuilder
+    private var trailingControls: some View {
+        if let onOpenInfo {
+            Button(action: onOpenInfo) { avatarLabel }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Open chat information"))
+                .accessibilityIdentifier("group-info-avatar-button")
+        } else {
+            avatarLabel
+        }
+    }
+
+    /// A circular glass control matching the back button; the avatar fills it
+    /// with a thin glass rim, like Telegram's title-bar avatar.
+    private var avatarLabel: some View {
+        avatar()
+            .frame(width: Self.avatarDiameter, height: Self.avatarDiameter)
+            .clipShape(Circle())
+            .frame(width: 44, height: 44)
+            .contentShape(Circle())
+            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: onOpenInfo != nil))
+            .clipShape(Circle())
+            .accessibilityHidden(onOpenInfo == nil)
+    }
+
+    /// Avatar diameter inside the 44 pt glass circle; callers size their avatar to this.
+    static var avatarDiameter: CGFloat { 38 }
+
+    /// ⌘F stays available even when search has no visible header button.
+    @ViewBuilder
+    private var searchShortcut: some View {
+        if let onSearch {
+            Button("Search messages", action: onSearch)
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
     }
 
     @ViewBuilder
@@ -258,18 +322,6 @@ struct ChatFloatingHeader<Avatar: View>: View {
         } else if let onClose {
             headerControl(
                 action: onClose, systemImage: "xmark", accessibilityLabel: "Close conversation")
-        }
-    }
-
-    @ViewBuilder
-    private var searchControl: some View {
-        if let onSearch {
-            headerControl(
-                action: onSearch, systemImage: "magnifyingglass",
-                accessibilityLabel: AppLanguage.localized("Search messages")
-            )
-            .keyboardShortcut("f", modifiers: .command)
-            .accessibilityIdentifier("message-search-button")
         }
     }
 
@@ -314,6 +366,8 @@ struct ChatFloatingHeader<Avatar: View>: View {
     /// The title bar's safe area becomes scroll breathing room, not an opaque layout band.
     struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
         let title: String
+        var subtitle: String?
+        var isMuted = false
         var onOpenInfo: (() -> Void)?
         var onSearch: (() -> Void)?
         @ViewBuilder var avatar: () -> Avatar
@@ -328,20 +382,32 @@ struct ChatFloatingHeader<Avatar: View>: View {
             .toolbar(.visible, for: .navigationBar)
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    ChatFloatingHeader(title: title, onOpenInfo: onOpenInfo, avatar: avatar)
-                }
-                if let onSearch {
+                // iOS 26 wraps bar items in a shared glass capsule; the header draws
+                // its own glass, so hide the system one to keep the avatar circular.
+                if #available(iOS 26, *) {
+                    ToolbarItem(placement: .principal) {
+                        header(.identity)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button(action: onSearch) {
-                            Image(systemName: "magnifyingglass")
-                        }
-                        .keyboardShortcut("f", modifiers: .command)
-                        .accessibilityLabel(Text("Search messages"))
-                        .accessibilityIdentifier("message-search-button")
+                        header(.trailing)
+                    }
+                    .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .principal) {
+                        header(.identity)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        header(.trailing)
                     }
                 }
             }
+        }
+
+        private func header(_ part: ChatFloatingHeader<Avatar>.Part) -> some View {
+            ChatFloatingHeader(
+                title: title, subtitle: subtitle, isMuted: isMuted,
+                onOpenInfo: onOpenInfo, onSearch: onSearch, part: part, avatar: avatar)
         }
     }
 #endif
@@ -400,23 +466,42 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
                                 }
                             }
                             .background(alignment: .top) {
-                                Rectangle()
-                                    .fill(.regularMaterial)
+                                ChatHeaderBackdrop()
                                     .frame(height: headerHeight + geometry.safeAreaInsets.top + 32)
-                                    .mask {
-                                        LinearGradient(
-                                            stops: [
-                                                .init(color: .black, location: 0),
-                                                .init(color: .black, location: 0.45),
-                                                .init(color: .clear, location: 1),
-                                            ],
-                                            startPoint: .top, endPoint: .bottom)
-                                    }
                                     .offset(y: -geometry.safeAreaInsets.top)
-                                    .allowsHitTesting(false)
                             }
                     }
                 }
         }
+    }
+}
+
+/// Very light title-bar backdrop, like Telegram for Mac: content stays visible
+/// behind the glass controls, softened slightly more toward the top edge.
+///
+/// SwiftUI has no variable-radius blur, and a single material faded by an opacity
+/// mask shows where blurred content meets sharp content. Two faint, staggered
+/// material layers make the softening ramp up instead of ending at a line.
+struct ChatHeaderBackdrop: View {
+    private static let reaches: [Double] = [1, 0.55]
+
+    var body: some View {
+        ZStack {
+            ForEach(Self.reaches, id: \.self) { reach in
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.5)
+                    .mask {
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .clear, location: reach),
+                            ],
+                            startPoint: .top, endPoint: .bottom)
+                    }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

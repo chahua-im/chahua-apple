@@ -12,8 +12,8 @@ Tracks user-facing functionality implemented in the old Flutter client but missi
 
 ## Messaging
 
-- [ ] **Chat-scoped message search:** query messages, choose relevance/newest ordering, paginate results, and navigate to a result in its chat or thread. Member autocomplete is not message search.
-  - Implemented as a retained sheet (`App/Features/Chat/Search/`): open it from the conversation header search button (⌘F) or the group info Search tile; DMs and threads search their chat. Best/Recent ordering, 300 ms debounce, 2-character minimum, automatic offset paging, and a distinct unavailable-server error. Results open the chat, or the thread pushed over its chat, positioned and highlighted at the message; reopening search restores the query and results until another chat is selected. Model tests cover length gating, stale responses, paging, sort reset, and failures; iOS/macOS look, navigation, and highlight still need manual verification.
+- [x] **Chat-scoped message search:** query messages, choose relevance/newest ordering, paginate results, and navigate to a result in its chat or thread. Member autocomplete is not message search.
+  - Implemented as a pushed page (`App/Features/Chat/Search/`): open it from the Search tile on the group or DM info page (reached by tapping the chat title or avatar), or with ⌘F from a conversation or thread (threads search their parent chat). Best/Recent dropdown beside the field, 300 ms debounce, 2-character minimum, automatic offset paging, and a distinct unavailable-server error. Results open the chat, or the thread pushed over its chat, positioned and highlighted at the message; reopening search restores the query and results until another chat is selected. Model tests cover length gating, stale responses, paging, sort reset, and failures; iOS/macOS look, navigation, and highlight still need manual verification.
 - [ ] **Full reaction emoji picker:** enable the More reactions control and allow selecting emojis beyond quick reactions, using the existing reaction eligibility and mutation behavior.
 - [ ] **Thread subscription controls:** expose membership state and subscribe/archive/unarchive actions inside thread detail. Preserve existing conversation-list archive/unarchive actions.
 
@@ -41,7 +41,7 @@ Tracks user-facing functionality implemented in the old Flutter client but missi
 - [x] **Timed notification muting:** offer 1 hour, 8 hours, 1 day, 7 days, and indefinite mute, while preserving unmute and existing list actions.
   - Verified on both simulator layouts: selected every duration and unmuted, observing notification status and list-state changes. Store regression coverage verifies preview/read-state preservation and unarchive-on-unmute.
 
-Group verification used temporary hosted runners with deterministic API responses, not live-server sessions; captures were visually inspected and the runners were removed afterward. API wire-contract tests cover group metadata, member mutations, and timed/indefinite mute. The revised shared SwiftUI profile uses one scroll surface and a bounded desktop content width. Only action controls use Liquid Glass on iOS; macOS uses flat action tiles. The member panel is an ordinary flat surface on both platforms. No media tabs or unsupported reference actions were added.
+Group verification used temporary hosted runners with deterministic API responses, not live-server sessions; captures were visually inspected and the runners were removed afterward. API wire-contract tests cover group metadata, member mutations, and timed/indefinite mute. The revised shared SwiftUI profile uses one scroll surface and a bounded desktop content width. Action controls (Mute, Search, More) are flat tiles on both iOS and macOS, matching Flutter. The member panel is an ordinary flat surface on both platforms. No media tabs or unsupported reference actions were added.
 
 ## Settings and customization
 

@@ -25,7 +25,6 @@ struct AuthenticatedShell: View {
     @State private var isVisible = false
     @State private var messageNavigation: MessageNavigation?
     @State private var messageSearch: MessageSearchSession?
-    @State private var showsMessageSearch = false
     @State private var groupPath: [GroupRoute] = []
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
@@ -40,6 +39,7 @@ struct AuthenticatedShell: View {
 
     private enum GroupRoute: Hashable {
         case info(ChatListItem)
+        case search(ChatListItem)
     }
 
     private var isBrowsingArchived: Bool { listPath.last == .archive }
@@ -175,14 +175,6 @@ struct AuthenticatedShell: View {
                     .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
             #endif
         }
-        .sheet(isPresented: $showsMessageSearch) {
-            if let session = messageSearch {
-                MessageSearchView(model: session.model, onSelect: openSearchResult)
-                    #if os(macOS)
-                        .frame(minWidth: 520, idealWidth: 600, minHeight: 520, idealHeight: 680)
-                    #endif
-            }
-        }
         #if os(iOS)
             .fullScreenCover(
                 isPresented: Binding(
@@ -219,6 +211,8 @@ struct AuthenticatedShell: View {
                             title: threadPath.isEmpty
                                 ? selectedTitle
                                 : openedThread?.title ?? AppLanguage.localized("Thread"),
+                            subtitle: threadPath.isEmpty ? headerSubtitle : nil,
+                            isMuted: threadPath.isEmpty && headerChatIsMuted,
                             onBack: !threadPath.isEmpty
                                 ? popThread : isSplit ? nil : { selectConversation(nil) },
                             onClose: isSplit && threadPath.isEmpty
@@ -265,6 +259,8 @@ struct AuthenticatedShell: View {
                                     title: openedThread?.key == key
                                         ? openedThread?.title ?? AppLanguage.localized("Thread")
                                         : selectedTitle,
+                                    subtitle: key.threadID == nil ? headerSubtitle : nil,
+                                    isMuted: key.threadID == nil && headerChatIsMuted,
                                     onOpenInfo: key.threadID == nil ? infoAction : nil,
                                     onSearch: searchAction
                                 ) {
@@ -476,14 +472,15 @@ struct AuthenticatedShell: View {
     }
 
     private var infoAction: (() -> Void)? {
-        guard threadPath.isEmpty, let chat = selectedGroup else { return nil }
+        guard threadPath.isEmpty, let chat = selectedInfoChat else { return nil }
         return {
             guard groupPath.isEmpty, !isSigningOut else { return }
             withAnimation { groupPath.append(.info(chat)) }
         }
     }
 
-    private var selectedGroup: ChatListItem? {
+    /// The selected group or DM, whose info page the header opens; threads have none.
+    private var selectedInfoChat: ChatListItem? {
         guard selectedConversationID?.threadID == nil else { return nil }
         let chat: ChatListItem?
         if let navigationChat = messageNavigation?.chat {
@@ -493,7 +490,7 @@ struct AuthenticatedShell: View {
         } else {
             chat = nil
         }
-        return chat?.kind == .group ? chat : nil
+        return chat
     }
 
     /// The chat searched from the visible conversation; threads search their parent chat.
@@ -526,15 +523,15 @@ struct AuthenticatedShell: View {
                     try await store.searchMessages(chatID: chatID, query: query)
                 })
         }
-        showsMessageSearch = true
+        guard groupPath.last != .search(chat) else { return }
+        withAnimation { groupPath.append(.search(chat)) }
     }
 
-    /// Dismisses the retained search and opens the result in its chat or thread.
+    /// Leaves the retained search page and opens the result in its chat or thread.
     private func openSearchResult(_ message: MessageResponse) {
         guard !isSigningOut, let chat = messageSearch?.chat, message.chatId == chat.id else {
             return
         }
-        showsMessageSearch = false
         groupPath.removeAll()
         let chatKey = ConversationKey(chatID: chat.id, threadID: nil)
         guard let rootID = message.replyRootId else {
@@ -573,6 +570,10 @@ struct AuthenticatedShell: View {
                     onSearch: { openMessageSearch(in: chat) }
                 )
                 .id(chat.id)
+            case .search(let chat):
+                if let session = messageSearch, session.chat.id == chat.id {
+                    MessageSearchView(model: session.model, onSelect: openSearchResult)
+                }
             }
         }
         // Native destinations must not inherit the timeline's floating-header inset.
@@ -624,14 +625,33 @@ struct AuthenticatedShell: View {
     @ViewBuilder private var selectedAvatar: some View {
         if let conversation = selectedConversation {
             ConversationAvatarView(
-                item: conversation, store: chatStore, currentUserID: me.uid, diameter: 32)
+                item: conversation, store: chatStore, currentUserID: me.uid,
+                diameter: ChatFloatingHeader<EmptyView>.avatarDiameter)
         } else if let chat = messageNavigation?.chat {
-            AvatarView(url: chat.chatAvatarURL, displayName: chat.chatDisplayName, diameter: 32)
+            AvatarView(
+                url: chat.chatAvatarURL, displayName: chat.chatDisplayName,
+                diameter: ChatFloatingHeader<EmptyView>.avatarDiameter)
         }
     }
 
+    /// Placeholder until the server reports member counts and presence.
+    private var headerSubtitle: String? {
+        switch selectedInfoChat?.kind {
+        case .group: AppLanguage.localized("— members, — online")
+        case .dm: AppLanguage.localized("last seen —")
+        case nil: nil
+        }
+    }
+
+    private var headerChatIsMuted: Bool {
+        guard selectedConversationID?.threadID == nil,
+            let mutedUntil = searchableChat?.mutedUntil
+        else { return false }
+        return mutedUntil > Date()
+    }
+
     private var visibleConversation: ConversationKey? {
-        guard isVisible, scenePhase == .active, !showsSettings, !showsMessageSearch,
+        guard isVisible, scenePhase == .active, !showsSettings,
             !isSigningOut, groupPath.isEmpty
         else { return nil }
         if let key = threadPath.last { return key }
@@ -673,7 +693,6 @@ struct AuthenticatedShell: View {
 
     /// Search results survive only while their chat (or one of its threads) stays selected.
     private func retainMessageSearch(forChatID chatID: String?) {
-        showsMessageSearch = false
         if messageSearch?.chat.id != chatID { messageSearch = nil }
     }
 

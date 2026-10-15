@@ -36,9 +36,12 @@ struct GroupInfoView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 28) {
+            VStack(spacing: 20) {
                 hero
                 actions
+                if let description {
+                    descriptionCard(description)
+                }
                 if isLoadingInfo, groupInfo == nil {
                     ProgressView()
                         .controlSize(.small)
@@ -50,7 +53,10 @@ struct GroupInfoView: View {
                     }
                     .font(.footnote)
                 }
-                GroupMembersView(chatID: chat.id, currentUserID: currentUserID, store: store)
+                sectionTabs
+                if !isDM {
+                    GroupMembersView(chatID: chat.id, currentUserID: currentUserID, store: store)
+                }
             }
             .frame(maxWidth: 760)
             .padding(.horizontal, 20)
@@ -59,7 +65,7 @@ struct GroupInfoView: View {
             .frame(maxWidth: .infinity)
         }
         .background(ChahuaTheme.conversationBackground(for: colorScheme))
-        .navigationTitle("Group Info")
+        .navigationTitle(isDM ? "Chat Info" : "Group Info")
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -96,36 +102,72 @@ struct GroupInfoView: View {
     }
 
     private var hero: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 6) {
             AvatarView(url: avatarURL, displayName: displayName, diameter: 104)
-                .padding(.bottom, 4)
+                .padding(.bottom, 8)
             Text(displayName)
                 .font(.title2.weight(.bold))
                 .multilineTextAlignment(.center)
                 .textSelection(.enabled)
-            Text(description ?? AppLanguage.localized("No group description yet."))
+            // Placeholder until the server reports member counts and presence.
+            Text(isDM ? "last seen —" : "— members, — online")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
         }
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(displayName)
-        .accessibilityValue(description ?? AppLanguage.localized("No group description yet."))
+    }
+
+    private func descriptionCard(_ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Description")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text(description)
+                .font(.body)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 18)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Placeholder section bar: only group Members exists; media sections are not implemented yet.
+    private var sectionTabs: some View {
+        let sections = GroupInfoSection.allCases.filter { !isDM || $0 != .members }
+        let selected = sections.first
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                ForEach(sections, id: \.self) { section in
+                    Text(section.title)
+                        .font(.body.weight(section == selected ? .semibold : .regular))
+                        .foregroundStyle(section == selected ? .primary : .secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background {
+                            if section == selected {
+                                Capsule().fill(ChahuaTheme.secondaryBackground)
+                            }
+                        }
+                        .accessibilityAddTraits(section == selected ? .isSelected : [])
+                }
+            }
+            .padding(4)
+        }
+        .background(
+            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme), in: Capsule())
     }
 
     private var actions: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
-                Button(action: onSearch) {
-                    GroupInfoActionLabel(systemImage: "magnifyingglass", title: "Search")
-                }
-                .accessibilityIdentifier("group-search-button")
-                .accessibilityLabel("Search messages")
-                .disabled(isLeaving)
-
                 Menu {
                     if isMuted {
                         Button("Unmute") { Task { await unmute() } }
@@ -154,24 +196,33 @@ struct GroupInfoView: View {
                 .accessibilityValue(muteStatus)
                 .disabled(isLeaving || isUpdatingMute)
 
-                Menu {
-                    Button(role: .destructive) {
-                        showsLeaveConfirmation = true
-                    } label: {
-                        Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
-                    }
-                    .accessibilityIdentifier("leave-group-button")
-                } label: {
-                    GroupInfoActionLabel(
-                        systemImage: "ellipsis", title: "More", isProgressing: isLeaving
-                    )
+                Button(action: onSearch) {
+                    GroupInfoActionLabel(systemImage: "magnifyingglass", title: "Search")
                 }
-                .accessibilityIdentifier("group-more-menu")
+                .accessibilityIdentifier("group-search-button")
+                .accessibilityLabel("Search messages")
                 .disabled(isLeaving)
+
+                if !isDM {
+                    Menu {
+                        Button(role: .destructive) {
+                            showsLeaveConfirmation = true
+                        } label: {
+                            Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        .accessibilityIdentifier("leave-group-button")
+                    } label: {
+                        GroupInfoActionLabel(
+                            systemImage: "ellipsis", title: "More", isProgressing: isLeaving
+                        )
+                    }
+                    .accessibilityIdentifier("group-more-menu")
+                    .disabled(isLeaving)
+                }
             }
             .menuIndicator(.hidden)
             .buttonStyle(.plain)
-            .frame(maxWidth: 340)
+            .frame(maxWidth: 560)
 
             if isMuted {
                 Text(muteStatus)
@@ -182,8 +233,10 @@ struct GroupInfoView: View {
         .frame(maxWidth: .infinity)
     }
 
+    private var isDM: Bool { chat.kind == .dm }
+
     private var displayName: String {
-        nonEmpty(groupInfo?.name) ?? chat.chatDisplayName
+        isDM ? chat.chatDisplayName : nonEmpty(groupInfo?.name) ?? chat.chatDisplayName
     }
 
     private var description: String? {
@@ -191,7 +244,7 @@ struct GroupInfoView: View {
     }
 
     private var avatarURL: URL? {
-        (groupInfo?.avatar ?? chat.avatar).flatMap(URL.init(string:))
+        isDM ? chat.chatAvatarURL : (groupInfo?.avatar ?? chat.avatar).flatMap(URL.init(string:))
     }
 
     private var listedChat: ChatListItem? {
@@ -345,15 +398,10 @@ private struct GroupInfoActionLabel: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .contentShape(RoundedRectangle(cornerRadius: 18))
-        // The requested iOS controls use Liquid Glass; desktop uses quieter,
-        // flat action tiles. Both are SwiftUI, without custom native wrappers.
-        #if os(iOS)
-            .modifier(ChatGlassSurface(cornerRadius: 18, isInteractive: true))
-        #else
-            .background(
-                ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
-                in: RoundedRectangle(cornerRadius: 18))
-        #endif
+        // Flat tiles on every platform, matching the Flutter group detail actions.
+        .background(
+            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
@@ -387,6 +435,20 @@ private struct GroupInfoFailure: Identifiable {
         case .mute: "mute"
         case .unmute: "unmute"
         case .leave: "leave"
+        }
+    }
+}
+
+private enum GroupInfoSection: CaseIterable {
+    case members, media, files, links, voice
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .members: "Members"
+        case .media: "Media"
+        case .files: "Files"
+        case .links: "Links"
+        case .voice: "Voice"
         }
     }
 }

@@ -1,42 +1,30 @@
 import ChahuaAPI
 import SwiftUI
 
-/// Chat-scoped message search, presented as a sheet over the conversation.
+/// Chat-scoped message search, pushed onto the conversation's navigation stack.
 ///
 /// The field is an inline SwiftUI `TextField` rather than `.searchable`, which
-/// renders in the toolbar on macOS and is not reliably available inside sheets.
+/// renders in the window toolbar on macOS instead of beside the sort menu.
 struct MessageSearchView: View {
     @ObservedObject var model: MessageSearchModel
     let onSelect: (MessageResponse) -> Void
 
     @FocusState private var isFieldFocused: Bool
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                controls
-                Divider()
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .navigationTitle("Search")
-            #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                }
-            }
+        VStack(spacing: 0) {
+            controls
+            Divider()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .navigationTitle("Search")
         // A restored search keeps its results visible instead of raising the keyboard.
         .onAppear { isFieldFocused = model.queryText.isEmpty }
     }
 
     private var controls: some View {
-        VStack(spacing: ChahuaTheme.Spacing.medium) {
+        HStack(spacing: ChahuaTheme.Spacing.small) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -66,12 +54,28 @@ struct MessageSearchView: View {
             .padding(.vertical, 10)
             .background(ChahuaTheme.secondaryBackground, in: RoundedRectangle(cornerRadius: 10))
 
-            Picker("Sort messages", selection: $model.sort) {
-                Text("Best").tag(MessageSearchSort.relevance)
-                Text("Recent").tag(MessageSearchSort.newest)
+            Menu {
+                Picker("Sort messages", selection: $model.sort) {
+                    Text("Best").tag(MessageSearchSort.relevance)
+                    Text("Recent").tag(MessageSearchSort.newest)
+                }
+                .pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(model.sort == .relevance ? "Best" : "Recent")
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(
+                    ChahuaTheme.secondaryBackground, in: RoundedRectangle(cornerRadius: 10))
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .fixedSize()
+            .accessibilityLabel("Sort messages")
+            .accessibilityValue(Text(model.sort == .relevance ? "Best" : "Recent"))
             .accessibilityIdentifier("message-search-sort")
         }
         .padding(16)
