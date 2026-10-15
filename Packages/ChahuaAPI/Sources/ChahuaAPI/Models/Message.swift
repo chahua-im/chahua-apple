@@ -272,6 +272,20 @@ public struct ListMessagesResponse: Codable, Hashable, Sendable {
     public let prevCursor: MessageID?
 }
 
+/// One result page returned by `GET /chats/{chatID}/messages/search`.
+///
+/// `messages` keep the requested search order, not timeline order. `nextOffset`
+/// is the `offset` for the following page, or `nil` when no further page exists.
+public struct SearchMessagesResponse: Codable, Hashable, Sendable {
+    public let messages: [MessageResponse]
+    public let nextOffset: Int?
+
+    public init(messages: [MessageResponse], nextOffset: Int?) {
+        self.messages = messages
+        self.nextOffset = nextOffset
+    }
+}
+
 /// JSON body accepted by `POST /chats/{chatID}/messages`.
 ///
 /// `messageType` and `clientGeneratedId` are always encoded. Empty

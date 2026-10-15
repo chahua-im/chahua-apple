@@ -1022,6 +1022,23 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func searchMessages(chatID: String, query: SearchMessagesQuery) async throws
+        -> SearchMessagesResponse
+    {
+        try Task.checkCancellation()
+        let requestGeneration = generation
+        do {
+            let response = try await apiClient.searchMessages(chatID: chatID, query: query)
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            return response
+        } catch {
+            guard generation == requestGeneration else { throw CancellationError() }
+            if case APIError.invalidToken = error { await onInvalidToken() }
+            throw error
+        }
+    }
+
     func markRead(chatID: String, threadID: String?, messageID: MessageID) async throws {
         try Task.checkCancellation()
         let requestGeneration = generation

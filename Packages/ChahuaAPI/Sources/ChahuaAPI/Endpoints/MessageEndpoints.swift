@@ -57,6 +57,43 @@ public struct ListMessagesQuery: Sendable, Equatable {
     }
 }
 
+/// Result ordering accepted by `GET /chats/{chatID}/messages/search`.
+public enum MessageSearchSort: String, Sendable, Equatable, CaseIterable {
+    /// Search-engine relevance, newest first among equal matches. The server default.
+    case relevance
+    /// Newest matching message first.
+    case newest
+}
+
+/// Query fields accepted by `GET /chats/{chatID}/messages/search`.
+///
+/// The server rejects queries shorter than two normalized characters and result
+/// windows whose `offset + limit` exceeds 1,000; it clamps `limit` to 1–100.
+public struct SearchMessagesQuery: Sendable, Equatable {
+    public var q: String
+    public var sort: MessageSearchSort
+    public var limit: Int?
+    public var offset: Int?
+
+    public init(
+        q: String, sort: MessageSearchSort = .relevance, limit: Int? = nil, offset: Int? = nil
+    ) {
+        self.q = q
+        self.sort = sort
+        self.limit = limit
+        self.offset = offset
+    }
+
+    var queryItems: [URLQueryItem] {
+        [
+            URLQueryItem(name: "q", value: q),
+            URLQueryItem(name: "sort", value: sort.rawValue),
+            limit.map { URLQueryItem(name: "limit", value: String($0)) },
+            offset.map { URLQueryItem(name: "offset", value: String($0)) },
+        ].compactMap { $0 }
+    }
+}
+
 extension ChahuaClient {
     public func markChatRead(chatID: String, messageID: MessageID) async throws
         -> ReadStateResponse
@@ -80,6 +117,20 @@ extension ChahuaClient {
                 query: query.queryItems
             ),
             decoding: ListMessagesResponse.self
+        )
+    }
+
+    /// Searches published text messages with authenticated `GET /chats/{chatID}/messages/search`.
+    public func searchMessages(chatID: String, query: SearchMessagesQuery) async throws
+        -> SearchMessagesResponse
+    {
+        try await send(
+            HTTPRequestSpec(
+                method: .get,
+                path: ["chats", chatID, "messages", "search"],
+                query: query.queryItems
+            ),
+            decoding: SearchMessagesResponse.self
         )
     }
 

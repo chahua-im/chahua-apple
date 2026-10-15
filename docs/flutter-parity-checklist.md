@@ -13,6 +13,7 @@ Tracks user-facing functionality implemented in the old Flutter client but missi
 ## Messaging
 
 - [ ] **Chat-scoped message search:** query messages, choose relevance/newest ordering, paginate results, and navigate to a result in its chat or thread. Member autocomplete is not message search.
+  - Implemented as a retained sheet (`App/Features/Chat/Search/`): open it from the conversation header search button (⌘F) or the group info Search tile; DMs and threads search their chat. Best/Recent ordering, 300 ms debounce, 2-character minimum, automatic offset paging, and a distinct unavailable-server error. Results open the chat, or the thread pushed over its chat, positioned and highlighted at the message; reopening search restores the query and results until another chat is selected. Model tests cover length gating, stale responses, paging, sort reset, and failures; iOS/macOS look, navigation, and highlight still need manual verification.
 - [ ] **Full reaction emoji picker:** enable the More reactions control and allow selecting emojis beyond quick reactions, using the existing reaction eligibility and mutation behavior.
 - [ ] **Thread subscription controls:** expose membership state and subscribe/archive/unarchive actions inside thread detail. Preserve existing conversation-list archive/unarchive actions.
 

@@ -188,6 +188,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var onBack: (() -> Void)?
     var onClose: (() -> Void)?
     var onOpenInfo: (() -> Void)?
+    var onSearch: (() -> Void)?
     @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
@@ -195,16 +196,20 @@ struct ChatFloatingHeader<Avatar: View>: View {
             HStack(spacing: 8) {
                 navigationControl
                 identity
+                searchControl
             }
             .frame(maxWidth: .infinity)
         #else
+            let hasControls = onBack != nil || onClose != nil || onSearch != nil
             ZStack {
+                // Symmetric insets keep the identity centered between edge controls.
                 identity
-                    .padding(.horizontal, onBack != nil || onClose != nil ? 52 : 0)
-                if onBack != nil || onClose != nil {
+                    .padding(.horizontal, hasControls ? 52 : 0)
+                if hasControls {
                     HStack {
                         navigationControl
                         Spacer(minLength: 0)
+                        searchControl
                     }
                 }
             }
@@ -257,6 +262,18 @@ struct ChatFloatingHeader<Avatar: View>: View {
     }
 
     @ViewBuilder
+    private var searchControl: some View {
+        if let onSearch {
+            headerControl(
+                action: onSearch, systemImage: "magnifyingglass",
+                accessibilityLabel: AppLanguage.localized("Search messages")
+            )
+            .keyboardShortcut("f", modifiers: .command)
+            .accessibilityIdentifier("message-search-button")
+        }
+    }
+
+    @ViewBuilder
     private func headerControl(
         action: @escaping () -> Void, systemImage: String, accessibilityLabel: String
     ) -> some View {
@@ -298,6 +315,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
     struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
         let title: String
         var onOpenInfo: (() -> Void)?
+        var onSearch: (() -> Void)?
         @ViewBuilder var avatar: () -> Avatar
 
         func body(content: Content) -> some View {
@@ -312,6 +330,16 @@ struct ChatFloatingHeader<Avatar: View>: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     ChatFloatingHeader(title: title, onOpenInfo: onOpenInfo, avatar: avatar)
+                }
+                if let onSearch {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: onSearch) {
+                            Image(systemName: "magnifyingglass")
+                        }
+                        .keyboardShortcut("f", modifiers: .command)
+                        .accessibilityLabel(Text("Search messages"))
+                        .accessibilityIdentifier("message-search-button")
+                    }
                 }
             }
         }

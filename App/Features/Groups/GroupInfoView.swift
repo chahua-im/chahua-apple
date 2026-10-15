@@ -7,6 +7,7 @@ struct GroupInfoView: View {
     let currentUserID: Int32
     @ObservedObject private var store: ChatStore
     let onLeave: () -> Void
+    let onSearch: () -> Void
 
     @State private var groupInfo: GroupInfoResponse?
     @State private var mutedUntil: Date?
@@ -22,12 +23,14 @@ struct GroupInfoView: View {
         chat: ChatListItem,
         currentUserID: Int32,
         store: ChatStore,
-        onLeave: @escaping () -> Void
+        onLeave: @escaping () -> Void,
+        onSearch: @escaping () -> Void
     ) {
         self.chat = chat
         self.currentUserID = currentUserID
         self.store = store
         self.onLeave = onLeave
+        self.onSearch = onSearch
         _mutedUntil = State(initialValue: chat.mutedUntil)
     }
 
@@ -116,6 +119,13 @@ struct GroupInfoView: View {
     private var actions: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
+                Button(action: onSearch) {
+                    GroupInfoActionLabel(systemImage: "magnifyingglass", title: "Search")
+                }
+                .accessibilityIdentifier("group-search-button")
+                .accessibilityLabel("Search messages")
+                .disabled(isLeaving)
+
                 Menu {
                     if isMuted {
                         Button("Unmute") { Task { await unmute() } }

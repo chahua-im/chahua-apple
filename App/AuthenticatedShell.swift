@@ -23,7 +23,9 @@ struct AuthenticatedShell: View {
     @State private var selectedConversationID: ConversationKey?
     @State private var showsSettings = false
     @State private var isVisible = false
-    @State private var notificationNavigation: NotificationNavigation?
+    @State private var messageNavigation: MessageNavigation?
+    @State private var messageSearch: MessageSearchSession?
+    @State private var showsMessageSearch = false
     @State private var groupPath: [GroupRoute] = []
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
@@ -61,22 +63,51 @@ struct AuthenticatedShell: View {
             })
     }
 
-    private struct NotificationNavigation {
-        let route: PushNotificationRoute
+    /// Opens a chat timeline positioned at one message.
+    ///
+    /// Notification payloads are unauthorized hints whose chat is resolved by
+    /// `ChatStore.chatForNotification`; search results already carry their chat.
+    private struct MessageNavigation {
+        let id = UUID()
+        let conversation: ConversationKey
+        let messageID: MessageID
         let userID: Int32
+        let notificationRoute: PushNotificationRoute?
         var requestID = UUID()
         var chat: ChatListItem?
         var failed = false
+
+        init(notification route: PushNotificationRoute, userID: Int32) {
+            conversation = route.conversation
+            messageID = route.messageID
+            self.userID = userID
+            notificationRoute = route
+        }
+
+        /// Thread replies open through `ThreadNavigation` so Back returns to the chat.
+        init(searchResult message: MessageResponse, in chat: ChatListItem, userID: Int32) {
+            conversation = .init(chatID: chat.id, threadID: nil)
+            messageID = message.id
+            self.userID = userID
+            notificationRoute = nil
+            self.chat = chat
+        }
     }
 
     private struct ThreadNavigation {
+        /// View identity: each navigation rebuilds the thread timeline at its position.
+        let id = UUID()
         let chat: ChatListItem
-        let rootMessage: MessageResponse
-        var key: ConversationKey { .init(chatID: chat.id, threadID: rootMessage.id.description) }
-        var title: String {
-            let preview = messagePreview(rootMessage.replyPreview)
-            return preview.isEmpty ? AppLanguage.localized("Thread") : preview
-        }
+        let rootID: String
+        let title: String
+        var initialMessageID: MessageID?
+        var key: ConversationKey { .init(chatID: chat.id, threadID: rootID) }
+    }
+
+    /// Search state retained for the selected chat while its sheet is dismissed.
+    private struct MessageSearchSession {
+        let chat: ChatListItem
+        let model: MessageSearchModel
     }
 
     @State private var openedThread: ThreadNavigation?
@@ -95,7 +126,7 @@ struct AuthenticatedShell: View {
             #endif
         }
         .onChange(of: chatStore.state) { _, state in
-            guard let selectedConversationID, notificationNavigation == nil else { return }
+            guard let selectedConversationID, messageNavigation == nil else { return }
             let loaded =
                 selectedConversationID.threadID == nil
                 ? (isBrowsingArchived ? state.archivedChatListLoadPhase : state.chatListLoadPhase)
@@ -108,7 +139,7 @@ struct AuthenticatedShell: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { claimNotification() }
         }
-        .task(id: notificationNavigation?.requestID) { await resolveNotification() }
+        .task(id: messageNavigation?.requestID) { await resolveNotification() }
         .onChange(of: me.uid) { _, _ in
             selectConversation(nil)
             showsSettings = false
@@ -143,6 +174,14 @@ struct AuthenticatedShell: View {
                 settings
                     .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
             #endif
+        }
+        .sheet(isPresented: $showsMessageSearch) {
+            if let session = messageSearch {
+                MessageSearchView(model: session.model, onSelect: openSearchResult)
+                    #if os(macOS)
+                        .frame(minWidth: 520, idealWidth: 600, minHeight: 520, idealHeight: 680)
+                    #endif
+            }
         }
         #if os(iOS)
             .fullScreenCover(
@@ -184,7 +223,8 @@ struct AuthenticatedShell: View {
                                 ? popThread : isSplit ? nil : { selectConversation(nil) },
                             onClose: isSplit && threadPath.isEmpty
                                 ? { selectConversation(nil) } : nil,
-                            onOpenInfo: infoAction
+                            onOpenInfo: infoAction,
+                            onSearch: searchAction
                         ) {
                             selectedAvatar
                         }
@@ -225,7 +265,8 @@ struct AuthenticatedShell: View {
                                     title: openedThread?.key == key
                                         ? openedThread?.title ?? AppLanguage.localized("Thread")
                                         : selectedTitle,
-                                    onOpenInfo: key.threadID == nil ? infoAction : nil
+                                    onOpenInfo: key.threadID == nil ? infoAction : nil,
+                                    onSearch: searchAction
                                 ) {
                                     selectedAvatar
                                 })
@@ -349,18 +390,18 @@ struct AuthenticatedShell: View {
     }
 
     @ViewBuilder private var detailContent: some View {
-        if let navigation = notificationNavigation,
-            navigation.route.conversation == selectedConversationID
+        if let navigation = messageNavigation,
+            navigation.conversation == selectedConversationID
         {
             if let chat = navigation.chat {
                 ChatDetailView(
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     navigationTitle: selectedTitle,
-                    threadID: navigation.route.threadID,
-                    initialPosition: .message(navigation.route.messageID),
+                    threadID: navigation.conversation.threadID,
+                    initialPosition: .message(navigation.messageID),
                     onOpenThread: { openThread($0, in: chat) }
                 )
-                .id(navigation.route.id)
+                .id(navigation.id)
             } else if navigation.failed {
                 ChahuaRecoverableErrorView(
                     title: "Couldn’t open notification",
@@ -400,16 +441,24 @@ struct AuthenticatedShell: View {
         if let thread = openedThread, thread.key == key {
             ChatDetailView(
                 chat: thread.chat, currentUserID: me.uid, store: chatStore,
-                navigationTitle: thread.title, threadID: thread.rootMessage.id.description,
-                initialPosition: .liveEdge
+                navigationTitle: thread.title, threadID: thread.rootID,
+                initialPosition: thread.initialMessageID.map(TimelineInitialPosition.message)
+                    ?? .liveEdge
             )
-            .id(key)
+            .id(thread.id)
         }
     }
 
     private func openThread(_ message: MessageResponse, in chat: ChatListItem) {
         guard !isSigningOut, !message.isDeleted, message.chatId == chat.id else { return }
-        let thread = ThreadNavigation(chat: chat, rootMessage: message)
+        let preview = messagePreview(message.replyPreview)
+        pushThread(
+            ThreadNavigation(
+                chat: chat, rootID: message.id.description,
+                title: preview.isEmpty ? AppLanguage.localized("Thread") : preview))
+    }
+
+    private func pushThread(_ thread: ThreadNavigation) {
         openedThread = thread
         #if os(macOS)
             withAnimation(nil) { threadPath = [thread.key] }
@@ -437,14 +486,78 @@ struct AuthenticatedShell: View {
     private var selectedGroup: ChatListItem? {
         guard selectedConversationID?.threadID == nil else { return nil }
         let chat: ChatListItem?
-        if let notificationChat = notificationNavigation?.chat {
-            chat = notificationChat
+        if let navigationChat = messageNavigation?.chat {
+            chat = navigationChat
         } else if case .chat(let selected) = selectedConversation {
             chat = selected
         } else {
             chat = nil
         }
         return chat?.kind == .group ? chat : nil
+    }
+
+    /// The chat searched from the visible conversation; threads search their parent chat.
+    private var searchableChat: ChatListItem? {
+        if let chat = messageNavigation?.chat { return chat }
+        switch selectedConversation {
+        case .chat(let chat):
+            return chat
+        case .thread(let thread):
+            return chatStore.state.chats.first { $0.id == thread.chatId }
+                ?? chatStore.state.archivedChats.first { $0.id == thread.chatId }
+        case nil:
+            return nil
+        }
+    }
+
+    private var searchAction: (() -> Void)? {
+        guard let chat = searchableChat else { return nil }
+        return { openMessageSearch(in: chat) }
+    }
+
+    private func openMessageSearch(in chat: ChatListItem) {
+        guard !isSigningOut else { return }
+        if messageSearch?.chat.id != chat.id {
+            let store = chatStore
+            let chatID = chat.id
+            messageSearch = MessageSearchSession(
+                chat: chat,
+                model: MessageSearchModel(chatID: chatID) { query in
+                    try await store.searchMessages(chatID: chatID, query: query)
+                })
+        }
+        showsMessageSearch = true
+    }
+
+    /// Dismisses the retained search and opens the result in its chat or thread.
+    private func openSearchResult(_ message: MessageResponse) {
+        guard !isSigningOut, let chat = messageSearch?.chat, message.chatId == chat.id else {
+            return
+        }
+        showsMessageSearch = false
+        groupPath.removeAll()
+        let chatKey = ConversationKey(chatID: chat.id, threadID: nil)
+        guard let rootID = message.replyRootId else {
+            threadPath.removeAll()
+            openedThread = nil
+            messageNavigation = MessageNavigation(searchResult: message, in: chat, userID: me.uid)
+            selectedConversationID = chatKey
+            return
+        }
+        // Keep the parent chat underneath, so Back leaves the thread for its chat.
+        if selectedConversationID != chatKey {
+            if messageNavigation?.conversation != chatKey { messageNavigation = nil }
+            selectedConversationID = chatKey
+        }
+        let subscribedRoot = (chatStore.state.threads + chatStore.state.archivedThreads).first {
+            $0.chatId == chat.id && $0.threadRootMessage.id.description == rootID
+        }
+        let preview = subscribedRoot.map { messagePreview($0.threadRootMessage) }
+        pushThread(
+            ThreadNavigation(
+                chat: chat, rootID: rootID,
+                title: preview.flatMap { $0.isEmpty ? nil : $0 } ?? AppLanguage.localized("Thread"),
+                initialMessageID: message.id))
     }
 
     @ViewBuilder
@@ -456,7 +569,8 @@ struct AuthenticatedShell: View {
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     onLeave: {
                         if selectedConversationID?.chatID == chat.id { selectConversation(nil) }
-                    }
+                    },
+                    onSearch: { openMessageSearch(in: chat) }
                 )
                 .id(chat.id)
             }
@@ -498,8 +612,8 @@ struct AuthenticatedShell: View {
     }
 
     private var selectedTitle: String {
-        if let navigation = notificationNavigation {
-            if navigation.route.threadID != nil {
+        if let navigation = messageNavigation {
+            if navigation.conversation.threadID != nil {
                 return selectedConversation?.title ?? AppLanguage.localized("Thread")
             }
             return navigation.chat?.chatDisplayName ?? AppLanguage.localized("Loading conversation")
@@ -511,17 +625,18 @@ struct AuthenticatedShell: View {
         if let conversation = selectedConversation {
             ConversationAvatarView(
                 item: conversation, store: chatStore, currentUserID: me.uid, diameter: 32)
-        } else if let chat = notificationNavigation?.chat {
+        } else if let chat = messageNavigation?.chat {
             AvatarView(url: chat.chatAvatarURL, displayName: chat.chatDisplayName, diameter: 32)
         }
     }
 
     private var visibleConversation: ConversationKey? {
-        guard isVisible, scenePhase == .active, !showsSettings, !isSigningOut, groupPath.isEmpty
+        guard isVisible, scenePhase == .active, !showsSettings, !showsMessageSearch,
+            !isSigningOut, groupPath.isEmpty
         else { return nil }
         if let key = threadPath.last { return key }
-        if let navigation = notificationNavigation {
-            return navigation.chat == nil ? nil : navigation.route.conversation
+        if let navigation = messageNavigation {
+            return navigation.chat == nil ? nil : navigation.conversation
         }
         return selectedConversation?.id
     }
@@ -541,8 +656,9 @@ struct AuthenticatedShell: View {
         threadPath.removeAll()
         openedThread = nil
         listPath.removeAll()
-        notificationNavigation = NotificationNavigation(route: route, userID: me.uid)
+        messageNavigation = MessageNavigation(notification: route, userID: me.uid)
         showsSettings = false
+        retainMessageSearch(forChatID: route.chatID)
         selectedConversationID = route.conversation
     }
 
@@ -550,33 +666,41 @@ struct AuthenticatedShell: View {
         groupPath.removeAll()
         threadPath.removeAll()
         openedThread = nil
-        notificationNavigation = nil
+        messageNavigation = nil
+        retainMessageSearch(forChatID: conversation?.chatID)
         selectedConversationID = conversation
     }
 
+    /// Search results survive only while their chat (or one of its threads) stays selected.
+    private func retainMessageSearch(forChatID chatID: String?) {
+        showsMessageSearch = false
+        if messageSearch?.chat.id != chatID { messageSearch = nil }
+    }
+
     private func retryNotification() {
-        guard notificationNavigation?.userID == me.uid, !isSigningOut else { return }
-        notificationNavigation?.failed = false
-        notificationNavigation?.requestID = UUID()
+        guard messageNavigation?.userID == me.uid, !isSigningOut else { return }
+        messageNavigation?.failed = false
+        messageNavigation?.requestID = UUID()
     }
 
     private func resolveNotification() async {
-        guard let navigation = notificationNavigation,
+        guard let navigation = messageNavigation,
+            let route = navigation.notificationRoute,
             navigation.userID == me.uid, !isSigningOut,
             navigation.chat == nil
         else { return }
         do {
-            let chat = try await chatStore.chatForNotification(navigation.route)
+            let chat = try await chatStore.chatForNotification(route)
             try Task.checkCancellation()
-            guard notificationNavigation?.requestID == navigation.requestID else { return }
-            notificationNavigation?.chat = chat
+            guard messageNavigation?.requestID == navigation.requestID else { return }
+            messageNavigation?.chat = chat
         } catch is CancellationError {
             // Keep the claimed route so a reappearing shell can resume loading.
         } catch {
             guard !Task.isCancelled,
-                notificationNavigation?.requestID == navigation.requestID
+                messageNavigation?.requestID == navigation.requestID
             else { return }
-            notificationNavigation?.failed = true
+            messageNavigation?.failed = true
         }
     }
 

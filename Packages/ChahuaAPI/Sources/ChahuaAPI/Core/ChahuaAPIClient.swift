@@ -86,6 +86,14 @@ public protocol ChahuaAPIClient: Sendable {
     /// Fetches authoritative, current-recipient state with `GET /chats/{chatID}/messages/{messageID}`.
     func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse
 
+    /// Searches a chat's text messages with `GET /chats/{chatID}/messages/search`.
+    ///
+    /// Results span the chat and its threads; `MessageResponse.replyRootId`
+    /// identifies thread replies. Page with `SearchMessagesResponse.nextOffset`.
+    /// Servers without message search configured respond with HTTP 503.
+    func searchMessages(chatID: String, query: SearchMessagesQuery) async throws
+        -> SearchMessagesResponse
+
     /// Replaces the text of an existing message with `PATCH /chats/{chatID}/messages/{messageID}`.
     func updateMessage(chatID: String, messageID: MessageID, body: UpdateMessageBody) async throws
         -> MessageResponse
@@ -186,6 +194,12 @@ extension ChahuaAPIClient {
 
     public func updateMessage(chatID: String, messageID: MessageID, body: UpdateMessageBody)
         async throws -> MessageResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func searchMessages(chatID: String, query: SearchMessagesQuery) async throws
+        -> SearchMessagesResponse
     {
         throw APIError.unavailable
     }

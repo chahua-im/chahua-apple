@@ -343,6 +343,47 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertNil(requests.values.last?.url?.query)
     }
 
+    func testMessageSearchEncodesQueryAndDecodesOffsetPaging() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return requests.values.count == 1
+                ? (200, #"{"messages":[],"nextOffset":40}"#)
+                : (200, #"{"messages":[],"nextOffset":null}"#)
+        }
+        let client = ChahuaClient(
+            configuration: ChahuaConfiguration(baseURL: URL(string: "https://api.example")!),
+            session: testSession()
+        )
+
+        let first = try await client.searchMessages(
+            chatID: "10",
+            query: SearchMessagesQuery(q: "早上 好&x", sort: .newest, limit: 20, offset: 20))
+        let last = try await client.searchMessages(
+            chatID: "10", query: SearchMessagesQuery(q: "hi"))
+
+        XCTAssertEqual(first.nextOffset, 40)
+        XCTAssertNil(last.nextOffset)
+        XCTAssertEqual(
+            requests.values.map { $0.url?.path },
+            ["/chats/10/messages/search", "/chats/10/messages/search"])
+        let urls = try requests.values.map { try XCTUnwrap($0.url) }
+        XCTAssertEqual(
+            URLComponents(url: urls[0], resolvingAgainstBaseURL: false)?.queryItems,
+            [
+                URLQueryItem(name: "q", value: "早上 好&x"),
+                URLQueryItem(name: "sort", value: "newest"),
+                URLQueryItem(name: "limit", value: "20"),
+                URLQueryItem(name: "offset", value: "20"),
+            ])
+        XCTAssertEqual(
+            URLComponents(url: urls[1], resolvingAgainstBaseURL: false)?.queryItems,
+            [
+                URLQueryItem(name: "q", value: "hi"),
+                URLQueryItem(name: "sort", value: "relevance"),
+            ])
+    }
+
     func testSendThreadMessageUsesThreadRouteAndPreservesMessageBody() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
