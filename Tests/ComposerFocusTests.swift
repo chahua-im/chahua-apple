@@ -146,7 +146,8 @@ final class ComposerFocusTests: XCTestCase {
             try h.selectEnd()
             UIPasteboard.general.string = " tail"
             editor.paste(nil)
-            try await pause()
+            // UIKit's paste controller loads pasteboard items asynchronously.
+            try await waitUntil { h.state.text == "caption tail" }
             XCTAssertEqual(h.state.text, "caption tail")
 
             let format = UIGraphicsImageRendererFormat()
@@ -555,6 +556,13 @@ final class ComposerFocusTests: XCTestCase {
     #endif
 
     private func pause() async throws { try await Task.sleep(for: .milliseconds(200)) }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
 
     private func mount(text: String, enabled: Bool = true, caption: Bool = false) async throws
         -> FocusComposerHarness

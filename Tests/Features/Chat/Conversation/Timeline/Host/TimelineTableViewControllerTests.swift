@@ -8,6 +8,15 @@
 
     @MainActor
     final class TimelineTableViewControllerTests: XCTestCase {
+        // CI runners have no active display, where AppKit display links never tick.
+        override func setUp() async throws {
+            TimelineDisplayScheduler.tickSource = .runLoop
+        }
+
+        override func tearDown() async throws {
+            TimelineDisplayScheduler.tickSource = .display
+        }
+
         func testOpeningWithFloatingHeaderLandsAtLatestMessage() async throws {
             let page = try TimelineTestFixtures.page(
                 (0..<80).map {
