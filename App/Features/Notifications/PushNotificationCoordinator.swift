@@ -524,17 +524,8 @@ final class PushNotificationCoordinator: ObservableObject {
                 return notification.request.identifier
             }
             self.center.removeDeliveredNotifications(withIdentifiers: identifiers)
-            // Match the backend badge: top-level unread only, excluding muted
-            // and archived chats. Thread groups never increment this count.
             if state.chatListLoadPhase == .loaded, !state.isRefreshingChats {
-                let now = Date()
-                let total = state.chats.filter {
-                    !$0.archived && ($0.mutedUntil == nil || $0.mutedUntil! <= now)
-                }
-                .reduce(Int64(0)) {
-                    min(Int64(UInt32.max), $0 + max(0, min(Int64(UInt32.max), $1.unreadCount)))
-                }
-                try? await self.center.setBadgeCount(Int(total))
+                try? await self.center.setBadgeCount(state.unreadBadgeCount())
             }
         }
     }

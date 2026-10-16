@@ -197,6 +197,8 @@ struct ChatFloatingHeader<Avatar: View>: View {
     /// The trailing slot holds its own control (e.g. the thread subscription menu)
     /// rather than a decorative avatar.
     var trailingIsControl = false
+    /// Unread count shown beside the back chevron, like the app-icon badge; 0 hides it.
+    var backBadgeCount = 0
     @ViewBuilder var avatar: () -> Avatar
 
     enum Part { case full, identity, trailing }
@@ -221,7 +223,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 ZStack {
                     // Symmetric insets keep the identity centered between edge controls.
                     identity
-                        .padding(.horizontal, 52)
+                        .padding(.horizontal, backBadgeCount > 0 ? 92 : 52)
                     HStack {
                         navigationControl
                         Spacer(minLength: 0)
@@ -323,12 +325,35 @@ struct ChatFloatingHeader<Avatar: View>: View {
     @ViewBuilder
     private var navigationControl: some View {
         if let onBack {
-            headerControl(
-                action: onBack, systemImage: "chevron.backward", accessibilityLabel: "Back")
+            if backBadgeCount > 0 {
+                badgedBackControl(action: onBack)
+            } else {
+                headerControl(
+                    action: onBack, systemImage: "chevron.backward", accessibilityLabel: "Back")
+            }
         } else if let onClose {
             headerControl(
                 action: onClose, systemImage: "xmark", accessibilityLabel: "Close conversation")
         }
+    }
+
+    /// Back chevron and unread badge in one glass capsule.
+    private func badgedBackControl(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 20, weight: .semibold))
+                UnreadBackBadge(count: backBadgeCount)
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+        .accessibilityLabel(Text("Back"))
+        .accessibilityValue(Text(UnreadBackBadge.accessibilityValue(backBadgeCount)))
     }
 
     @ViewBuilder
@@ -377,7 +402,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
         var onOpenInfo: (() -> Void)?
         var onSearch: (() -> Void)?
         var trailingIsControl = false
+        var backBadgeCount = 0
         @ViewBuilder var avatar: () -> Avatar
+        @Environment(\.dismiss) private var dismiss
 
         func body(content: Content) -> some View {
             GeometryReader { geometry in
@@ -391,7 +418,12 @@ struct ChatFloatingHeader<Avatar: View>: View {
             .toolbar {
                 // iOS 26 wraps bar items in a shared glass capsule; the header draws
                 // its own glass, so hide the system one to keep the avatar circular.
+                // The badge keeps the shared background so it joins the native back
+                // button's capsule; the system back button and swipe-back stay intact.
                 if #available(iOS 26, *) {
+                    if backBadgeCount > 0 {
+                        ToolbarItem(placement: .topBarLeading) { backBadge }
+                    }
                     ToolbarItem(placement: .principal) {
                         header(.identity)
                     }
@@ -401,6 +433,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
                     }
                     .sharedBackgroundVisibility(.hidden)
                 } else {
+                    if backBadgeCount > 0 {
+                        ToolbarItem(placement: .topBarLeading) { backBadge }
+                    }
                     ToolbarItem(placement: .principal) {
                         header(.identity)
                     }
@@ -411,14 +446,46 @@ struct ChatFloatingHeader<Avatar: View>: View {
             }
         }
 
+        /// Tapping the badge goes back, like the chevron beside it.
+        private var backBadge: some View {
+            Button {
+                dismiss()
+            } label: {
+                UnreadBackBadge(count: backBadgeCount)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Back"))
+            .accessibilityValue(Text(UnreadBackBadge.accessibilityValue(backBadgeCount)))
+        }
+
         private func header(_ part: ChatFloatingHeader<Avatar>.Part) -> some View {
             ChatFloatingHeader(
                 title: title, subtitle: subtitle, isMuted: isMuted,
                 onOpenInfo: onOpenInfo, onSearch: onSearch, part: part,
-                trailingIsControl: trailingIsControl, avatar: avatar)
+                trailingIsControl: trailingIsControl, backBadgeCount: backBadgeCount,
+                avatar: avatar)
         }
     }
 #endif
+
+/// Unread count beside a back chevron, like Telegram's title bar.
+struct UnreadBackBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+            .foregroundStyle(.background)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 22, minHeight: 22)
+            .background(.primary, in: Capsule())
+            .accessibilityHidden(true)
+    }
+
+    static func accessibilityValue(_ count: Int) -> String {
+        AppLanguage.localized("\(count) unread messages")
+    }
+}
 
 struct ChatGlassSurface: ViewModifier {
     let cornerRadius: CGFloat

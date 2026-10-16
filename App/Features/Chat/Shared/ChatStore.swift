@@ -27,6 +27,21 @@ struct ChatState: Equatable {
     var isRefreshingArchivedThreads = false
 }
 
+extension ChatState {
+    /// The app-icon badge, matching the backend: top-level unread only, excluding
+    /// muted and archived chats; threads never count. `excludingChatID` drops one
+    /// chat, e.g. the one on screen for an in-app back-button badge.
+    func unreadBadgeCount(excludingChatID: String? = nil, now: Date = Date()) -> Int {
+        let total = chats.reduce(Int64(0)) { total, chat in
+            guard chat.id != excludingChatID, !chat.archived,
+                chat.mutedUntil.map({ $0 <= now }) ?? true
+            else { return total }
+            return min(Int64(UInt32.max), total + max(0, min(Int64(UInt32.max), chat.unreadCount)))
+        }
+        return Int(total)
+    }
+}
+
 @MainActor
 final class ChatStore: ObservableObject {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "conversations")

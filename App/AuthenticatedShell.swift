@@ -228,7 +228,8 @@ struct AuthenticatedShell: View {
                                 ? { selectConversation(nil) } : nil,
                             onOpenInfo: infoAction,
                             onSearch: searchAction,
-                            trailingIsControl: headerThreadKey != nil
+                            trailingIsControl: headerThreadKey != nil,
+                            backBadgeCount: backBadgeCount
                         ) {
                             headerTrailing(for: headerThreadKey)
                         }
@@ -273,7 +274,8 @@ struct AuthenticatedShell: View {
                                     isMuted: key.threadID == nil && headerChatIsMuted,
                                     onOpenInfo: key.threadID == nil ? infoAction : nil,
                                     onSearch: searchAction,
-                                    trailingIsControl: key.threadID != nil
+                                    trailingIsControl: key.threadID != nil,
+                                    backBadgeCount: backBadgeCount
                                 ) {
                                     headerTrailing(for: key)
                                 })
@@ -659,6 +661,11 @@ struct AuthenticatedShell: View {
                 url: chat.chatAvatarURL, displayName: chat.chatDisplayName,
                 diameter: ChatFloatingHeader<EmptyView>.avatarDiameter)
         }
+    }
+
+    /// The app-icon badge minus the chat on screen (or a thread's parent chat).
+    private var backBadgeCount: Int {
+        chatStore.state.unreadBadgeCount(excludingChatID: selectedConversationID?.chatID)
     }
 
     /// Placeholder until the server reports member counts and presence.
