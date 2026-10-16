@@ -5,17 +5,20 @@ import XCTest
 
 @MainActor
 final class MessageImageGalleryTests: XCTestCase {
-    func testMixedAttachmentsPreserveTappedImageAndMessageOrder() throws {
+    func testMixedAttachmentsKeepMediaInMessageOrderAndSkipFiles() throws {
         let attachments = [
-            item("first", "image/jpeg"), item("video", "video/mp4"),
-            item("selected", "image/png"), item("last", "image/gif"),
+            item("first", "image/jpeg"), item("video", "Video/MP4"),
+            item("document", "application/pdf"), item("selected", "image/png"),
         ]
         let gallery = try XCTUnwrap(
             MessageImageGallery(messageID: "message", items: attachments, selectedID: "selected"))
-        XCTAssertEqual(gallery.items.map(\.id), ["first", "selected", "last"])
+        XCTAssertEqual(gallery.items.map(\.id), ["first", "video", "selected"])
         XCTAssertEqual(gallery.items[gallery.selectedIndex].id, "selected")
-        XCTAssertNil(
+        let fromVideo = try XCTUnwrap(
             MessageImageGallery(messageID: "message", items: attachments, selectedID: "video"))
+        XCTAssertEqual(fromVideo.selectedIndex, 1)
+        XCTAssertNil(
+            MessageImageGallery(messageID: "message", items: attachments, selectedID: "document"))
         XCTAssertNil(
             MessageImageGallery(messageID: "message", items: attachments, selectedID: "missing"))
     }

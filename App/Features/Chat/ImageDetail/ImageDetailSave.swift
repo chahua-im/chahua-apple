@@ -3,15 +3,17 @@ import UniformTypeIdentifiers
 
 #if os(iOS)
     import Photos
+    import UIKit
 #elseif os(macOS)
     import AppKit
 #endif
 
+/// Saves a viewer item's original bytes: to Photos on iOS, through a Save panel on macOS.
 @MainActor
 enum ImageDetailSave {
     static func save(_ item: MessageImageItem) async throws -> Bool {
-        guard item.contentType.lowercased().hasPrefix("image/") else {
-            throw ImageDetailSaveError.unavailable
+        guard item.isImage || item.isVideo else {
+            throw ImageDetailSaveError.unavailable(isVideo: false)
         }
 
         #if os(iOS)
@@ -22,7 +24,7 @@ enum ImageDetailSave {
             try Task.checkCancellation()
             let original = try await ImageDetailOriginal.prepare(from: item)
             defer { original.removeTemporaryFile() }
-            try await saveToPhotoLibrary(original)
+            try await saveToPhotoLibrary(original, isVideo: item.isVideo)
             return true
         #elseif os(macOS)
             try Task.checkCancellation()
@@ -30,21 +32,29 @@ enum ImageDetailSave {
             defer { original.removeTemporaryFile() }
             return try await saveWithPanel(original, item: item)
         #else
-            throw ImageDetailSaveError.unavailable
+            throw ImageDetailSaveError.unavailable(isVideo: item.isVideo)
         #endif
     }
 
     #if os(iOS)
-        private static func saveToPhotoLibrary(_ original: ImageDetailOriginal) async throws {
+        private static func saveToPhotoLibrary(_ original: ImageDetailOriginal, isVideo: Bool)
+            async throws
+        {
             try Task.checkCancellation()
+            // Photos accepts only formats Apple platforms can play (e.g. MP4/MOV with
+            // H.264/HEVC); report WebM/MKV distinctly instead of a generic failure.
+            if isVideo, !UIVideoAtPathIsCompatibleWithSavedPhotosAlbum(original.url.path) {
+                throw ImageDetailSaveError.videoFormatUnsupported
+            }
             do {
                 try await PHPhotoLibrary.shared().performChanges {
                     let request = PHAssetCreationRequest.forAsset()
-                    request.addResource(with: .photo, fileURL: original.url, options: nil)
+                    request.addResource(
+                        with: isVideo ? .video : .photo, fileURL: original.url, options: nil)
                 }
             } catch {
                 if Task.isCancelled { throw CancellationError() }
-                throw ImageDetailSaveError.couldNotSave
+                throw ImageDetailSaveError.couldNotSave(isVideo: isVideo)
             }
         }
 
@@ -94,7 +104,7 @@ enum ImageDetailSave {
                     onCancel: { copy.cancel() })
             } catch {
                 if Task.isCancelled { throw CancellationError() }
-                throw ImageDetailSaveError.couldNotSave
+                throw ImageDetailSaveError.couldNotSave(isVideo: item.isVideo)
             }
             return true
         }
@@ -104,7 +114,7 @@ enum ImageDetailSave {
         {
             var name = (item.fileName as NSString).lastPathComponent
             if name.isEmpty || name == "." || name == ".." {
-                name = "Image"
+                name = item.isVideo ? "Video" : "Image"
             }
             if (name as NSString).pathExtension.isEmpty, !originalURL.pathExtension.isEmpty {
                 name += ".\(originalURL.pathExtension)"
@@ -127,21 +137,23 @@ private struct ImageDetailOriginal {
     private let temporaryDirectory: URL?
 
     static func prepare(from item: MessageImageItem) async throws -> Self {
-        guard let source = item.url else { throw ImageDetailSaveError.unavailable }
+        guard let source = item.url else {
+            throw ImageDetailSaveError.unavailable(isVideo: item.isVideo)
+        }
         if source.isFileURL {
             guard FileManager.default.isReadableFile(atPath: source.path) else {
-                throw ImageDetailSaveError.unavailable
+                throw ImageDetailSaveError.unavailable(isVideo: item.isVideo)
             }
             return Self(url: source, temporaryDirectory: nil)
         }
 
         guard ["http", "https"].contains(source.scheme?.lowercased() ?? ""), source.host != nil
         else {
-            throw ImageDetailSaveError.unavailable
+            throw ImageDetailSaveError.unavailable(isVideo: item.isVideo)
         }
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "chahua-image-save-\(UUID().uuidString)", isDirectory: true)
+            "chahua-media-save-\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
@@ -151,7 +163,7 @@ private struct ImageDetailOriginal {
             try Task.checkCancellation()
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode)
             else {
-                throw ImageDetailSaveError.downloadFailed
+                throw ImageDetailSaveError.downloadFailed(isVideo: item.isVideo)
             }
 
             let original = directory.appendingPathComponent("original").appendingPathExtension(
@@ -167,7 +179,7 @@ private struct ImageDetailOriginal {
         } catch {
             try? FileManager.default.removeItem(at: directory)
             if Task.isCancelled { throw CancellationError() }
-            throw ImageDetailSaveError.downloadFailed
+            throw ImageDetailSaveError.downloadFailed(isVideo: item.isVideo)
         }
     }
 
@@ -182,7 +194,8 @@ private struct ImageDetailOriginal {
         }
         let fileNameExtension = (item.fileName as NSString).pathExtension
         if !fileNameExtension.isEmpty { return fileNameExtension }
-        return source.pathExtension.isEmpty ? "image" : source.pathExtension
+        return source.pathExtension.isEmpty
+            ? (item.isVideo ? "mp4" : "image") : source.pathExtension
     }
 }
 
@@ -210,21 +223,30 @@ nonisolated private enum ImageDetailFileCopy {
 }
 
 private enum ImageDetailSaveError: LocalizedError {
-    case unavailable
-    case downloadFailed
+    case unavailable(isVideo: Bool)
+    case downloadFailed(isVideo: Bool)
     case photoLibraryAccessDenied
-    case couldNotSave
+    case videoFormatUnsupported
+    case couldNotSave(isVideo: Bool)
 
     var errorDescription: String? {
         switch self {
-        case .unavailable:
-            AppLanguage.localized("This image is no longer available.")
-        case .downloadFailed:
-            AppLanguage.localized("The image couldn’t be downloaded. Please try again.")
+        case .unavailable(let isVideo):
+            isVideo
+                ? AppLanguage.localized("This video is no longer available.")
+                : AppLanguage.localized("This image is no longer available.")
+        case .downloadFailed(let isVideo):
+            isVideo
+                ? AppLanguage.localized("The video couldn’t be downloaded. Please try again.")
+                : AppLanguage.localized("The image couldn’t be downloaded. Please try again.")
         case .photoLibraryAccessDenied:
-            AppLanguage.localized("Allow Chahua to add photos in Settings before saving images.")
-        case .couldNotSave:
-            AppLanguage.localized("The image couldn’t be saved. Please try again.")
+            AppLanguage.localized("Allow Chahua to add photos in Settings before saving media.")
+        case .videoFormatUnsupported:
+            AppLanguage.localized("Photos doesn’t support this video format.")
+        case .couldNotSave(let isVideo):
+            isVideo
+                ? AppLanguage.localized("The video couldn’t be saved. Please try again.")
+                : AppLanguage.localized("The image couldn’t be saved. Please try again.")
         }
     }
 }

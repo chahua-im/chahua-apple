@@ -240,15 +240,17 @@
             self.gallery = gallery
             self.captionSize = captionSize
             resetChrome()
-            let video = attachment.kind.hasPrefix("video/")
+            let kind = attachment.kind.lowercased()
+            let video = kind.hasPrefix("video/")
             configureSurface(gallery: gallery, video: video, overflow: overflow)
             if video {
+                // No poster frame is generated for remote videos: a neutral dark tile with a
+                // play badge opens the viewer, which streams the video with AVKit.
                 imageView.clear()
                 imageView.isHidden = true
-                showWarning(
-                    symbol: "video.slash",
-                    label: AppLanguage.localized("Video preview unavailable"),
-                    color: .white.withAlphaComponent(0.8))
+                surface.layer?.backgroundColor = NSColor(white: 0.15, alpha: 1).cgColor
+                playBackground.isHidden = false
+                playSymbol.isHidden = false
             } else {
                 imageView.configure(
                     url: URL(string: attachment.url), contentMode: gallery ? .fill : .fit,
@@ -256,11 +258,11 @@
                     showsBlurredBackdrop: !gallery,
                     thumbnailPixelSize: pixelSize(displayScale), mediaContext: mediaContext)
             }
-            isEnabled = canOpen && attachment.kind.lowercased().hasPrefix("image/")
+            isEnabled = canOpen && (video || kind.hasPrefix("image/"))
             setAccessibilityRole(isEnabled ? .button : .image)
             setAccessibilityLabel(
                 video
-                    ? AppLanguage.localized("Video preview unavailable")
+                    ? AppLanguage.localized("Play video")
                     : isEnabled
                         ? AppLanguage.localized("Open image") : AppLanguage.localized("Image"))
             needsLayout = true
@@ -279,7 +281,8 @@
             self.gallery = gallery
             self.captionSize = captionSize
             resetChrome()
-            let video = attachment.mimeType.hasPrefix("video/")
+            let kind = attachment.mimeType.lowercased()
+            let video = kind.hasPrefix("video/")
             configureSurface(gallery: gallery, video: video, overflow: overflow)
             if changed {
                 discardLocal()
@@ -296,9 +299,10 @@
             }
             playBackground.isHidden = !video
             playSymbol.isHidden = !video
-            isEnabled = canOpen && attachment.mimeType.lowercased().hasPrefix("image/")
+            isEnabled = canOpen && (video || kind.hasPrefix("image/"))
             setAccessibilityRole(isEnabled ? .button : .image)
-            setAccessibilityLabel(attachment.fileName)
+            setAccessibilityLabel(
+                video && isEnabled ? AppLanguage.localized("Play video") : attachment.fileName)
             needsLayout = true
             refreshVisibility()
         }

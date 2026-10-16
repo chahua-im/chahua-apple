@@ -2,6 +2,7 @@ import ChahuaAPI
 import CoreGraphics
 import Foundation
 
+/// One viewer item: an image or a video attachment.
 struct MessageImageItem: Identifiable, Hashable {
     let id: String
     let url: URL?
@@ -20,9 +21,13 @@ struct MessageImageItem: Identifiable, Hashable {
             pixelSize = nil
         }
     }
+
+    var isVideo: Bool { contentType.lowercased().hasPrefix("video/") }
+    var isImage: Bool { contentType.lowercased().hasPrefix("image/") }
 }
 
-/// An immutable snapshot of one message, never a conversation-wide media query.
+/// An immutable snapshot of one message's images and videos, never a conversation-wide
+/// media query.
 struct MessageImageGallery: Identifiable {
     let id = UUID()
     let messageID: String
@@ -35,12 +40,12 @@ struct MessageImageGallery: Identifiable {
         messageID: String, items: [MessageImageItem], selectedID: String,
         sentAt: Date? = nil
     ) {
-        let images = items.filter { $0.contentType.lowercased().hasPrefix("image/") }
-        guard let selectedIndex = images.firstIndex(where: { $0.id == selectedID }) else {
+        let media = items.filter { $0.isImage || $0.isVideo }
+        guard let selectedIndex = media.firstIndex(where: { $0.id == selectedID }) else {
             return nil
         }
         self.messageID = messageID
-        self.items = images
+        self.items = media
         self.selectedIndex = selectedIndex
         self.sentAt = sentAt
     }

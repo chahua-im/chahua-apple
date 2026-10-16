@@ -277,30 +277,32 @@ struct ChatFloatingHeader<Avatar: View>: View {
         .modifier(ChatGlassSurface(cornerRadius: 24, isInteractive: onOpenInfo != nil))
     }
 
-    @ViewBuilder
+    /// Built like `headerControl`: the glass wraps the button rather than sitting inside
+    /// its label, and is not clipped, so the interactive glass can bulge and highlight
+    /// on press instead of the touch landing on a flat, clipped avatar image.
     private var trailingControls: some View {
-        if let onOpenInfo {
-            Button(action: onOpenInfo) { avatarLabel }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("Open chat information"))
-                .accessibilityIdentifier("group-info-avatar-button")
-        } else {
-            avatarLabel
+        let isInteractive = onOpenInfo != nil || trailingIsControl
+        return Group {
+            if let onOpenInfo {
+                Button(action: onOpenInfo) { avatarCircle }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("Open chat information"))
+                    .accessibilityIdentifier("group-info-avatar-button")
+            } else {
+                avatarCircle
+                    .accessibilityHidden(!isInteractive)
+            }
         }
+        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: isInteractive))
     }
 
-    /// A circular glass control matching the back button; the avatar fills it
-    /// with a thin glass rim, like Telegram's title-bar avatar.
-    private var avatarLabel: some View {
-        let isInteractive = onOpenInfo != nil || trailingIsControl
-        return avatar()
+    /// The avatar centered in the 44 pt control, leaving a thin glass rim like Telegram.
+    private var avatarCircle: some View {
+        avatar()
             .frame(width: Self.avatarDiameter, height: Self.avatarDiameter)
             .clipShape(Circle())
             .frame(width: 44, height: 44)
             .contentShape(Circle())
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: isInteractive))
-            .clipShape(Circle())
-            .accessibilityHidden(!isInteractive)
     }
 
     /// Avatar diameter inside the 44 pt glass circle; callers size their avatar to this.

@@ -1,4 +1,5 @@
 #if os(macOS)
+    import AVKit
     import AppKit
     import Combine
     import Kingfisher
@@ -377,8 +378,23 @@
 
         // Events belong only to this overlay. Native buttons retain their hit targets;
         // all image/clip descendants route through one directional gesture owner.
+        // The active video's AVPlayerView receives mouse events so its native inline
+        // controls work (mouse-drag paging/dismissal is therefore unavailable over the
+        // video rect, but remains in its letterbox space). Trackpad scroll, swipe and
+        // magnify gestures still come here so swipe paging and swipe-down dismissal work
+        // over a video too.
         override func hitTest(_ point: NSPoint) -> NSView? {
             guard let hit = super.hitTest(point) else { return nil }
+            if let playerView = activePage?.videoView?.playerView, hit.isDescendant(of: playerView)
+            {
+                switch NSApp.currentEvent?.type {
+                case .scrollWheel, .swipe, .magnify, .smartMagnify, .rotate, .beginGesture,
+                    .endGesture, .gesture:
+                    return self
+                default:
+                    return hit
+                }
+            }
             var candidate: NSView? = hit
             while let view = candidate, view !== self {
                 if let button = view as? NSButton { return button }
@@ -412,6 +428,10 @@
             return handleKey(event) || super.performKeyEquivalent(with: event)
         }
 
+        // Arrow keys and Escape are claimed here (also through `performKeyEquivalent`, which
+        // runs before a focused AVPlayerView's own frame-step/seek handling) so they keep
+        // paging and dismissing on video pages. Space toggles the active video only while
+        // focus is on the viewer or its player, leaving Space to activate focused buttons.
         private func handleKey(_ event: NSEvent) -> Bool {
             guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
                 return false
@@ -420,6 +440,13 @@
             case 53: dismiss(downward: false)
             case 123: changePage(by: -1)
             case 124: changePage(by: 1)
+            case 49:
+                guard acceptsInteraction, let page = activePage, let video = page.videoView,
+                    let responder = window?.firstResponder,
+                    responder === self
+                        || (responder as? NSView)?.isDescendant(of: video.playerView) == true
+                else { return false }
+                page.togglePlayback()
             default: return false
             }
             return true
@@ -434,8 +461,9 @@
             guard acceptsInteraction, saveTask == nil else { return }
             let menu = NSMenu()
             let save = NSMenuItem(
-                title: AppLanguage.localized("Save Image"), action: #selector(saveImage),
-                keyEquivalent: "")
+                title: gallery.items[selectedIndex].isVideo
+                    ? AppLanguage.localized("Save Video") : AppLanguage.localized("Save Image"),
+                action: #selector(saveMedia), keyEquivalent: "")
             save.image = NSImage(
                 systemSymbolName: "square.and.arrow.down", accessibilityDescription: nil)
             save.target = self
@@ -444,7 +472,7 @@
                 positioning: nil, at: NSPoint(x: 0, y: moreButton.bounds.maxY), in: moreButton)
         }
 
-        @objc private func saveImage() {
+        @objc private func saveMedia() {
             guard acceptsInteraction, saveTask == nil else { return }
             let item = gallery.items[selectedIndex]
             saveTask = Task { [weak self] in
@@ -744,6 +772,8 @@
         let retryButton = NSButton(title: AppLanguage.localized("Retry"), target: nil, action: nil)
         var onZoomChanged: (() -> Void)?
         var onRetry: (() -> Void)?
+        /// Present only for video items; those pages never magnify and never load an image.
+        let videoView: ImageDetailMacVideoView?
 
         private let item: MessageImageItem
         private let mediaContext: AppMediaContext?
@@ -766,6 +796,9 @@
         init(item: MessageImageItem, mediaContext: AppMediaContext?) {
             self.item = item
             self.mediaContext = mediaContext
+            videoView =
+                item.isVideo
+                ? ImageDetailMacVideoView(url: item.url, pixelSize: item.pixelSize) : nil
             super.init(frame: .zero)
             setAccessibilityElement(false)
             wantsLayer = true
@@ -785,10 +818,17 @@
             scrollView.documentView = imageDocument
             addSubview(scrollView)
             imageDocument.setAccessibilityLabel(item.fileName)
+            if let videoView {
+                scrollView.isHidden = true
+                addSubview(videoView)
+            }
 
             progress.style = .spinning
             progress.isDisplayedWhenStopped = false
-            progress.setAccessibilityLabel(AppLanguage.localized("Loading image"))
+            progress.setAccessibilityLabel(
+                videoView == nil
+                    ? AppLanguage.localized("Loading image")
+                    : AppLanguage.localized("Loading video"))
             addSubview(progress)
             statusLabel.textColor = .white
             statusLabel.font = .systemFont(ofSize: 14)
@@ -797,11 +837,19 @@
             retryButton.bezelStyle = .rounded
             retryButton.target = self
             retryButton.action = #selector(retry)
-            retryButton.setAccessibilityLabel(AppLanguage.localized("Retry loading image"))
+            retryButton.setAccessibilityLabel(
+                videoView == nil
+                    ? AppLanguage.localized("Retry loading image")
+                    : AppLanguage.localized("Retry loading video"))
             addSubview(retryButton)
             magnificationObservation = scrollView.observe(\.magnification, options: [.new]) {
                 [weak self] _, _ in
                 MainActor.assumeIsolated { self?.onZoomChanged?() }
+            }
+            if let videoView {
+                videoView.onStateChanged = { [weak self] in self?.renderVideo($0) }
+                renderVideo(videoView.state)
+                return
             }
             subscription = Publishers.CombineLatest3(
                 loader.$image, loader.$isLoading, loader.$failed
@@ -818,6 +866,7 @@
             subscription = nil
             magnificationObservation = nil
             loader.cancel()
+            videoView?.stop()
             imageDocument.clear()
             displayedImage = nil
             progress.stopAnimation(nil)
@@ -827,11 +876,31 @@
             isActive = active
             self.reduceMotion = reduceMotion
             imageDocument.setAnimating(active && !reduceMotion)
+            videoView?.setActive(active)
         }
+
+        func togglePlayback() { videoView?.togglePlayback() }
 
         @objc private func retry() {
             onRetry?()
-            loader.load(item, mediaContext: mediaContext)
+            if let videoView {
+                videoView.retry()
+            } else {
+                loader.load(item, mediaContext: mediaContext)
+            }
+        }
+
+        private func renderVideo(_ state: ImageDetailMacVideoView.State) {
+            if state == .loading {
+                progress.startAnimation(nil)
+            } else {
+                progress.stopAnimation(nil)
+            }
+            progress.isHidden = state != .loading
+            statusLabel.stringValue = AppLanguage.localized("This video can’t be played")
+            statusLabel.isHidden = state != .failed
+            retryButton.isHidden = state != .failed
+            onZoomChanged?()
         }
 
         private func render(image: NSImage?, isLoading: Bool, failed: Bool) {
@@ -866,6 +935,7 @@
                     x: oldSize.width > 0 ? clip.bounds.midX / oldSize.width : 0.5,
                     y: oldSize.height > 0 ? clip.bounds.midY / oldSize.height : 0.5)
                 scrollView.frame = bounds
+                videoView?.frame = bounds
                 let scale = min(
                     max(1, bounds.width) / imageSize.width, max(1, bounds.height) / imageSize.height
                 )

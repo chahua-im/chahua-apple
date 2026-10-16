@@ -49,7 +49,10 @@
         private let nextButton = UIButton(type: .system)
         private lazy var dismissPan = UIPanGestureRecognizer(
             target: self, action: #selector(dragToDismiss(_:)))
-        private var pages: [Int: ImageDetailPageIOS] = [:]
+        private var pages: [Int: any ImageDetailPageContentIOS] = [:]
+        /// Extra safe-area insets that keep AVKit's controls clear of the viewer's header and
+        /// page indicator; the viewer's chrome stays visible over video pages.
+        private var playerControlInsets = UIEdgeInsets.zero
         private var selectedIndex: Int
         private var viewportSize = CGSize.zero
         private var appeared = false
@@ -64,8 +67,8 @@
         private var isTornDown = false
 
         private enum SaveResult {
-            case saved(itemID: String, fileName: String)
-            case failed(String)
+            case saved(itemID: String, fileName: String, isVideo: Bool)
+            case failed(String, isVideo: Bool)
         }
 
         private var saveTask: Task<Void, Never>?
@@ -121,9 +124,10 @@
             pager.showsVerticalScrollIndicator = false
             pager.contentInsetAdjustmentBehavior = .never
             pager.panGestureRecognizer.maximumNumberOfTouches = 1
-            pager.canBeginPaging = { [weak self] in
-                guard let self else { return false }
-                return self.canInteract && self.pages[self.selectedIndex]?.isAtFit == true
+            pager.canBeginPaging = { [weak self] location in
+                guard let self, let page = self.pages[self.selectedIndex] else { return false }
+                return self.canInteract && page.isAtFit
+                    && page.allowsContainerGesture(at: page.convert(location, from: self.pager))
             }
             pager.onAccessibilityScroll = { [weak self] in self?.accessibilityPage($0) ?? false }
             pager.alpha = 0
@@ -252,6 +256,15 @@
                 height: controlSize)
 
             let navigationY = size.height - safe.bottom - 56
+            let controlInsets = UIEdgeInsets(
+                top: max(0, titlePill.frame.maxY + 8 - safe.top), left: 0,
+                bottom: countLabel.isHidden && previousButton.isHidden ? 0 : 56, right: 0)
+            if controlInsets != playerControlInsets {
+                playerControlInsets = controlInsets
+                for page in pages.values {
+                    page.childViewController?.additionalSafeAreaInsets = controlInsets
+                }
+            }
             countLabel.frame = CGRect(
                 x: (size.width - 96) / 2, y: navigationY + 12, width: 96, height: 20)
             let maximumFeedbackWidth = max(0, size.width - safe.left - safe.right - 48)
@@ -320,11 +333,18 @@
             pager.canBeginPaging = nil
             pager.onAccessibilityScroll = nil
             dismissPan.isEnabled = false
-            for page in pages.values {
-                page.tearDown()
-                page.removeFromSuperview()
-            }
+            for page in pages.values { removePage(page) }
             pages.removeAll()
+            // Pages have released their players; hand audio back to other apps.
+            ImageDetailVideoAudioSession.deactivate()
+        }
+
+        private func removePage(_ page: any ImageDetailPageContentIOS) {
+            page.tearDown()
+            let child = page.childViewController
+            child?.willMove(toParent: nil)
+            page.removeFromSuperview()
+            child?.removeFromParent()
         }
 
         // UIKit's native glass APIs begin in iOS 26; earlier systems use standard button
@@ -396,12 +416,24 @@
         }
 
         private func configureMoreButton() {
+            // Resolved on each open so the title follows the selected page's media type.
             moreButton.menu = UIMenu(children: [
-                UIAction(
-                    title: AppLanguage.localized("Save Image"),
-                    image: UIImage(systemName: "square.and.arrow.down")
-                ) { [weak self] _ in
-                    self?.saveSelectedImage()
+                UIDeferredMenuElement.uncached { [weak self] completion in
+                    guard let self, self.gallery.items.indices.contains(self.selectedIndex) else {
+                        completion([])
+                        return
+                    }
+                    let isVideo = self.gallery.items[self.selectedIndex].isVideo
+                    completion([
+                        UIAction(
+                            title: isVideo
+                                ? AppLanguage.localized("Save Video")
+                                : AppLanguage.localized("Save Image"),
+                            image: UIImage(systemName: "square.and.arrow.down")
+                        ) { [weak self] _ in
+                            self?.saveSelectedItem()
+                        }
+                    ])
                 }
             ])
             moreButton.showsMenuAsPrimaryAction = true
@@ -456,14 +488,18 @@
             let lower = max(0, selectedIndex - 1)
             let upper = min(gallery.items.count - 1, selectedIndex + 1)
             for index in Array(pages.keys) where index < lower || index > upper {
-                let page = pages.removeValue(forKey: index)
-                page?.tearDown()
-                page?.removeFromSuperview()
+                if let page = pages.removeValue(forKey: index) { removePage(page) }
             }
             for index in lower...upper where pages[index] == nil {
-                let page = ImageDetailPageIOS(
-                    item: gallery.items[index], mediaContext: mediaContext)
-                page.onZoomChanged = { [weak self] in self?.updatePageStates() }
+                let item = gallery.items[index]
+                let page: any ImageDetailPageContentIOS
+                if item.isVideo {
+                    page = ImageDetailVideoPageIOS(item: item)
+                } else {
+                    let imagePage = ImageDetailImagePageIOS(item: item, mediaContext: mediaContext)
+                    imagePage.onZoomChanged = { [weak self] in self?.updatePageStates() }
+                    page = imagePage
+                }
                 page.mayInteract = { [weak self] in
                     guard let self else { return false }
                     return self.canInteract && self.selectedIndex == index
@@ -471,7 +507,14 @@
                 page.frame = CGRect(
                     x: CGFloat(index) * viewportSize.width, y: 0, width: viewportSize.width,
                     height: viewportSize.height)
-                pager.addSubview(page)
+                if let child = page.childViewController {
+                    child.additionalSafeAreaInsets = playerControlInsets
+                    addChild(child)
+                    pager.addSubview(page)
+                    child.didMove(toParent: self)
+                } else {
+                    pager.addSubview(page)
+                }
                 pages[index] = page
             }
             updatePageStates()
@@ -489,6 +532,7 @@
                     isVisible && applicationIsActive && !dismissalStarted && intersectsViewport
                 page.setPresentation(
                     visible: visible,
+                    selected: index == selectedIndex,
                     interactive: canInteract && index == selectedIndex,
                     animating: visible && canInteract && index == selectedIndex
                         && !UIAccessibility.isReduceMotionEnabled
@@ -505,9 +549,13 @@
         private func updateChrome() {
             let conversationTitle = gallery.conversationTitle?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            let selectedIsVideo =
+                gallery.items.indices.contains(selectedIndex)
+                && gallery.items[selectedIndex].isVideo
             titleLabel.text =
                 conversationTitle?.isEmpty == false
-                ? conversationTitle : AppLanguage.localized("Image")
+                ? conversationTitle
+                : selectedIsVideo ? AppLanguage.localized("Video") : AppLanguage.localized("Image")
             let sentAtText = gallery.sentAt?.formatted(
                 .dateTime.year().month(.abbreviated).day().hour().minute().locale(
                     AppLanguage.selected.locale))
@@ -545,7 +593,7 @@
         @objc private func previousTapped() { _ = goToPage(selectedIndex - 1) }
         @objc private func nextTapped() { _ = goToPage(selectedIndex + 1) }
 
-        private func saveSelectedImage() {
+        private func saveSelectedItem() {
             guard !isSaving, canInteract, gallery.items.indices.contains(selectedIndex) else {
                 return
             }
@@ -559,13 +607,17 @@
                     let saved = try await ImageDetailSave.save(item)
                     guard !Task.isCancelled else { return }
                     self?.finishSaving(
-                        saved ? .saved(itemID: item.id, fileName: item.fileName) : nil)
+                        saved
+                            ? .saved(
+                                itemID: item.id, fileName: item.fileName, isVideo: item.isVideo)
+                            : nil)
                 } catch is CancellationError {
                     guard !Task.isCancelled else { return }
                     self?.finishSaving(nil)
                 } catch {
                     guard !Task.isCancelled else { return }
-                    self?.finishSaving(.failed(error.localizedDescription))
+                    self?.finishSaving(
+                        .failed(error.localizedDescription, isVideo: item.isVideo))
                 }
             }
         }
@@ -593,17 +645,23 @@
             }
 
             switch result {
-            case .saved(let itemID, let fileName):
-                let isCurrentImage = gallery.items[selectedIndex].id == itemID
+            case .saved(let itemID, let fileName, let isVideo):
+                let isCurrentItem = gallery.items[selectedIndex].id == itemID
                 showFeedbackToast(
-                    isCurrentImage
-                        ? AppLanguage.localized("Image saved")
-                        : AppLanguage.localized("Saved \(fileName)"))
-            case .failed(let failure):
+                    !isCurrentItem
+                        ? AppLanguage.localized("Saved \(fileName)")
+                        : isVideo
+                            ? AppLanguage.localized("Video saved")
+                            : AppLanguage.localized("Image saved"))
+            case .failed(let failure, let isVideo):
                 showFeedbackToast(
-                    failure.isEmpty
-                        ? AppLanguage.localized("The image couldn’t be saved. Please try again.")
-                        : failure)
+                    !failure.isEmpty
+                        ? failure
+                        : isVideo
+                            ? AppLanguage.localized(
+                                "The video couldn’t be saved. Please try again.")
+                            : AppLanguage.localized(
+                                "The image couldn’t be saved. Please try again."))
             }
         }
 
@@ -723,8 +781,10 @@
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard gestureRecognizer === dismissPan else { return true }
-            guard canInteract, pages[selectedIndex]?.isAtFit == true,
-                !pager.isDragging, !pager.isDecelerating
+            guard canInteract, let page = pages[selectedIndex], page.isAtFit,
+                !pager.isDragging, !pager.isDecelerating,
+                page.allowsContainerGesture(
+                    at: page.convert(dismissPan.startLocation(in: view), from: view))
             else { return false }
             let velocity = dismissPan.velocity(in: view)
             return velocity.y > 0 && velocity.y > abs(velocity.x) * 1.15
@@ -833,6 +893,30 @@
         }
     }
 
+    /// A pager page: the zoomable image page or the AVKit video page.
+    @MainActor
+    protocol ImageDetailPageContentIOS: UIView {
+        var isAtFit: Bool { get }
+        var mayInteract: (() -> Bool)? { get set }
+        /// A controller the viewer contains while the page is installed.
+        var childViewController: UIViewController? { get }
+        /// `selected` is the settled page; `interactive` also excludes transient paging,
+        /// dismissal drags and viewport changes.
+        func setPresentation(visible: Bool, selected: Bool, interactive: Bool, animating: Bool)
+        /// Whether paging or drag-to-dismiss may start at `point` (page coordinates).
+        func allowsContainerGesture(at point: CGPoint) -> Bool
+        func tearDown()
+    }
+
+    extension UIPanGestureRecognizer {
+        /// The touch-down point, since recognition happens after the touch has moved.
+        fileprivate func startLocation(in view: UIView) -> CGPoint {
+            let location = self.location(in: view)
+            let translation = self.translation(in: view)
+            return CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+        }
+    }
+
     @MainActor
     private final class ImageDetailRootViewIOS: UIView {
         var onEscape: (() -> Bool)?
@@ -854,7 +938,7 @@
 
     @MainActor
     private final class ImageDetailPagerIOS: UIScrollView {
-        var canBeginPaging: (() -> Bool)?
+        var canBeginPaging: ((CGPoint) -> Bool)?
         var onAccessibilityScroll: ((UIAccessibilityScrollDirection) -> Bool)?
 
         override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
@@ -865,7 +949,9 @@
         {
             if gestureRecognizer === panGestureRecognizer {
                 let velocity = panGestureRecognizer.velocity(in: self)
-                guard canBeginPaging?() == true, abs(velocity.x) > abs(velocity.y) else {
+                guard canBeginPaging?(panGestureRecognizer.startLocation(in: self)) == true,
+                    abs(velocity.x) > abs(velocity.y)
+                else {
                     return false
                 }
             }
@@ -892,7 +978,9 @@
     }
 
     @MainActor
-    private final class ImageDetailPageIOS: UIView, UIScrollViewDelegate {
+    private final class ImageDetailImagePageIOS: UIView, UIScrollViewDelegate,
+        ImageDetailPageContentIOS
+    {
         private let item: MessageImageItem
         private let mediaContext: AppMediaContext?
         private let loader = ImageDetailImageLoader()
@@ -982,7 +1070,11 @@
 
         required init?(coder: NSCoder) { nil }
 
-        func setPresentation(visible: Bool, interactive: Bool, animating: Bool) {
+        var childViewController: UIViewController? { nil }
+
+        func allowsContainerGesture(at point: CGPoint) -> Bool { true }
+
+        func setPresentation(visible: Bool, selected _: Bool, interactive: Bool, animating: Bool) {
             guard !tornDown else { return }
             self.visible = visible
             self.interactive = interactive

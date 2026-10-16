@@ -248,15 +248,14 @@
             self.gallery = gallery
             self.captionSize = captionSize
             resetChrome()
-            let video = attachment.kind.hasPrefix("video/")
+            let video = attachment.kind.lowercased().hasPrefix("video/")
             configureSurface(gallery: gallery, video: video, overflow: overflow)
             if video {
+                // Neutral dark tile with a play badge; poster frames are not generated.
                 imageView.clear()
                 imageView.isHidden = true
-                showWarning(
-                    symbol: "video.slash",
-                    label: AppLanguage.localized("Video preview unavailable"),
-                    color: .white.withAlphaComponent(0.8))
+                playBackground.isHidden = false
+                playSymbol.isHidden = false
             } else {
                 imageView.configure(
                     url: URL(string: attachment.url), contentMode: gallery ? .fill : .fit,
@@ -264,11 +263,11 @@
                     showsBlurredBackdrop: !gallery,
                     thumbnailPixelSize: pixelSize(displayScale), mediaContext: mediaContext)
             }
-            isEnabled = canOpen && attachment.kind.lowercased().hasPrefix("image/")
+            isEnabled = canOpen && (video || attachment.kind.lowercased().hasPrefix("image/"))
             accessibilityTraits = isEnabled ? .button : .image
             accessibilityLabel =
                 video
-                ? AppLanguage.localized("Video preview unavailable")
+                ? (isEnabled ? AppLanguage.localized("Play video") : AppLanguage.localized("Video"))
                 : isEnabled ? AppLanguage.localized("Open image") : AppLanguage.localized("Image")
             updateTapMarker()
             setNeedsLayout()
@@ -286,7 +285,7 @@
             self.gallery = gallery
             self.captionSize = captionSize
             resetChrome()
-            let video = attachment.mimeType.hasPrefix("video/")
+            let video = attachment.mimeType.lowercased().hasPrefix("video/")
             configureSurface(gallery: gallery, video: video, overflow: overflow)
             if changed {
                 discardLocal()
@@ -303,9 +302,13 @@
             }
             playBackground.isHidden = !video
             playSymbol.isHidden = !video
-            isEnabled = canOpen && attachment.mimeType.lowercased().hasPrefix("image/")
+            let mimeType = attachment.mimeType.lowercased()
+            isEnabled = canOpen && (video || mimeType.hasPrefix("image/"))
             accessibilityTraits = isEnabled ? .button : .image
-            accessibilityLabel = attachment.fileName
+            accessibilityLabel =
+                video && isEnabled ? AppLanguage.localized("Play video") : attachment.fileName
+            accessibilityValue = video && isEnabled ? attachment.fileName : nil
+            updateTapMarker()
             setNeedsLayout()
             refreshVisibility()
         }
