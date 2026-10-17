@@ -265,24 +265,48 @@ struct AuthenticatedShell: View {
                                     detailContent
                                 }
                             }
+                            // iPhone conversations draw the same header as the split
+                            // layout instead of the system bar: the system back button
+                            // cannot show the unread pill (as Messages and Telegram do).
+                            // UIKit still owns push/pop; `ConversationSwipeBack` keeps
+                            // swipe-back working with the bar hidden.
                             .modifier(
-                                ChatPhoneDetailHeader(
-                                    title: openedThread?.key == key
-                                        ? openedThread?.title ?? AppLanguage.localized("Thread")
-                                        : selectedTitle,
-                                    subtitle: key.threadID == nil ? headerSubtitle : nil,
-                                    isMuted: key.threadID == nil && headerChatIsMuted,
-                                    onOpenInfo: key.threadID == nil ? infoAction : nil,
-                                    onSearch: searchAction,
-                                    trailingIsControl: key.threadID != nil,
-                                    backBadgeCount: backBadgeCount
-                                ) {
-                                    headerTrailing(for: key)
-                                })
+                                ChatHeaderOverlay {
+                                    ChatFloatingHeader(
+                                        title: openedThread?.key == key
+                                            ? openedThread?.title
+                                                ?? AppLanguage.localized("Thread")
+                                            : selectedTitle,
+                                        subtitle: key.threadID == nil ? headerSubtitle : nil,
+                                        isMuted: key.threadID == nil && headerChatIsMuted,
+                                        onBack: { popPhoneConversation(key) },
+                                        onOpenInfo: key.threadID == nil ? infoAction : nil,
+                                        onSearch: searchAction,
+                                        trailingIsControl: key.threadID != nil,
+                                        backBadgeCount: backBadgeCount
+                                    ) {
+                                        headerTrailing(for: key)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                }
+                            )
+                            .toolbar(.hidden, for: .navigationBar)
+                            .background(ConversationSwipeBack())
                         case .group(let route):
                             groupDestination(route)
                         }
                     }
+            }
+        }
+
+        /// Back from a phone conversation: a thread pushed over its chat returns to
+        /// the chat; anything else returns to the list.
+        private func popPhoneConversation(_ key: ConversationKey) {
+            if openedThread?.key == key {
+                popThread()
+            } else {
+                selectConversation(nil)
             }
         }
 

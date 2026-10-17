@@ -192,8 +192,6 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var onOpenInfo: (() -> Void)?
     /// Search lives on the info page; the header only binds ⌘F, with no visible button.
     var onSearch: (() -> Void)?
-    /// The phone header splits the identity and trailing controls into separate toolbar items.
-    var part: Part = .full
     /// The trailing slot holds its own control (e.g. the thread subscription menu)
     /// rather than a decorative avatar.
     var trailingIsControl = false
@@ -201,38 +199,28 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var backBadgeCount = 0
     @ViewBuilder var avatar: () -> Avatar
 
-    enum Part { case full, identity, trailing }
-
     var body: some View {
-        switch part {
-        case .identity:
-            identity
-        case .trailing:
-            trailingControls
-                .background { searchShortcut }
-        case .full:
-            #if os(macOS)
-                HStack(spacing: 8) {
+        #if os(macOS)
+            HStack(spacing: 8) {
+                navigationControl
+                identity
+                trailingControls
+            }
+            .frame(maxWidth: .infinity)
+            .background { searchShortcut }
+        #else
+            ZStack {
+                // Symmetric insets keep the identity centered between edge controls.
+                identity
+                    .padding(.horizontal, backBadgeCount > 0 ? 92 : 52)
+                HStack {
                     navigationControl
-                    identity
+                    Spacer(minLength: 0)
                     trailingControls
                 }
-                .frame(maxWidth: .infinity)
-                .background { searchShortcut }
-            #else
-                ZStack {
-                    // Symmetric insets keep the identity centered between edge controls.
-                    identity
-                        .padding(.horizontal, backBadgeCount > 0 ? 92 : 52)
-                    HStack {
-                        navigationControl
-                        Spacer(minLength: 0)
-                        trailingControls
-                    }
-                }
-                .background { searchShortcut }
-            #endif
-        }
+            }
+            .background { searchShortcut }
+        #endif
     }
 
     @ViewBuilder
@@ -392,93 +380,20 @@ struct ChatFloatingHeader<Avatar: View>: View {
     }
 }
 
-#if os(iOS)
-    /// Keep native back navigation, but let messages scroll beneath the glass controls.
-    /// The title bar's safe area becomes scroll breathing room, not an opaque layout band.
-    struct ChatPhoneDetailHeader<Avatar: View>: ViewModifier {
-        let title: String
-        var subtitle: String?
-        var isMuted = false
-        var onOpenInfo: (() -> Void)?
-        var onSearch: (() -> Void)?
-        var trailingIsControl = false
-        var backBadgeCount = 0
-        @ViewBuilder var avatar: () -> Avatar
-        @Environment(\.dismiss) private var dismiss
-
-        func body(content: Content) -> some View {
-            GeometryReader { geometry in
-                content
-                    .environment(\.chatHeaderInset, geometry.safeAreaInsets.top + 12)
-                    .ignoresSafeArea(.container, edges: .top)
-            }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.visible, for: .navigationBar)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .toolbar {
-                // iOS 26 wraps bar items in a shared glass capsule; the header draws
-                // its own glass, so hide the system one to keep the avatar circular.
-                // The badge keeps the shared background so it joins the native back
-                // button's capsule; the system back button and swipe-back stay intact.
-                if #available(iOS 26, *) {
-                    if backBadgeCount > 0 {
-                        ToolbarItem(placement: .topBarLeading) { backBadge }
-                    }
-                    ToolbarItem(placement: .principal) {
-                        header(.identity)
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                    ToolbarItem(placement: .topBarTrailing) {
-                        header(.trailing)
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                } else {
-                    if backBadgeCount > 0 {
-                        ToolbarItem(placement: .topBarLeading) { backBadge }
-                    }
-                    ToolbarItem(placement: .principal) {
-                        header(.identity)
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        header(.trailing)
-                    }
-                }
-            }
-        }
-
-        /// Tapping the badge goes back, like the chevron beside it.
-        private var backBadge: some View {
-            Button {
-                dismiss()
-            } label: {
-                UnreadBackBadge(count: backBadgeCount)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Back"))
-            .accessibilityValue(Text(UnreadBackBadge.accessibilityValue(backBadgeCount)))
-        }
-
-        private func header(_ part: ChatFloatingHeader<Avatar>.Part) -> some View {
-            ChatFloatingHeader(
-                title: title, subtitle: subtitle, isMuted: isMuted,
-                onOpenInfo: onOpenInfo, onSearch: onSearch, part: part,
-                trailingIsControl: trailingIsControl, backBadgeCount: backBadgeCount,
-                avatar: avatar)
-        }
-    }
-#endif
-
-/// Unread count beside a back chevron, like Telegram's title bar.
+/// Unread count beside a back chevron, like Messages and Telegram: a black pill with
+/// white digits in light mode, white with black digits in dark mode. Explicit colors
+/// keep the pill solid instead of picking up the glass's vibrancy.
 struct UnreadBackBadge: View {
     let count: Int
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Text(count > 99 ? "99+" : "\(count)")
             .font(.system(size: 13, weight: .semibold).monospacedDigit())
-            .foregroundStyle(.background)
+            .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
             .padding(.horizontal, 6)
             .frame(minWidth: 22, minHeight: 22)
-            .background(.primary, in: Capsule())
+            .background(colorScheme == .dark ? Color.white : Color.black, in: Capsule())
             .accessibilityHidden(true)
     }
 
@@ -518,62 +433,144 @@ extension EnvironmentValues {
 }
 
 /// Reserve scrollable breathing room, not layout space: rows travel behind the glass.
+///
+/// On iOS the content also extends under the status bar (like Telegram and Messages),
+/// and the header inset is measured from the screen top so the first rows still clear
+/// the header. macOS keeps the content below the window's title-bar safe area.
 struct ChatHeaderOverlay<Header: View>: ViewModifier {
     var isVisible = true
     @ViewBuilder let header: () -> Header
-    @State private var headerHeight: CGFloat = 0
+    /// Header frame and the content's top, in window coordinates. The content extends
+    /// under the status bar on iOS, so the inset must be measured from its own top, not
+    /// from a coordinate space anchored at the safe-area edge.
+    @State private var headerFrame = CGRect.zero
+    @State private var contentTop: CGFloat = 0
+
+    private static var space: String { "chat-header-overlay" }
 
     func body(content: Content) -> some View {
-        GeometryReader { geometry in
+        #if os(iOS)
             content
-                .environment(\.chatHeaderInset, isVisible ? headerHeight + 12 : 0)
+                .environment(
+                    \.chatHeaderInset,
+                    isVisible ? max(0, headerFrame.maxY - contentTop) + 12 : 0
+                )
+                .ignoresSafeArea(.container, edges: .top)
+                .background {
+                    GeometryReader { geometry in
+                        let top = geometry.frame(in: .global).minY
+                        Color.clear
+                            .onAppear { contentTop = top }
+                            .onChange(of: top) { _, top in contentTop = top }
+                    }
+                    .ignoresSafeArea(.container, edges: .top)
+                }
                 .overlay(alignment: .top) {
                     if isVisible {
+                        // The timeline draws the backdrop below this header and the
+                        // pinned bar, sized to the full `chatHeaderInset`.
                         header()
                             .frame(maxWidth: .infinity)
-                            .background {
-                                GeometryReader { headerGeometry in
-                                    Color.clear
-                                        .onAppear { headerHeight = headerGeometry.size.height }
-                                        .onChange(of: headerGeometry.size.height) { _, height in
-                                            headerHeight = height
-                                        }
-                                }
-                            }
-                            .background(alignment: .top) {
-                                ChatHeaderBackdrop()
-                                    .frame(height: headerHeight + geometry.safeAreaInsets.top + 32)
-                                    .offset(y: -geometry.safeAreaInsets.top)
-                            }
+                            .background { measuredHeader(in: .global) }
                     }
                 }
+        #else
+            GeometryReader { geometry in
+                content
+                    .environment(\.chatHeaderInset, isVisible ? headerFrame.height + 12 : 0)
+                    .overlay(alignment: .top) {
+                        if isVisible {
+                            header()
+                                .frame(maxWidth: .infinity)
+                                .background { measuredHeader(in: .named(Self.space)) }
+                                .background(alignment: .top) {
+                                    ChatHeaderBackdrop(edge: .top, strength: .light)
+                                        .frame(
+                                            height: headerFrame.height
+                                                + geometry.safeAreaInsets.top + 32
+                                        )
+                                        .offset(y: -geometry.safeAreaInsets.top)
+                                }
+                        }
+                    }
+                    .coordinateSpace(.named(Self.space))
+            }
+        #endif
+    }
+
+    private func measuredHeader(in space: CoordinateSpace) -> some View {
+        GeometryReader { headerGeometry in
+            let frame = headerGeometry.frame(in: space)
+            Color.clear
+                .onAppear { headerFrame = frame }
+                .onChange(of: frame) { _, frame in headerFrame = frame }
         }
     }
 }
 
-/// Very light title-bar backdrop, like Telegram for Mac: content stays visible
-/// behind the glass controls, softened slightly more toward the top edge.
+/// Backdrop behind floating chat chrome whose blur strengthens toward the screen edge.
 ///
 /// SwiftUI has no variable-radius blur, and a single material faded by an opacity
-/// mask shows where blurred content meets sharp content. Two faint, staggered
-/// material layers make the softening ramp up instead of ending at a line.
+/// mask shows where blurred content meets sharp content. Staggered material layers
+/// make the softening ramp up instead of ending at a line.
+///
+/// - `strong` (iPhone, like Telegram): constant blur from the screen edge, then a
+///   fixed-height transition band at the far end; slightly translucent overall.
+/// - `light` (macOS, like Telegram for Mac): faint layers fading over the full height.
 struct ChatHeaderBackdrop: View {
-    private static let reaches: [Double] = [1, 0.55]
+    enum Strength {
+        case light, strong
+
+        /// Fraction of the transition each staggered layer takes to fade out.
+        var reaches: [Double] {
+            switch self {
+            case .light: [1, 0.55]
+            case .strong: [1, 0.7, 0.4]
+            }
+        }
+
+        var layerOpacity: Double {
+            switch self {
+            case .light: 0.4
+            case .strong: 0.4
+            }
+        }
+
+        /// Points over which the blur fades; `nil` fades over the full height.
+        var transitionHeight: CGFloat? {
+            switch self {
+            case .light: nil
+            case .strong: 70
+            }
+        }
+    }
+
+    let edge: VerticalEdge
+    let strength: Strength
 
     var body: some View {
-        ZStack {
-            ForEach(Self.reaches, id: \.self) { reach in
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .opacity(0.5)
-                    .mask {
-                        LinearGradient(
-                            stops: [
-                                .init(color: .black, location: 0),
-                                .init(color: .clear, location: reach),
-                            ],
-                            startPoint: .top, endPoint: .bottom)
-                    }
+        GeometryReader { geometry in
+            let height = max(geometry.size.height, 1)
+            let transition = min(strength.transitionHeight ?? height, height)
+            let solid = (height - transition) / height
+            ZStack {
+                ForEach(strength.reaches, id: \.self) { reach in
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+                        .opacity(strength.layerOpacity)
+                        .mask {
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: solid),
+                                    .init(
+                                        color: .clear,
+                                        location: solid + (1 - solid) * reach),
+                                ],
+                                startPoint: edge == .top ? .top : .bottom,
+                                endPoint: edge == .top ? .bottom : .top)
+                        }
+                }
             }
         }
         .allowsHitTesting(false)

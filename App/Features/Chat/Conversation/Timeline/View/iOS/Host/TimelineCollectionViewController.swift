@@ -70,8 +70,22 @@
         var composerInset: CGFloat = 0 {
             didSet {
                 guard composerInset != oldValue, isViewLoaded else { return }
+                // The composer inset is measured after the first layout and changes with
+                // the keyboard. Keep the rows' distance from the bottom edge, so the live
+                // edge or a revealed message stays just above the composer instead of
+                // ending up behind it.
+                let bounds = collectionView.bounds.height
+                let contentHeight = collectionView.contentSize.height
+                let distanceFromBottom =
+                    contentHeight + oldValue - bounds - collectionView.contentOffset.y
                 collectionView.contentInset.bottom = composerInset
                 collectionView.verticalScrollIndicatorInsets.bottom = composerInset
+                if !collectionView.isDragging, !collectionView.isDecelerating, bounds > 0 {
+                    let minOffset = -collectionView.adjustedContentInset.top
+                    let maxOffset = max(minOffset, contentHeight + composerInset - bounds)
+                    let offset = min(max(maxOffset - distanceFromBottom, minOffset), maxOffset)
+                    collectionView.contentOffset.y = offset
+                }
                 view.setNeedsLayout()
             }
         }
@@ -155,11 +169,6 @@
             collectionView.verticalScrollIndicatorInsets.top = headerInset
             collectionView.contentInset.bottom = composerInset
             collectionView.verticalScrollIndicatorInsets.bottom = composerInset
-            // Under the phone navigation bar, the system draws a progressive (soft)
-            // blur rather than a hard-edged backdrop.
-            if #available(iOS 26, *) {
-                collectionView.topEdgeEffect.style = .soft
-            }
             collectionView.register(
                 TimelineCollectionViewCell.self, forCellWithReuseIdentifier: "timeline")
             displayScheduler = TimelineDisplayScheduler(view: view)

@@ -822,22 +822,42 @@ extension EnvironmentValues {
 }
 
 /// Keep the scroll viewport behind the composer, with clearance for its current height.
+///
+/// On iOS the viewport also extends under the home indicator, like Telegram; the inset
+/// is the distance from the composer's top to the viewport bottom, so it covers the
+/// home-indicator area when the keyboard is hidden and only the composer above it.
 struct ChatComposerOverlay<Composer: View>: ViewModifier {
     @ViewBuilder let composer: () -> Composer
-    @State private var composerHeight: CGFloat = 0
+    /// Composer top and the viewport bottom, in window coordinates. The viewport
+    /// extends under the home indicator on iOS, beyond its own safe-area frame.
+    @State private var composerTop: CGFloat = 0
+    @State private var viewportBottom: CGFloat = 0
 
     func body(content: Content) -> some View {
         content
-            .environment(\.chatComposerInset, composerHeight)
+            .environment(\.chatComposerInset, max(0, viewportBottom - composerTop))
+            #if os(iOS)
+                .ignoresSafeArea(.container, edges: .bottom)
+            #endif
+            .background {
+                GeometryReader { geometry in
+                    let bottom = geometry.frame(in: .global).maxY
+                    Color.clear
+                        .onAppear { viewportBottom = bottom }
+                        .onChange(of: bottom) { _, bottom in viewportBottom = bottom }
+                }
+                #if os(iOS)
+                    .ignoresSafeArea(.container, edges: .bottom)
+                #endif
+            }
             .overlay(alignment: .bottom) {
                 composer()
                     .background {
                         GeometryReader { geometry in
+                            let top = geometry.frame(in: .global).minY
                             Color.clear
-                                .onAppear { composerHeight = geometry.size.height }
-                                .onChange(of: geometry.size.height) { _, height in
-                                    composerHeight = height
-                                }
+                                .onAppear { composerTop = top }
+                                .onChange(of: top) { _, top in composerTop = top }
                         }
                     }
             }

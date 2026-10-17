@@ -284,6 +284,53 @@
             XCTAssertFalse(model.state.live.followsLatest)
         }
 
+        func testLiveEdgeStaysAboveComposerWhenItsInsetArrivesAfterOpening() async throws {
+            let messages = try (0..<50).map {
+                try TimelineTestFixtures.message(
+                    id: UInt64($0), senderID: 2, at: $0, text: "Live edge message \($0)")
+            }
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
+                messageStore: ConversationMessageStore()
+            )
+            let parent = UIViewController()
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = parent
+            window.makeKeyAndVisible()
+            defer {
+                model.close()
+                window.isHidden = true
+            }
+            // The chrome measures its insets after the first layout pass.
+            let controller = TimelineCollectionViewController(model: model, actions: .init())
+            parent.addChild(controller)
+            parent.view.addSubview(controller.view)
+            controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 500)
+            controller.didMove(toParent: parent)
+            parent.view.layoutIfNeeded()
+            await model.open(position: .liveEdge)
+            try await Task.sleep(for: .milliseconds(200))
+            controller.view.layoutIfNeeded()
+
+            controller.headerInset = 64
+            controller.composerInset = 94
+            controller.view.layoutIfNeeded()
+
+            let collection = try XCTUnwrap(
+                controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+            let last = try XCTUnwrap(
+                collection.layoutAttributesForItem(
+                    at: .init(item: model.rows.count - 1, section: 0))
+            ).frame
+            XCTAssertEqual(
+                last.maxY,
+                collection.contentOffset.y + collection.bounds.height - controller.composerInset,
+                accuracy: 1,
+                "A late composer inset must keep the newest message just above the composer.")
+        }
+
         func testShortUnreadEntryReadsVisibleMessagesWithoutShowingJump() async throws {
             let messages = try (1...3).map {
                 try TimelineTestFixtures.message(id: UInt64($0), senderID: 2, at: $0)

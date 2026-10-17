@@ -27,6 +27,7 @@
                 ZStack(alignment: .bottomTrailing) {
                     content
                         .clipped()
+                        .overlay { headerBackdrop }
                     if model.showsJumpToLatest {
                         Button {
                             Task { await model.jumpTowardLatest() }
@@ -69,6 +70,20 @@
             }
         }
 
+        /// Blurs rows scrolling under the floating chrome: the header, and the pinned
+        /// bar when present, since `chatHeaderInset` covers both. Drawn here so it sits
+        /// above the rows but below that chrome; it starts at the screen top.
+        @ViewBuilder
+        private var headerBackdrop: some View {
+            if chatHeaderInset > 0 {
+                VStack(spacing: 0) {
+                    ChatHeaderBackdrop(edge: .top, strength: .strong)
+                        .frame(height: chatHeaderInset + 24)
+                    Spacer(minLength: 0)
+                }
+                .ignoresSafeArea(.container, edges: .top)
+            }
+        }
         @ViewBuilder
         private var jumpToLatestSymbol: some View {
             let symbol = Image(systemName: "chevron.down")

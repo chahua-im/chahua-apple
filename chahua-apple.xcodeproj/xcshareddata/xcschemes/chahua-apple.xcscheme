@@ -67,7 +67,7 @@
       <CommandLineArguments>
          <CommandLineArgument
             argument = "-cache-debug"
-            isEnabled = "YES">
+            isEnabled = "NO">
          </CommandLineArgument>
       </CommandLineArguments>
    </LaunchAction>

@@ -555,12 +555,19 @@
                     abandon(.scroll)
                     return
                 }
+                // Reply swipes only move left (displacement is `-dx`). A rightward drag
+                // belongs to navigation swipe-back, so fail now instead of claiming it
+                // and preventing the pop gesture.
+                if dx > 0 {
+                    abandon(.native)
+                    return
+                }
                 guard captured.input == .finger, captured.swipe.isEnabled else {
                     abandon(.cancelled)
                     return
                 }
-                // Lock even a rightward drag at zero displacement: retreating or
-                // pausing can never resurrect this touch's tap/hold eligibility.
+                // Lock the reply swipe at zero displacement: retreating or pausing can
+                // never resurrect this touch's tap/hold eligibility.
                 captured.owner = .swipe
                 captured.displacement = min(max(-dx, 0), 80)
                 state = .began
