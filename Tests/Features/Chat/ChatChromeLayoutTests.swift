@@ -20,11 +20,6 @@
             window.makeKeyAndVisible()
             defer { window.isHidden = true }
 
-            let safeArea = window.safeAreaInsets
-            let height = window.bounds.height
-            XCTAssertGreaterThan(safeArea.top, 0, "Needs a device/simulator with a status bar")
-            XCTAssertGreaterThan(safeArea.bottom, 0, "Needs a home-indicator device/simulator")
-
             // Measurements feed back into insets; wait until a full layout pass is stable.
             var previous = probe.snapshot
             for _ in 0..<100 {
@@ -33,6 +28,13 @@
                 if current == previous, current.timeline.height > 0 { break }
                 previous = current
             }
+            // Read after layout: the window reports no safe area before its first pass.
+            window.layoutIfNeeded()
+            let safeArea = window.safeAreaInsets
+            let height = window.bounds.height
+            try XCTSkipIf(
+                safeArea.top == 0 || safeArea.bottom == 0,
+                "Edge-to-edge chrome needs a destination with a status bar and home indicator")
             let layout = probe.snapshot
             XCTAssertEqual(layout.timeline.minY, 0, accuracy: 0.5, "Timeline must start at the top")
             XCTAssertEqual(
