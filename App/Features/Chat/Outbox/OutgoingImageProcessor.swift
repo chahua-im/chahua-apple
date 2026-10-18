@@ -153,32 +153,28 @@ nonisolated struct OutgoingImageProcessor: Sendable {
     private static func prepareImage(_ attachment: LocalOutgoingAttachment, source: CGImageSource)
         throws -> LocalOutgoingAttachment
     {
-        // Preserve every frame and its timing by sending animated/multi-image originals unchanged.
-        guard CGImageSourceGetCount(source) == 1 else { return attachment }
-        let image = try thumbnail(source, maximum: 1920)
-        let type: UTType = hasAlpha(image) ? .png : .jpeg
-        let name = UUID().uuidString
         let folder = URL(fileURLWithPath: attachment.sourcePath).deletingLastPathComponent()
-        let staging = folder.appendingPathComponent(".\(name).partial")
-        defer { try? FileManager.default.removeItem(at: staging) }
-        try encode(image, type: type, to: staging)
-        let bytes = try fileSize(staging)
-        try Task.checkCancellation()
-        // The original remains authoritative unless the complete result saves at least 25%.
-        guard Double(bytes) < Double(attachment.byteCount) * 0.75 else { return attachment }
-        let output = folder.appendingPathComponent(
-            "prepared.\(name).\(type.preferredFilenameExtension!)")
-        try FileManager.default.moveItem(at: staging, to: output)
+        let output: StillImagePreparation.Output?
+        do {
+            output = try StillImagePreparation.prepare(
+                source: source, originalByteCount: attachment.byteCount, directory: folder)
+        } catch let error as StillImagePreparation.PreparationError {
+            switch error {
+            case .invalidImage: throw OutgoingImageError.invalidImage
+            case .encodingFailed: throw OutgoingImageError.encodingFailed
+            }
+        }
+        guard let output else { return attachment }
         var result = attachment
-        result.preparedPath = output.path
+        result.preparedPath = output.url.path
         result.fileName = fileName(
             URL(fileURLWithPath: attachment.fileName).deletingPathExtension().lastPathComponent,
-            extensionName: type.preferredFilenameExtension!
+            extensionName: output.extensionName
         )
-        result.mimeType = type.preferredMIMEType!
-        result.width = image.width
-        result.height = image.height
-        result.byteCount = bytes
+        result.mimeType = output.mimeType
+        result.width = output.width
+        result.height = output.height
+        result.byteCount = output.byteCount
         return result
     }
 

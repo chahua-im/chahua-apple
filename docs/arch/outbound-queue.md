@@ -74,12 +74,14 @@ Unsent media lives under the account's Application Support directory, in `Outbox
 The persisted `compressionEnabled` option selects the current fixed preparation policy:
 
 - Disabled: upload the validated original.
-- Enabled: target a longest edge of 1920 pixels, preserve orientation, use PNG for transparency and JPEG otherwise, and replace the original only if the result is less than 75% of its byte size.
+- Enabled: preserve orientation and aspect ratio without upscaling or cropping. The compressed candidate simultaneously caps the short side at 1400 pixels, area at 8,000,000 pixels and long side at 16000 pixels, with dimensions floored. Prefer native AVIF, then bundled libwebp, then JPEG for opaque pixels or PNG for transparent pixels. AVIF/WebP quality is 0.6; JPEG quality is 0.8. Unsupported or failed codecs fall through without flattening transparency. Replace the original only if the selected result is less than 75% of its byte size; otherwise retain the original bytes and dimensions.
 - Multi-frame images retain their original bytes rather than flattening animation.
 - Videos retain their original bytes regardless of this option. AVFoundation validates playable video and extracts an oriented preview; container extensions are normalized from file headers before loading.
 - Local previews use an oriented thumbnail up to 480 pixels; preparation records actual output MIME type, dimensions and byte count.
 
 Changing compression while blocked invalidates prepared/uploaded work and reprocesses the original. Prepared checkpoints survive restart. Any future algorithm change must explicitly account for persisted unprepared work; the current option is a Boolean, not a versioned policy registry.
+
+`Shared/StillImagePreparation.swift` supplies the same still-image policy to the app and iOS Share extension. The extension defaults **Compress images** on and retains acquired provider originals for opt-out. Changing this option cancels the current work, clears uploaded attachment IDs and starts preparation/upload for the new setting; late completions cannot replace the current IDs. The server size limit applies after image preparation, including when an oversized source can shrink below the limit. Videos retain their acquisition-time limit and original bytes. Extension files are temporary rather than durable outbox entries.
 
 Cleanup waits for preparation/upload/import activity to settle and a 60-second grace period. It retains referenced sources, prepared files and previews, and only removes older unreferenced account-owned files. This protects acknowledgement handoff and newly installed files awaiting a database reference. Missing referenced files surface as attachment errors, not silent omission.
 
@@ -144,6 +146,8 @@ Verification performed for this implementation:
 - Generated landscape MP4 and rotated portrait MOV imported/prepared with correct display dimensions, decodable previews and byte-identical originals under both image-compression settings; image preparation also produced a decodable result.
 - Pending-media smoke: local/delivered sizes and gallery cells match for 1, 2, 3, 6, 7 and 20 attachments; inspected the rendered pending gallery and hollow metadata checkmark.
 - Provider/state smoke: pane acquisition opened the caption and appended subsequent media without losing its draft; reorder payloads committed once, rejected stale/foreign membership and skipped no-op/cancelled changes. Edge-hover scrolling stopped on exit. End-to-end pointer-driven drag verification was blocked by macOS input-posting permission and remains a manual check.
+- Still-image smoke on macOS and iOS Simulator: native AVIF and direct libwebp encode/decode roundtrips preserve actual alpha; aspect-ratio bounds, original-byte opt-out and animated originals are retained. Chromium smoke exercises the matching PWA policy, including JPEG/PNG fallbacks with AVIF/WebP disabled.
+- Share-model loopback smoke: oversized source compresses below the upload limit, opt-out uploads hash-identical provider bytes, rapid option changes discard stale IDs, and switching during a held PUT prevents its late completion from replacing the current upload. The actual shared SwiftUI view was rendered on a macOS host; physical-device Share-sheet interaction remains manual.
 - Full Photos/iCloud interaction, iOS keyboard feel and live-backend sending still require manual verification.
 
 ## Source references

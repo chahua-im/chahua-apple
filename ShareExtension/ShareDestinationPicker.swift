@@ -159,6 +159,19 @@ struct ShareExtensionRootView: View {
 
             // The composer stays outside scrolling content and retains its identity on focus changes.
             captionEditor
+            if model.hasImages {
+                Toggle(
+                    "Compress images",
+                    isOn: Binding(
+                        get: { model.compressionEnabled },
+                        set: { model.setCompressionEnabled($0) })
+                )
+                .font(.subheadline)
+                .disabled(!model.canEditContent)
+                .accessibilityIdentifier("share.compressImages")
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+            }
             transferStatus
             sendButton
         }

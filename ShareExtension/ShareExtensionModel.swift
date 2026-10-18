@@ -28,6 +28,11 @@ final class ShareExtensionModel: ObservableObject {
     @Published private(set) var uploadProgress: Double = 0
     @Published private(set) var isUploading = false
     @Published private(set) var uploadErrorMessage: String?
+    @Published private(set) var compressionEnabled = true
+
+    var hasImages: Bool {
+        media.contains { $0.contentType.lowercased().hasPrefix("image/") }
+    }
 
     var canEditContent: Bool {
         state == .ready && lockedDestination == nil && pendingMessageRequest == nil
@@ -159,6 +164,20 @@ final class ShareExtensionModel: ObservableObject {
         ensureMediaUploaded()
     }
 
+    func setCompressionEnabled(_ enabled: Bool) {
+        guard canEditContent, enabled != compressionEnabled else { return }
+        compressionEnabled = enabled
+        uploadTask?.cancel()
+        uploadTask = nil
+        uploadID = nil
+        attachmentIDs = []
+        uploadProgress = 0
+        isUploading = false
+        uploadErrorMessage = nil
+        // draft.media and the previews keep the acquired provider originals for either setting.
+        ensureMediaUploaded()
+    }
+
     func send() {
         guard let api, let destination = lockedDestination ?? selectedDestination, canSend else {
             return
@@ -251,6 +270,7 @@ final class ShareExtensionModel: ObservableObject {
         let id = UUID()
         let media = media
         let startIndex = attachmentIDs.count
+        let compressionEnabled = compressionEnabled
         uploadTask?.cancel()
         uploadID = id
         isUploading = true
@@ -258,12 +278,14 @@ final class ShareExtensionModel: ObservableObject {
         uploadProgress = Double(startIndex) / Double(media.count)
         uploadTask = Task { [weak self] in
             await self?.uploadMedia(
-                using: api, media: media, startingAt: startIndex, uploadID: id)
+                using: api, media: media, compressionEnabled: compressionEnabled,
+                startingAt: startIndex, uploadID: id)
         }
     }
 
     private func uploadMedia(
-        using api: any ChahuaAPIClient, media: [ShareMedia], startingAt startIndex: Int,
+        using api: any ChahuaAPIClient, media: [ShareMedia], compressionEnabled: Bool,
+        startingAt startIndex: Int,
         uploadID: UUID
     ) async {
         do {
@@ -271,7 +293,10 @@ final class ShareExtensionModel: ObservableObject {
             for index in startIndex..<media.count {
                 try Task.checkCancellation()
                 guard self.uploadID == uploadID else { return }
-                let item = media[index]
+                let item = try await ShareContentAcquirer.prepare(
+                    media[index], compressionEnabled: compressionEnabled)
+                try Task.checkCancellation()
+                guard self.uploadID == uploadID else { return }
                 guard item.byteCount <= maximumFileSize else {
                     throw ShareExtensionError.fileTooLarge(maximumFileSize)
                 }
@@ -563,6 +588,37 @@ nonisolated private struct ShareAcquisitionResult: Sendable {
 }
 
 nonisolated private enum ShareContentAcquirer {
+    static func prepare(_ media: ShareMedia, compressionEnabled: Bool) async throws -> ShareMedia {
+        guard compressionEnabled, media.contentType.lowercased().hasPrefix("image/") else {
+            return media
+        }
+        let worker = Task.detached(priority: .utility) {
+            try autoreleasepool {
+                try Task.checkCancellation()
+                guard
+                    let source = CGImageSourceCreateWithURL(
+                        media.url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+                else { throw ShareExtensionError.unsupportedMedia }
+                guard
+                    let output = try StillImagePreparation.prepare(
+                        source: source, originalByteCount: media.byteCount,
+                        directory: media.url.deletingLastPathComponent())
+                else { return media }
+                let stem = URL(fileURLWithPath: media.fileName)
+                    .deletingPathExtension().lastPathComponent
+                return ShareMedia(
+                    url: output.url, fileName: "\(stem).\(output.extensionName)",
+                    contentType: output.mimeType, byteCount: output.byteCount,
+                    width: output.width, height: output.height)
+            }
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     static func acquire(providers: [NSItemProvider], directory: URL, maximumFileSize: Int64)
         async throws
         -> ShareAcquisitionResult
@@ -599,8 +655,11 @@ nonisolated private enum ShareContentAcquirer {
                     $0.conforms(to: .image) || $0.conforms(to: .movie)
                 })
         else { return nil }
+        // Image limits apply after preparation; the existing file-backed copy retains originals.
+        // Videos still enforce the server limit during acquisition.
+        let copyLimit = type.conforms(to: .image) ? Int64.max : maximumFileSize
         let copied = try await copyFileRepresentation(
-            from: provider, type: type, directory: directory, maximumFileSize: maximumFileSize)
+            from: provider, type: type, directory: directory, maximumFileSize: copyLimit)
         do {
             return try await mediaMetadata(for: copied)
         } catch {
@@ -745,7 +804,11 @@ nonisolated private enum ShareContentAcquirer {
             let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
             width > 0, height > 0
         {
-            return try media(url: url, contentType: contentType, width: width, height: height)
+            let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+            let swapped = (5...8).contains(orientation)
+            return try media(
+                url: url, contentType: contentType, width: swapped ? height : width,
+                height: swapped ? width : height)
         }
         let asset = AVURLAsset(url: url)
         let playable = try await asset.load(.isPlayable)

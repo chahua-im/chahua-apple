@@ -15,6 +15,8 @@
 		C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C0EE0002303BCC2200320001 /* ChahuaAudio */; };
 		C0F0000130460000003200C0 /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C0F0000230460000003200C0 /* ShareExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C0F0000330460000003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0F0000430460000003200C0 /* ChahuaAPI */; };
+		C0F1000130460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000330460000003200C0 /* libwebp */; };
+		C0F1000230460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000430460000003200C0 /* libwebp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -96,6 +98,7 @@
 				C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */,
 				C0CC0001303BCC2200320001 /* Kingfisher in Frameworks */,
 				C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */,
+				C0F1000130460000003200C0 /* libwebp in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -113,6 +116,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0F0000330460000003200C0 /* ChahuaAPI in Frameworks */,
+				C0F1000230460000003200C0 /* libwebp in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -185,6 +189,7 @@
 				C0AA0001303BCC2200320001 /* ChahuaAPI */,
 				C0CC0005303BCC2200320001 /* Kingfisher */,
 				C0EE0002303BCC2200320001 /* ChahuaAudio */,
+				C0F1000330460000003200C0 /* libwebp */,
 			);
 			productName = "chahua-ios";
 			productReference = C0985FCE303BCC22003200C0 /* Chahua.app */;
@@ -234,6 +239,7 @@
 			name = ShareExtension;
 			packageProductDependencies = (
 				C0F0000430460000003200C0 /* ChahuaAPI */,
+				C0F1000430460000003200C0 /* libwebp */,
 			);
 			productName = ShareExtension;
 			productReference = C0F0000230460000003200C0 /* ShareExtension.appex */;
@@ -289,6 +295,7 @@
 				C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */,
 				C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				C0EE0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAudio" */,
+				C0F1000530460000003200C0 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C0985FCF303BCC22003200C0 /* Products */;
@@ -977,6 +984,14 @@
 				version = 8.12.0;
 			};
 		};
+		C0F1000530460000003200C0 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SDWebImage/libwebp-Xcode.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.6.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1009,6 +1024,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */;
 			productName = ChahuaAPI;
+		};
+		C0F1000330460000003200C0 /* libwebp */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0F1000530460000003200C0 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */;
+			productName = libwebp;
+		};
+		C0F1000430460000003200C0 /* libwebp */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0F1000530460000003200C0 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */;
+			productName = libwebp;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

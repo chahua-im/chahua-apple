@@ -1,4 +1,6 @@
 import ChahuaAPI
+import CoreGraphics
+import ImageIO
 import Kingfisher
 import SwiftUI
 import XCTest
@@ -7,6 +9,44 @@ import XCTest
 
 @MainActor
 final class MediaHostingTests: XCTestCase {
+    func testStillImageSizingKeepsAllBoundsWithoutUpscaling() {
+        let cases: [(Int, Int, Int, Int)] = [
+            (640, 480, 640, 480),
+            (6000, 4000, 2100, 1400),
+            (3000, 4000, 1400, 1866),
+            (10000, 1000, 8944, 894),
+            (100000, 1000, 16000, 160),
+        ]
+        for (width, height, expectedWidth, expectedHeight) in cases {
+            let size = StillImagePreparation.dimensions(width: width, height: height)
+            XCTAssertEqual(size.width, expectedWidth)
+            XCTAssertEqual(size.height, expectedHeight)
+            XCTAssertLessThanOrEqual(min(size.width, size.height), 1400)
+            XCTAssertLessThanOrEqual(max(size.width, size.height), 16000)
+            XCTAssertLessThanOrEqual(size.width * size.height, 8_000_000)
+            XCTAssertLessThanOrEqual(size.width, width)
+            XCTAssertLessThanOrEqual(size.height, height)
+        }
+    }
+
+    func testStillImageTransparencyUsesPixelsRatherThanAlphaChannelPresence() throws {
+        let bitmap = try StillImagePreparation.rgbaBitmap(width: 16, height: 16)
+        bitmap.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        bitmap.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        XCTAssertFalse(try StillImagePreparation.hasTransparency(bitmap))
+        bitmap.clear(CGRect(x: 2, y: 2, width: 1, height: 1))
+        XCTAssertTrue(try StillImagePreparation.hasTransparency(bitmap))
+    }
+
+    func testStillImagePreparationRetainsAnimatedOriginal() throws {
+        let data = try makeMediaGIF()
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        XCTAssertNil(
+            try StillImagePreparation.prepare(
+                source: source, originalByteCount: Int64(data.count),
+                directory: FileManager.default.temporaryDirectory))
+    }
+
     func testClearingMediaCacheRefreshesDiskUsageWithoutTouchingOtherCaches() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString)
