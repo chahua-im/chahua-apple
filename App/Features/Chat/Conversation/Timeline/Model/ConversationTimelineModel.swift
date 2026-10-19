@@ -91,6 +91,11 @@ final class ConversationTimelineModel: ObservableObject {
         publish()
     }
 
+    func setRealtimeStatus(_ status: RealtimeConnectionStatus) {
+        guard state.realtimeStatus != status else { return }
+        state.realtimeStatus = status
+    }
+
     /// Unlike fixture-oriented loadInitial, every appearance requests a fresh entry window.
     func open(position: TimelineInitialPosition = .liveEdge) async {
         invalidateRequests()
@@ -908,6 +913,7 @@ final class ConversationTimelineModel: ObservableObject {
 
     private func clearWindow() {
         let unreadCount = state.live.unreadCount
+        let realtimeStatus = state.realtimeStatus
         window = TimelineWindow()
         windowRevision &+= 1
         unreadBeforeMessageID = nil
@@ -916,7 +922,7 @@ final class ConversationTimelineModel: ObservableObject {
         preHistoryAcknowledgementKeys.removeAll()
         canReuseLatestWindowAfterPendingChange = false
         deletedIDs.removeAll()
-        state = ConversationTimelineState()
+        state = ConversationTimelineState(realtimeStatus: realtimeStatus)
         state.live.unreadCount = unreadCount
         pendingScroll = nil
         lastViewport = .empty

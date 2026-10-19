@@ -30,6 +30,7 @@ struct ConversationTimelineState: Equatable {
         var scrollsTowardNewer = false
     }
 
+    var realtimeStatus: RealtimeConnectionStatus = .idle
     var content: Content = .idle
     var live = Live()
     var older: Edge = .idle

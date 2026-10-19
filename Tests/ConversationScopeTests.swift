@@ -6,6 +6,35 @@ import XCTest
 
 @MainActor
 final class ConversationScopeTests: XCTestCase {
+    func testNativePullRefreshOwnsListProgressDuringLoadingAndConnectionRecovery() {
+        let statuses: [RealtimeConnectionStatus] = [
+            .idle, .connecting, .connected, .reconnecting, .unavailable,
+        ]
+        for status in statuses {
+            var state = ChatState()
+            state.realtimeStatus = status
+            state.chatListLoadPhase = .loading
+            state.threadListLoadPhase = .loading
+            XCTAssertTrue(
+                ConversationListLoadStatus(state: state, scope: .messages, onRetry: {}).isVisible)
+            XCTAssertFalse(
+                ConversationListLoadStatus(
+                    state: state, scope: .messages, isPullRefreshing: true, onRetry: {}
+                ).isVisible)
+
+            state.chatListLoadPhase = .loaded
+            state.threadListLoadPhase = .loaded
+            let isRecovering = status != .idle && status != .connected
+            XCTAssertEqual(
+                ConversationListLoadStatus(state: state, scope: .messages, onRetry: {}).isVisible,
+                isRecovering)
+            XCTAssertFalse(
+                ConversationListLoadStatus(
+                    state: state, scope: .messages, isPullRefreshing: true, onRetry: {}
+                ).isVisible)
+        }
+    }
+
     func testScopesOverlapWithoutConfusingThreadsWithTheirParentAndRespectDraftActivity() throws {
         let group = ChatListItem(
             id: "group", name: "Group", lastMessageAt: Date(timeIntervalSince1970: 20),

@@ -3,6 +3,7 @@ import CoreGraphics
 import ImageIO
 import Kingfisher
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import chahua_apple
@@ -36,6 +37,25 @@ final class MediaHostingTests: XCTestCase {
         XCTAssertFalse(try StillImagePreparation.hasTransparency(bitmap))
         bitmap.clear(CGRect(x: 2, y: 2, width: 1, height: 1))
         XCTAssertTrue(try StillImagePreparation.hasTransparency(bitmap))
+    }
+
+    func testStillImagePreparationProducesDecodableWebP() throws {
+        let data = try makeMediaPNG(red: 200, green: 50, blue: 30, width: 1024, height: 768)
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let output = try XCTUnwrap(
+            StillImagePreparation.prepare(
+                source: source, originalByteCount: Int64(data.count), directory: directory))
+        XCTAssertEqual(output.mimeType, "image/webp")
+        let encoded = try XCTUnwrap(CGImageSourceCreateWithURL(output.url as CFURL, nil))
+        XCTAssertEqual(CGImageSourceGetType(encoded) as String?, UTType.webP.identifier)
+        let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(encoded, 0, nil))
+        XCTAssertEqual(decoded.width, 1024)
+        XCTAssertEqual(decoded.height, 768)
     }
 
     func testStillImagePreparationRetainsAnimatedOriginal() throws {

@@ -68,6 +68,17 @@ The presence/frame contract follows the PWA's `src/api/ws.ts` (`onopen`, `publis
 
 App/session and connection generations invalidate old asynchronous results. Sign-out/account replacement cancels old work before new state can be accepted. The HTTP client's credential generation also prevents a late refresh from account A overwriting account B's token. Authentication bootstrap runs once per app owner, not once per window; credential refresh remains owned by the shared HTTP client. Each WS reconnect reads the current shared JWT, including any credential installed by normal HTTP refresh; it neither retains a stale credential nor introduces WS-specific refresh. Never log JWTs or raw frames.
 
+### Connection feedback
+
+`RealtimeCoordinator` publishes a presentation status through `ChatStore` to the list and registered timeline models. Initial opening shows **Connecting…**; routine recovery shows **Reconnecting…**. An established socket dropping does not itself consume a failed reconnect attempt. Three foreground opening failures show **Can’t connect right now. Retrying…** while automatic retries continue. A successful opening clears that feedback immediately. Repeated short-lived reconnects also warn after three failures; the existing five-second stable-connection timer clears that streak.
+
+Presentation counters are separate from transport backoff. Background failures do not advance them, and returning to the foreground starts a fresh warning budget without resetting the transport delay. Session replacement/sign-out clears connection feedback and generation-fences stale completions. Invalid-token handling remains immediate.
+
+Connection feedback replaces automatic HTTP refresh-failure banners while recovery is in progress, without hiding unrelated initial-history, pagination, reposition or explicit-action failures. Once connected, genuine HTTP refresh failures retain their normal retry controls. English, Simplified Chinese and Traditional Chinese share this behavior.
+
+The conversation list has one automatic status row. While its native `.refreshable` action is running, that row is removed rather than retained as an empty row, leaving progress ownership to native pull-to-refresh. The action awaits coalesced refresh work, including dirty-list repeats. The native gesture's pre-trigger drag interval remains OS-owned and requires device-level visual verification.
+
+
 ## Message identities and mutation semantics
 
 Remote lookup uses `(chatId, message.id)`. The existing nonempty `clientGeneratedId` supplies stable pending/acknowledgement identity; records lacking it use the server identity. Deduplicate by server identity as well as the client stable key so one logical message cannot create duplicate native rows.
@@ -259,3 +270,5 @@ Apple implementation:
 - [ConversationTimelineModel](../../App/Features/Chat/Conversation/Timeline/Model/ConversationTimelineModel.swift) and [TimelineWindow](../../App/Features/Chat/Conversation/Timeline/Model/TimelineWindow.swift): per-window reconciliation, identities, pagination and viewport policy.
 
 Behavioral regressions cover HTTP rollback of intervening edits/deletes, duplicate create/ack identity and unseen counts, multi-window delivery, historical gaps, same-model reopen, account replacement, refresh failures, and retained-socket presence transitions. Coordinator regressions cover inactive heartbeat/reconnect frames, focus loss during opening, serialized focus restoration, account teardown, and foreground-only bulk recovery; package loopback tests inspect the actual auth/appState/ping frames on one retained connection. Real URLSession loopback scenarios exercise HTTP/event races and recovery through both native hosts; their rendered attachments show the redacted/edited rows, historical unseen affordance, fresh reopened window, and list error/empty states. These checks establish client-side behavior, not lossless server delivery or a global mutation order.
+
+Connection-feedback regressions cover the three-attempt boundary, background/foreground budgets, successful recovery, short-lived connections, session replacement, timeline registration/reopening, immediate authentication expiry and exclusive pull-refresh indicator ownership. A real URLSession loopback smoke closes an established WebSocket, rejects three upgrade attempts, restores connectivity and verifies feedback clearing. The rendered macOS list and native timeline chrome show calm recovery, delayed warning and removal of the automatic list row during active pull refresh. Physical-device pull gestures, including the pre-trigger interval, remain a manual check.

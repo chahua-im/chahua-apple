@@ -7,6 +7,295 @@ import XCTest
 
 @MainActor
 final class RealtimeCoordinatorTests: XCTestCase {
+    func testInitialOpenWarnsOnlyAfterThreeForegroundFailures() async {
+        let clock = RealtimeTestClock()
+        let provider = RealtimeTestProvider(sockets: [], holdOpen: true)
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        XCTAssertEqual(store.state.realtimeStatus, .connecting)
+
+        await eventually { await provider.opens == 1 }
+        await provider.releaseOpen()
+        await eventually { await clock.hasSleep(seconds: 1) }
+        XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        await clock.advance(seconds: 1)
+        await eventually { await provider.opens == 2 }
+        await provider.releaseOpen()
+        await eventually { await clock.hasSleep(seconds: 2) }
+        XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        await clock.advance(seconds: 2)
+        await eventually { await provider.opens == 3 }
+        await provider.releaseOpen()
+        await eventually { await clock.hasSleep(seconds: 4) }
+        XCTAssertEqual(store.state.realtimeStatus, .unavailable)
+        coordinator.setSession(uid: 2)
+        XCTAssertEqual(store.state.realtimeStatus, .connecting)
+        await eventually { await provider.opens == 4 }
+        await provider.releaseOpen()
+        await eventually { await clock.hasSleep(seconds: 1) }
+        XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        coordinator.setSession(uid: nil)
+        XCTAssertEqual(store.state.realtimeStatus, .idle)
+    }
+
+    func testSocketDropDoesNotConsumeAReconnectionFailure() async {
+        let clock = RealtimeTestClock()
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [socket])
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await socket.frames == [.appState(.active)] }
+        XCTAssertEqual(store.state.realtimeStatus, .connected)
+        await socket.close()
+        await eventually { await clock.hasSleep(seconds: 1) }
+        XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+
+        for (delay, nextDelay) in [(1.0, 2.0), (2.0, 4.0)] {
+            await clock.advance(seconds: delay)
+            await eventually { await clock.hasSleep(seconds: nextDelay) }
+            XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        }
+        await clock.advance(seconds: 4)
+        await eventually { await clock.hasSleep(seconds: 8) }
+        XCTAssertEqual(store.state.realtimeStatus, .unavailable)
+        coordinator.setSession(uid: nil)
+    }
+
+    func testBackgroundFailuresDoNotConsumeForegroundWarningBudget() async {
+        let clock = RealtimeTestClock()
+        let provider = RealtimeTestProvider(sockets: [])
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSession(uid: 1)
+        await eventually { await clock.hasSleep(seconds: 1) }
+        for (delay, nextDelay) in [(1.0, 2.0), (2.0, 4.0), (4.0, 8.0)] {
+            await clock.advance(seconds: delay)
+            await eventually { await clock.hasSleep(seconds: nextDelay) }
+            XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        }
+
+        coordinator.setSceneActive(id: UUID(), active: true)
+        XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        for (delay, nextDelay) in [(8.0, 16.0), (16.0, 30.0)] {
+            await clock.advance(seconds: delay)
+            await eventually { await clock.hasSleep(seconds: nextDelay) }
+            XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        }
+        await clock.advance(seconds: 30)
+        await eventually { await provider.opens == 7 }
+        await eventually { store.state.realtimeStatus == .unavailable }
+        coordinator.setSession(uid: nil)
+    }
+
+    func testForegroundResumeClearsWarningWithoutResettingTransportBackoff() async {
+        let clock = RealtimeTestClock()
+        let provider = RealtimeTestProvider(sockets: [])
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await clock.hasSleep(seconds: 1) }
+        await clock.advance(seconds: 1)
+        await eventually { await clock.hasSleep(seconds: 2) }
+        await clock.advance(seconds: 2)
+        await eventually { await clock.hasSleep(seconds: 4) }
+        XCTAssertEqual(store.state.realtimeStatus, .unavailable)
+        coordinator.setSceneActive(id: scene, active: false)
+        coordinator.setSceneActive(id: scene, active: true)
+        XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        let opens = await provider.opens
+        XCTAssertEqual(opens, 3)
+        for (delay, nextDelay) in [(4.0, 8.0), (8.0, 16.0)] {
+            await clock.advance(seconds: delay)
+            await eventually { await clock.hasSleep(seconds: nextDelay) }
+            XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        }
+        await clock.advance(seconds: 16)
+        await eventually { await clock.hasSleep(seconds: 30) }
+        XCTAssertEqual(store.state.realtimeStatus, .unavailable)
+        coordinator.setSession(uid: nil)
+    }
+
+    func testSuccessfulOpenImmediatelyClearsWarningAndResetsOpenFailureBudget() async {
+        let clock = RealtimeTestClock()
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(
+            results: [
+                .failure(.unavailable), .failure(.unavailable), .failure(.unavailable),
+                .success(socket),
+            ])
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await clock.hasSleep(seconds: 1) }
+        await clock.advance(seconds: 1)
+        await eventually { await clock.hasSleep(seconds: 2) }
+        await clock.advance(seconds: 2)
+        await eventually { await clock.hasSleep(seconds: 4) }
+        XCTAssertEqual(store.state.realtimeStatus, .unavailable)
+        await clock.advance(seconds: 4)
+        await eventually { await socket.frames == [.appState(.active)] }
+        XCTAssertEqual(store.state.realtimeStatus, .connected)
+        await socket.close()
+        await eventually { await clock.hasSleep(seconds: 8) }
+        XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        for (delay, nextDelay) in [(8.0, 16.0), (16.0, 30.0)] {
+            await clock.advance(seconds: delay)
+            await eventually { await clock.hasSleep(seconds: nextDelay) }
+            XCTAssertEqual(store.state.realtimeStatus, .reconnecting)
+        }
+        await clock.advance(seconds: 30)
+        await eventually { await provider.opens == 7 }
+        await eventually { store.state.realtimeStatus == .unavailable }
+        coordinator.setSession(uid: nil)
+    }
+
+    func testShortLivedReconnectsEventuallyWarn() async {
+        let clock = RealtimeTestClock()
+        let sockets = (0..<4).map { _ in RealtimeTestSocket() }
+        let provider = RealtimeTestProvider(sockets: sockets)
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await sockets[0].frames == [.appState(.active)] }
+        await sockets[0].close()
+        await eventually { await clock.hasSleep(seconds: 1) }
+        for (index, delay, nextDelay) in [(1, 1.0, 2.0), (2, 2.0, 4.0), (3, 4.0, 8.0)] {
+            await clock.advance(seconds: delay)
+            await eventually { await sockets[index].frames == [.appState(.active)] }
+            XCTAssertEqual(store.state.realtimeStatus, .connected)
+            await sockets[index].close()
+            await eventually { await clock.hasSleep(seconds: nextDelay) }
+            XCTAssertEqual(store.state.realtimeStatus, index == 3 ? .unavailable : .reconnecting)
+        }
+        coordinator.setSession(uid: nil)
+    }
+
+    func testStatusSeedsAndSynchronouslyUpdatesRegisteredTimelineModels() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = ConversationTimelineModel(
+            chatID: "1", currentUserID: 1, isGroupChat: true, source: store,
+            messageStore: store.conversationMessages)
+        store.setRealtimeStatus(.reconnecting)
+        store.registerTimeline(model)
+        XCTAssertEqual(model.state.realtimeStatus, .reconnecting)
+        var observed: [RealtimeConnectionStatus] = []
+        let observation = model.$state.map(\.realtimeStatus).sink { observed.append($0) }
+        store.setRealtimeStatus(.unavailable)
+        XCTAssertEqual(model.state.realtimeStatus, .unavailable)
+        XCTAssertEqual(observed, [.reconnecting, .unavailable])
+        await model.open()
+        XCTAssertEqual(model.state.realtimeStatus, .unavailable)
+        XCTAssertEqual(model.state.content, .initialLoadFailed)
+        store.reset()
+        XCTAssertEqual(store.state.realtimeStatus, .idle)
+        XCTAssertEqual(model.state.realtimeStatus, .idle)
+        store.unregisterTimeline(model)
+        store.setRealtimeStatus(.connected)
+        XCTAssertEqual(model.state.realtimeStatus, .idle)
+        model.close()
+        withExtendedLifetime(observation) {}
+    }
+
+    func testReplacementSessionDiscardsLateOpeningSuccess() async {
+        let first = RealtimeTestSocket()
+        let second = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [first, second], holdOpen: true)
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {})
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await provider.opens == 1 }
+        coordinator.setSession(uid: 2)
+        XCTAssertEqual(store.state.realtimeStatus, .connecting)
+        await eventually { await provider.opens == 2 }
+        await provider.releaseOpen()
+        await eventually { await first.closed }
+        XCTAssertEqual(store.state.realtimeStatus, .connecting)
+        await provider.releaseOpen()
+        await eventually { await second.frames == [.appState(.active)] }
+        XCTAssertEqual(store.state.realtimeStatus, .connected)
+        coordinator.setSession(uid: nil)
+        XCTAssertEqual(store.state.realtimeStatus, .idle)
+    }
+
+    func testReplacementSessionDiscardsLateInvalidTokenOpeningFailure() async {
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(
+            results: [.failure(.invalidToken), .success(socket)], holdOpen: true)
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        var expirations = 0
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: { expirations += 1 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { await provider.opens == 1 }
+        coordinator.setSession(uid: 2)
+        await eventually { await provider.opens == 2 }
+        await provider.releaseOpen()
+        await eventually { await provider.completedOpens == 1 }
+        await provider.releaseOpen()
+        await eventually { await socket.frames == [.appState(.active)] }
+        XCTAssertEqual(expirations, 0)
+        XCTAssertEqual(store.state.realtimeStatus, .connected)
+        coordinator.setSession(uid: nil)
+    }
+
+    func testInvalidTokenOpeningFailureImmediatelyExpiresSession() async {
+        let provider = RealtimeTestProvider(results: [.failure(.invalidToken)])
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        var expirations = 0
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: { expirations += 1 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        await eventually { expirations == 1 }
+        XCTAssertEqual(store.state.realtimeStatus, .idle)
+        let opens = await provider.opens
+        XCTAssertEqual(opens, 1)
+        coordinator.setSession(uid: nil)
+    }
+
     func testExpirySuspendedInStorageCannotSignOutReplacementAccount() async {
         let storage = RealtimeExpiryStorage()
         let session = AuthSessionModel(
@@ -354,23 +643,29 @@ private actor RealtimeTestSocket: RealtimeConnection {
 }
 
 private actor RealtimeTestProvider: RealtimeConnectionProviding {
-    private var sockets: [RealtimeTestSocket]
+    private var results: [Result<RealtimeTestSocket, APIError>]
     private let holdOpen: Bool
-    private var opening: CheckedContinuation<Void, Never>?
+    private var openings: [CheckedContinuation<Void, Never>] = []
     private(set) var opens = 0
+    private(set) var completedOpens = 0
     init(sockets: [RealtimeTestSocket], holdOpen: Bool = false) {
-        self.sockets = sockets
+        results = sockets.map { .success($0) }
+        self.holdOpen = holdOpen
+    }
+    init(results: [Result<RealtimeTestSocket, APIError>], holdOpen: Bool = false) {
+        self.results = results
         self.holdOpen = holdOpen
     }
     func openRealtimeConnection() async throws -> any RealtimeConnection {
         opens += 1
-        if holdOpen { await withCheckedContinuation { opening = $0 } }
-        guard !sockets.isEmpty else { throw APIError.unavailable }
-        return sockets.removeFirst()
+        let result = results.isEmpty ? .failure(APIError.unavailable) : results.removeFirst()
+        if holdOpen { await withCheckedContinuation { openings.append($0) } }
+        defer { completedOpens += 1 }
+        return try result.get()
     }
     func releaseOpen() {
-        opening?.resume()
-        opening = nil
+        guard !openings.isEmpty else { return }
+        openings.removeFirst().resume()
     }
 }
 

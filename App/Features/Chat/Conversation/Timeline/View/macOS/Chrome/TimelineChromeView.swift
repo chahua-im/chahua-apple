@@ -100,7 +100,18 @@
             } else {
                 repositionFailure.hide()
             }
-            if showsTable && state.reconciliationFailed {
+            let connectionMessage: String?
+            switch state.realtimeStatus {
+            case .idle, .connected: connectionMessage = nil
+            case .connecting: connectionMessage = AppLanguage.localized("Connecting…")
+            case .reconnecting: connectionMessage = AppLanguage.localized("Reconnecting…")
+            case .unavailable:
+                connectionMessage = AppLanguage.localized("Can’t connect right now. Retrying…")
+            }
+            if showsTable, let connectionMessage {
+                reconciliationFailure.configure(
+                    text: connectionMessage, action: nil, loading: true)
+            } else if showsTable && state.reconciliationFailed {
                 reconciliationFailure.configure(
                     text: AppLanguage.localized("Couldn’t refresh messages."),
                     action: AppLanguage.localized("Retry"), loading: false)

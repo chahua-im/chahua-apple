@@ -124,7 +124,20 @@
                         }
                     }
                     .overlay(alignment: .top) {
-                        if model.state.reconciliationFailed {
+                        if let connectionMessage {
+                            HStack(spacing: ChahuaTheme.Spacing.small) {
+                                ProgressView().controlSize(.small)
+                                Text(connectionMessage)
+                                    .foregroundStyle(ChahuaTheme.secondaryText)
+                                Spacer()
+                            }
+                            .font(.caption).padding(ChahuaTheme.Spacing.small)
+                            .background(
+                                .regularMaterial,
+                                in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)
+                            ).padding()
+                            .padding(.top, chatHeaderInset)
+                        } else if model.state.reconciliationFailed {
                             HStack {
                                 Text("Couldn’t refresh messages.")
                                 Spacer()
@@ -148,6 +161,15 @@
                 }
             } else {
                 ProgressView("Loading messages")
+            }
+        }
+
+        private var connectionMessage: LocalizedStringKey? {
+            switch model.state.realtimeStatus {
+            case .idle, .connected: nil
+            case .connecting: "Connecting…"
+            case .reconnecting: "Reconnecting…"
+            case .unavailable: "Can’t connect right now. Retrying…"
             }
         }
 

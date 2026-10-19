@@ -64,24 +64,17 @@ nonisolated enum StillImagePreparation {
         let bitmap = try rgbaBitmap(width: size.width, height: size.height)
         bitmap.interpolationQuality = .high
         bitmap.draw(thumbnail, in: CGRect(x: 0, y: 0, width: size.width, height: size.height))
-        guard let image = bitmap.makeImage() else { throw PreparationError.invalidImage }
         let transparent = try hasTransparency(bitmap)
         let staging = directory.appendingPathComponent(".\(UUID().uuidString).partial")
         defer { try? FileManager.default.removeItem(at: staging) }
         let format: (extensionName: String, mimeType: String)
-        if try encodeNative(
-            image, identifier: "public.avif", to: staging,
-            preservingTransparency: transparent)
-        {
-            format = ("avif", "image/avif")
-        } else if try encodeWebP(bitmap, to: staging, hasTransparency: transparent) {
+        if try encodeWebP(bitmap, to: staging, hasTransparency: transparent) {
             format = ("webp", "image/webp")
         } else {
+            guard let image = bitmap.makeImage() else { throw PreparationError.invalidImage }
             let type: UTType = transparent ? .png : .jpeg
             guard
-                try encodeNative(
-                    image, identifier: type.identifier, to: staging,
-                    preservingTransparency: transparent)
+                try encodeNative(image, identifier: type.identifier, to: staging)
             else { throw PreparationError.encodingFailed }
             format = (type.preferredFilenameExtension!, type.preferredMIMEType!)
         }
@@ -126,7 +119,7 @@ nonisolated enum StillImagePreparation {
     }
 
     static func encodeNative(
-        _ image: CGImage, identifier: String, to url: URL, preservingTransparency: Bool = false
+        _ image: CGImage, identifier: String, to url: URL
     ) throws -> Bool {
         try Task.checkCancellation()
         guard (CGImageDestinationCopyTypeIdentifiers() as! [String]).contains(identifier),
@@ -134,22 +127,12 @@ nonisolated enum StillImagePreparation {
                 url as CFURL, identifier as CFString, 1, nil)
         else { return false }
         var properties: [CFString: Any] = [kCGImagePropertyOrientation: 1]
-        if identifier == "public.avif" {
-            properties[kCGImageDestinationLossyCompressionQuality] = 0.6
-        } else if identifier == UTType.jpeg.identifier {
+        if identifier == UTType.jpeg.identifier {
             properties[kCGImageDestinationLossyCompressionQuality] = 0.8
         }
         CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return false }
         try Task.checkCancellation()
-        // An available encoder may still lack alpha support on a particular OS version.
-        if preservingTransparency && identifier == "public.avif" {
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
-                    as? [CFString: Any],
-                (properties[kCGImagePropertyHasAlpha] as? NSNumber)?.boolValue == true
-            else { return false }
-        }
         return true
     }
 

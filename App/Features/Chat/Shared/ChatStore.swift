@@ -9,6 +9,7 @@ enum ChatListLoadPhase: Equatable {
 }
 
 struct ChatState: Equatable {
+    var realtimeStatus: RealtimeConnectionStatus = .idle
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
     var chatListRefreshFailed = false
@@ -881,8 +882,15 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func setRealtimeStatus(_ status: RealtimeConnectionStatus) {
+        guard state.realtimeStatus != status else { return }
+        state.realtimeStatus = status
+        for model in visibleTimelines() { model.setRealtimeStatus(status) }
+    }
+
     func registerTimeline(_ model: ConversationTimelineModel) {
         timelines[ObjectIdentifier(model)] = WeakTimeline(value: model)
+        model.setRealtimeStatus(state.realtimeStatus)
         updateReadState(for: model)
     }
 
@@ -1191,6 +1199,7 @@ final class ChatStore: ObservableObject {
         pins.reset()
         stickers.reset()
         conversationMessages.reset()
+        setRealtimeStatus(.idle)
         state = ChatState()
     }
 }

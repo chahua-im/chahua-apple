@@ -52,15 +52,18 @@ struct ChatListView: View {
             threads: archivedMode ? store.state.archivedThreads : store.state.threads,
             scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages,
             draftUpdatedAt: drafts.draftUpdatedAt)
+        let loadStatus = ConversationListLoadStatus(
+            state: store.state, scope: scope, archivedMode: archivedMode,
+            showThreadsInMessages: showThreadsInMessages,
+            isPullRefreshing: isPullRefreshing, onRetry: { await refreshScope() }
+        )
         List {
-            ConversationListLoadStatus(
-                state: store.state, scope: scope, archivedMode: archivedMode,
-                showThreadsInMessages: showThreadsInMessages,
-                isPullRefreshing: isPullRefreshing, onRetry: { await refreshScope() }
-            )
-            #if os(macOS)
-                .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-            #endif
+            if loadStatus.isVisible {
+                loadStatus
+                    #if os(macOS)
+                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                    #endif
+            }
             if !archivedMode, let onOpenArchived, hasArchivedConversations {
                 Button(action: onOpenArchived) { archivedEntry }
                     .buttonStyle(.plain)
@@ -369,6 +372,20 @@ struct ConversationListLoadStatus: View {
         scope.includesThreads(showThreadsInMessages: showThreadsInMessages)
     }
 
+    private var connectionMessage: LocalizedStringKey? {
+        switch state.realtimeStatus {
+        case .idle, .connected: nil
+        case .connecting: "Connecting…"
+        case .reconnecting: "Reconnecting…"
+        case .unavailable: "Can’t connect right now. Retrying…"
+        }
+    }
+
+    private var hasInitialFailure: Bool {
+        (scope.includesChats && chatPhase == .failed)
+            || (includesThreads && threadPhase == .failed)
+    }
+
     private var hasFailure: Bool {
         (scope.includesChats
             && (chatPhase == .failed
@@ -385,14 +402,29 @@ struct ConversationListLoadStatus: View {
             || (includesThreads && (threadPhase == .idle || threadPhase == .loading))
     }
 
+    var isVisible: Bool {
+        !isPullRefreshing && (connectionMessage != nil || isLoading || hasFailure)
+    }
+
     var body: some View {
-        if isLoading && !isPullRefreshing {
+        if let connectionMessage, !hasInitialFailure, !isPullRefreshing {
+            HStack(spacing: ChahuaTheme.Spacing.small) {
+                ProgressView().controlSize(.small)
+                Text(connectionMessage)
+                    .font(.caption)
+                    .foregroundStyle(ChahuaTheme.secondaryText)
+            }
+            .frame(maxWidth: .infinity)
+            .listRowSeparator(.hidden)
+        } else if isLoading && !isPullRefreshing {
             ProgressView()
                 .frame(maxWidth: .infinity)
                 .accessibilityLabel("Loading conversations")
                 .listRowSeparator(.hidden)
         }
-        if hasFailure && !isLoading && !isPullRefreshing {
+        if hasFailure && (connectionMessage == nil || hasInitialFailure)
+            && !isLoading && !isPullRefreshing
+        {
             Button {
                 Task { await onRetry() }
             } label: {

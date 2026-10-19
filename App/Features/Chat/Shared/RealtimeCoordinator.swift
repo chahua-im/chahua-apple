@@ -2,6 +2,14 @@ import ChahuaAPI
 import Combine
 import Foundation
 
+nonisolated enum RealtimeConnectionStatus: Equatable, Sendable {
+    case idle
+    case connecting
+    case connected
+    case reconnecting
+    case unavailable
+}
+
 /// One session socket shared by all windows; scene activity controls presence, not its lifetime.
 @MainActor
 final class RealtimeCoordinator: ObservableObject {
@@ -26,6 +34,10 @@ final class RealtimeCoordinator: ObservableObject {
     private var appState: RealtimeAppState { activeScenes.isEmpty ? .inactive : .active }
     private var awaitingPong = false
     private var failures = 0
+    private var presentationFailures = 0
+    private var shortLivedReconnects = 0
+    private var hasConnected = false
+    private var connectionIsStable = false
 
     init(
         provider: any RealtimeConnectionProviding,
@@ -62,6 +74,11 @@ final class RealtimeCoordinator: ObservableObject {
                 .appState(appState), on: connection, generation: generation, attempt: attempt)
         }
         if isActive {
+            presentationFailures = 0
+            shortLivedReconnects = 0
+            if uid != nil, connection == nil {
+                store.setRealtimeStatus(.reconnecting)
+            }
             startIfNeeded()
             if connection != nil { startRecovery(generation: generation) }
         } else {
@@ -80,6 +97,7 @@ final class RealtimeCoordinator: ObservableObject {
     private func startIfNeeded() {
         guard runner == nil, let uid else { return }
         let currentGeneration = generation
+        if store.state.realtimeStatus == .idle { store.setRealtimeStatus(.connecting) }
         runner = Task { [weak self] in
             await self?.run(uid: uid, generation: currentGeneration)
         }
@@ -89,6 +107,8 @@ final class RealtimeCoordinator: ObservableObject {
         while generation == currentGeneration && !Task.isCancelled {
             attempt += 1
             let currentAttempt = attempt
+            let isReconnect = hasConnected
+            var opened = false
             do {
                 // Opening authenticates only. Read activity after the asynchronous
                 // handshake so a focus change during opening cannot advertise active.
@@ -98,6 +118,11 @@ final class RealtimeCoordinator: ObservableObject {
                     return
                 }
                 connection = socket
+                opened = true
+                hasConnected = true
+                connectionIsStable = false
+                presentationFailures = 0
+                store.setRealtimeStatus(.connected)
                 enqueuePresence(
                     .appState(appState), on: socket, generation: currentGeneration,
                     attempt: currentAttempt)
@@ -129,6 +154,19 @@ final class RealtimeCoordinator: ObservableObject {
                 }
             }
             guard generation == currentGeneration, !Task.isCancelled else { return }
+            if !activeScenes.isEmpty {
+                if !opened {
+                    presentationFailures += 1
+                } else if isReconnect, !connectionIsStable {
+                    // An authenticated handshake is not proof of a healthy connection.
+                    // Repeated short reconnects must eventually warn, without counting
+                    // the original established socket dropping as a failed recovery.
+                    shortLivedReconnects += 1
+                }
+            }
+            store.setRealtimeStatus(
+                presentationFailures >= 3 || shortLivedReconnects >= 3
+                    ? .unavailable : .reconnecting)
             heartbeat?.cancel()
             stableConnection?.cancel()
             pendingSend?.cancel()
@@ -215,6 +253,8 @@ final class RealtimeCoordinator: ObservableObject {
                 self.generation == currentGeneration, self.attempt == currentAttempt
             else { return }
             self.failures = 0
+            self.connectionIsStable = true
+            self.shortLivedReconnects = 0
         }
     }
 
@@ -272,5 +312,10 @@ final class RealtimeCoordinator: ObservableObject {
         }
         connection = nil
         awaitingPong = false
+        presentationFailures = 0
+        shortLivedReconnects = 0
+        hasConnected = false
+        connectionIsStable = false
+        store.setRealtimeStatus(.idle)
     }
 }
