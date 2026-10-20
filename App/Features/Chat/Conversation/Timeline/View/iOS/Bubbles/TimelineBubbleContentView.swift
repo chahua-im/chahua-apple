@@ -137,7 +137,7 @@
                         mentionAction: isPreview ? nil : binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? presentation.metadata : nil,
                         failureAction: failureAction, geometry: geometry,
-                        fontSize: environment.bodySize
+                        fontSize: environment.bodySize, document: presentation.markdown
                     ), resetSelection: resetSelection)
             } else {
                 textView?.clear()
@@ -521,12 +521,13 @@
     private final class TimelineReplyView: UIControl {
         var onActivate: (() -> Void)?
         private let author = BubbleLabel()
-        private let previewLabel = BubbleLabel()
+        private let previewLabel = MessageSummaryNativeView(frame: .zero)
         private let stripe = CALayer()
         private let marker = MessageRowGestureMarker(frame: .zero)
         private var preview: MessagePreview?
         private var outgoing = false
         private var filled = false
+        private var fontSize: CGFloat = 12
         private var contentFrames: [CGRect] = []
 
         override init(frame: CGRect) {
@@ -559,16 +560,15 @@
             self.preview = preview
             self.outgoing = outgoing
             self.filled = filled
+            self.fontSize = fontSize
             contentFrames = frames
             author.text =
                 preview.sender.name.flatMap { $0.isEmpty ? nil : $0 }
                 ?? "User \(preview.sender.uid)"
             author.font = .systemFont(ofSize: fontSize * 11 / 12, weight: .semibold)
-            previewLabel.text = messagePreview(preview)
-            previewLabel.font = .systemFont(ofSize: fontSize)
             isEnabled = enabled
             accessibilityTraits = isEnabled ? .button : .staticText
-            accessibilityLabel = "\(author.text ?? ""), \(previewLabel.text ?? "")"
+            accessibilityLabel = "\(author.text ?? ""), \(messagePreview(preview))"
             if isEnabled {
                 marker.configure(.tap { [weak self] in self?.activate() })
             } else {
@@ -582,7 +582,7 @@
             preview = nil
             contentFrames.removeAll(keepingCapacity: true)
             author.text = nil
-            previewLabel.text = nil
+            previewLabel.clear()
             isEnabled = false
             accessibilityLabel = nil
             marker.stop()
@@ -613,7 +613,11 @@
                 outgoing && filled
                 ? UIColor.white : UIColor(bubbleColorForUser(uid: preview.sender.uid, dark: dark))
             author.textColor = color.withAlphaComponent(0.85)
-            previewLabel.textColor = color.withAlphaComponent(0.7)
+            previewLabel.configure(
+                MessageSummaryContent.attributedText(
+                    MessageSummaryContent.summary(preview), mentions: preview.mentions,
+                    font: .systemFont(ofSize: fontSize), color: color.withAlphaComponent(0.7)),
+                accessibilityText: messagePreview(preview))
             backgroundColor = (outgoing && filled ? UIColor.black : color).withAlphaComponent(0.1)
             stripe.backgroundColor =
                 color.withAlphaComponent(outgoing ? 0.5 : 1).resolvedColor(with: traitCollection)

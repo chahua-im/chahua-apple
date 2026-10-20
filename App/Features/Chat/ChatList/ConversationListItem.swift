@@ -92,16 +92,10 @@ enum ConversationListItem: Hashable, Identifiable {
         }
     }
 
-    var preview: String? {
+    var previewMessage: MessagePreview? {
         switch self {
-        case .chat(let chat):
-            guard let lastMessage = chat.lastMessage else { return nil }
-            let preview = messagePreview(lastMessage)
-            return preview.isEmpty ? AppLanguage.localized("Message") : preview
-        case .thread(let thread):
-            let message = thread.lastReply ?? thread.threadRootMessage
-            let preview = messagePreview(message)
-            return preview.isEmpty ? AppLanguage.localized("Message") : preview
+        case .chat(let chat): chat.lastMessage
+        case .thread(let thread): thread.lastReply ?? thread.threadRootMessage
         }
     }
 

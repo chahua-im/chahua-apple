@@ -177,11 +177,8 @@ private struct MessageSearchResultRow: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Text(messagePreview(message.replyPreview))
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                MessageSummaryText(message.replyPreview, lineLimit: 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if message.replyRootId != nil {
                     Label("In thread", systemImage: "bubble.left.and.bubble.right")
                         .font(.caption)

@@ -138,6 +138,9 @@
             var ancestor = touch.view
             while let current = ancestor {
                 if current is UITextField { return true }
+                // Code blocks own horizontal pans and native selection; a reply
+                // swipe must not steal the block's independent scroll gesture.
+                if current is MessageCodeScrollView { return true }
                 if !allowsVoiceContextMenu, let bubble = current as? TimelineBubbleContentView,
                     bubble.ownsVoiceTouch(touch)
                 {

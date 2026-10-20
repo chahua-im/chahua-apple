@@ -30,8 +30,17 @@ struct ConversationListRow: View {
                 diameter: Self.avatarDiameter, isSelected: isSelected)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: ChahuaTheme.Spacing.medium) {
-                    Text(item.title).font(.headline).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Group {
+                        if case .thread(let thread) = item {
+                            MessageSummaryText(
+                                thread.threadRootMessage, fontSize: 17,
+                                color: isSelected ? .white : .primary, weight: .semibold,
+                                fallback: AppLanguage.localized("Message"))
+                        } else {
+                            Text(item.title).font(.headline).lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     TimelineView(.periodic(from: .now, by: 60)) { context in
                         Text(activityLabel(now: context.date))
                             .font(.system(size: 13))
@@ -43,13 +52,15 @@ struct ConversationListRow: View {
                 HStack(spacing: ChahuaTheme.Spacing.medium) {
                     Group {
                         if !draft.isEmpty {
-                            Text("Draft: \(draft)")
-                        } else if let preview = item.preview {
-                            if let sender = item.previewSenderName(parentKind: threadParentKind) {
-                                Text("\(Text(verbatim: sender).bold()): \(Text(verbatim: preview))")
-                            } else {
-                                Text(verbatim: preview)
-                            }
+                            MessageSummaryText(
+                                source: draft, color: subtitleColor,
+                                prefix: AppLanguage.localized("Draft") + ": ")
+                        } else if let preview = item.previewMessage {
+                            MessageSummaryText(
+                                preview, fontSize: 17, color: subtitleColor,
+                                prefix: item.previewSenderName(parentKind: threadParentKind)
+                                    .map { $0 + ": " } ?? "",
+                                boldPrefix: true, fallback: AppLanguage.localized("Message"))
                         } else {
                             Color.clear
                         }
@@ -87,6 +98,10 @@ struct ConversationListRow: View {
         .padding(.horizontal, ChatSplitMetrics.outerInset)
         .frame(height: 68)
         .foregroundStyle(isSelected ? Color.white : Color.primary)
+    }
+
+    private var subtitleColor: Color {
+        isSelected ? Color.white.opacity(0.88) : .secondary
     }
 
     private func activityLabel(now: Date) -> String {

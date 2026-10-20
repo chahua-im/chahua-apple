@@ -659,9 +659,7 @@ struct MessageComposerView: View {
                     )
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
-                    Text(messagePreview(reply))
-                        .font(.system(size: fontSize * 12 / 15))
-                        .foregroundStyle(.primary)
+                    MessageSummaryText(reply, fontSize: fontSize * 12 / 15)
                 }
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -697,9 +695,7 @@ struct MessageComposerView: View {
                 Text("Edit message")
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
-                Text(messagePreview(message.replyPreview))
-                    .font(.system(size: fontSize * 12 / 15))
-                    .foregroundStyle(.primary)
+                MessageSummaryText(message.replyPreview, fontSize: fontSize * 12 / 15)
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)

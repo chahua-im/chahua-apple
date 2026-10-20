@@ -127,7 +127,8 @@
                         action: binding.actions.openLink,
                         mentionAction: binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? p.metadata : nil,
-                        failureAction: failureAction, geometry: geometry, fontSize: e.bodySize
+                        failureAction: failureAction, geometry: geometry, fontSize: e.bodySize,
+                        document: p.markdown
                     ), resetSelection: resetSelection)
             } else {
                 textView?.clear()
@@ -532,7 +533,7 @@
     private final class TimelineReplyView: NSButton {
         var onActivate: (() -> Void)?
         private let author = BubbleLabel()
-        private let previewLabel = BubbleLabel()
+        private let previewLabel = MessageSummaryNativeView(frame: .zero)
         private let stripe = CALayer()
         private var preview: MessagePreview?
         private var outgoing = false
@@ -571,17 +572,15 @@
                 preview.sender.name.flatMap { $0.isEmpty ? nil : $0 }
                 ?? "User \(preview.sender.uid)"
             author.font = .systemFont(ofSize: fontSize * 11 / 12, weight: .semibold)
-            previewLabel.stringValue = messagePreview(preview)
-            previewLabel.font = .systemFont(ofSize: fontSize)
             isEnabled = enabled
-            setAccessibilityLabel("\(author.stringValue), \(previewLabel.stringValue)")
+            setAccessibilityLabel("\(author.stringValue), \(messagePreview(preview))")
             updateColors()
             needsLayout = true
         }
         func clear() {
             preview = nil
             author.stringValue = ""
-            previewLabel.stringValue = ""
+            previewLabel.clear()
             isEnabled = false
             setAccessibilityLabel(nil)
         }
@@ -608,7 +607,11 @@
                     ? NSColor.white
                     : NSColor(bubbleColorForUser(uid: preview.sender.uid, dark: dark))
                 author.textColor = color.withAlphaComponent(0.85)
-                previewLabel.textColor = color.withAlphaComponent(0.7)
+                previewLabel.configure(
+                    MessageSummaryContent.attributedText(
+                        MessageSummaryContent.summary(preview), mentions: preview.mentions,
+                        font: .systemFont(ofSize: fontSize), color: color.withAlphaComponent(0.7)),
+                    accessibilityText: messagePreview(preview))
                 layer?.backgroundColor =
                     (outgoing && filled ? NSColor.black : color).withAlphaComponent(0.1).cgColor
                 stripe.backgroundColor = color.withAlphaComponent(outgoing ? 0.5 : 1).cgColor

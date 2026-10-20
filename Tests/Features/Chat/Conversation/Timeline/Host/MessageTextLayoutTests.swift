@@ -45,7 +45,7 @@ final class MessageTextLayoutTests: XCTestCase {
             XCTAssertEqual(text.string, "Hello https://example.com")
         }
 
-        func testNativeLinkHoverUsesHandWithoutDisablingTextSelection() throws {
+        func testNativeLinkAndSpoilerHoverUseHandWithoutDisablingTextSelection() throws {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 160, height: 100),
                 styleMask: [.borderless], backing: .buffered, defer: false
@@ -103,6 +103,29 @@ final class MessageTextLayoutTests: XCTestCase {
                 .link, range: NSRange(location: 0, length: text.string.utf16.count))
             try hover(8)
             XCTAssertEqual(NSCursor.current, .iBeam)
+
+            let source = "Before ||hidden text|| after"
+            let spoiler = try preparedText(source, width: 136)
+            text.apply(
+                MessageTextContent(
+                    text: source, mentions: [], currentUserID: 1,
+                    isOutgoing: false, action: nil, metadata: spoiler.metadata,
+                    geometry: spoiler.geometry, fontSize: 14),
+                resetSelection: true)
+            text.setSelectedRange(NSRange(location: 0, length: 6))
+            let hidden = (text.string as NSString).range(of: "hidden text")
+            let coordinator = try XCTUnwrap(text.delegate as? MessageTextContent.Coordinator)
+            try hover(hidden.location)
+            XCTAssertEqual(NSCursor.current, .pointingHand)
+            try hover(1)
+            XCTAssertEqual(NSCursor.current, .iBeam)
+            XCTAssertTrue(coordinator.toggleSpoiler(at: hidden.location))
+            try hover(hidden.location)
+            XCTAssertEqual(NSCursor.current, .pointingHand)
+            XCTAssertTrue(coordinator.toggleSpoiler(at: hidden.location))
+            try hover(hidden.location)
+            XCTAssertEqual(NSCursor.current, .pointingHand)
+            XCTAssertEqual(text.selectedRange(), NSRange(location: 0, length: 6))
         }
     #else
         func testUIKitSelectionSurvivesActionReplacementAndDisabledLinksCannotEscape() async throws
@@ -404,6 +427,176 @@ final class MessageTextLayoutTests: XCTestCase {
                 brightest, 0.4,
                 "Metadata created outside a drawing pass must resolve its color in the displaying view."
             )
+        }
+    #endif
+
+    func testConcealedSpoilerCannotBeCopiedUntilRevealedAndReconcealClampsSelection() throws {
+        let source = "Before ||secret|| after"
+        let prepared = try preparedText(source, width: 240)
+        #if os(macOS)
+            let text = AppKitMessageTextView(geometry: prepared.geometry)
+            let window = NSWindow(
+                contentRect: CGRect(origin: .zero, size: prepared.geometry.size),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = text
+            window.makeFirstResponder(text)
+            defer { window.close() }
+            let board = NSPasteboard.general
+            let saved = (board.pasteboardItems ?? []).map { item in
+                let copy = NSPasteboardItem()
+                for type in item.types {
+                    if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+                }
+                return copy
+            }
+            defer {
+                board.clearContents()
+                board.writeObjects(saved)
+            }
+            func select(_ range: NSRange) { text.setSelectedRange(range) }
+            func copied() -> String? { board.string(forType: .string) }
+        #else
+            let text = UIKitMessageTextView(geometry: prepared.geometry)
+            text.allowsSelection = true
+            let host = UIViewController()
+            host.view.addSubview(text)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            text.frame = CGRect(origin: .zero, size: prepared.geometry.size)
+            defer { window.isHidden = true }
+            let saved = UIPasteboard.general.items
+            defer { UIPasteboard.general.items = saved }
+            func select(_ range: NSRange) { text.selectedRange = range }
+            func copied() -> String? { UIPasteboard.general.string }
+        #endif
+        text.apply(
+            MessageTextContent(
+                text: source, mentions: [], currentUserID: 1,
+                isOutgoing: false, action: nil, metadata: prepared.metadata,
+                geometry: prepared.geometry, fontSize: 14), resetSelection: true)
+        let coordinator = try XCTUnwrap(text.delegate as? MessageTextContent.Coordinator)
+        let full = NSRange(location: 0, length: text.contentLayout.storage.length)
+        let hidden = (text.contentLayout.storage.string as NSString).range(of: "secret")
+        let safe = text.contentLayout.selectableRange(
+            full, previous: NSRange(location: 0, length: 0))
+        XCTAssertEqual(safe, NSRange(location: 0, length: hidden.location))
+        select(full)
+        text.copy(nil)
+        XCTAssertEqual(copied(), "Before ")
+        XCTAssertFalse(text.contentLayout.accessibilityText.contains("secret"))
+
+        XCTAssertTrue(coordinator.toggleSpoiler(at: hidden.location))
+        select(full)
+        text.copy(nil)
+        XCTAssertEqual(copied(), "Before secret after")
+        XCTAssertTrue(coordinator.toggleSpoiler(at: hidden.location))
+        text.copy(nil)
+        XCTAssertEqual(copied(), "Before ")
+
+        let suffix = NSRange(location: NSMaxRange(hidden), length: full.length - NSMaxRange(hidden))
+        select(suffix)
+        text.copy(nil)
+        XCTAssertEqual(copied(), " after", "Concealment must not disable ordinary selectable text.")
+    }
+
+    func testNestedListUsesIndentedParagraphAndGlyphGeometry() throws {
+        let layout = makeLayout("- First item\n- Second item\n  1. Nested ordered item")
+        _ = layout.geometry(for: 280)
+        let source = layout.storage.string as NSString
+        let parent = source.range(of: "• Second")
+        let nested = source.range(of: "1. Nested")
+        XCTAssertNotEqual(parent.location, NSNotFound)
+        XCTAssertNotEqual(nested.location, NSNotFound)
+        let parentStyle = try XCTUnwrap(
+            layout.storage.attribute(
+                .paragraphStyle,
+                at: parent.location, effectiveRange: nil) as? NSParagraphStyle)
+        let nestedStyle = try XCTUnwrap(
+            layout.storage.attribute(
+                .paragraphStyle,
+                at: nested.location, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertGreaterThan(nestedStyle.firstLineHeadIndent, parentStyle.firstLineHeadIndent)
+        func glyphBounds(_ index: Int) -> CGRect {
+            let glyphs = layout.layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil)
+            return layout.layoutManager.boundingRect(
+                forGlyphRange: glyphs, in: layout.textContainer)
+        }
+        XCTAssertGreaterThan(glyphBounds(nested.location).minX, glyphBounds(parent.location).minX)
+    }
+
+    func testFencedCodeViewportDoesNotWrapOrExceedSharedGeometry() throws {
+        let code = String(repeating: "let longValue = 123; ", count: 30)
+        let source = "Before\n```swift\n\(code)\n```\nAfter"
+        let layout = makeLayout(source)
+        let wide = layout.geometry(for: 220)
+        let narrow = layout.geometry(for: 140)
+        let wideCode = try XCTUnwrap(wide.codeBlocks.first)
+        let narrowCode = try XCTUnwrap(narrow.codeBlocks.first)
+        XCTAssertEqual(wide.codeBlocks.count, 1)
+        XCTAssertLessThanOrEqual(narrowCode.frame.maxX, narrow.size.width + 0.5)
+        XCTAssertLessThanOrEqual(narrow.bodyBounds.maxX, narrow.size.width + 0.5)
+        XCTAssertEqual(wideCode.frame.height, narrowCode.frame.height, accuracy: 0.5)
+        let attachment = try XCTUnwrap(
+            layout.storage.attribute(
+                .bubbleCodeBlock,
+                at: narrowCode.characterIndex, effectiveRange: nil) as? MessageCodeAttachment)
+        XCTAssertGreaterThan(attachment.naturalSize.width, narrowCode.frame.width)
+        XCTAssertEqual(attachment.bounds.width, narrowCode.frame.width, accuracy: 0.5)
+        let displayed = makeLayout(source)
+        displayed.install(geometry: narrow)
+        let displayedAttachment = try XCTUnwrap(displayed.codeBlocks.first?.1)
+        XCTAssertEqual(displayedAttachment.bounds.width, narrowCode.frame.width, accuracy: 0.5)
+        let glyphs = displayed.layoutManager.glyphRange(
+            forCharacterRange: NSRange(location: narrowCode.characterIndex, length: 1),
+            actualCharacterRange: nil)
+        displayed.layoutManager.ensureLayout(for: displayed.textContainer)
+        let bounds = displayed.layoutManager.boundingRect(
+            forGlyphRange: glyphs, in: displayed.textContainer)
+        XCTAssertEqual(bounds.minX, narrowCode.frame.minX, accuracy: 0.5)
+        XCTAssertEqual(bounds.minY, narrowCode.frame.minY, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(narrow.metadataFrame.minY, narrowCode.frame.maxY)
+    }
+
+    #if os(macOS)
+        func testCodeViewportReceivesHitsAndHorizontalScrolling() throws {
+            let source = "```swift\n" + String(repeating: "let value = 123; ", count: 40) + "\n```"
+            let prepared = try preparedText(source, width: 180)
+            let text = AppKitMessageTextView(geometry: prepared.geometry)
+            let window = NSWindow(
+                contentRect: CGRect(origin: .zero, size: prepared.geometry.size),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = text
+            defer { window.close() }
+            text.apply(
+                MessageTextContent(
+                    text: source, mentions: [], currentUserID: 1,
+                    isOutgoing: false, action: nil, metadata: prepared.metadata,
+                    geometry: prepared.geometry, fontSize: 14), resetSelection: true)
+            text.layoutSubtreeIfNeeded()
+            let code = try XCTUnwrap(
+                text.subviews.compactMap { $0 as? MessageCodeScrollView }.first)
+            XCTAssertGreaterThan(
+                try XCTUnwrap(code.documentView).frame.width, code.contentView.bounds.width)
+            let point = text.convert(
+                CGPoint(x: code.frame.midX, y: code.frame.midY), to: text.superview)
+            let hit = try XCTUnwrap(text.hitTest(point))
+            XCTAssertTrue(
+                hit === code || hit.isDescendant(of: code),
+                "The outer selectable text view must not steal code viewport interaction.")
+            let event = try XCTUnwrap(
+                CGEvent(
+                    scrollWheelEvent2Source: nil, units: .pixel,
+                    wheelCount: 2, wheel1: 0, wheel2: -120, wheel3: 0))
+            code.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: event)))
+            XCTAssertGreaterThan(code.contentView.bounds.minX, 0)
+            XCTAssertLessThanOrEqual(
+                code.contentView.bounds.maxX,
+                try XCTUnwrap(code.documentView).frame.maxX + 0.5)
         }
     #endif
 

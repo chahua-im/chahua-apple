@@ -179,40 +179,56 @@
                     presentation: presentation, layout: layout, context: .init(), actions: .init(),
                     mediaContext: nil))
             native.layoutSubtreeIfNeeded()
-            func labels(in view: NSView) -> [NSTextField] {
-                if let button = view as? NSButton {
-                    let labels = button.subviews.compactMap { $0 as? NSTextField }
-                    if labels.count == 2 { return labels }
-                }
-                return view.subviews.flatMap { labels(in: $0) }
+            func summary(in view: NSView) -> MessageSummaryNativeView? {
+                if let summary = view as? MessageSummaryNativeView { return summary }
+                return view.subviews.lazy.compactMap { summary(in: $0) }.first
             }
-            let renderedLabels = labels(in: native)
-            XCTAssertEqual(renderedLabels.count, 2)
-            return try renderedLabels.reduce(CGFloat(10)) { result, label in
-                let font = try XCTUnwrap(label.font)
-                if fitsFullContent {
-                    let naturalWidth = NSAttributedString(
-                        string: label.stringValue, attributes: [.font: font]
-                    ).size().width
-                    XCTAssertGreaterThanOrEqual(
-                        label.bounds.width, naturalWidth,
-                        "A quote must widen a short reply rather than truncate before the column limit."
-                    )
-                }
-                let height = NSAttributedString(
-                    string: label.stringValue, attributes: [.font: font]
-                )
-                .boundingRect(
-                    with: CGSize(
-                        width: CGFloat.greatestFiniteMagnitude,
-                        height: CGFloat.greatestFiniteMagnitude),
-                    options: [.usesFontLeading]
-                ).height
+            let renderedSummary = try XCTUnwrap(summary(in: native))
+            let quote = try XCTUnwrap(renderedSummary.superview)
+            let author = try XCTUnwrap(quote.subviews.compactMap { $0 as? NSTextField }.first)
+            let authorFont = try XCTUnwrap(author.font)
+            let authorText = NSAttributedString(
+                string: author.stringValue, attributes: [.font: authorFont])
+            let authorHeight = authorText.boundingRect(
+                with: CGSize(
+                    width: CGFloat.greatestFiniteMagnitude,
+                    height: CGFloat.greatestFiniteMagnitude),
+                options: [.usesFontLeading]
+            ).height
+            let idealSummary = renderedSummary.summaryLayout.size(width: 1_000_000)
+            let fittedSummary = renderedSummary.summaryLayout.size(
+                width: renderedSummary.bounds.width)
+            let pixel = 1 / presentation.environment.displayScale
+            XCTAssertLessThanOrEqual(quote.bounds.width, width + pixel)
+            for leaf in [author as NSView, renderedSummary as NSView] {
+                XCTAssertGreaterThanOrEqual(leaf.frame.minX, 0)
+                XCTAssertLessThanOrEqual(
+                    leaf.frame.maxX, width + pixel,
+                    "The native author and summary must fit the available quote width.")
+                XCTAssertGreaterThanOrEqual(leaf.frame.minY, 0)
+                XCTAssertLessThanOrEqual(
+                    leaf.frame.maxY, quote.bounds.height + pixel,
+                    "Both native lines must fit the cached quote height.")
+            }
+            if fitsFullContent {
                 XCTAssertGreaterThanOrEqual(
-                    label.bounds.height, height - 0.5,
-                    "The native quote must not clip its single visible line.")
-                return result + height
+                    author.bounds.width + pixel, authorText.size().width,
+                    "A quote must widen a short reply to fit its author before the column limit.")
+                XCTAssertGreaterThanOrEqual(
+                    renderedSummary.bounds.width + pixel, idealSummary.width,
+                    "A quote must widen a short reply to fit its formatted summary before the column limit."
+                )
             }
+            XCTAssertEqual(
+                fittedSummary.height, idealSummary.height, accuracy: pixel,
+                "Truncated summaries must remain a single visible line.")
+            XCTAssertGreaterThanOrEqual(
+                author.bounds.height, authorHeight - pixel,
+                "The native quote must not clip its author line.")
+            XCTAssertGreaterThanOrEqual(
+                renderedSummary.bounds.height, fittedSummary.height - pixel,
+                "The native quote must not clip its formatted summary line.")
+            return 10 + authorHeight + fittedSummary.height
         }
     }
 #endif

@@ -17,6 +17,7 @@
 		C0F0000330460000003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0F0000430460000003200C0 /* ChahuaAPI */; };
 		C0F1000130460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000330460000003200C0 /* libwebp */; };
 		C0F1000230460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000430460000003200C0 /* libwebp */; };
+		C0F2000130460000003200C0 /* ChahuaMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = C0F2000230460000003200C0 /* ChahuaMarkdown */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -98,6 +99,7 @@
 				C098601B304275A5003200C0 /* ChahuaAPI in Frameworks */,
 				C0CC0001303BCC2200320001 /* Kingfisher in Frameworks */,
 				C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */,
+				C0F2000130460000003200C0 /* ChahuaMarkdown in Frameworks */,
 				C0F1000130460000003200C0 /* libwebp in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -189,6 +191,7 @@
 				C0AA0001303BCC2200320001 /* ChahuaAPI */,
 				C0CC0005303BCC2200320001 /* Kingfisher */,
 				C0EE0002303BCC2200320001 /* ChahuaAudio */,
+				C0F2000230460000003200C0 /* ChahuaMarkdown */,
 				C0F1000330460000003200C0 /* libwebp */,
 			);
 			productName = "chahua-ios";
@@ -295,6 +298,7 @@
 				C0AA0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAPI" */,
 				C0CC0011303BCC2200320001 /* XCRemoteSwiftPackageReference "Kingfisher" */,
 				C0EE0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAudio" */,
+				C0F2000330460000003200C0 /* XCLocalSwiftPackageReference "Packages/ChahuaMarkdown" */,
 				C0F1000530460000003200C0 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -973,6 +977,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ChahuaAudio;
 		};
+		C0F2000330460000003200C0 /* XCLocalSwiftPackageReference "Packages/ChahuaMarkdown" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ChahuaMarkdown;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -1034,6 +1042,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0F1000530460000003200C0 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */;
 			productName = libwebp;
+		};
+		C0F2000230460000003200C0 /* ChahuaMarkdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0F2000330460000003200C0 /* XCLocalSwiftPackageReference "Packages/ChahuaMarkdown" */;
+			productName = ChahuaMarkdown;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -28,10 +28,7 @@ struct ChatPinnedMessageBar: View {
                         Text("Pinned Message")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Color.accentColor)
-                        Text(pinPreview(pin.message))
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                        pinPreview(pin.message)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -146,10 +143,8 @@ struct ChatPinnedMessagesSheet: View {
                                         pin.message.sender.name ?? "User \(pin.message.sender.uid)"
                                     )
                                     .font(.subheadline.weight(.semibold))
-                                    Text(messagePreview(pin.message.replyPreview))
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
+                                    MessageSummaryText(
+                                        pin.message.replyPreview, color: .secondary, lineLimit: 2)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
@@ -216,8 +211,8 @@ struct ChatPinnedMessagesSheet: View {
     }
 }
 
-private func pinPreview(_ message: MessageResponse) -> String {
+private func pinPreview(_ message: MessageResponse) -> some View {
     let sender = message.sender.name ?? "User \(message.sender.uid)"
-    let preview = messagePreview(message.replyPreview)
-    return "\(sender): \(preview.isEmpty ? AppLanguage.localized("Message") : preview)"
+    return MessageSummaryText(
+        message.replyPreview, prefix: sender + ": ", fallback: AppLanguage.localized("Message"))
 }

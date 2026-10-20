@@ -394,7 +394,20 @@
                 let texts = [
                     "Hello", "Hello", "First line\n第二行 👨‍👩‍👧‍👦\nFinal line",
                     String(repeating: "x", count: 160),
-                    "Literal *markup* and `code`; @[uid:2] @[uid:99] https://example.com/path).",
+                    """
+                    **Bold __italic__** ~~strike~~ and `code`; literal *markup*.
+                    @[uid:2] @[uid:99] [Example](https://example.com/path).
+                    ||Hidden text with **formatting** and [a link](https://example.com)||
+
+                    - First item
+                    - Second item
+                      1. Nested ordered item
+
+                    ```swift
+                    let greeting = "Hello 👋"
+                    let longLine = "Horizontal code scrolling keeps this deliberately long source line inside the message bubble."
+                    ```
+                    """,
                 ]
                 for (index, text) in texts.enumerated() {
                     objects.append(object(index: index, text: text))

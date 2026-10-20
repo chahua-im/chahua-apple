@@ -178,7 +178,7 @@ final class ConversationScopeTests: XCTestCase {
         let expected = "Hi 👋 @Ada, @User 9, @Ada, @[uid:nope]"
 
         XCTAssertEqual(messagePreview(preview), expected)
-        XCTAssertEqual(group.preview, expected)
+        XCTAssertEqual(group.previewMessage, preview)
         XCTAssertEqual(group.previewSenderName(), "Ada")
     }
 
@@ -213,10 +213,50 @@ final class ConversationScopeTests: XCTestCase {
         }
 
         XCTAssertEqual(thread(lastReply: reply).title, "Root message")
-        XCTAssertEqual(thread(lastReply: reply).preview, "Latest reply")
+        XCTAssertEqual(thread(lastReply: reply).previewMessage, reply)
         XCTAssertEqual(thread(lastReply: reply).previewSenderName(), "Ada")
         XCTAssertNil(thread(lastReply: reply).previewSenderName(parentKind: .dm))
-        XCTAssertEqual(thread(lastReply: nil).preview, "Root message")
+        XCTAssertEqual(thread(lastReply: nil).previewMessage, root)
+    }
+
+    func testFormattedSummariesKeepStylesAndConcealSpoilersWithoutEmbeddedActions() throws {
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 1,
+            text:
+                "**bold** __italic__ ~~strike~~ `code` [label](https://example.com) ||secret|| @[uid:2]",
+            fields: ["mentions": [["uid": 2, "gender": 0, "username": "**Ada**"]]])
+        let preview = message.replyPreview
+        let nodes = MessageSummaryContent.summary(preview)
+        let attributed = MessageSummaryContent.attributedText(
+            nodes, mentions: preview.mentions, font: .systemFont(ofSize: 15), color: .black)
+        XCTAssertEqual(attributed.string, "bold italic strike code label secret @**Ada**")
+        XCTAssertFalse(messagePreview(preview).contains("secret"))
+        XCTAssertTrue(messagePreview(preview).hasSuffix("@**Ada**"))
+
+        let source = attributed.string as NSString
+        for value in ["bold", "italic", "code"] {
+            let range = source.range(of: value)
+            XCTAssertNotEqual(
+                attributed.attribute(.font, at: range.location, effectiveRange: nil)
+                    as? BubbleNativeFont,
+                BubbleNativeFont.systemFont(ofSize: 15))
+        }
+        let link = source.range(of: "label")
+        XCTAssertNotNil(
+            attributed.attribute(.underlineStyle, at: link.location, effectiveRange: nil))
+        let strike = source.range(of: "strike")
+        XCTAssertNotNil(
+            attributed.attribute(.strikethroughStyle, at: strike.location, effectiveRange: nil))
+        let secret = source.range(of: "secret")
+        XCTAssertNotNil(
+            attributed.attribute(.bubbleSpoiler, at: secret.location, effectiveRange: nil))
+        attributed.enumerateAttribute(.link, in: NSRange(location: 0, length: attributed.length)) {
+            value, _, _ in XCTAssertNil(value)
+        }
+        let layout = MessageSummaryLayout()
+        layout.update(attributed, lineLimit: 1)
+        XCTAssertTrue(layout.hasSpoilers)
+        XCTAssertTrue(layout.manager.revealedSpoilers.isEmpty)
     }
 
 }

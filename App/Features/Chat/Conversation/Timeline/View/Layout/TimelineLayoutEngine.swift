@@ -11,6 +11,7 @@ import SwiftUI
 struct TimelineLayoutEngine {
     // A single bounded scratch TextKit graph, never attached to a rendering view.
     private let textMeasurer = MessageTextLayout()
+    private let replyMeasurer = MessageSummaryLayout()
 
     func layout(_ content: TimelineRowPresentation, environment: TimelineLayoutEnvironment)
         -> TimelineRowLayout
@@ -65,9 +66,10 @@ struct TimelineLayoutEngine {
         if hasBody {
             textMeasurer.update(
                 attributedText: MessageTextContent.attributedText(
-                    text: text, mentions: row.entry.remoteMessage?.mentions ?? [],
+                    document: p.markdown!, mentions: row.entry.remoteMessage?.mentions ?? [],
                     currentUserID: nil, isOutgoing: row.isOutgoing,
-                    font: .systemFont(ofSize: e.bodySize)), metadata: metadata)
+                    font: .systemFont(ofSize: e.bodySize), linksEnabled: false,
+                    mentionsEnabled: false), metadata: metadata)
             preferredText = textMeasurer.idealSize.width + 24
         }
         var labelFont = BubbleNativeFont.systemFont(ofSize: e.bodySize)
@@ -96,9 +98,16 @@ struct TimelineLayoutEngine {
         let replySizes = p.reply.map { reply in
             let author =
                 reply.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(reply.sender.uid)"
+            replyMeasurer.update(
+                MessageSummaryContent.attributedText(
+                    MessageSummaryContent.summary(reply), mentions: reply.mentions,
+                    font: .systemFont(ofSize: e.captionSize), color: bubbleLabelColor),
+                lineLimit: 1)
             return (
                 author: singleLineSize(author, size: e.captionSize * 11 / 12, weight: .semibold),
-                preview: singleLineSize(messagePreview(reply), size: e.captionSize)
+                preview: replyMeasurer.storage.length == 0
+                    ? singleLineSize("", size: e.captionSize)
+                    : replyMeasurer.size(width: 1_000_000)
             )
         }
         // Include the quote's stripe/text insets and the bubble's side padding.

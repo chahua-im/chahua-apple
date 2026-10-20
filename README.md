@@ -14,6 +14,20 @@ Message actions offer **Reactions** for published messages with reactions. On iO
 
 The image viewer header shows Back, the chat/thread name above the message timestamp, and an overflow menu containing only **Save Image**. iOS requests add-only Photos access and saves the original image file; macOS uses a native Save panel with user-selected read/write access. Saving has no progress/status message, prevents duplicate requests, and reports success or failure with a transient accessible toast. Canceling the Save panel is silent. Video saving is not included.
 
+## Markdown rendering
+
+Message bodies and displayed summaries render Markdown automatically on iOS and macOS. There is no rendering preference or composer formatting UI/shortcut support.
+
+`Packages/ChahuaMarkdown` owns the restricted chat grammar, semantic document, single-line summary projection, and syntax-highlight token ranges. It does not depend on `ChahuaAPI` or resolve mention display names. The app inserts names literally, applies native fonts/colors, and owns TextKit layout, navigation, selection, scrolling, and spoiler state. Timeline measurement and display share the prepared document.
+
+Supported syntax is `**bold**`, `__italic__`, `~~strikethrough~~`, `||spoilers||`, backtick inline/fenced code, dash/plus unordered lists, numbered/nested lists, and HTTP(S) links. Headings, blockquotes, tables, horizontal rules, indented code, star bullets, single/triple-star emphasis, tilde fences, raw HTML, and embedded Markdown images are not interpreted as those constructs. Plain messages preserve their original whitespace.
+
+Fenced code preserves source whitespace and scrolls horizontally within its bubble. Explicitly labelled supported languages use bundled highlight.js 11.12.0 grammars through JavaScriptCore; unknown/unlabelled languages, inline code, and summaries remain unhighlighted. No user source is evaluated as JavaScript or installed as HTML. Resource provenance and the upstream license are included in the package.
+
+Body spoilers use fine floating particles without a solid background panel. On macOS, interactive spoilers show a pointing-hand cursor, both concealed and revealed. The first click reveals without activating enclosed links or mentions; clicking revealed ordinary spoiler text hides it again. Concealed text cannot be selected/copied through the native text view. Displayed list, draft, search, pin, thread, and reply/edit summaries retain formatting and concealed spoiler geometry, but embedded links/mentions and spoiler reveal remain inactive so the surrounding action owns the click.
+
+The existing DEBUG `-bubble-timeline` diagnostic includes a rich-text sample at message ID `5`. Set `CHAHUA_FIXTURE_MESSAGE=5` when launching it to inspect formatting, mention fallback, multiline spoilers, nested lists, and long fenced code without authentication or network writes. Check a narrow window/screen and both appearances; body spoilers should reveal/hide, preview spoilers should remain concealed, and horizontal code scrolling should not move the timeline sideways.
+
 ## Notifications, camera, and incoming shares
 
 - iOS and macOS message notifications offer **Reply**. The server must send `aps.category: "chahua"`; the separate routing envelope remains unchanged. Replies target the notification's chat/thread through the account-scoped outbox without consuming the open composer draft.

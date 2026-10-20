@@ -1,4 +1,5 @@
 import ChahuaAPI
+import ChahuaMarkdown
 import SwiftUI
 
 struct TitleContent: Hashable {
@@ -14,7 +15,7 @@ enum RowSectionKey: Hashable {
     case grouping(outgoing: Bool, position: TimelineGroupPosition, title: Bool, avatar: Bool)
     case title(TitleContent?)
     case body(String, mentionLabels: [String])
-    case reply(author: String, preview: String)
+    case reply(MessagePreview)
     case media([CGSize], category: String)
     case audio
     case sticker(CGSize)
@@ -33,6 +34,7 @@ struct TimelineRowPresentation {
     let environment: TimelineLayoutEnvironment
     let title: TitleContent?
     let reply: MessagePreview?
+    let markdown: MarkdownDocument?
     let metadata: MessageMetadata?
     let metadataIsOverlay: Bool
     let threadLabel: String?
@@ -77,6 +79,7 @@ struct TimelineRowPresentation {
     ) -> Self {
         var title: TitleContent?
         var reply: MessagePreview?
+        var markdown: MarkdownDocument?
         var metadata: MessageMetadata?
         var overlay = false
         var threadLabel: String?
@@ -124,10 +127,9 @@ struct TimelineRowPresentation {
                 if !deleted && supported {
                     reply = message.entry.replyToMessage.flatMap { $0.isDeleted ? nil : $0 }
                     if let reply {
-                        sections.append(
-                            .reply(
-                                author: reply.sender.name.flatMap { $0.isEmpty ? nil : $0 }
-                                    ?? "User \(reply.sender.uid)", preview: messagePreview(reply)))
+                        // Source/mention changes can alter styles and concealed
+                        // glyph widths even when the plain summary is unchanged.
+                        sections.append(.reply(reply))
                     }
                     let text = message.entry.text ?? ""
                     let hasBody = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -149,6 +151,7 @@ struct TimelineRowPresentation {
                     } else if audio {
                         sections.append(.audio)
                     } else {
+                        if hasBody { markdown = MarkdownDocument(parsing: text) }
                         let names = MessageMentions.names(in: remote?.mentions ?? [])
                         let source = text as NSString
                         let labels = MessageMentions.pattern.matches(
@@ -209,7 +212,8 @@ struct TimelineRowPresentation {
             sections = [.kind("unread"), .standalone(standaloneText!, author: nil)]
         }
         return .init(
-            row: row, environment: environment, title: title, reply: reply, metadata: metadata,
+            row: row, environment: environment, title: title, reply: reply, markdown: markdown,
+            metadata: metadata,
             metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText,
             layoutKey: .init(sections: sections))
     }

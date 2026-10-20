@@ -1,4 +1,5 @@
 import ChahuaAPI
+import ChahuaMarkdown
 import Foundation
 
 #if os(macOS)
@@ -18,22 +19,27 @@ struct MessageTextContent {
     var failureAction: (() -> Void)? = nil
     let geometry: MessageTextGeometry
     let fontSize: CGFloat
+    var document: MarkdownDocument? = nil
 
     func update(_ layout: MessageTextLayout, coordinator: Coordinator) -> Bool {
         coordinator.openLink = action
         coordinator.openMention = mentionAction
+        coordinator.layout = layout
         let input = TextInput(
             text: text, mentions: mentions, currentUserID: currentUserID,
             isOutgoing: isOutgoing, fontSize: fontSize,
-            linksEnabled: action != nil, mentionsEnabled: mentionAction != nil
-        )
+            linksEnabled: action != nil, mentionsEnabled: mentionAction != nil)
         let attributed: NSAttributedString?
         if coordinator.textInput != input {
+            if coordinator.textInput?.text != text {
+                coordinator.document = document ?? MarkdownDocument(parsing: text)
+                layout.layoutManager.revealedSpoilers.removeAll()
+            }
             attributed = Self.attributedText(
-                text: text, mentions: mentions, currentUserID: currentUserID,
+                document: coordinator.document ?? MarkdownDocument(parsing: text),
+                mentions: mentions, currentUserID: currentUserID,
                 isOutgoing: isOutgoing, font: .systemFont(ofSize: fontSize),
-                linksEnabled: input.linksEnabled, mentionsEnabled: input.mentionsEnabled
-            )
+                linksEnabled: input.linksEnabled, mentionsEnabled: input.mentionsEnabled)
             coordinator.textInput = input
         } else {
             attributed = nil
@@ -45,8 +51,6 @@ struct MessageTextContent {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    // Prepared geometry and replacement callbacks do not change the selectable runs.
-    // Keep this local to the native view's lifetime rather than caching message text globally.
     struct TextInput: Equatable {
         let text: String
         let mentions: [MentionInfo]
@@ -61,8 +65,33 @@ struct MessageTextContent {
         var openLink: ((URL) -> Void)?
         var openMention: ((Int32) -> Void)?
         var textInput: TextInput?
+        var document: MarkdownDocument?
+        weak var layout: MessageTextLayout?
+        var spoilerChanged: (() -> Void)?
+        var previousSelection = NSRange(location: 0, length: 0)
+
+        @discardableResult
+        func toggleSpoiler(at index: Int, onlyIfHidden: Bool = false) -> Bool {
+            guard let layout, index >= 0, index < layout.storage.length,
+                let ids = layout.storage.attribute(.bubbleSpoiler, at: index, effectiveRange: nil)
+                    as? [Int]
+            else { return false }
+            let manager = layout.layoutManager
+            if let hidden = ids.first(where: { !manager.revealedSpoilers.contains($0) }) {
+                manager.revealedSpoilers.formUnion(ids.prefix(through: ids.firstIndex(of: hidden)!))
+            } else {
+                guard !onlyIfHidden, let id = ids.last else { return false }
+                manager.revealedSpoilers.remove(id)
+            }
+            manager.invalidateDisplay(
+                forCharacterRange: NSRange(location: 0, length: layout.storage.length))
+            spoilerChanged?()
+            return true
+        }
 
         func activateLink(in storage: NSAttributedString, at charIndex: Int) {
+            // A concealed link's first activation reveals its spoiler, never navigates.
+            if toggleSpoiler(at: charIndex, onlyIfHidden: true) { return }
             guard charIndex >= 0, charIndex < storage.length,
                 storage.attribute(.link, at: charIndex, effectiveRange: nil) != nil
             else { return }
@@ -78,13 +107,21 @@ struct MessageTextContent {
         }
     }
 
-    private static let linkPattern = try! NSRegularExpression(
-        pattern: #"https?://[A-Za-z0-9\-._~:/?#@!$&'()*+,;=%]+"#)
-
     static func attributedText(
         text: String, mentions: [MentionInfo], currentUserID: Int32?, isOutgoing: Bool,
         font: BubbleNativeFont = .preferredFont(forTextStyle: .body),
         linksEnabled: Bool = false, mentionsEnabled: Bool = false
+    ) -> NSAttributedString {
+        attributedText(
+            document: MarkdownDocument(parsing: text), mentions: mentions,
+            currentUserID: currentUserID, isOutgoing: isOutgoing, font: font,
+            linksEnabled: linksEnabled, mentionsEnabled: mentionsEnabled)
+    }
+
+    static func attributedText(
+        document: MarkdownDocument, mentions: [MentionInfo], currentUserID: Int32?,
+        isOutgoing: Bool,
+        font: BubbleNativeFont, linksEnabled: Bool = false, mentionsEnabled: Bool = false
     ) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.minimumLineHeight = ceil(font.pointSize * 1.4)
@@ -96,73 +133,113 @@ struct MessageTextContent {
             .paragraphStyle: paragraph,
         ]
         let output = NSMutableAttributedString(string: "")
-        let source = text as NSString
         let names = MessageMentions.names(in: mentions)
+        var spoilerID = 0
 
-        func appendText(_ text: String) {
-            let run = NSMutableAttributedString(string: text, attributes: base)
-            let string = text as NSString
-            for match in linkPattern.matches(
-                in: text, range: NSRange(location: 0, length: string.length))
-            {
-                var range = match.range
-                while range.length > 0,
-                    ".,);!?".contains(
-                        string.substring(with: NSRange(location: NSMaxRange(range) - 1, length: 1)))
-                {
-                    range.length -= 1
-                }
-                guard range.length > 0, let url = URL(string: string.substring(with: range)) else {
-                    continue
-                }
-                run.addAttributes(
-                    [.bubbleURL: url, .underlineStyle: NSUnderlineStyle.single.rawValue],
-                    range: range)
-                if linksEnabled { run.addAttribute(.link, value: url, range: range) }
-            }
-            output.append(run)
+        func append(_ value: String, _ attributes: [NSAttributedString.Key: Any]) {
+            output.append(NSAttributedString(string: value, attributes: attributes))
         }
-
-        var offset = 0
-        for match in MessageMentions.pattern.matches(
-            in: text, range: NSRange(location: 0, length: source.length))
-        {
-            appendText(
-                source.substring(
-                    with: NSRange(location: offset, length: match.range.location - offset)))
-            let rawID = source.substring(with: match.range(at: 1))
-            guard let uid = Int32(rawID) else {
-                appendText(source.substring(with: match.range))
-                offset = NSMaxRange(match.range)
-                continue
+        func inline(_ nodes: [MarkdownInline], _ attributes: [NSAttributedString.Key: Any]) {
+            for node in nodes {
+                var attributes = attributes
+                switch node {
+                case .text(let value): append(value, attributes)
+                case .strong(let children):
+                    attributes[.font] = MessageMarkdownStyle.font(
+                        attributes[.font] as? BubbleNativeFont ?? font, bold: true)
+                    inline(children, attributes)
+                case .emphasis(let children):
+                    attributes[.font] = MessageMarkdownStyle.font(
+                        attributes[.font] as? BubbleNativeFont ?? font, italic: true)
+                    inline(children, attributes)
+                case .strikethrough(let children):
+                    attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                    inline(children, attributes)
+                case .spoiler(let children):
+                    spoilerID += 1
+                    attributes[.bubbleSpoiler] =
+                        (attributes[.bubbleSpoiler] as? [Int] ?? []) + [spoilerID]
+                    #if os(macOS)
+                        attributes[.cursor] = NSCursor.pointingHand
+                    #endif
+                    inline(children, attributes)
+                case .code(let value):
+                    attributes[.font] = BubbleNativeFont.monospacedSystemFont(
+                        ofSize: font.pointSize * 0.92, weight: .regular)
+                    attributes[.backgroundColor] = MessageMarkdownStyle.codeBackground
+                    attributes[.foregroundColor] = MessageMarkdownStyle.codeForeground
+                    append(value, attributes)
+                case .link(let destination, let children):
+                    if let url = URL(string: destination),
+                        ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+                    {
+                        attributes[.bubbleURL] = url
+                        attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                        if linksEnabled { attributes[.link] = url }
+                    }
+                    inline(children, attributes)
+                case .mention(let uid):
+                    attributes[.font] = BubbleNativeFont.systemFont(
+                        ofSize: font.pointSize * 0.9, weight: .semibold)
+                    let tint: BubbleNativeColor = isOutgoing ? .white : .systemBlue
+                    attributes[.foregroundColor] = tint
+                    attributes[.bubbleMentionID] = NSNumber(value: uid)
+                    attributes[.bubbleMentionTint] = tint.withAlphaComponent(
+                        uid == currentUserID ? 0.28 : 0.14)
+                    if mentionsEnabled {
+                        attributes[.link] = URL(string: "chahua-mention://\(uid)")
+                    }
+                    let start = output.length
+                    append("\u{2002}@\(names[uid] ?? "User \(uid)")\u{2002}", attributes)
+                    for location in [start, output.length - 1] {
+                        output.addAttribute(
+                            .font, value: BubbleNativeFont.systemFont(ofSize: 8),
+                            range: NSRange(location: location, length: 1))
+                    }
+                }
             }
-            let mentionFont = BubbleNativeFont.systemFont(
-                ofSize: font.pointSize * 0.9, weight: .semibold)
-            let isSelf = uid == currentUserID
-            let tint: BubbleNativeColor = isOutgoing ? .white : .systemBlue
-            // En spaces with an 8pt font reserve exactly four points at either edge.
-            // They remain part of the selectable run rather than separate wrapping views.
-            let run = NSMutableAttributedString(
-                string: "\u{2002}@\(names[uid] ?? "User \(uid)")\u{2002}", attributes: base)
-            let range = NSRange(location: 0, length: run.length)
-            run.addAttributes(
-                [
-                    .font: mentionFont, .foregroundColor: tint,
-                    .bubbleMentionID: NSNumber(value: uid),
-                    .bubbleMentionTint: tint.withAlphaComponent(isSelf ? 0.28 : 0.14),
-                ], range: range)
-            for location in [0, run.length - 1] {
-                run.addAttribute(
-                    .font, value: BubbleNativeFont.systemFont(ofSize: 8),
-                    range: NSRange(location: location, length: 1))
-            }
-            if mentionsEnabled, let target = URL(string: "chahua-mention://\(uid)") {
-                run.addAttribute(.link, value: target, range: range)
-            }
-            output.append(run)
-            offset = NSMaxRange(match.range)
         }
-        appendText(source.substring(from: offset))
+        func blocks(_ nodes: [MarkdownBlock], depth: Int = 0, prefix: String? = nil) {
+            for (index, node) in nodes.enumerated() {
+                if index > 0 { append("\n", base) }
+                let style = paragraph.mutableCopy() as! NSMutableParagraphStyle
+                style.headIndent = CGFloat(depth) * font.pointSize * 1.3
+                style.firstLineHeadIndent = style.headIndent
+                if index == 0, let prefix {
+                    style.firstLineHeadIndent = CGFloat(max(0, depth - 1)) * font.pointSize * 1.3
+                    style.headIndent =
+                        style.firstLineHeadIndent
+                        + (prefix as NSString).size(withAttributes: [.font: font]).width
+                }
+                var attributes = base
+                attributes[.paragraphStyle] = style
+                switch node {
+                case .paragraph(let children):
+                    if index == 0, let prefix { append(prefix, attributes) }
+                    inline(children, attributes)
+                case .codeBlock(let language, let code):
+                    if index == 0, let prefix {
+                        append(prefix + "\n", attributes)
+                        style.firstLineHeadIndent = style.headIndent
+                    }
+                    let attachment = MessageCodeAttachment(
+                        code: code, language: language, fontSize: font.pointSize)
+                    attributes[.attachment] = attachment
+                    attributes[.bubbleCodeBlock] = attachment
+                    // Attachment height is its own measured no-wrap TextKit height.
+                    style.minimumLineHeight = 0
+                    style.maximumLineHeight = 0
+                    append("\u{FFFC}", attributes)
+                case .list(let orderedStart, let items):
+                    for (itemIndex, item) in items.enumerated() {
+                        if itemIndex > 0 { append("\n", base) }
+                        let prefix = orderedStart.map { "\($0 + itemIndex). " } ?? "• "
+                        blocks(item, depth: depth + 1, prefix: prefix)
+                    }
+                }
+            }
+        }
+        blocks(document.blocks)
         return output
     }
 }

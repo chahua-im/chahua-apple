@@ -2,6 +2,13 @@
     import UIKit
 
     extension MessageTextContent.Coordinator: UITextViewDelegate {
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard let layout else { return }
+            let selection = textView.selectedRange
+            let safe = layout.selectableRange(selection, previous: previousSelection)
+            previousSelection = safe
+            if safe != selection { textView.selectedRange = safe }
+        }
 
         @available(iOS 17.0, *)
         func textView(
@@ -34,6 +41,8 @@
             didSet { updateAccessibilityActions() }
         }
         private var failureButton: TimelineFailureButton?
+        private var codeViews: [Int: MessageCodeScrollView] = [:]
+        private let spoilerAnimator = MessageSpoilerAnimator()
         /// A non-selectable UITextView does not activate links; this tap stands in for
         /// UIKit's link interaction while selection is off.
         private lazy var linkTap = UITapGestureRecognizer(
@@ -49,7 +58,9 @@
                     selectedRange = NSRange(location: 0, length: 0)
                 }
                 isSelectable = allowsSelection
-                linkTap.isEnabled = !allowsSelection
+                // Spoilers remain tappable in the selectable action-menu preview.
+                linkTap.isEnabled = true
+                updateCodeViews()
             }
         }
 
@@ -76,6 +87,20 @@
             linkTextAttributes = [:]
             delegate = coordinator
             addGestureRecognizer(linkTap)
+            coordinator.spoilerChanged = { [weak self] in
+                guard let self else { return }
+                let safe = self.contentLayout.selectableRange(
+                    self.selectedRange, previous: self.selectedRange)
+                if safe != self.selectedRange { self.selectedRange = safe }
+                self.setNeedsDisplay()
+                self.updateSpoilerAnimation()
+            }
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(updateSpoilerAnimation),
+                name: UIApplication.didBecomeActiveNotification, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(stopSpoilerAnimation),
+                name: UIApplication.willResignActiveNotification, object: nil)
             layout.textContainer.widthTracksTextView = false
             layout.textContainer.heightTracksTextView = false
             setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -98,6 +123,11 @@
         }
 
         func apply(_ content: MessageTextContent, resetSelection: Bool) {
+            if resetSelection {
+                contentLayout.layoutManager.revealedSpoilers.removeAll()
+                for view in codeViews.values { view.removeFromSuperview() }
+                codeViews.removeAll()
+            }
             let selection = selectedRange
             let geometryChanged = content.update(contentLayout, coordinator: coordinator)
             let length = contentLayout.storage.length
@@ -116,12 +146,19 @@
                 invalidateIntrinsicContentSize()
             }
             setNeedsDisplay()
+            updateCodeViews()
+            updateSpoilerAnimation()
         }
 
         func clear() {
             coordinator.openLink = nil
             coordinator.openMention = nil
             coordinator.textInput = nil
+            coordinator.document = nil
+            contentLayout.layoutManager.revealedSpoilers.removeAll()
+            spoilerAnimator.stop()
+            for view in codeViews.values { view.removeFromSuperview() }
+            codeViews.removeAll()
             failureAction = nil
             rowAccessibilityActions = nil
             resignFirstResponder()
@@ -133,6 +170,7 @@
         override func layoutSubviews() {
             super.layoutSubviews()
             guard let geometry = contentLayout.assignedGeometry else { return }
+            updateCodeViews()
             if let failureButton, let metadata = contentLayout.metadata {
                 failureButton.setSymbolFrame(metadata.symbolFrame(in: geometry.metadataFrame))
                 bringSubviewToFront(failureButton)
@@ -147,8 +185,20 @@
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
 
+        override func copy(_ sender: Any?) {
+            let safe = contentLayout.selectableRange(selectedRange, previous: selectedRange)
+            if safe != selectedRange { selectedRange = safe }
+            guard safe.length > 0 else { return }
+            super.copy(sender)
+        }
+
         @objc private func activateTappedLink(_ recognizer: UITapGestureRecognizer) {
             guard let index = linkCharacterIndex(at: recognizer.location(in: self)) else { return }
+            if contentLayout.layoutManager.isConcealed(at: index)
+                || textStorage.attribute(.link, at: index, effectiveRange: nil) == nil
+            {
+                if coordinator.toggleSpoiler(at: index) { return }
+            }
             coordinator.activateLink(in: textStorage, at: index)
         }
 
@@ -160,14 +210,68 @@
                 x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
             let index = layoutManager.characterIndex(
                 for: location, in: textContainer, fractionOfDistanceBetweenInsertionPoints: nil)
-            guard index < storage.length,
-                storage.attribute(.link, at: index, effectiveRange: nil) != nil
+            guard index < storage.length else { return nil }
+            let hasLink = storage.attribute(.link, at: index, effectiveRange: nil) != nil
+            let hasSpoiler =
+                storage.attribute(.bubbleSpoiler, at: index, effectiveRange: nil) != nil
+            guard hasLink || hasSpoiler,
+                !allowsSelection
+                    || (hasSpoiler
+                        && (!hasLink || contentLayout.layoutManager.isConcealed(at: index)))
             else { return nil }
             let glyphs = layoutManager.glyphRange(
                 forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil)
             let bounds = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
             return bounds.insetBy(dx: -4, dy: -4).contains(location) ? index : nil
         }
+
+        override var isHidden: Bool {
+            didSet { updateSpoilerAnimation() }
+        }
+
+        @objc private func stopSpoilerAnimation() { spoilerAnimator.stop() }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            updateSpoilerAnimation()
+        }
+
+        @objc private func updateSpoilerAnimation() {
+            guard window != nil, !isHidden, UIApplication.shared.applicationState == .active,
+                !UIAccessibility.isReduceMotionEnabled,
+                contentLayout.layoutManager.hasConcealedSpoilers
+            else {
+                spoilerAnimator.stop()
+                return
+            }
+            spoilerAnimator.start { [weak self] in
+                guard let self else { return }
+                self.contentLayout.layoutManager.particlePhase += 1.0 / 24
+                self.setNeedsDisplay()
+            }
+        }
+
+        private func updateCodeViews() {
+            let blocks = contentLayout.codeBlocks
+            let indices = Set(blocks.map { $0.0.characterIndex })
+            for index in Array(codeViews.keys) where !indices.contains(index) {
+                codeViews.removeValue(forKey: index)?.removeFromSuperview()
+            }
+            for (geometry, attachment) in blocks {
+                let view: MessageCodeScrollView
+                if let existing = codeViews[geometry.characterIndex] {
+                    view = existing
+                } else {
+                    view = MessageCodeScrollView()
+                    codeViews[geometry.characterIndex] = view
+                    addSubview(view)
+                }
+                view.frame = geometry.frame
+                view.apply(attachment, allowsSelection: allowsSelection)
+            }
+        }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
 
         override func draw(_ rect: CGRect) {
             super.draw(rect)
@@ -178,8 +282,10 @@
 
         override var accessibilityValue: String? {
             get {
-                guard let metadata = contentLayout.metadata else { return super.accessibilityValue }
-                return "\(text ?? "") \(metadata.accessibilityLabel)"
+                guard let metadata = contentLayout.metadata else {
+                    return contentLayout.accessibilityText
+                }
+                return "\(contentLayout.accessibilityText) \(metadata.accessibilityLabel)"
             }
             set { super.accessibilityValue = newValue }
         }
