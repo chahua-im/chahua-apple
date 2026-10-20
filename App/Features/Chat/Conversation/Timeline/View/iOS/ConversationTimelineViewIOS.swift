@@ -25,7 +25,11 @@
             // participate in the enclosing window's intrinsic/minimum-size probes.
             GeometryReader { geometry in
                 ZStack(alignment: .bottomTrailing) {
+                    // Fill the viewport in every state: the loading/failure placeholders
+                    // are intrinsically small, and the header backdrop overlay would
+                    // otherwise be laid out inside the placeholder's frame.
                     content
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                         .overlay { headerBackdrop }
                     if model.showsJumpToLatest {

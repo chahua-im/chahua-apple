@@ -37,7 +37,10 @@
 
             private struct Replacement {
                 weak var gesture: UIGestureRecognizer?
-                weak var originalDelegate: UIGestureRecognizerDelegate?
+                /// Strong: the recognizer's `delegate` is weak, so while replaced nothing else
+                /// may retain UIKit's delegate. Losing it restores `nil`, which lets the edge
+                /// pop begin on the root controller and freezes navigation.
+                var originalDelegate: UIGestureRecognizerDelegate?
                 let wasEnabled: Bool
             }
 
@@ -67,7 +70,7 @@
             }
 
             /// Idempotent: takes over each pop recognizer whose delegate is not this one,
-            /// remembering UIKit's delegate only the first time.
+            /// remembering UIKit's latest delegate so `restore()` hands back the current one.
             func install() {
                 guard isVisible else { return }
                 guard let navigationController else {
@@ -93,6 +96,10 @@
                             "took over \(type(of: gesture), privacy: .public); stack \(navigationController.viewControllers.count)"
                         )
                     } else {
+                        // UIKit installed a new delegate; the one remembered earlier is stale.
+                        if let current = gesture.delegate {
+                            replacements[key]?.originalDelegate = current
+                        }
                         Self.logger.debug(
                             "re-took \(type(of: gesture), privacy: .public) after delegate reset")
                     }
