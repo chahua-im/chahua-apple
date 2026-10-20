@@ -4,12 +4,15 @@ struct AvatarView: View {
     let url: URL?
     let displayName: String
     let diameter: CGFloat
+    let isOnline: Bool
+    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
     @Environment(\.displayScale) private var displayScale
 
-    init(url: URL?, displayName: String, diameter: CGFloat = 40) {
+    init(url: URL?, displayName: String, diameter: CGFloat = 40, isOnline: Bool = false) {
         self.url = url
         self.displayName = displayName
         self.diameter = diameter
+        self.isOnline = isOnline
     }
 
     var body: some View {
@@ -32,7 +35,20 @@ struct AvatarView: View {
                 AvatarPlaceholder(displayName: displayName, diameter: scaledDiameter)
             }
         }
+        // Overlay after the shared circular clip, within its bounds so headers cannot cut it off.
+        .overlay(alignment: .bottomTrailing) {
+            if isOnline {
+                Circle()
+                    .fill(.green)
+                    .frame(width: diameter * scale * 0.24, height: diameter * scale * 0.24)
+                    .overlay {
+                        Circle().strokeBorder(.background, lineWidth: diameter * scale * 0.045)
+                    }
+                    .accessibilityHidden(true)
+            }
+        }
         .accessibilityLabel(Text("Avatar for \(displayName)"))
+        .accessibilityValue(isOnline ? AppLanguage.localized("Online") : "")
     }
 }
 

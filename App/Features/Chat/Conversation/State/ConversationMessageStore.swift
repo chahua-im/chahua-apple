@@ -199,7 +199,8 @@ extension RealtimeServerEvent {
         case .messagesBulkDeleted(let payload): payload.chatId
         case .reactionUpdated(let payload): payload.chatId
         case .threadUpdate(let payload): payload.chatId
-        case .pong, .chatArchiveStateChanged, .presenceUpdate, .threadMembershipChanged,
+        case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
+            .threadMembershipChanged,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
             .friendRequestReceived, .friendRequestResolved, .friendshipRemoved, .unknown:
             nil

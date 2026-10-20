@@ -7,6 +7,347 @@ import XCTest
 
 @MainActor
 final class RealtimeCoordinatorTests: XCTestCase {
+    func testPrivacySelectionAutomaticallySavesAcrossPageDismissal() async throws {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = PresencePrivacySettingsModel(store: store)
+        await model.load()
+        await api.holdNextPresenceUpdate()
+        let choosing = Task { await model.chooseVisibility(.nobody) }
+        await eventually { await api.hasHeldPresenceUpdate }
+        XCTAssertEqual(model.visibility, .nobody)
+        XCTAssertTrue(model.isSaving)
+
+        // Leaving and reopening the page must not abort or reload over the write.
+        model.cancelLoading()
+        await model.load()
+        XCTAssertTrue(model.isSaving)
+        XCTAssertEqual(model.visibility, .nobody)
+        await api.releasePresenceUpdate()
+        await choosing.value
+        XCTAssertFalse(model.isSaving)
+        XCTAssertNil(model.saveError)
+        let stored = try await api.presenceSettings()
+        XCTAssertEqual(stored.visibility, .nobody)
+
+        // Tapping the already selected policy must not start another fallible write.
+        await api.setPresenceUpdateError(.unavailable)
+        await model.chooseVisibility(.nobody)
+        XCTAssertNil(model.saveError)
+        XCTAssertEqual(model.visibility, .nobody)
+    }
+
+    func testAutomaticPrivacySaveRetainsFailedSelectionAndRetries() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = PresencePrivacySettingsModel(store: store)
+        await model.load()
+        store.setRealtimeStatus(.connected)
+        store.setPresenceScope(PresenceScope(userIDs: [2]), for: UUID())
+        store.beginPresenceRequest(1)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: 1, users: [UserPresenceResponse(uid: 2, online: true)], groups: [])),
+            currentUserID: 1)
+        await api.setPresenceUpdateError(.unavailable)
+        await model.chooseVisibility(.friends)
+        XCTAssertEqual(model.visibility, .friends)
+        XCTAssertNotNil(model.saveError)
+        XCTAssertFalse(model.isSaving)
+        XCTAssertEqual(store.state.userPresence[2]?.online, true)
+
+        await api.setPresenceUpdateError(nil)
+        await model.retrySave()
+        XCTAssertEqual(model.visibility, .friends)
+        XCTAssertNil(model.saveError)
+        XCTAssertFalse(model.isSaving)
+        XCTAssertNil(store.state.userPresence[2])
+    }
+
+    func testPrivacySaveClearsIndividualPresenceAndRefreshesUnchangedWatch() async throws {
+        let socket = RealtimeTestSocket()
+        let api = RealtimeTestHTTP()
+        let clock = RealtimeTestClock()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        store.setPresenceScope(PresenceScope(userIDs: [2], chatIDs: ["7"]), for: UUID())
+        await eventually { await socket.latestWatch != nil }
+        let initialWatch = await socket.latestWatch
+        let initialID = try XCTUnwrap(initialWatch?.requestID)
+        let user = UserPresenceResponse(uid: 2, online: true)
+        let group = GroupPresenceResponse(chatId: "7", memberCount: 8, onlineCount: 3)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(requestId: initialID, users: [user], groups: [group])),
+            currentUserID: 1)
+        var groupCounts: [UInt32?] = []
+        let observation = store.$state.sink {
+            groupCounts.append($0.groupPresence["7"]?.onlineCount)
+        }
+        let saved = try await store.updatePresenceSettings(visibility: .nobody)
+        XCTAssertEqual(saved.visibility, .nobody)
+        XCTAssertNil(store.state.userPresence[2])
+        XCTAssertEqual(store.state.groupPresence["7"], group)
+        await eventually { await socket.latestWatch.map { $0.requestID > initialID } == true }
+        let refreshedWatch = await socket.latestWatch
+        let refreshedID = try XCTUnwrap(refreshedWatch?.requestID)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(requestId: initialID, users: [user], groups: [group])),
+            currentUserID: 1)
+        XCTAssertNil(
+            store.state.userPresence[2],
+            "An old snapshot must not restore privacy-invalidated status.")
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(requestId: refreshedID, users: [], groups: [group])),
+            currentUserID: 1)
+        XCTAssertNil(store.state.userPresence[2])
+        XCTAssertTrue(
+            groupCounts.allSatisfy { $0 == 3 }, "Privacy changes must not hide group counts.")
+        withExtendedLifetime(observation) {}
+    }
+
+    func testFailedPrivacySaveKeepsCurrentPresenceWatchValid() async throws {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        store.setRealtimeStatus(.connected)
+        store.setPresenceScope(PresenceScope(userIDs: [2]), for: UUID())
+        store.beginPresenceRequest(1)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: 1, users: [UserPresenceResponse(uid: 2, online: true)], groups: [])),
+            currentUserID: 1)
+        await api.setPresenceUpdateError(.unavailable)
+        do {
+            _ = try await store.updatePresenceSettings(visibility: .nobody)
+            XCTFail("Rejected settings must not be reported as saved.")
+        } catch APIError.unavailable {}
+        XCTAssertEqual(store.state.userPresence[2]?.online, true)
+        let lastSeen = Date(timeIntervalSince1970: 1_800_000_000)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: 1,
+                    users: [UserPresenceResponse(uid: 2, online: false, lastSeenAt: lastSeen)],
+                    groups: [])),
+            currentUserID: 1)
+        XCTAssertEqual(store.state.userPresence[2]?.lastSeenAt, lastSeen)
+    }
+
+    func testOldAccountPrivacySaveCannotInvalidateNewAccountPresence() async throws {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        await api.holdNextPresenceUpdate()
+        let saving = Task { try await store.updatePresenceSettings(visibility: .nobody) }
+        await eventually { await api.hasHeldPresenceUpdate }
+        store.reset()
+        store.setRealtimeStatus(.connected)
+        store.setPresenceScope(PresenceScope(userIDs: [3]), for: UUID())
+        store.beginPresenceRequest(2)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: 2, users: [UserPresenceResponse(uid: 3, online: true)], groups: [])),
+            currentUserID: 2)
+        await api.releasePresenceUpdate()
+        do {
+            _ = try await saving.value
+            XCTFail("An old account's save must not publish into the new session.")
+        } catch is CancellationError {}
+        XCTAssertEqual(store.state.userPresence[3]?.online, true)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(PresenceSnapshotPayload(requestId: 2, users: [], groups: [])),
+            currentUserID: 2)
+        XCTAssertNil(store.state.userPresence[3], "The new account's watch must remain usable.")
+    }
+
+    func testPresenceRefreshKeepsOverlappingStatusVisibleUntilReplacement() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        store.setRealtimeStatus(.connected)
+        let consumer = UUID()
+        store.setPresenceScope(PresenceScope(userIDs: [2], chatIDs: ["7"]), for: consumer)
+        store.beginPresenceRequest(1)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: 1, users: [UserPresenceResponse(uid: 2, online: true)],
+                    groups: [GroupPresenceResponse(chatId: "7", memberCount: 8, onlineCount: 3)])),
+            currentUserID: 1)
+
+        var onlineStates: [Bool?] = []
+        var onlineCounts: [UInt32?] = []
+        let observation = store.$state.sink { state in
+            onlineStates.append(state.userPresence[2]?.online)
+            onlineCounts.append(state.groupPresence["7"]?.onlineCount)
+        }
+        // Scrolling another peer into view must not hide an existing dot or subtitle.
+        // Mounting a replacement consumer can transiently empty the aggregate.
+        store.removePresenceScope(for: consumer)
+        store.setPresenceScope(PresenceScope(userIDs: [2, 3], chatIDs: ["7"]), for: consumer)
+        store.beginPresenceRequest(2)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(PresenceSnapshotPayload(requestId: 1, users: [], groups: [])),
+            currentUserID: 1)
+        XCTAssertEqual(store.state.userPresence[2]?.online, true)
+        XCTAssertEqual(store.state.groupPresence["7"]?.onlineCount, 3)
+        XCTAssertNil(
+            store.state.userPresence[3], "New peers stay unknown until the snapshot arrives.")
+
+        let lastSeen = Date(timeIntervalSince1970: 1_800_000_000)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: 2,
+                    users: [
+                        UserPresenceResponse(uid: 2, online: false, lastSeenAt: lastSeen),
+                        UserPresenceResponse(uid: 3, online: true),
+                    ],
+                    groups: [GroupPresenceResponse(chatId: "7", memberCount: 8, onlineCount: 4)])),
+            currentUserID: 1)
+        XCTAssertEqual(store.state.userPresence[2]?.online, false)
+        XCTAssertEqual(store.state.userPresence[2]?.lastSeenAt, lastSeen)
+        XCTAssertEqual(store.state.groupPresence["7"]?.onlineCount, 4)
+        XCTAssertTrue(
+            onlineStates.allSatisfy { $0 != nil }, "Refresh must not publish a hidden dot.")
+        XCTAssertTrue(onlineCounts.allSatisfy { $0 != nil }, "Refresh must not hide group counts.")
+        withExtendedLifetime(observation) {}
+
+        store.setPresenceScope(PresenceScope(userIDs: [3]), for: consumer)
+        store.beginPresenceRequest(3)
+        XCTAssertNil(store.state.userPresence[2])
+        XCTAssertTrue(store.state.groupPresence.isEmpty)
+        XCTAssertEqual(store.state.userPresence[3]?.online, true)
+    }
+
+    func testPresenceSnapshotsRejectOldScopesAndReplaceMissingUsers() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        store.setRealtimeStatus(.connected)
+        let consumer = UUID()
+        store.setPresenceScope(PresenceScope(userIDs: [2], chatIDs: ["7"]), for: consumer)
+        store.beginPresenceRequest(1)
+        let user = UserPresenceResponse(uid: 2, online: true, lastSeenAt: nil)
+        let group = GroupPresenceResponse(chatId: "7", memberCount: 8, onlineCount: 3)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(requestId: 1, users: [user], groups: [group])),
+            currentUserID: 1)
+        XCTAssertEqual(store.state.userPresence[2]?.online, true)
+        XCTAssertEqual(store.state.groupPresence["7"]?.onlineCount, 3)
+
+        store.setPresenceScope(PresenceScope(userIDs: [3]), for: consumer)
+        store.beginPresenceRequest(2)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(requestId: 1, users: [user], groups: [group])),
+            currentUserID: 1)
+        XCTAssertTrue(store.state.userPresence.isEmpty)
+        XCTAssertTrue(store.state.groupPresence.isEmpty)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: 2,
+                    users: [UserPresenceResponse(uid: 3, online: true, lastSeenAt: nil)],
+                    groups: [])),
+            currentUserID: 1)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(PresenceSnapshotPayload(requestId: 2, users: [], groups: [])),
+            currentUserID: 1)
+        XCTAssertNil(
+            store.state.userPresence[3], "An omitted user must lose its previous online dot.")
+        store.setForegroundActive(false)
+        await store.applyRealtimeEvent(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(requestId: 2, users: [user], groups: [group])),
+            currentUserID: 1)
+        XCTAssertTrue(store.state.userPresence.isEmpty)
+        XCTAssertTrue(store.state.groupPresence.isEmpty)
+    }
+
+    func testPresenceWatchResubscribesAfterReconnectAndForeground() async throws {
+        let first = RealtimeTestSocket()
+        let second = RealtimeTestSocket()
+        let clock = RealtimeTestClock()
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [first, second]), store: store,
+            onInvalidToken: {}, sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        let consumer = UUID()
+        store.setPresenceScope(PresenceScope(userIDs: [2]), for: consumer)
+        await eventually { await first.latestWatch?.userIDs == [2] }
+        let firstWatch = await first.latestWatch
+        let firstID = try XCTUnwrap(firstWatch?.requestID)
+        await first.emit(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: firstID,
+                    users: [UserPresenceResponse(uid: 2, online: true, lastSeenAt: nil)], groups: []
+                )))
+        await eventually { store.state.userPresence[2]?.online == true }
+        await first.close()
+        await eventually { await clock.hasSleep(seconds: 1) }
+        XCTAssertTrue(store.state.userPresence.isEmpty)
+        await clock.advance(seconds: 1)
+        await eventually { await second.latestWatch?.userIDs == [2] }
+        let secondWatch = await second.latestWatch
+        let secondID = try XCTUnwrap(secondWatch?.requestID)
+        XCTAssertGreaterThan(secondID, firstID)
+
+        coordinator.setSceneActive(id: scene, active: false)
+        await eventually { await second.latestWatch?.userIDs == [] }
+        // A UI disappearance while inactive must not cancel the queued unsubscribe.
+        store.removePresenceScope(for: consumer)
+        store.setPresenceScope(PresenceScope(userIDs: [2]), for: consumer)
+        coordinator.setSceneActive(id: scene, active: true)
+        await eventually { await second.latestWatch?.userIDs == [2] }
+        let resumed = await second.latestWatch
+        XCTAssertGreaterThan(try XCTUnwrap(resumed?.requestID), secondID)
+        coordinator.setSession(uid: nil)
+        XCTAssertTrue(store.presenceScope.isEmpty)
+        XCTAssertTrue(store.state.userPresence.isEmpty)
+    }
+
+    func testPresenceScopesDeduplicateAndRetainOtherConsumersWithinServerLimits() {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let first = UUID()
+        let second = UUID()
+        store.setPresenceScope(PresenceScope(userIDs: [2], chatIDs: ["7"]), for: first)
+        store.setPresenceScope(PresenceScope(userIDs: [2, 3], chatIDs: ["7"]), for: second)
+        store.removePresenceScope(for: first)
+        XCTAssertEqual(store.presenceScope, PresenceScope(userIDs: [2, 3], chatIDs: ["7"]))
+        store.setPresenceScope(
+            PresenceScope(userIDs: Array(1...Int32(120)), chatIDs: ["1", "2", "3", "4", "5"]),
+            for: second)
+        XCTAssertEqual(store.presenceScope.userIDs, Array(1...Int32(100)))
+        XCTAssertEqual(store.presenceScope.chatIDs, ["1", "2", "3", "4"])
+        store.removePresenceScope(for: second)
+        XCTAssertTrue(store.presenceScope.isEmpty)
+    }
+
     func testInitialOpenWarnsOnlyAfterThreeForegroundFailures() async {
         let clock = RealtimeTestClock()
         let provider = RealtimeTestProvider(sockets: [], holdOpen: true)
@@ -596,8 +937,20 @@ private actor RealtimeTestSocket: RealtimeConnection {
     enum Frame: Equatable, Sendable {
         case appState(RealtimeAppState)
         case ping(RealtimeAppState)
+        case watch(UInt64, [Int32], [String])
     }
     private(set) var frames: [Frame] = []
+    struct Watch: Sendable {
+        let requestID: UInt64
+        let userIDs: [Int32]
+        let chatIDs: [String]
+    }
+    var latestWatch: Watch? {
+        for case .watch(let id, let users, let groups) in frames.reversed() {
+            return Watch(requestID: id, userIDs: users, chatIDs: groups)
+        }
+        return nil
+    }
     private var events: [RealtimeServerEvent] = []
     private var receiver: CheckedContinuation<RealtimeServerEvent, Error>?
     private var holdsNextAppState = false
@@ -625,6 +978,10 @@ private actor RealtimeTestSocket: RealtimeConnection {
         }
         guard !closed else { throw CancellationError() }
         frames.append(.appState(state))
+    }
+    func sendWatchPresence(requestID: UInt64, userIDs: [Int32], chatIDs: [String]) async throws {
+        guard !closed else { throw CancellationError() }
+        frames.append(.watch(requestID, userIDs, chatIDs))
     }
     func close() {
         closed = true
@@ -674,6 +1031,35 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     private var chats: CheckedContinuation<Void, Never>?
     private(set) var chatRequestStarted = false
     init(holdChats: Bool = false) { self.holdChats = holdChats }
+    private var visibility: PresenceVisibility = .everyone
+    private var presenceUpdateError: APIError?
+    private var holdsPresenceUpdate = false
+    private var heldPresenceUpdate: CheckedContinuation<PresenceSettingsResponse, Error>?
+    var hasHeldPresenceUpdate: Bool { heldPresenceUpdate != nil }
+
+    func presenceSettings() async throws -> PresenceSettingsResponse {
+        PresenceSettingsResponse(visibility: visibility)
+    }
+
+    func updatePresenceSettings(visibility: PresenceVisibility) async throws
+        -> PresenceSettingsResponse
+    {
+        if let presenceUpdateError { throw presenceUpdateError }
+        self.visibility = visibility
+        if holdsPresenceUpdate {
+            holdsPresenceUpdate = false
+            return try await withCheckedThrowingContinuation { heldPresenceUpdate = $0 }
+        }
+        return PresenceSettingsResponse(visibility: visibility)
+    }
+
+    func setPresenceUpdateError(_ error: APIError?) { presenceUpdateError = error }
+    func holdNextPresenceUpdate() { holdsPresenceUpdate = true }
+    func releasePresenceUpdate() {
+        heldPresenceUpdate?.resume(returning: PresenceSettingsResponse(visibility: visibility))
+        heldPresenceUpdate = nil
+    }
+
     func authenticate(candidateJWT: String) async throws -> MeResponse {
         try JSONDecoder().decode(
             MeResponse.self,

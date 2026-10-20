@@ -197,6 +197,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var trailingIsControl = false
     /// Unread count shown beside the back chevron, like the app-icon badge; 0 hides it.
     var backBadgeCount = 0
+    /// Thread identity shares one glass capsule with its avatar; navigation stays separate.
+    var leadingAvatar: ThreadHeaderAvatar? = nil
+    @ScaledMetric(relativeTo: .body) private var avatarScale: CGFloat = 1
     @ViewBuilder var avatar: () -> Avatar
 
     var body: some View {
@@ -210,9 +213,13 @@ struct ChatFloatingHeader<Avatar: View>: View {
             .background { searchShortcut }
         #else
             ZStack {
-                // Symmetric insets keep the identity centered between edge controls.
+                // Symmetric edge slots keep the whole identity capsule centered on phones.
                 identity
-                    .padding(.horizontal, backBadgeCount > 0 ? 92 : 52)
+                    .padding(
+                        .horizontal,
+                        max(
+                            backBadgeCount > 0 ? 92 : 52,
+                            trailingIsControl ? 52 : Self.avatarDiameter * avatarScale + 8))
                 HStack {
                     navigationControl
                     Spacer(minLength: 0)
@@ -236,28 +243,35 @@ struct ChatFloatingHeader<Avatar: View>: View {
     }
 
     private var identityLabel: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .accessibilityAddTraits(.isHeader)
-                if isMuted {
-                    Image(systemName: "speaker.slash.fill")
+        HStack(spacing: 8) {
+            if let leadingAvatar {
+                // Let the avatar keep its Dynamic Type size, including its author badge.
+                leadingAvatar.fixedSize()
+            }
+            VStack(spacing: 0) {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .accessibilityAddTraits(.isHeader)
+                    if isMuted {
+                        Image(systemName: "speaker.slash.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Muted")
+                    }
+                }
+                if let subtitle {
+                    Text(subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .accessibilityLabel("Muted")
+                        .lineLimit(1)
                 }
             }
-            if let subtitle {
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
         }
-        .padding(.horizontal, 18)
+        .padding(.leading, leadingAvatar == nil ? 18 : 8)
+        .padding(.trailing, leadingAvatar == nil ? 18 : 12)
         .padding(.vertical, 4)
         .frame(minHeight: 44)
         #if os(macOS)
@@ -277,6 +291,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 Button(action: onOpenInfo) { avatarCircle }
                     .buttonStyle(.plain)
                     .accessibilityLabel(Text("Open chat information"))
+                    .accessibilityValue(subtitle ?? "")
                     .accessibilityIdentifier("group-info-avatar-button")
             } else {
                 avatarCircle
@@ -286,16 +301,22 @@ struct ChatFloatingHeader<Avatar: View>: View {
         .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: isInteractive))
     }
 
-    /// The avatar centered in the 44 pt control, leaving a thin glass rim like Telegram.
+    /// Avatars own their scaled bounds and presence ring; controls instead fill a
+    /// bounded hit target. A filling control must never receive the screen proposal.
+    @ViewBuilder
     private var avatarCircle: some View {
-        avatar()
-            .frame(width: Self.avatarDiameter, height: Self.avatarDiameter)
-            .clipShape(Circle())
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
+        if trailingIsControl {
+            avatar()
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        } else {
+            avatar()
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Circle())
+        }
     }
 
-    /// Avatar diameter inside the 44 pt glass circle; callers size their avatar to this.
+    /// Base avatar diameter; trailing controls stay 44 pt while avatars scale independently.
     static var avatarDiameter: CGFloat { 38 }
 
     /// ⌘F stays available even when search has no visible header button.

@@ -72,6 +72,87 @@ final class ChahuaAPITests: XCTestCase {
         } catch APIError.invalidToken {}
     }
 
+    func testPresenceSettingsUsesAuthenticatedRoutesAndAuthoritativeResponses() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            if request.httpMethod == "PUT" {
+                return (200, #"{"visibility":"nobody"}"#)
+            }
+            return (200, #"{"visibility":"friends"}"#)
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        let settings = try await client.presenceSettings()
+        XCTAssertEqual(settings, PresenceSettingsResponse(visibility: .friends))
+        for visibility in PresenceVisibility.allCases {
+            let saved = try await client.updatePresenceSettings(visibility: visibility)
+            XCTAssertEqual(
+                saved.visibility, .nobody, "Use the returned policy, not the submitted draft.")
+        }
+
+        let recorded = requests.values
+        XCTAssertEqual(recorded.map(\.httpMethod), ["GET", "PUT", "PUT", "PUT"])
+        XCTAssertEqual(
+            recorded.map { $0.url?.path }, Array(repeating: "/me/presence-settings", count: 4))
+        XCTAssertTrue(recorded.allSatisfy { $0.url?.query == nil })
+        XCTAssertTrue(
+            recorded.allSatisfy {
+                $0.value(forHTTPHeaderField: "Authorization") == "Bearer candidate"
+            })
+        XCTAssertTrue(requestBody(recorded[0]).isEmpty)
+        for (request, visibility) in zip(recorded.dropFirst(), PresenceVisibility.allCases) {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: requestBody(request)) as? [String: String])
+            XCTAssertEqual(body, ["visibility": visibility.rawValue])
+        }
+    }
+
+    func testPresenceSettingsFailuresDoNotReturnDefaultPolicy() async throws {
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        StubURLProtocol.handler = { _ in (403, #"{"error":"forbidden"}"#) }
+        do {
+            _ = try await client.updatePresenceSettings(visibility: .nobody)
+            XCTFail("Expected rejected write")
+        } catch APIError.http(let status, let body) {
+            XCTAssertEqual(status, 403)
+            XCTAssertEqual(String(decoding: body, as: UTF8.self), #"{"error":"forbidden"}"#)
+        }
+
+        StubURLProtocol.handler = { _ in (401, "") }
+        do {
+            _ = try await client.presenceSettings()
+            XCTFail("Expected invalid token")
+        } catch APIError.invalidToken {}
+    }
+
+    func testPresenceSettingsRejectsUnknownOrMissingVisibility() async throws {
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        for response in [#"{"visibility":"unknown"}"#, "{}"] {
+            StubURLProtocol.handler = { _ in (200, response) }
+            do {
+                _ = try await client.presenceSettings()
+                XCTFail("Expected invalid settings to fail decoding")
+            } catch APIError.decoding(let status, _) {
+                XCTAssertEqual(status, 200)
+            }
+            do {
+                _ = try await client.updatePresenceSettings(visibility: .everyone)
+                XCTFail("Expected invalid saved settings to fail decoding")
+            } catch APIError.decoding(let status, _) {
+                XCTAssertEqual(status, 200)
+            }
+        }
+    }
+
     func testListChatsRequestsActiveChatsAndDecodesResponse() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in

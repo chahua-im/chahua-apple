@@ -81,6 +81,43 @@ final class RealtimeConnectionTests: XCTestCase {
         }
     }
 
+    func testWatchPresenceSendsExactFlatFramesAndEmptyUnsubscribe() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        do {
+            let client = ChahuaClient(
+                configuration: ChahuaConfiguration(baseURL: await server.baseURL),
+                token: "installed")
+            let connection = try await client.openRealtimeConnection()
+            try await connection.sendWatchPresence(
+                requestID: UInt64.max, userIDs: [7, Int32.max],
+                chatIDs: ["9223372036854775807"])
+            try await connection.sendWatchPresence(requestID: 0, userIDs: [], chatIDs: [])
+            try await connection.sendPing(state: .active)
+            guard case .pong = try await connection.receive() else {
+                return XCTFail("Expected heartbeat pong")
+            }
+            let frames = await server.clientFrames
+            XCTAssertEqual(
+                frames,
+                [
+                    .init(type: "auth", ticket: "installed", state: nil),
+                    .init(
+                        type: "watchPresence", ticket: nil, state: nil,
+                        requestId: UInt64.max, userIds: [7, Int32.max],
+                        chatIds: ["9223372036854775807"]),
+                    .init(
+                        type: "watchPresence", ticket: nil, state: nil,
+                        requestId: 0, userIds: [], chatIds: []),
+                    .init(type: "ping", ticket: nil, state: "active"),
+                ])
+            await connection.close()
+            await server.stop()
+        } catch {
+            await server.stop()
+            throw error
+        }
+    }
+
     func testRefreshAndReconnectShareNewCredentialWithoutAdditionalRefresh() async throws {
         let server = try await RealtimeLoopbackServer.start()
         do {
@@ -139,6 +176,49 @@ final class RealtimeConnectionTests: XCTestCase {
             let auth = await server.authentications
             XCTAssertEqual(auth, ["account-B"])
             await connection.close()
+            await server.stop()
+        } catch {
+            await server.stop()
+            throw error
+        }
+    }
+
+    func testPresenceSnapshotsReachConsumerAndMalformedSnapshotClosesConnection() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        do {
+            await server.setFrames([
+                .string(
+                    #"{"type":"presenceSnapshot","payload":{"requestId":12,"users":[{"uid":7,"online":true}],"groups":[{"chatId":"9223372036854775807","memberCount":5,"onlineCount":2}]}}"#
+                ),
+                .string(#"{"type":"presenceSnapshot","payload":{"users":[]}}"#),
+            ])
+            let client = ChahuaClient(
+                configuration: ChahuaConfiguration(baseURL: await server.baseURL),
+                token: "installed")
+            let connection = try await client.openRealtimeConnection()
+            try await connection.sendPing(state: .active)
+            guard case .pong = try await connection.receive() else {
+                return XCTFail("Expected pong")
+            }
+            guard case .presenceSnapshot(let snapshot) = try await connection.receive() else {
+                return XCTFail("Expected typed presence snapshot")
+            }
+            XCTAssertEqual(snapshot.requestId, 12)
+            XCTAssertEqual(snapshot.users, [UserPresenceResponse(uid: 7, online: true)])
+            XCTAssertEqual(
+                snapshot.groups,
+                [
+                    GroupPresenceResponse(
+                        chatId: "9223372036854775807", memberCount: 5, onlineCount: 2)
+                ])
+            do {
+                _ = try await connection.receive()
+                XCTFail("Malformed known snapshot must fail")
+            } catch is DecodingError {}
+            do {
+                _ = try await connection.receive()
+                XCTFail("Malformed snapshot must close the connection")
+            } catch is CancellationError {}
             await server.stop()
         } catch {
             await server.stop()
@@ -348,6 +428,15 @@ private actor RealtimeLoopbackServer {
                     let (opcode, data) = try await wire.readFrame()
                     if opcode == 8 { break }
                     let frame = try JSONDecoder().decode(ClientFrame.self, from: data)
+                    if frame.type == "watchPresence" {
+                        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        guard opcode == 1, let object,
+                            Set(object.keys) == Set(["type", "requestId", "userIds", "chatIds"]),
+                            frame.requestId != nil, frame.userIds != nil, frame.chatIds != nil
+                        else { throw APIError.unexpectedResponse }
+                        clientFrames.append(frame)
+                        continue
+                    }
                     guard opcode == 1, frame.state == "active" || frame.state == "inactive",
                         frame.type == "appState" || frame.type == "ping"
                     else { throw APIError.unexpectedResponse }
@@ -398,6 +487,9 @@ private actor RealtimeLoopbackServer {
         let type: String
         let ticket: String?
         let state: String?
+        var requestId: UInt64? = nil
+        var userIds: [Int32]? = nil
+        var chatIds: [String]? = nil
     }
 }
 

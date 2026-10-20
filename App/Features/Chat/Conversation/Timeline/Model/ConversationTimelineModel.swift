@@ -845,7 +845,8 @@ final class ConversationTimelineModel: ObservableObject {
             if let rootID = MessageID(payload.threadRootId) {
                 mutateServerID(rootID) { $0.replacingThreadReplyCount(payload.replyCount) }
             }
-        case .pong, .chatArchiveStateChanged, .presenceUpdate, .threadMembershipChanged,
+        case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
+            .threadMembershipChanged,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
             .friendRequestReceived, .friendRequestResolved, .friendshipRemoved, .unknown:
             break

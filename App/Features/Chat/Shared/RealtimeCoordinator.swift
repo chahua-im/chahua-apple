@@ -38,6 +38,10 @@ final class RealtimeCoordinator: ObservableObject {
     private var shortLivedReconnects = 0
     private var hasConnected = false
     private var connectionIsStable = false
+    private var presenceObservation: AnyCancellable?
+    private var presenceWatchTask: Task<Void, Never>?
+    private var nextPresenceRequestID: UInt64 = 0
+    private var hasPresenceWatch = false
 
     init(
         provider: any RealtimeConnectionProviding,
@@ -51,6 +55,12 @@ final class RealtimeCoordinator: ObservableObject {
         self.onInvalidToken = onInvalidToken
         self.sleep = sleep
         self.jitter = jitter
+        presenceObservation = Publishers.Merge(
+            store.$presenceScope.dropFirst().map { _ in () },
+            store.presencePrivacyInvalidations
+        ).sink { [weak self] _ in
+            self?.schedulePresenceWatch()
+        }
     }
 
     func setSession(uid: Int32?) {
@@ -73,6 +83,7 @@ final class RealtimeCoordinator: ObservableObject {
             enqueuePresence(
                 .appState(appState), on: connection, generation: generation, attempt: attempt)
         }
+        schedulePresenceWatch()
         if isActive {
             presentationFailures = 0
             shortLivedReconnects = 0
@@ -126,6 +137,7 @@ final class RealtimeCoordinator: ObservableObject {
                 enqueuePresence(
                     .appState(appState), on: socket, generation: currentGeneration,
                     attempt: currentAttempt)
+                schedulePresenceWatch()
                 startHeartbeat(socket, generation: currentGeneration, attempt: currentAttempt)
                 startStableReset(generation: currentGeneration, attempt: currentAttempt)
                 startRecovery(generation: currentGeneration)
@@ -171,6 +183,9 @@ final class RealtimeCoordinator: ObservableObject {
             stableConnection?.cancel()
             pendingSend?.cancel()
             pongDeadline?.cancel()
+            presenceWatchTask?.cancel()
+            presenceWatchTask = nil
+            hasPresenceWatch = false
             heartbeat = nil
             stableConnection = nil
             pendingSend = nil
@@ -187,9 +202,30 @@ final class RealtimeCoordinator: ObservableObject {
         }
     }
 
+    /// Coalesce a list's appearance callbacks without cancelling a transport send.
+    private func schedulePresenceWatch() {
+        guard presenceWatchTask == nil else { return }
+        presenceWatchTask = Task { [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else { return }
+            self.presenceWatchTask = nil
+            guard self.uid != nil, let socket = self.connection else { return }
+            let scope = self.activeScenes.isEmpty ? PresenceScope() : self.store.presenceScope
+            guard !scope.isEmpty || self.hasPresenceWatch else { return }
+            self.hasPresenceWatch = !scope.isEmpty
+            self.nextPresenceRequestID += 1
+            let requestID = self.nextPresenceRequestID
+            self.store.beginPresenceRequest(requestID)
+            self.enqueuePresence(
+                .watch(requestID, scope), on: socket,
+                generation: self.generation, attempt: self.attempt)
+        }
+    }
+
     private enum PresenceFrame {
         case appState(RealtimeAppState)
         case ping
+        case watch(UInt64, PresenceScope)
     }
 
     /// Serialize state changes with pings. Cancelling a transport send closes its
@@ -212,6 +248,12 @@ final class RealtimeCoordinator: ObservableObject {
                 switch frame {
                 case .appState(let state):
                     try await socket.sendAppState(state)
+                case .watch(let requestID, let scope):
+                    guard scope.isEmpty || self.store.isCurrentPresenceRequest(requestID) else {
+                        return
+                    }
+                    try await socket.sendWatchPresence(
+                        requestID: requestID, userIDs: scope.userIDs, chatIDs: scope.chatIDs)
                 case .ping:
                     // A simultaneous heartbeat must never reset an outstanding
                     // deadline; both timers can wake together after suspension.
@@ -299,6 +341,9 @@ final class RealtimeCoordinator: ObservableObject {
         pendingSend?.cancel()
         pongDeadline?.cancel()
         recovery?.cancel()
+        presenceWatchTask?.cancel()
+        presenceWatchTask = nil
+        hasPresenceWatch = false
         runner = nil
         heartbeat = nil
         stableConnection = nil

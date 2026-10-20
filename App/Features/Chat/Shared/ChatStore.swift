@@ -10,6 +10,8 @@ enum ChatListLoadPhase: Equatable {
 
 struct ChatState: Equatable {
     var realtimeStatus: RealtimeConnectionStatus = .idle
+    var userPresence: [Int32: UserPresenceResponse] = [:]
+    var groupPresence: [String: GroupPresenceResponse] = [:]
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
     var chatListRefreshFailed = false
@@ -47,6 +49,9 @@ extension ChatState {
 final class ChatStore: ObservableObject {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "conversations")
     @Published private(set) var state = ChatState()
+    @Published private(set) var presenceScope = PresenceScope()
+    private var presenceConsumers: [UUID: PresenceScope] = [:]
+    private var presenceRequestID: UInt64?
     @Published var currentUserProfile: MeResponse? {
         didSet {
             stickers.setAccount(currentUserProfile?.uid)
@@ -273,6 +278,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setForegroundActive(_ active: Bool) {
+        if !active { clearPresence() }
         outgoingQueue.requestForegroundActive(active)
         if !active {
             drafts.scheduleBackgroundFlush()
@@ -710,6 +716,21 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// Resolves only a missing thread root, preserving the session fence used by other reads.
+    func threadRoot(for key: ConversationKey) async throws -> MessageResponse {
+        guard let threadID = key.threadID, let messageID = MessageID(threadID) else {
+            throw APIError.unexpectedResponse
+        }
+        let requestGeneration = generation
+        let root = try await performGroupRequest(generation: requestGeneration) {
+            try await apiClient.getMessage(chatID: key.chatID, messageID: messageID)
+        }
+        guard root.chatId == key.chatID, root.id == messageID, root.replyRootId == nil else {
+            throw APIError.unexpectedResponse
+        }
+        return root
+    }
+
     /// Payload identifiers are only navigation hints; authorize the message and
     /// resolve its parent independently of the active (unarchived) list.
     func chatForNotification(_ route: PushNotificationRoute) async throws -> ChatListItem {
@@ -824,6 +845,18 @@ final class ChatStore: ObservableObject {
             invalidateChatList()
         case .stickerPackOrderUpdated(let payload):
             stickers.setPackOrder(payload.order)
+        case .presenceSnapshot(let snapshot):
+            guard let presenceRequestID, snapshot.requestId == presenceRequestID,
+                state.realtimeStatus == .connected
+            else { return }
+            // Snapshots are absolute: missing/unauthorized entities must not retain
+            // a previous online dot or member count.
+            var updated = state
+            updated.userPresence.removeAll(keepingCapacity: true)
+            updated.groupPresence.removeAll(keepingCapacity: true)
+            for user in snapshot.users { updated.userPresence[user.uid] = user }
+            for group in snapshot.groups { updated.groupPresence[group.chatId] = group }
+            state = updated
         case .pong, .presenceUpdate, .pinAdded, .threadPinAdded,
             .pinRemoved, .threadPinRemoved, .friendRequestReceived:
             break
@@ -885,7 +918,95 @@ final class ChatStore: ObservableObject {
     func setRealtimeStatus(_ status: RealtimeConnectionStatus) {
         guard state.realtimeStatus != status else { return }
         state.realtimeStatus = status
+        if status != .connected { clearPresence() }
         for model in visibleTimelines() { model.setRealtimeStatus(status) }
+    }
+
+    func setPresenceScope(_ scope: PresenceScope, for id: UUID) {
+        guard presenceConsumers[id] != scope else { return }
+        presenceConsumers[id] = scope
+        updatePresenceScope()
+    }
+
+    func removePresenceScope(for id: UUID) {
+        guard presenceConsumers.removeValue(forKey: id) != nil else { return }
+        updatePresenceScope()
+    }
+
+    private func updatePresenceScope() {
+        let scope = PresenceScope.combined(presenceConsumers.values)
+        guard scope != presenceScope else { return }
+        presenceRequestID = nil
+        presenceScope = scope
+    }
+
+    func presenceSettings() async throws -> PresenceSettingsResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.presenceSettings()
+        }
+    }
+
+    func updatePresenceSettings(visibility: PresenceVisibility) async throws
+        -> PresenceSettingsResponse
+    {
+        let requestGeneration = generation
+        return try await performGroupRequest(generation: requestGeneration) {
+            let settings = try await apiClient.updatePresenceSettings(visibility: visibility)
+            guard generation == requestGeneration else { throw CancellationError() }
+            // A committed privacy change invalidates cached individual status even
+            // if its settings view has since been dismissed or cancelled.
+            invalidateIndividualPresence()
+            return settings
+        }
+    }
+
+    let presencePrivacyInvalidations = PassthroughSubject<Void, Never>()
+
+    private func invalidateIndividualPresence() {
+        // Fence old snapshots immediately; the new watch keeps group counts visible.
+        presenceRequestID = nil
+        if !state.userPresence.isEmpty {
+            var updated = state
+            updated.userPresence.removeAll()
+            state = updated
+        }
+        presencePrivacyInvalidations.send(())
+    }
+
+    /// Prune at coalesced watch publication, not during transient SwiftUI
+    /// unmount/remount callbacks. Overlapping status stays visible while loading.
+    func beginPresenceRequest(_ requestID: UInt64) {
+        let scope = presenceScope
+        presenceRequestID = requestID
+        // A watch refresh is not an offline transition. Retain overlapping IDs
+        // while loading, but remove data whose UI consumer left the scope.
+        let users = Set(scope.userIDs)
+        let groups = Set(scope.chatIDs)
+        var updated = state
+        for uid in state.userPresence.keys where !users.contains(uid) {
+            updated.userPresence.removeValue(forKey: uid)
+        }
+        for chatID in state.groupPresence.keys where !groups.contains(chatID) {
+            updated.groupPresence.removeValue(forKey: chatID)
+        }
+        if updated.userPresence.count != state.userPresence.count
+            || updated.groupPresence.count != state.groupPresence.count
+        {
+            state = updated
+        }
+    }
+
+    func isCurrentPresenceRequest(_ requestID: UInt64) -> Bool {
+        presenceRequestID == requestID
+    }
+
+    func clearPresence() {
+        presenceRequestID = nil
+        guard !state.userPresence.isEmpty || !state.groupPresence.isEmpty else { return }
+        var updated = state
+        updated.userPresence.removeAll()
+        updated.groupPresence.removeAll()
+        state = updated
     }
 
     func registerTimeline(_ model: ConversationTimelineModel) {
@@ -1188,6 +1309,9 @@ final class ChatStore: ObservableObject {
 
     func reset() {
         generation += 1
+        presenceConsumers.removeAll()
+        presenceScope = PresenceScope()
+        clearPresence()
         cancelQueuedGroupMutations()
         pendingListActions.removeAll()
         deletingMessageIDs.removeAll()

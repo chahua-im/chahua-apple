@@ -25,6 +25,13 @@
                             }
                         }
                     }
+                    Section("Privacy and Security") {
+                        NavigationLink(value: SettingsPage.presencePrivacy) {
+                            Label(
+                                SettingsPage.presencePrivacy.title,
+                                systemImage: SettingsPage.presencePrivacy.symbol)
+                        }
+                    }
                     Section("Stickers") {
                         ForEach(SettingsPage.stickerPages) { page in
                             NavigationLink(value: page) {

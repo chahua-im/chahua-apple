@@ -19,6 +19,14 @@ public protocol ChahuaAPIClient: Sendable {
     /// Fetches the currently authenticated account with `GET /users/me`.
     func me() async throws -> MeResponse
 
+    /// Fetches the authenticated account's policy with `GET /me/presence-settings`.
+    func presenceSettings() async throws -> PresenceSettingsResponse
+
+    /// Replaces the policy with `PUT /me/presence-settings`, returning the saved value.
+    /// This controls individual online and last-seen sharing, not group counts.
+    func updatePresenceSettings(visibility: PresenceVisibility) async throws
+        -> PresenceSettingsResponse
+
     /// Fetches the current attachment size limit with `GET /attachments/config`.
     func attachmentConfig() async throws -> AttachmentConfigResponse
 
@@ -178,6 +186,16 @@ public protocol ChahuaAPIClient: Sendable {
 }
 
 extension ChahuaAPIClient {
+    public func presenceSettings() async throws -> PresenceSettingsResponse {
+        throw APIError.unavailable
+    }
+
+    public func updatePresenceSettings(visibility: PresenceVisibility) async throws
+        -> PresenceSettingsResponse
+    {
+        throw APIError.unavailable
+    }
+
     public func createStickerPack(name: String) async throws -> StickerPackSummary {
         try await createStickerPack(name: name, description: nil)
     }

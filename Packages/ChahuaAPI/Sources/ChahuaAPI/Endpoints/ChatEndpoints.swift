@@ -73,6 +73,26 @@ private struct UpdateGroupMemberRoleBody: Encodable {
 }
 
 extension ChahuaClient {
+    /// Reads the authenticated user's individual presence sharing policy.
+    public func presenceSettings() async throws -> PresenceSettingsResponse {
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["me", "presence-settings"]),
+            decoding: PresenceSettingsResponse.self
+        )
+    }
+
+    /// Saves the policy; callers should invalidate individual presence only after success.
+    public func updatePresenceSettings(visibility: PresenceVisibility) async throws
+        -> PresenceSettingsResponse
+    {
+        try await send(
+            HTTPRequestSpec.json(
+                .put, ["me", "presence-settings"],
+                body: PresenceSettingsResponse(visibility: visibility)),
+            decoding: PresenceSettingsResponse.self
+        )
+    }
+
     public func markChatUnread(chatID: String) async throws -> ReadStateResponse {
         try await send(
             HTTPRequestSpec(method: .post, path: ["chats", chatID, "unread"]),

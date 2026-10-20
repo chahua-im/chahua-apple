@@ -70,6 +70,7 @@ struct GroupInfoView: View {
             .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: chat.id) { await loadInfo() }
+        .presenceScope(ChatPresenceDisplay.scope(for: chat), store: store)
         .onChange(of: listedChat?.mutedUntil) { _, value in
             if listedChat != nil { mutedUntil = value }
         }
@@ -101,23 +102,28 @@ struct GroupInfoView: View {
         }
     }
 
+    // TODO: On a future user profile detail page, add a current friend's presence
+    // override (inherit/share/hide); keep per-friend privacy out of chat/group info.
     private var hero: some View {
         VStack(spacing: 6) {
-            AvatarView(url: avatarURL, displayName: displayName, diameter: 104)
-                .padding(.bottom, 8)
+            AvatarView(
+                url: avatarURL, displayName: displayName, diameter: 104,
+                isOnline: ChatPresenceDisplay.isOnline(chat, in: store.state)
+            )
+            .padding(.bottom, 8)
             Text(displayName)
                 .font(.title2.weight(.bold))
                 .multilineTextAlignment(.center)
                 .textSelection(.enabled)
-            // Placeholder until the server reports member counts and presence.
-            Text(isDM ? "last seen —" : "— members, — online")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            if let subtitle = ChatPresenceDisplay.subtitle(for: chat, in: store.state) {
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(displayName)
     }
 
     private func descriptionCard(_ description: String) -> some View {

@@ -1,6 +1,230 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Privacy and Security" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Privacy and Security" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "隐私与安全" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "隱私與安全" }
+        }
+      }
+    },
+    "Last Seen & Online" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last Seen & Online" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "最后上线与在线状态" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "最後上線與在線狀態" }
+        }
+      }
+    },
+    "Who can see my last seen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Who can see my last seen" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "谁可以查看我的最后上线时间" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "誰可以查看我的最後上線時間" }
+        }
+      }
+    },
+    "Exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Exceptions" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "例外" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "例外" }
+        }
+      }
+    },
+    "Never Share With" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Never Share With" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "不向以下用户共享" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "不向以下使用者分享" }
+        }
+      }
+    },
+    "Coming soon" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Coming soon" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "暂未开放" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "暫未開放" }
+        }
+      }
+    },
+    "Exceptions are not available yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Exceptions are not available yet." }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "例外设置暂未开放。" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "例外設定暫未開放。" }
+        }
+      }
+    },
+    "Everyone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Everyone" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "所有人" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "所有人" }
+        }
+      }
+    },
+    "Friends" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Friends" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "仅好友" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "僅好友" }
+        }
+      }
+    },
+    "Nobody" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Nobody" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "没有人" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "沒有人" }
+        }
+      }
+    },
+    "Online status and last seen are visible only when both people allow sharing with each other. Group online counts are not affected." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Online status and last seen are visible only when both people allow sharing with each other. Group online counts are not affected." }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "在线状态和最近上线仅在双方都允许向对方分享时可见；群组在线人数不受影响。" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "在線狀態和最近上線只會在雙方都允許向對方分享時顯示；群組在線人數不受影響。" }
+        }
+      }
+    },
+    "Failed to load presence privacy settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Failed to load presence privacy settings." }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "在线状态隐私设置加载失败。" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "在線狀態隱私設定載入失敗。" }
+        }
+      }
+    },
+    "Save failed. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Save failed. Please try again." }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "保存失败，请重试。" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "儲存失敗，請重試。" }
+        }
+      }
+    },
+    "Saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Saved" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "已保存" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "已儲存" }
+        }
+      }
+    },
+    "Saving…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Saving…" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "正在保存…" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "正在儲存…" }
+        }
+      }
+    },
+    "Loading presence privacy settings…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Loading presence privacy settings…" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "正在加载在线状态隐私设置…" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "正在載入在線狀態隱私設定…" }
+        }
+      }
+    },
     "" : {
       "localizations" : {
         "zh-Hans" : {
@@ -17,26 +241,31 @@
         }
       }
     },
-    "— members, — online" : {
+    "%lld online · %lld members" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "— members, — online"
-          }
+          "stringUnit" : { "state" : "translated", "value" : "%1$lld online · %2$lld members" }
         },
         "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "— 位成员，— 人在线"
-          }
+          "stringUnit" : { "state" : "translated", "value" : "%1$lld 人在线 · 共 %2$lld 人" }
         },
         "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "— 位成員，— 人在線"
-          }
+          "stringUnit" : { "state" : "translated", "value" : "%1$lld 人在線 · 共 %2$lld 人" }
+        }
+      }
+    },
+    "Online" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Online" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "在线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "在線" }
         }
       }
     },
@@ -4220,26 +4449,143 @@
         }
       }
     },
-    "last seen —" : {
+    "Last seen recently" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "last seen —"
-          }
+          "stringUnit" : { "state" : "translated", "value" : "Last seen recently" }
         },
         "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最后上线 —"
-          }
+          "stringUnit" : { "state" : "translated", "value" : "最近上线" }
         },
         "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "最後上線 —"
-          }
+          "stringUnit" : { "state" : "translated", "value" : "最近上線" }
+        }
+      }
+    },
+    "Last seen within 30 minutes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 30 minutes" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "30 分钟内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "30 分鐘內上線" }
+        }
+      }
+    },
+    "Last seen within 1 hour" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 hour" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 小时内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 小時內上線" }
+        }
+      }
+    },
+    "Last seen within 2 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 2 hours" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "2 小时内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "2 小時內上線" }
+        }
+      }
+    },
+    "Last seen within 6 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 6 hours" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "6 小时内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "6 小時內上線" }
+        }
+      }
+    },
+    "Last seen within 12 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 12 hours" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "12 小时内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "12 小時內上線" }
+        }
+      }
+    },
+    "Last seen within 1 day" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 day" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 天内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 天內上線" }
+        }
+      }
+    },
+    "Last seen within 1 week" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 week" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 周内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 週內上線" }
+        }
+      }
+    },
+    "Last seen within 1 month" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 month" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 个月内上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "1 個月內上線" }
+        }
+      }
+    },
+    "Last seen a long time ago" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Last seen a long time ago" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "很久以前上线" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "很久以前上線" }
         }
       }
     },

@@ -146,6 +146,62 @@ final class RealtimeModelTests: XCTestCase {
         XCTAssertEqual(type, "futureFeature")
     }
 
+    func testPresenceSnapshotDecodesCamelCaseAndExactIdentifiers() throws {
+        guard
+            case .presenceSnapshot(let snapshot) = try event(
+                "presenceSnapshot",
+                """
+                {"requestId":18446744073709551615,"users":[{"uid":7,"online":true,"lastSeenAt":"\(timestamp)"},{"uid":8,"online":false},{"uid":9,"online":false,"lastSeenAt":null}],"groups":[{"chatId":"\(largeID)","memberCount":4294967295,"onlineCount":2}]}
+                """)
+        else { return XCTFail("Expected presence snapshot") }
+        XCTAssertEqual(snapshot.requestId, UInt64.max)
+        XCTAssertEqual(snapshot.users.map(\.uid), [7, 8, 9])
+        XCTAssertTrue(snapshot.users[0].online)
+        XCTAssertEqual(
+            snapshot.users[0].lastSeenAt,
+            try JSONCoding.decoder.decode(Date.self, from: Data("\"\(timestamp)\"".utf8)))
+        XCTAssertEqual(snapshot.users[1], UserPresenceResponse(uid: 8, online: false))
+        XCTAssertNil(snapshot.users[2].lastSeenAt)
+        XCTAssertEqual(
+            snapshot.groups,
+            [GroupPresenceResponse(chatId: largeID, memberCount: UInt32.max, onlineCount: 2)])
+    }
+
+    func testPresenceSnapshotOptionalCorrelationDoesNotSubstituteZero() throws {
+        for payload in [
+            #"{"users":[],"groups":[]}"#,
+            #"{"requestId":null,"users":[],"groups":[]}"#,
+        ] {
+            guard case .presenceSnapshot(let snapshot) = try event("presenceSnapshot", payload)
+            else { return XCTFail("Expected presence snapshot") }
+            XCTAssertNil(snapshot.requestId)
+            XCTAssertTrue(snapshot.users.isEmpty)
+            XCTAssertTrue(snapshot.groups.isEmpty)
+        }
+        guard
+            case .presenceSnapshot(let snapshot) = try event(
+                "presenceSnapshot", #"{"requestId":0,"users":[],"groups":[]}"#)
+        else { return XCTFail("Expected presence snapshot") }
+        XCTAssertEqual(snapshot.requestId, 0)
+    }
+
+    func testMalformedKnownPresenceSnapshotsFailRatherThanBecomingUnknown() throws {
+        for payload in [
+            "{}",
+            #"{"users":[]}"#,
+            #"{"requestId":-1,"users":[],"groups":[]}"#,
+            #"{"requestId":"1","users":[],"groups":[]}"#,
+            #"{"users":[{"uid":2147483648,"online":true}],"groups":[]}"#,
+            #"{"users":[{"uid":7,"online":"true"}],"groups":[]}"#,
+            #"{"users":[{"uid":7,"online":false,"lastSeenAt":"invalid"}],"groups":[]}"#,
+            #"{"users":[],"groups":[{"chatId":42,"memberCount":2,"onlineCount":1}]}"#,
+            #"{"users":[],"groups":[{"chatId":"42","memberCount":-1,"onlineCount":0}]}"#,
+            #"{"users":[],"groups":[{"chatId":"42","memberCount":2,"onlineCount":4294967296}]}"#,
+        ] {
+            XCTAssertThrowsError(try event("presenceSnapshot", payload), payload)
+        }
+    }
+
     func testKnownMalformedEventsFailRatherThanBecomingUnknown() throws {
         XCTAssertThrowsError(try event("reactionUpdated", #"{"chatId":"42","reactions":[]}"#))
         XCTAssertThrowsError(try event("message", "{}"))

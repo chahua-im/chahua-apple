@@ -1,4 +1,5 @@
 #if os(iOS)
+    import ChahuaAPI
     import SwiftUI
     import UIKit
     import XCTest
@@ -11,6 +12,74 @@
     /// Composes the production chrome modifiers in the chat screen's order.
     @MainActor
     final class ChatChromeLayoutTests: XCTestCase {
+        func testHeaderBoundsThreadControlsWithoutCroppingScaledAvatars() throws {
+            let api = FixtureReactionClient()
+            let root = try TimelineTestFixtures.message(
+                id: 1, senderID: 2, at: 0,
+                text: "A long thread title that must truncate in its capsule")
+            api.install([root])
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            let subscription = ThreadSubscriptionModel(chatID: "chat", threadID: "1", store: store)
+            let available = CGSize(width: 402, height: 800)
+            let thread = UIHostingController(
+                rootView: ChatFloatingHeader(
+                    title: "Thread", onBack: {}, trailingIsControl: true
+                ) {
+                    ThreadSubscriptionMenu(model: subscription)
+                })
+            let threadSize = thread.sizeThatFits(in: available)
+            XCTAssertLessThan(
+                threadSize.height, available.height / 4,
+                "A thread control must not turn the floating header into a full-screen overlay.")
+
+            let parent = ChatListItem(
+                id: "chat", name: "Design team", lastMessageAt: root.createdAt,
+                unreadCount: 0, lastMessage: root.replyPreview, mutedUntil: nil, archived: false,
+                kind: .group, peer: nil)
+            let leadingAvatar = ThreadHeaderAvatar(
+                key: .init(chatID: "chat", threadID: "1"), parent: parent, store: store,
+                currentUserID: 1, diameter: ChatFloatingHeader<EmptyView>.avatarDiameter,
+                root: root)
+            for dynamicType in [DynamicTypeSize.large, .accessibility5] {
+                for width in [CGFloat(320), CGFloat(402)] {
+                    let proposal = CGSize(width: width, height: available.height)
+                    let leadingHost = UIHostingController(
+                        rootView: leadingAvatar.environment(\.dynamicTypeSize, dynamicType))
+                    let threadWithAvatar = UIHostingController(
+                        rootView: ChatFloatingHeader(
+                            title: root.message ?? "Thread", subtitle: parent.name, onBack: {},
+                            trailingIsControl: true, leadingAvatar: leadingAvatar
+                        ) {
+                            ThreadSubscriptionMenu(model: subscription)
+                        }
+                        .environment(\.dynamicTypeSize, dynamicType))
+                    let size = threadWithAvatar.sizeThatFits(in: proposal)
+                    XCTAssertLessThanOrEqual(
+                        size.width, proposal.width,
+                        "The avatar and long identity must fit between the edge controls.")
+                    XCTAssertLessThan(
+                        size.height, proposal.height / 4,
+                        "A leading avatar must not let the thread control fill the screen.")
+                    XCTAssertGreaterThanOrEqual(
+                        size.height, leadingHost.sizeThatFits(in: proposal).height,
+                        "The identity must accommodate the scaled thread avatar without clipping.")
+                }
+            }
+
+            let avatar = AvatarView(url: nil, displayName: "Ada", diameter: 38, isOnline: true)
+            let avatarHost = UIHostingController(
+                rootView: avatar.environment(\.dynamicTypeSize, .accessibility5))
+            let profile = UIHostingController(
+                rootView: ChatFloatingHeader(title: "Ada") { avatar }
+                    .environment(\.dynamicTypeSize, .accessibility5))
+            XCTAssertGreaterThanOrEqual(
+                profile.sizeThatFits(in: available).height,
+                avatarHost.sizeThatFits(in: available).height,
+                "Bounding controls must not reintroduce clipping of scaled online avatars.")
+        }
+
         func testTimelineExtendsEdgeToEdgeWhileChromeStacksWithoutOverlap() async throws {
             let scene = try XCTUnwrap(
                 UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)

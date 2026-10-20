@@ -1,3 +1,21 @@
+/// Base sharing policy for individual online status and last-seen activity together.
+/// Discoverability, blocking, and the other person's policy still apply.
+public enum PresenceVisibility: String, Codable, CaseIterable, Sendable {
+    case everyone
+    case friends
+    case nobody
+}
+
+/// Authoritative settings returned by `GET` and `PUT /me/presence-settings`.
+/// A failed read must not be interpreted as the server's default policy.
+public struct PresenceSettingsResponse: Codable, Equatable, Sendable {
+    public let visibility: PresenceVisibility
+
+    public init(visibility: PresenceVisibility) {
+        self.visibility = visibility
+    }
+}
+
 public struct User: Codable, Hashable, Sendable {
     public let uid: Int32
     public let gender: Int32

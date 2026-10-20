@@ -14,12 +14,19 @@ struct ConversationAvatarView: View {
             switch item {
             case .chat(let chat):
                 AvatarView(
-                    url: chat.chatAvatarURL, displayName: chat.chatDisplayName, diameter: diameter)
+                    url: chat.chatAvatarURL, displayName: chat.chatDisplayName, diameter: diameter,
+                    isOnline: ChatPresenceDisplay.isOnline(chat, in: store.state)
+                )
+                .presenceScope(
+                    chat.kind == .dm ? ChatPresenceDisplay.scope(for: chat) : PresenceScope(),
+                    store: store)
             case .thread(let thread):
                 ThreadAvatarView(
-                    thread: thread,
+                    chatName: thread.chatName, chatAvatar: thread.chatAvatar,
                     parent: store.state.chats.first(where: { $0.id == thread.chatId })
+                        ?? store.state.archivedChats.first(where: { $0.id == thread.chatId })
                         ?? resolvedParent,
+                    participants: thread.participants, rootSender: thread.threadRootMessage.sender,
                     currentUserID: currentUserID, diameter: diameter, isSelected: isSelected)
             }
         }
@@ -42,28 +49,31 @@ struct ConversationAvatarView: View {
 }
 
 struct ThreadAvatarView: View {
-    let thread: ThreadListItem
+    let chatName: String
+    let chatAvatar: String?
     let parent: ChatListItem?
+    let participants: [User]
+    let rootSender: User?
     let currentUserID: Int32
     var diameter: CGFloat = 48
     var isSelected = false
     @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
 
     private var isDM: Bool { parent?.kind == .dm }
-    private var participant: User? { thread.participants.first { $0.uid != currentUserID } }
+    private var participant: User? { participants.first { $0.uid != currentUserID } }
     private var primaryName: String {
         if isDM {
-            if let peer = parent?.peer { return peer.username ?? thread.chatName }
-            return participant?.name ?? thread.chatName
+            if let peer = parent?.peer { return peer.username ?? chatName }
+            return participant?.name ?? chatName
         }
-        return thread.chatName
+        return chatName
     }
     private var primaryURL: URL? {
         let value =
             isDM
             ? ((parent?.peer != nil ? parent?.peer?.avatarUrl : participant?.avatarUrl)
-                ?? thread.chatAvatar)
-            : thread.chatAvatar
+                ?? chatAvatar)
+            : chatAvatar
         return value.flatMap(URL.init(string:))
     }
 
@@ -71,7 +81,8 @@ struct ThreadAvatarView: View {
         let secondarySize = max(16, (diameter * 0.55).rounded())
         AvatarView(url: primaryURL, displayName: primaryName, diameter: diameter)
             .overlay(alignment: .topTrailing) {
-                if isDM || !(thread.threadRootMessage.sender.name ?? "").isEmpty {
+                // Do not infer group-vs-DM styling while the parent kind is unresolved.
+                if isDM || (parent != nil && !(rootSender?.name ?? "").isEmpty) {
                     Group {
                         if isDM {
                             Image(systemName: "bubble.left.and.bubble.right.fill")
@@ -84,10 +95,9 @@ struct ThreadAvatarView: View {
                                 .foregroundStyle(.white)
                                 .frame(width: secondarySize * scale, height: secondarySize * scale)
                                 .background(ChahuaTheme.accent, in: Circle())
-                        } else if let name = thread.threadRootMessage.sender.name {
+                        } else if let name = rootSender?.name {
                             AvatarView(
-                                url: thread.threadRootMessage.sender.avatarUrl.flatMap(
-                                    URL.init(string:)),
+                                url: rootSender?.avatarUrl.flatMap(URL.init(string:)),
                                 displayName: name, diameter: secondarySize)
                         }
                     }

@@ -9,6 +9,7 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case messagesBulkDeleted(BulkDeletedPayload)
     case reactionUpdated(ReactionUpdatePayload)
     case presenceUpdate(PresenceUpdatePayload)
+    case presenceSnapshot(PresenceSnapshotPayload)
     case threadUpdate(ThreadUpdatePayload)
     case threadMembershipChanged(ThreadMembershipChangedPayload)
     case chatArchiveStateChanged(ChatArchiveStateChangedPayload)
@@ -44,6 +45,9 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         case "presenceUpdate":
             self = .presenceUpdate(
                 try container.decode(PresenceUpdatePayload.self, forKey: .payload))
+        case "presenceSnapshot":
+            self = .presenceSnapshot(
+                try container.decode(PresenceSnapshotPayload.self, forKey: .payload))
         case "threadUpdate":
             self = .threadUpdate(try container.decode(ThreadUpdatePayload.self, forKey: .payload))
         case "threadMembershipChanged":
@@ -130,6 +134,48 @@ public struct PresenceUpdatePayload: Decodable, Sendable {
 
     public init(activeConnections: UInt32) {
         self.activeConnections = activeConnections
+    }
+}
+
+/// A watched user's socket presence and optional last recorded HTTP activity.
+public struct UserPresenceResponse: Decodable, Equatable, Sendable {
+    public let uid: Int32
+    public let online: Bool
+    public let lastSeenAt: Date?
+
+    public init(uid: Int32, online: Bool, lastSeenAt: Date? = nil) {
+        self.uid = uid
+        self.online = online
+        self.lastSeenAt = lastSeenAt
+    }
+}
+
+/// Aggregate presence for a regular group; chat IDs remain opaque decimal strings.
+public struct GroupPresenceResponse: Decodable, Equatable, Sendable {
+    public let chatId: String
+    public let memberCount: UInt32
+    public let onlineCount: UInt32
+
+    public init(chatId: String, memberCount: UInt32, onlineCount: UInt32) {
+        self.chatId = chatId
+        self.memberCount = memberCount
+        self.onlineCount = onlineCount
+    }
+}
+
+/// An absolute watch response. Omitted entities are unavailable or unauthorized.
+public struct PresenceSnapshotPayload: Decodable, Sendable {
+    /// Echoed when supplied by the client; absence is distinct from zero.
+    public let requestId: UInt64?
+    public let users: [UserPresenceResponse]
+    public let groups: [GroupPresenceResponse]
+
+    public init(
+        requestId: UInt64? = nil, users: [UserPresenceResponse], groups: [GroupPresenceResponse]
+    ) {
+        self.requestId = requestId
+        self.users = users
+        self.groups = groups
     }
 }
 

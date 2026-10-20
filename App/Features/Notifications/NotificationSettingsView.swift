@@ -3,9 +3,12 @@ import SwiftUI
 import UserNotifications
 
 enum SettingsPage: String, Identifiable {
-    case language, appearance, conversations, storage, reactions, stickerPacks, notifications
+    case language, appearance, conversations, presencePrivacy, storage, reactions, stickerPacks,
+        notifications
 
-    static let generalPages: [Self] = [.language, .appearance, .conversations, .storage]
+    static let generalPages: [Self] = [
+        .language, .appearance, .conversations, .storage,
+    ]
     static let stickerPages: [Self] = [.reactions, .stickerPacks]
     var id: Self { self }
 
@@ -14,6 +17,7 @@ enum SettingsPage: String, Identifiable {
         case .language: "Language"
         case .appearance: "Appearance"
         case .conversations: "Conversations"
+        case .presencePrivacy: "Last Seen & Online"
         case .storage: "Storage"
         case .reactions: "Quick Reaction"
         case .stickerPacks: "Manage Sticker Packs"
@@ -26,6 +30,7 @@ enum SettingsPage: String, Identifiable {
         case .language: "globe"
         case .appearance: "paintpalette"
         case .conversations: "bubble.left.and.bubble.right"
+        case .presencePrivacy: "eye"
         case .storage: "internaldrive"
         case .reactions: "face.smiling"
         case .stickerPacks: "square.stack"
@@ -112,7 +117,10 @@ struct NotificationSettingsView: View {
 
     @ViewBuilder
     func page(_ page: SettingsPage, grouped: Bool) -> some View {
-        if page == .reactions {
+        if page == .presencePrivacy {
+            PresencePrivacySettingsView(store: chatStore, grouped: grouped)
+                .id(ObjectIdentifier(chatStore))
+        } else if page == .reactions {
             ReactionManagementView(library: chatStore.stickers, currentUserID: me.uid)
         } else if page == .stickerPacks {
             StickerPackManagementView(library: chatStore.stickers, currentUserID: me.uid)
@@ -159,7 +167,7 @@ struct NotificationSettingsView: View {
     @ViewBuilder
     private func pageRows(_ page: SettingsPage, showsDividers: Bool) -> some View {
         switch page {
-        case .reactions, .stickerPacks:
+        case .reactions, .stickerPacks, .presencePrivacy:
             EmptyView()
         case .language:
             LabeledContent("App language") {

@@ -8,6 +8,9 @@ public protocol RealtimeConnection: Sendable {
     func receive() async throws -> RealtimeServerEvent
     func sendPing(state: RealtimeAppState) async throws
     func sendAppState(_ state: RealtimeAppState) async throws
+    /// Replaces this socket's watch (up to 100 users and 4 groups).
+    /// Empty arrays unsubscribe; callers serialize updates and correlate snapshots by request ID.
+    func sendWatchPresence(requestID: UInt64, userIDs: [Int32], chatIDs: [String]) async throws
     func close() async
 }
 
@@ -69,6 +72,11 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
         try await send(StateFrame(type: "appState", state: state))
     }
 
+    func sendWatchPresence(requestID: UInt64, userIDs: [Int32], chatIDs: [String]) async throws {
+        try await send(
+            WatchPresenceFrame(requestId: requestID, userIds: userIDs, chatIds: chatIDs))
+    }
+
     func close() {
         guard !isClosed else { return }
         isClosed = true
@@ -102,5 +110,12 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
     private struct StateFrame: Encodable {
         let type: String
         let state: RealtimeAppState
+    }
+
+    private struct WatchPresenceFrame: Encodable {
+        let type = "watchPresence"
+        let requestId: UInt64
+        let userIds: [Int32]
+        let chatIds: [String]
     }
 }

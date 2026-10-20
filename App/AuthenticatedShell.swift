@@ -101,6 +101,8 @@ struct AuthenticatedShell: View {
         let rootID: String
         let title: String
         var initialMessageID: MessageID?
+        /// Timeline navigation already has the authoritative root; reuse its author in the header.
+        var root: MessageResponse?
         var key: ConversationKey { .init(chatID: chat.id, threadID: rootID) }
     }
 
@@ -229,10 +231,16 @@ struct AuthenticatedShell: View {
                             onOpenInfo: infoAction,
                             onSearch: searchAction,
                             trailingIsControl: headerThreadKey != nil,
-                            backBadgeCount: backBadgeCount
+                            backBadgeCount: backBadgeCount,
+                            leadingAvatar: headerLeading(for: headerThreadKey)
                         ) {
                             headerTrailing(for: headerThreadKey)
                         }
+                        .presenceScope(
+                            ChatPresenceDisplay.scope(
+                                for: threadPath.isEmpty ? selectedInfoChat : nil),
+                            store: chatStore
+                        )
                         .padding(.horizontal, 12)
                         .padding(.vertical, 12)
                     }
@@ -283,10 +291,16 @@ struct AuthenticatedShell: View {
                                         onOpenInfo: key.threadID == nil ? infoAction : nil,
                                         onSearch: searchAction,
                                         trailingIsControl: key.threadID != nil,
-                                        backBadgeCount: backBadgeCount
+                                        backBadgeCount: backBadgeCount,
+                                        leadingAvatar: headerLeading(for: key)
                                     ) {
                                         headerTrailing(for: key)
                                     }
+                                    .presenceScope(
+                                        ChatPresenceDisplay.scope(
+                                            for: key.threadID == nil ? selectedInfoChat : nil),
+                                        store: chatStore
+                                    )
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
                                 }
@@ -488,7 +502,8 @@ struct AuthenticatedShell: View {
         pushThread(
             ThreadNavigation(
                 chat: chat, rootID: message.id.description,
-                title: preview.isEmpty ? AppLanguage.localized("Thread") : preview))
+                title: preview.isEmpty ? AppLanguage.localized("Thread") : preview,
+                root: message))
     }
 
     private func pushThread(_ thread: ThreadNavigation) {
@@ -666,6 +681,20 @@ struct AuthenticatedShell: View {
         return selectedConversationID?.threadID == nil ? nil : selectedConversationID
     }
 
+    /// Threads keep their composite identity beside the title, separate from subscription controls.
+    private func headerLeading(for key: ConversationKey?) -> ThreadHeaderAvatar? {
+        guard let key, key.threadID != nil else { return nil }
+        let parent =
+            chatStore.state.chats.first { $0.id == key.chatID }
+            ?? chatStore.state.archivedChats.first { $0.id == key.chatID }
+            ?? (openedThread?.key == key ? openedThread?.chat : nil)
+            ?? (messageNavigation?.chat?.id == key.chatID ? messageNavigation?.chat : nil)
+        return ThreadHeaderAvatar(
+            key: key, parent: parent, store: chatStore, currentUserID: me.uid,
+            diameter: ChatFloatingHeader<EmptyView>.avatarDiameter,
+            root: openedThread?.key == key ? openedThread?.root : nil)
+    }
+
     /// Threads show their subscription control where chats show their avatar.
     @ViewBuilder private func headerTrailing(for key: ConversationKey?) -> some View {
         if let key, key.threadID != nil, let model = threadSubscription, model.key == key {
@@ -683,7 +712,8 @@ struct AuthenticatedShell: View {
         } else if let chat = messageNavigation?.chat {
             AvatarView(
                 url: chat.chatAvatarURL, displayName: chat.chatDisplayName,
-                diameter: ChatFloatingHeader<EmptyView>.avatarDiameter)
+                diameter: ChatFloatingHeader<EmptyView>.avatarDiameter,
+                isOnline: ChatPresenceDisplay.isOnline(chat, in: chatStore.state))
         }
     }
 
@@ -692,13 +722,8 @@ struct AuthenticatedShell: View {
         chatStore.state.unreadBadgeCount(excludingChatID: selectedConversationID?.chatID)
     }
 
-    /// Placeholder until the server reports member counts and presence.
     private var headerSubtitle: String? {
-        switch selectedInfoChat?.kind {
-        case .group: AppLanguage.localized("— members, — online")
-        case .dm: AppLanguage.localized("last seen —")
-        case nil: nil
-        }
+        ChatPresenceDisplay.subtitle(for: selectedInfoChat, in: chatStore.state)
     }
 
     private var headerChatIsMuted: Bool {
