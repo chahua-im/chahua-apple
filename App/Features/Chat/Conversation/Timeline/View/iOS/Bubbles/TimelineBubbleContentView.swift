@@ -124,13 +124,17 @@
                     sections.addSubview(view)
                 }
                 view.isHidden = false
+                // The action-menu preview is for reading and copying: selectable text,
+                // inert links. The live timeline is the reverse.
+                let isPreview = binding.context.isInteractionPreview
+                view.allowsSelection = isPreview
                 view.apply(
                     MessageTextContent(
                         text: row.entry.text ?? "",
                         mentions: row.entry.remoteMessage?.mentions ?? [],
                         currentUserID: binding.context.currentUserID, isOutgoing: row.isOutgoing,
-                        action: binding.actions.openLink,
-                        mentionAction: binding.actions.openMention,
+                        action: isPreview ? nil : binding.actions.openLink,
+                        mentionAction: isPreview ? nil : binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? presentation.metadata : nil,
                         failureAction: failureAction, geometry: geometry,
                         fontSize: environment.bodySize

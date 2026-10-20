@@ -34,6 +34,24 @@
             didSet { updateAccessibilityActions() }
         }
         private var failureButton: TimelineFailureButton?
+        /// A non-selectable UITextView does not activate links; this tap stands in for
+        /// UIKit's link interaction while selection is off.
+        private lazy var linkTap = UITapGestureRecognizer(
+            target: self, action: #selector(activateTappedLink(_:)))
+
+        /// Touch timelines show inert text so holds and swipes belong to the row; the
+        /// action-menu preview turns selection on. macOS bubbles are always selectable.
+        var allowsSelection = false {
+            didSet {
+                guard allowsSelection != oldValue else { return }
+                if !allowsSelection {
+                    resignFirstResponder()
+                    selectedRange = NSRange(location: 0, length: 0)
+                }
+                isSelectable = allowsSelection
+                linkTap.isEnabled = !allowsSelection
+            }
+        }
 
         init(geometry: MessageTextGeometry) {
             let layout = MessageTextLayout()
@@ -43,7 +61,7 @@
             // on the same layout manager rather than UITextView's TextKit 2 default.
             super.init(frame: .zero, textContainer: layout.textContainer)
             isEditable = false
-            isSelectable = true
+            isSelectable = allowsSelection
             isScrollEnabled = false
             backgroundColor = .clear
             isOpaque = false
@@ -57,6 +75,7 @@
             dataDetectorTypes = []
             linkTextAttributes = [:]
             delegate = coordinator
+            addGestureRecognizer(linkTap)
             layout.textContainer.widthTracksTextView = false
             layout.textContainer.heightTracksTextView = false
             setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -118,6 +137,36 @@
                 failureButton.setSymbolFrame(metadata.symbolFrame(in: geometry.metadataFrame))
                 bringSubviewToFront(failureButton)
             }
+        }
+
+        override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool
+        {
+            if gestureRecognizer === linkTap {
+                return linkCharacterIndex(at: gestureRecognizer.location(in: self)) != nil
+            }
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+
+        @objc private func activateTappedLink(_ recognizer: UITapGestureRecognizer) {
+            guard let index = linkCharacterIndex(at: recognizer.location(in: self)) else { return }
+            coordinator.activateLink(in: textStorage, at: index)
+        }
+
+        /// The character under `point` only when its glyph is actually hit and carries a link.
+        private func linkCharacterIndex(at point: CGPoint) -> Int? {
+            let storage = textStorage
+            guard storage.length > 0 else { return nil }
+            let location = CGPoint(
+                x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
+            let index = layoutManager.characterIndex(
+                for: location, in: textContainer, fractionOfDistanceBetweenInsertionPoints: nil)
+            guard index < storage.length,
+                storage.attribute(.link, at: index, effectiveRange: nil) != nil
+            else { return nil }
+            let glyphs = layoutManager.glyphRange(
+                forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil)
+            let bounds = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            return bounds.insetBy(dx: -4, dy: -4).contains(location) ? index : nil
         }
 
         override func draw(_ rect: CGRect) {

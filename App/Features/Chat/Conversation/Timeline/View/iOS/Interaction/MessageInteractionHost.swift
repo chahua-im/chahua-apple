@@ -239,7 +239,9 @@
                                 + (bubbleSize.height - previewFrame.height)
                                 * (1 - animation.previewScale) / 2
                     )
-                    .allowsHitTesting(false)
+                    // Touchable so its text can be selected; row gestures, links and media
+                    // are inert in interaction previews.
+                    .allowsHitTesting(animation.isPresented)
                     .accessibilityHidden(true)
                     if policy.canReact {
                         menu(.reactions, width: controlsWidth)
