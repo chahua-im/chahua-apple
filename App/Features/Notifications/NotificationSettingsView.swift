@@ -175,23 +175,33 @@ struct NotificationSettingsView: View {
                 HStack {
                     Label("Message text size", systemImage: "textformat.size")
                     Spacer()
-                    Text("\(messageTextSize) pt")
-                        .monospacedDigit()
+                    Text(MessageTextSizePreference.option(messageTextSize).title)
                         .foregroundStyle(.secondary)
                 }
                 Slider(
                     value: Binding(
-                        get: { Double(messageTextSize) },
+                        get: { Double(MessageTextSizePreference.option(messageTextSize).rawValue) },
                         set: { messageTextSize = Int($0.rounded()) }
                     ),
-                    in: 14...18, step: 1
+                    in: Double(
+                        MessageTextSizePreference.allowedValues.lowerBound)...Double(
+                            MessageTextSizePreference.allowedValues.upperBound),
+                    step: 1
                 )
                 .accessibilityLabel("Message text size")
+                .accessibilityValue(Text(MessageTextSizePreference.option(messageTextSize).title))
                 HStack {
-                    Text("14")
+                    Text("Smallest")
                     Spacer()
-                    Text("18")
+                    Text("Default")
+                    Spacer()
+                    Text("Largest")
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Text(
+                    "Default follows system text size. Other sizes override it for messages and the composer."
+                )
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }

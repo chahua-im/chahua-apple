@@ -143,15 +143,16 @@ struct ChatListView: View {
         let count = ConversationTabBadges(
             chats: store.state.archivedChats, threads: store.state.archivedThreads,
             archived: true, showThreadsInMessages: showThreadsInMessages)[scope]
-        return HStack(spacing: 12) {
-            Image(systemName: "archivebox")
-                .font(.title2)
-                .foregroundStyle(.white)
-                .frame(
-                    width: ConversationListRow.avatarDiameter,
-                    height: ConversationListRow.avatarDiameter
-                )
-                .background(ChahuaTheme.ChatList.primary, in: Circle())
+        return HStack(spacing: ChahuaTheme.Spacing.medium) {
+            AvatarFrame(diameter: ConversationListRow.avatarDiameter) { _ in
+                ChahuaTheme.ChatList.primary
+                    .overlay {
+                        Image(systemName: "archivebox")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                    }
+            }
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Archived").font(.headline)
                 Text("View archived chats and threads")
@@ -167,8 +168,7 @@ struct ChatListView: View {
                     .accessibilityLabel("\(count) unread conversations")
             }
         }
-        .padding(.horizontal, ChatSplitMetrics.outerInset)
-        .frame(height: 68)
+        .modifier(ConversationListRowLayout())
         .contentShape(Rectangle())
     }
 

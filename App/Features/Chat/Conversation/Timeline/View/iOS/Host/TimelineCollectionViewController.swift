@@ -302,19 +302,23 @@
 
         private var currentEnvironment: TimelineLayoutEnvironment {
             let traits = view.traitCollection
-            let preferredBodySize = UIFont.preferredFont(
-                forTextStyle: .body, compatibleWith: traits
-            ).pointSize
             let bodySize = MessageTextSizePreference.scaledBodySize(
                 messageTextSize, compatibleWith: traits)
-            let relativeScale = bodySize / max(1, preferredBodySize)
             return .current(
                 timelineWidth: availableRowWidth, displayScale: traits.displayScale,
                 bodySize: bodySize,
-                captionSize: UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits)
-                    .pointSize * relativeScale,
-                caption2Size: UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: traits)
-                    .pointSize * relativeScale,
+                captionSize: MessageTextSizePreference.scaledSize(
+                    messageTextSize,
+                    systemSize: UIFont.preferredFont(
+                        forTextStyle: .caption1, compatibleWith: traits
+                    )
+                    .pointSize, defaultSize: 12),
+                caption2Size: MessageTextSizePreference.scaledSize(
+                    messageTextSize,
+                    systemSize: UIFont.preferredFont(
+                        forTextStyle: .caption2, compatibleWith: traits
+                    )
+                    .pointSize, defaultSize: 11),
                 avatarSize: UIFontMetrics(forTextStyle: .body).scaledValue(
                     for: 36, compatibleWith: traits),
                 layoutDirection: view.effectiveUserInterfaceLayoutDirection == .rightToLeft

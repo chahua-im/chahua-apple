@@ -330,17 +330,19 @@
 
         private var currentEnvironment: TimelineLayoutEnvironment {
             let geometry = currentGeometry
-            let preferredBodySize = NSFont.preferredFont(forTextStyle: .body).pointSize
             let bodySize = MessageTextSizePreference.scaledBodySize(messageTextSize)
-            let relativeScale = bodySize / max(1, preferredBodySize)
             return .current(
                 timelineWidth: geometry.rowWidth,
                 displayScale: geometry.scale,
                 bodySize: bodySize,
-                captionSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize
-                    * relativeScale,
-                caption2Size: NSFont.preferredFont(forTextStyle: .caption2).pointSize
-                    * relativeScale,
+                captionSize: MessageTextSizePreference.scaledSize(
+                    messageTextSize,
+                    systemSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize,
+                    defaultSize: 10),
+                caption2Size: MessageTextSizePreference.scaledSize(
+                    messageTextSize,
+                    systemSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
+                    defaultSize: 10),
                 layoutDirection: view.userInterfaceLayoutDirection == .rightToLeft
                     ? .rightToLeft : .leftToRight, language: appLanguage)
         }

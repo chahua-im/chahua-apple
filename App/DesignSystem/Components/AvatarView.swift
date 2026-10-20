@@ -3,17 +3,17 @@ import SwiftUI
 struct AvatarView: View {
     let url: URL?
     let displayName: String
-    @ScaledMetric(relativeTo: .body) private var scaledDiameter: CGFloat = 40
+    let diameter: CGFloat
     @Environment(\.displayScale) private var displayScale
 
     init(url: URL?, displayName: String, diameter: CGFloat = 40) {
         self.url = url
         self.displayName = displayName
-        _scaledDiameter = ScaledMetric(wrappedValue: diameter, relativeTo: .body)
+        self.diameter = diameter
     }
 
     var body: some View {
-        Group {
+        AvatarFrame(diameter: diameter) { scaledDiameter in
             if let url {
                 CachedImageView(
                     url: url,
@@ -25,19 +25,30 @@ struct AvatarView: View {
                     if case .success(let image) = phase {
                         image.resizable().scaledToFill()
                     } else {
-                        fallback
+                        AvatarPlaceholder(displayName: displayName, diameter: scaledDiameter)
                     }
                 }
             } else {
-                fallback
+                AvatarPlaceholder(displayName: displayName, diameter: scaledDiameter)
             }
         }
-        .frame(width: scaledDiameter, height: scaledDiameter)
-        .clipShape(Circle())
         .accessibilityLabel(Text("Avatar for \(displayName)"))
     }
+}
 
-    private var fallback: some View {
-        AvatarPlaceholder(displayName: displayName, diameter: scaledDiameter)
+/// Image and symbol avatars share the same Dynamic Type scaling and circular bounds.
+struct AvatarFrame<Content: View>: View {
+    @ScaledMetric(relativeTo: .body) private var scaledDiameter: CGFloat = 40
+    private let content: (CGFloat) -> Content
+
+    init(diameter: CGFloat, @ViewBuilder content: @escaping (CGFloat) -> Content) {
+        _scaledDiameter = ScaledMetric(wrappedValue: diameter, relativeTo: .body)
+        self.content = content
+    }
+
+    var body: some View {
+        content(scaledDiameter)
+            .frame(width: scaledDiameter, height: scaledDiameter)
+            .clipShape(Circle())
     }
 }

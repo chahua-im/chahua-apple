@@ -12,6 +12,14 @@ struct ConversationListRow: View {
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
     @Environment(\.locale) private var locale
     @Environment(\.calendar) private var calendar
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var subtitleHeight: CGFloat = 19
+
+    private var titleLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: ChahuaTheme.Spacing.medium))
+    }
 
     private var isMuted: Bool {
         guard case .chat(let chat) = item, let until = chat.mutedUntil else { return false }
@@ -29,7 +37,7 @@ struct ConversationListRow: View {
                 item: item, store: store, currentUserID: currentUserID,
                 diameter: Self.avatarDiameter, isSelected: isSelected)
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: ChahuaTheme.Spacing.medium) {
+                titleLayout {
                     Group {
                         if case .thread(let thread) = item {
                             MessageSummaryText(
@@ -43,11 +51,11 @@ struct ConversationListRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     TimelineView(.periodic(from: .now, by: 60)) { context in
                         Text(activityLabel(now: context.date))
-                            .font(.system(size: 13))
+                            .font(.footnote)
                             .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.primary)
-                            .lineLimit(1)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                     }
-                    .fixedSize()
+                    .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
                 }
                 HStack(spacing: ChahuaTheme.Spacing.medium) {
                     Group {
@@ -68,7 +76,7 @@ struct ConversationListRow: View {
                     .modifier(ConversationListSubtitleStyle(isSelected: isSelected))
                     if item.unreadCount > 0 {
                         Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(isMuted ? Color.primary : Color.white)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
@@ -83,7 +91,7 @@ struct ConversationListRow: View {
                             .accessibilityLabel("\(item.unreadCount) unread messages")
                     } else if isMuted {
                         Image(systemName: "bell.slash.fill")
-                            .font(.system(size: 13))
+                            .font(.footnote)
                             .foregroundStyle(
                                 isSelected ? Color.white.opacity(0.88) : Color.secondary
                             )
@@ -91,12 +99,11 @@ struct ConversationListRow: View {
                             .accessibilityLabel("Muted")
                     }
                 }
-                .frame(height: 19)
+                .frame(minHeight: subtitleHeight)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, ChatSplitMetrics.outerInset)
-        .frame(height: 68)
+        .modifier(ConversationListRowLayout())
         .foregroundStyle(isSelected ? Color.white : Color.primary)
     }
 
@@ -122,6 +129,16 @@ struct ConversationListRow: View {
                 ? format : format.year())
     }
 
+}
+
+/// Keep archive and conversation rows aligned without clipping scaled content.
+struct ConversationListRowLayout: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, ChatSplitMetrics.outerInset)
+            .padding(.vertical, 10)
+            .frame(minHeight: 68)
+    }
 }
 
 /// The archived entry and conversation rows use the same secondary line

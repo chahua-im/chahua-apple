@@ -54,9 +54,8 @@ struct MessageComposerView: View {
     #endif
     private var fontSize: CGFloat {
         #if os(iOS)
-            scaledDefaultMessageTextSize
-                * CGFloat(MessageTextSizePreference.clamped(messageTextSize))
-                / CGFloat(MessageTextSizePreference.defaultValue)
+            MessageTextSizePreference.scaledSize(
+                messageTextSize, systemSize: scaledDefaultMessageTextSize, defaultSize: 17)
         #else
             MessageTextSizePreference.scaledBodySize(messageTextSize)
         #endif
@@ -660,6 +659,8 @@ struct MessageComposerView: View {
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
                     MessageSummaryText(reply, fontSize: fontSize * 12 / 15)
+                        // The composer has already resolved system sizing or the explicit override.
+                        .dynamicTypeSize(.large)
                 }
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -696,6 +697,7 @@ struct MessageComposerView: View {
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
                 MessageSummaryText(message.replyPreview, fontSize: fontSize * 12 / 15)
+                    .dynamicTypeSize(.large)
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -434,9 +434,6 @@
         }
       }
     },
-    "%lld pt" : {
-
-    },
     "%lld reactions" : {
       "localizations" : {
         "zh-Hans" : {
@@ -618,12 +615,6 @@
           }
         }
       }
-    },
-    "14" : {
-
-    },
-    "18" : {
-
     },
     "99+" : {
       "comment" : "A string that can be used to represent a count of 99 or more.",
@@ -3036,6 +3027,23 @@
         }
       }
     },
+    "Default follows system text size. Other sizes override it for messages and the composer." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "默认跟随系统文字大小，其他选项会覆盖消息和输入框的文字大小。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "預設跟隨系統文字大小，其他選項會覆寫訊息和輸入框的文字大小。"
+          }
+        }
+      }
+    },
     "Delete" : {
       "localizations" : {
         "en" : {
@@ -4174,6 +4182,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "語言"
+          }
+        }
+      }
+    },
+    "Larger" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较大"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "較大"
+          }
+        }
+      }
+    },
+    "Largest" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最大"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最大"
           }
         }
       }
@@ -8434,6 +8476,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "簡體中文"
+          }
+        }
+      }
+    },
+    "Smaller" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "较小"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "較小"
+          }
+        }
+      }
+    },
+    "Smallest" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最小"
           }
         }
       }
