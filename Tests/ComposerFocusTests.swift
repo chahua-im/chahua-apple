@@ -823,14 +823,7 @@ private final class FocusComposerHarness {
         func pressBackground() {
             let point = host.view.convert(
                 NSPoint(x: 10, y: host.view.isFlipped ? 10 : host.view.bounds.height - 10), to: nil)
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = NSEvent.mouseEvent(
-                    with: type, location: point, modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime,
-                    windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
-                NSApp.sendEvent(event)
-            }
+            click(at: point)
         }
 
         func pressSendButton() {
@@ -838,14 +831,24 @@ private final class FocusComposerHarness {
                 NSPoint(
                     x: host.view.bounds.width - 34,
                     y: host.view.isFlipped ? host.view.bounds.height - 34 : 34), to: nil)
-            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-                let event = NSEvent.mouseEvent(
-                    with: type, location: point, modifierFlags: [],
-                    timestamp: ProcessInfo.processInfo.systemUptime,
-                    windowNumber: window.windowNumber,
-                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
-                NSApp.sendEvent(event)
-            }
+            click(at: point)
+        }
+
+        private func click(at point: NSPoint) {
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            let release = NSEvent.mouseEvent(
+                with: .leftMouseUp, location: point, modifierFlags: [],
+                timestamp: timestamp + 0.01,
+                windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 0)!
+            let press = NSEvent.mouseEvent(
+                with: .leftMouseDown, location: point, modifierFlags: [],
+                timestamp: timestamp,
+                windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            // Native controls may wait for mouse-up before mouseDown returns.
+            NSApp.postEvent(release, atStart: true)
+            NSApp.sendEvent(press)
         }
     #else
         @discardableResult

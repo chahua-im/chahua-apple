@@ -109,7 +109,7 @@
                 messageStore: ConversationMessageStore())
             let controller = TimelineTableViewController(model: model)
             controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
-            let window = mountForDisplay(controller)
+            let window = mountForDisplay(controller, styleMask: [.titled])
             window.makeKeyAndOrderFront(nil)
             defer {
                 model.close()
@@ -142,6 +142,15 @@
                     timestamp: ProcessInfo.processInfo.systemUptime,
                     windowNumber: window.windowNumber, context: nil, eventNumber: 0,
                     clickCount: 1, pressure: 1))
+            let release = try XCTUnwrap(
+                NSEvent.mouseEvent(
+                    with: .leftMouseUp, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 1,
+                    clickCount: 1, pressure: 0))
+            // NSTextView can track synchronously inside mouseDown; its release must
+            // already be queued before dispatching the press.
+            NSApp.postEvent(release, atStart: true)
             NSApp.sendEvent(click)
             XCTAssertEqual(first.selectedRange().length, 0)
             second.setSelectedRange(NSRange(location: 0, length: 6))
@@ -657,9 +666,12 @@
             }
         }
 
-        private func mountForDisplay(_ controller: TimelineTableViewController) -> NSWindow {
+        private func mountForDisplay(
+            _ controller: TimelineTableViewController,
+            styleMask: NSWindow.StyleMask = [.borderless]
+        ) -> NSWindow {
             let window = NSWindow(
-                contentRect: controller.view.frame, styleMask: [.borderless], backing: .buffered,
+                contentRect: controller.view.frame, styleMask: styleMask, backing: .buffered,
                 defer: false)
             window.isReleasedWhenClosed = false
             window.contentViewController = controller

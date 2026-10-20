@@ -111,6 +111,8 @@ compile() {
 }
 
 # Avoid Xcode cloning multiple simulators and competing hosted UI test processes.
+# Bound individual tests as well as the Jenkins job: native AppKit event tracking
+# can block the main thread, preventing an async test's own deadline from running.
 test() {
   local ios_destination
 
@@ -127,6 +129,9 @@ test() {
     -destination "$ios_destination" \
     -derivedDataPath "$BUILD_ROOT/DerivedData/iOS" \
     -parallel-testing-enabled NO \
+    -test-timeouts-enabled YES \
+    -default-test-execution-time-allowance 60 \
+    -maximum-test-execution-time-allowance 120 \
     -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages" \
     -resultBundlePath "$BUILD_ROOT/TestResults/chahua-ios.xcresult" \
     CODE_SIGNING_ALLOWED=NO \
@@ -141,6 +146,9 @@ test() {
     -derivedDataPath "$BUILD_ROOT/DerivedData/macOS" \
     -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages" \
     -parallel-testing-enabled NO \
+    -test-timeouts-enabled YES \
+    -default-test-execution-time-allowance 60 \
+    -maximum-test-execution-time-allowance 120 \
     -resultBundlePath "$BUILD_ROOT/TestResults/chahua-macos.xcresult" \
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY=- \
