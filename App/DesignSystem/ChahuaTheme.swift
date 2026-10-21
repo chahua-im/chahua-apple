@@ -8,6 +8,9 @@ enum ChahuaTheme {
     static let separator = Color.primary.opacity(0.18)
     static let accent = Color.accentColor
     static let destructive = Color.red
+    // Match the PWA's --app-online-color (#4dc920) in both appearances.
+    static let online = Color(
+        .sRGB, red: 77.0 / 255, green: 201.0 / 255, blue: 32.0 / 255, opacity: 1)
 
     static func conversationBackground(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark

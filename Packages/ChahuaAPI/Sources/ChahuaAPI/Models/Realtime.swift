@@ -13,6 +13,7 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case threadUpdate(ThreadUpdatePayload)
     case threadMembershipChanged(ThreadMembershipChangedPayload)
     case chatArchiveStateChanged(ChatArchiveStateChangedPayload)
+    case readReceiptChanged(ReadReceiptChangedPayload)
     case pinAdded(PinUpdatePayload)
     case threadPinAdded(PinUpdatePayload)
     case pinRemoved(PinUpdatePayload)
@@ -56,6 +57,9 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         case "chatArchiveStateChanged":
             self = .chatArchiveStateChanged(
                 try container.decode(ChatArchiveStateChangedPayload.self, forKey: .payload))
+        case "readReceiptChanged":
+            self = .readReceiptChanged(
+                try container.decode(ReadReceiptChangedPayload.self, forKey: .payload))
         case "pinAdded":
             self = .pinAdded(try container.decode(PinUpdatePayload.self, forKey: .payload))
         case "threadPinAdded":
@@ -78,6 +82,16 @@ public enum RealtimeServerEvent: Decodable, Sendable {
                 try container.decode(FriendshipRemovedPayload.self, forKey: .payload))
         default: self = .unknown(type: type)
         }
+    }
+}
+
+public struct ReadReceiptChangedPayload: Decodable, Sendable {
+    public let chatId: String
+    public let privacyChanged: Bool?
+
+    public init(chatId: String, privacyChanged: Bool? = nil) {
+        self.chatId = chatId
+        self.privacyChanged = privacyChanged
     }
 }
 

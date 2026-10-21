@@ -153,6 +153,140 @@ final class ChahuaAPITests: XCTestCase {
         }
     }
 
+    func testReadReceiptScopesAndHiddenCursorUseAuthenticatedEndpoint() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (
+                200, request.url?.query == nil ? #"{"lastReadMessageId":"9007199254740993"}"# : "{}"
+            )
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        let root = try await client.readReceipt(chatID: "chat/opaque #1", threadID: nil)
+        XCTAssertEqual(root.lastReadMessageId, MessageID(9_007_199_254_740_993))
+        let thread = try await client.readReceipt(
+            chatID: "chat/opaque #1", threadID: MessageID(9_007_199_254_740_991))
+        XCTAssertNil(thread.lastReadMessageId)
+
+        let recorded = requests.values
+        XCTAssertEqual(recorded.map(\.httpMethod), ["GET", "GET"])
+        for request in recorded {
+            let components = try XCTUnwrap(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+            XCTAssertEqual(
+                components.percentEncodedPath, "/chats/chat%2Fopaque%20%231/read-receipt")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+            XCTAssertTrue(requestBody(request).isEmpty)
+        }
+        XCTAssertNil(recorded[0].url?.query)
+        XCTAssertEqual(recorded[1].url?.query, "threadId=9007199254740991")
+
+        StubURLProtocol.handler = { _ in (401, "") }
+        do {
+            _ = try await client.readReceipt(chatID: "1", threadID: nil)
+            XCTFail("Unauthorized requests must fail, not become hidden cursors.")
+        } catch APIError.invalidToken {}
+    }
+
+    func testReadReceiptPrivacyPoliciesUseExactBodiesAndAuthoritativeResponses() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            if request.url?.path == "/me/read-receipt-settings" {
+                return (
+                    200,
+                    request.httpMethod == "PUT"
+                        ? #"{"visibility":"nobody"}"# : #"{"visibility":"friends"}"#
+                )
+            }
+            return (
+                200,
+                request.httpMethod == "PUT"
+                    ? #"{"override":"hide"}"# : #"{"override":"inherit"}"#
+            )
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+
+        let global = try await client.readReceiptSettings()
+        XCTAssertEqual(global.visibility, .friends)
+        for visibility in ReadReceiptVisibility.allCases {
+            let saved = try await client.updateReadReceiptSettings(visibility: visibility)
+            XCTAssertEqual(saved.visibility, .nobody)
+        }
+        let friend = try await client.friendReadReceiptSettings(peerUID: 42)
+        XCTAssertEqual(friend.override, .inherit)
+        for override in FriendReadReceiptOverride.allCases {
+            let saved = try await client.updateFriendReadReceiptSettings(
+                peerUID: 42, override: override)
+            XCTAssertEqual(saved.override, .hide)
+        }
+
+        let recorded = requests.values
+        XCTAssertEqual(
+            recorded.map(\.httpMethod), ["GET", "PUT", "PUT", "GET", "PUT", "PUT", "PUT"])
+        XCTAssertEqual(
+            recorded.map { $0.url?.path },
+            Array(repeating: "/me/read-receipt-settings", count: 3)
+                + Array(repeating: "/friends/42/read-receipt-settings", count: 4))
+        for request in recorded {
+            XCTAssertNil(request.url?.query)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+        }
+        XCTAssertTrue(requestBody(recorded[0]).isEmpty)
+        XCTAssertTrue(requestBody(recorded[3]).isEmpty)
+        for (request, visibility) in zip(recorded[1...2], ReadReceiptVisibility.allCases) {
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: requestBody(request)) as? [String: String])
+            XCTAssertEqual(body, ["visibility": visibility.rawValue])
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        }
+        for (request, override) in zip(recorded[4...6], FriendReadReceiptOverride.allCases) {
+            let body = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: requestBody(request)) as? [String: String])
+            XCTAssertEqual(body, ["override": override.rawValue])
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        }
+    }
+
+    func testReadReceiptPrivacyRejectsMissingUnknownAndFailedPolicies() async throws {
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        for response in ["{}", #"{"visibility":"everyone","override":"unknown"}"#] {
+            StubURLProtocol.handler = { _ in (200, response) }
+            do {
+                _ = try await client.readReceiptSettings()
+                XCTFail("A failed read must not return a default visibility.")
+            } catch APIError.decoding(let status, _) { XCTAssertEqual(status, 200) }
+            do {
+                _ = try await client.friendReadReceiptSettings(peerUID: 42)
+                XCTFail("A failed read must not return an inherited override.")
+            } catch APIError.decoding(let status, _) { XCTAssertEqual(status, 200) }
+            do {
+                _ = try await client.updateReadReceiptSettings(visibility: .friends)
+                XCTFail("A malformed save must not return the submitted visibility.")
+            } catch APIError.decoding(let status, _) { XCTAssertEqual(status, 200) }
+            do {
+                _ = try await client.updateFriendReadReceiptSettings(peerUID: 42, override: .share)
+                XCTFail("A malformed save must not return the submitted override.")
+            } catch APIError.decoding(let status, _) { XCTAssertEqual(status, 200) }
+        }
+        StubURLProtocol.handler = { _ in (403, #"{"error":"forbidden"}"#) }
+        do {
+            _ = try await client.updateReadReceiptSettings(visibility: .nobody)
+            XCTFail("Rejected updates must not return a policy.")
+        } catch APIError.http(let status, _) { XCTAssertEqual(status, 403) }
+        do {
+            _ = try await client.updateFriendReadReceiptSettings(peerUID: 42, override: .hide)
+            XCTFail("Rejected updates must not return a policy.")
+        } catch APIError.http(let status, _) { XCTAssertEqual(status, 403) }
+    }
+
     func testListChatsRequestsActiveChatsAndDecodesResponse() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in

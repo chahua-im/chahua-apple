@@ -175,7 +175,7 @@ struct TimelineRowPresentation {
                         + (remote?.isEdited == true ? " " + AppLanguage.localized("(Edited)") : "")
                     metadata = MessageMetadata(
                         time: time, state: message.isOutgoing ? message.entry.displayState : nil,
-                        isOutgoing: message.isOutgoing, isOverlay: overlay,
+                        isOutgoing: message.isOutgoing, isRead: message.isRead, isOverlay: overlay,
                         fontSize: overlay ? environment.caption2Size : environment.captionSize)
                     sections.append(.metadata(metadata!.size, overlay: overlay))
                 } else {

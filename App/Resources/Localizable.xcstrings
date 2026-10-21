@@ -1,6 +1,94 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Read" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀" } }
+      }
+    },
+    "Read Receipts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read Receipts" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條" } }
+      }
+    },
+    "Who can see my read receipts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Who can see my read receipts" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "谁可以查看我的已读回执" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "誰可以查看我的已讀回條" } }
+      }
+    },
+    "Read receipt sharing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read receipt sharing" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执分享" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條分享" } }
+      }
+    },
+    "Loading read receipt settings…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading read receipt settings…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载已读回执设置…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入已讀回條設定…" } }
+      }
+    },
+    "Failed to load read receipt settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed to load read receipt settings." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执设置加载失败。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條設定載入失敗。" } }
+      }
+    },
+    "Failed to load this friend's read receipt setting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed to load this friend's read receipt setting." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此好友的已读回执设置加载失败。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此好友的已讀回條設定載入失敗。" } }
+      }
+    },
+    "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅在双方都允许分享时显示已读回执；群组对话永不显示已读回执。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "只會在雙方都允許分享時顯示已讀回條；群組對話永不顯示已讀回條。" } }
+      }
+    },
+    "Use global setting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use global setting" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用全局设置" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "使用全域設定" } }
+      }
+    },
+    "Share with this friend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Share with this friend" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "与这位好友分享" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "與這位好友分享" } }
+      }
+    },
+    "Hide from this friend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Hide from this friend" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "对这位好友隐藏" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "對這位好友隱藏" } }
+      }
+    },
     "Privacy and Security" : {
       "extractionState" : "manual",
       "localizations" : {

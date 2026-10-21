@@ -7,6 +7,24 @@
     @MainActor
     final class FixtureReactionClient: ChahuaAPIClient {
         var failNextMutation = false
+
+        func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
+            throw APIError.unavailable
+        }
+        func readReceiptSettings() async throws -> ReadReceiptSettingsResponse {
+            throw APIError.unavailable
+        }
+        func updateReadReceiptSettings(visibility: ReadReceiptVisibility) async throws
+            -> ReadReceiptSettingsResponse
+        { throw APIError.unavailable }
+        func friendReadReceiptSettings(peerUID: Int32) async throws
+            -> FriendReadReceiptSettingsResponse
+        {
+            throw APIError.unavailable
+        }
+        func updateFriendReadReceiptSettings(peerUID: Int32, override: FriendReadReceiptOverride)
+            async throws -> FriendReadReceiptSettingsResponse
+        { throw APIError.unavailable }
         private var messages: [MessageID: MessageResponse] = [:]
         private let decoder: JSONDecoder = {
             let decoder = JSONDecoder()

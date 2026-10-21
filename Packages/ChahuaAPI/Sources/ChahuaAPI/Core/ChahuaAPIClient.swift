@@ -27,6 +27,20 @@ public protocol ChahuaAPIClient: Sendable {
     func updatePresenceSettings(visibility: PresenceVisibility) async throws
         -> PresenceSettingsResponse
 
+    /// Reads a DM peer's visible cursor; thread scopes use the optional `threadId` query.
+    func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse
+
+    /// Authoritative GET/PUT /me/read-receipt-settings policy.
+    func readReceiptSettings() async throws -> ReadReceiptSettingsResponse
+    func updateReadReceiptSettings(visibility: ReadReceiptVisibility) async throws
+        -> ReadReceiptSettingsResponse
+
+    /// Authoritative GET/PUT /friends/{peerUID}/read-receipt-settings refinement.
+    func friendReadReceiptSettings(peerUID: Int32) async throws
+        -> FriendReadReceiptSettingsResponse
+    func updateFriendReadReceiptSettings(peerUID: Int32, override: FriendReadReceiptOverride)
+        async throws -> FriendReadReceiptSettingsResponse
+
     /// Fetches the current attachment size limit with `GET /attachments/config`.
     func attachmentConfig() async throws -> AttachmentConfigResponse
 

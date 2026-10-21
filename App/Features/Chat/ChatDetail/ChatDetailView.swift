@@ -70,6 +70,16 @@ struct ChatDetailView: View {
         self.outgoingQueue = store.outgoingQueue
         _interactionContext = State(
             initialValue: .init(isDM: chat.kind == .dm, isThreadView: threadID != nil))
+        let fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)?
+        if chat.kind == .dm {
+            fetchReadReceipt = { threadID in
+                let receipt = try await store.readReceipt(
+                    chatID: chat.id, threadID: threadID.flatMap(MessageID.init))
+                return receipt.lastReadMessageId
+            }
+        } else {
+            fetchReadReceipt = nil
+        }
         _model = StateObject(
             wrappedValue: ConversationTimelineModel(
                 chatID: chat.id,
@@ -81,7 +91,8 @@ struct ChatDetailView: View {
                 markRead: { messageID in
                     try await store.markRead(
                         chatID: chat.id, threadID: threadID, messageID: messageID)
-                }
+                },
+                fetchReadReceipt: fetchReadReceipt
             ))
     }
 

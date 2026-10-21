@@ -841,8 +841,13 @@ final class ChatStore: ObservableObject {
             invalidateChatList()
             threadSubscriptionInvalidations.send(
                 ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId))
+        case .readReceiptChanged(let payload):
+            for model in visibleTimelines() where model.chatID == payload.chatId {
+                model.refreshReadReceipt(clear: payload.privacyChanged == true)
+            }
         case .friendRequestResolved, .friendshipRemoved:
             invalidateChatList()
+            invalidateReadReceipts()
         case .stickerPackOrderUpdated(let payload):
             stickers.setPackOrder(payload.order)
         case .presenceSnapshot(let snapshot):
@@ -960,6 +965,60 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.readReceipt(chatID: chatID, threadID: threadID)
+        }
+    }
+
+    func readReceiptSettings() async throws -> ReadReceiptSettingsResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.readReceiptSettings()
+        }
+    }
+
+    func updateReadReceiptSettings(visibility: ReadReceiptVisibility) async throws
+        -> ReadReceiptSettingsResponse
+    {
+        let requestGeneration = generation
+        return try await performGroupRequest(generation: requestGeneration) {
+            let settings = try await apiClient.updateReadReceiptSettings(visibility: visibility)
+            guard generation == requestGeneration else { throw CancellationError() }
+            // Invalidation belongs to the committed write, not the settings view's lifetime.
+            invalidateReadReceipts()
+            return settings
+        }
+    }
+
+    func friendReadReceiptSettings(peerUID: Int32) async throws
+        -> FriendReadReceiptSettingsResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.friendReadReceiptSettings(peerUID: peerUID)
+        }
+    }
+
+    func updateFriendReadReceiptSettings(peerUID: Int32, override: FriendReadReceiptOverride)
+        async throws -> FriendReadReceiptSettingsResponse
+    {
+        let requestGeneration = generation
+        return try await performGroupRequest(generation: requestGeneration) {
+            let settings = try await apiClient.updateFriendReadReceiptSettings(
+                peerUID: peerUID, override: override)
+            guard generation == requestGeneration else { throw CancellationError() }
+            invalidateReadReceipts(peerUID: peerUID)
+            return settings
+        }
+    }
+
+    func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
+        let response = try await performGroupRequest(generation: generation) {
+            try await apiClient.friendRelationship(peerUID: peerUID)
+        }
+        guard response.peerUid == peerUID else { throw APIError.unexpectedResponse }
+        return response
+    }
+
     let presencePrivacyInvalidations = PassthroughSubject<Void, Never>()
 
     private func invalidateIndividualPresence() {
@@ -1017,6 +1076,19 @@ final class ChatStore: ObservableObject {
 
     func unregisterTimeline(_ model: ConversationTimelineModel) {
         timelines.removeValue(forKey: ObjectIdentifier(model))
+    }
+
+    /// A committed sharing-policy change revokes cached receipts before refetching.
+    func invalidateReadReceipts(peerUID: Int32? = nil) {
+        for model in visibleTimelines() {
+            // A notification can open a conversation not present in the cached lists.
+            if let peerUID, let modelPeerUID = chat(id: model.chatID)?.peer?.uid,
+                modelPeerUID != peerUID
+            {
+                continue
+            }
+            model.refreshReadReceipt(clear: true)
+        }
     }
 
     private func updateReadState(for model: ConversationTimelineModel) {

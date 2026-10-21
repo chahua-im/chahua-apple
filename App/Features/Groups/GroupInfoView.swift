@@ -53,6 +53,11 @@ struct GroupInfoView: View {
                     }
                     .font(.footnote)
                 }
+                if isDM, let peer = groupInfo?.peer {
+                    ReadReceiptPrivacySettingsRows(store: store, peerUID: peer.uid)
+                        .id(peer.uid)
+                        .padding(.horizontal, 16)
+                }
                 sectionTabs
                 if !isDM {
                     GroupMembersView(chatID: chat.id, currentUserID: currentUserID, store: store)
@@ -102,8 +107,6 @@ struct GroupInfoView: View {
         }
     }
 
-    // TODO: On a future user profile detail page, add a current friend's presence
-    // override (inherit/share/hide); keep per-friend privacy out of chat/group info.
     private var hero: some View {
         VStack(spacing: 6) {
             AvatarView(

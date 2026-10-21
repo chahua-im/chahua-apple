@@ -11,6 +11,7 @@ import SwiftUI
 struct MessageMetadata {
     let time: String
     let state: ConversationMessageDisplayState?
+    let isRead: Bool
     let size: CGSize
     private let timeLine: CTLine
     private let textBounds: CGRect
@@ -19,13 +20,16 @@ struct MessageMetadata {
     let symbol: BubbleNativeImage?
     let textOpacity: CGFloat
     let foreground: BubbleNativeColor
+    private let symbolWidth: CGFloat
 
     init(
         time: String, state: ConversationMessageDisplayState?, isOutgoing: Bool,
-        isOverlay: Bool = false, fontSize: CGFloat = 12
+        isRead: Bool = false, isOverlay: Bool = false, fontSize: CGFloat = 12
     ) {
         self.time = time
         self.state = state
+        self.isRead = isRead && state == .delivered
+        symbolWidth = state == .delivered ? fontSize * 1.5 : fontSize
         textOpacity = isOverlay ? 1 : 0.7
         self.fontSize = fontSize
         foreground = isOutgoing || isOverlay ? .white : bubbleLabelColor
@@ -51,31 +55,61 @@ struct MessageMetadata {
             typographicBounds.union(CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)).integral
         textSize = textBounds.size
         size = CGSize(
-            width: ceil(textSize.width) + (state == nil ? 0 : 4 + fontSize),
+            width: ceil(textSize.width) + (state == nil ? 0 : 4 + symbolWidth),
             height: ceil(max(textSize.height, fontSize)))
         if let state {
             let name: String
             switch state {
             case .queued, .sending: name = "checkmark.circle"
-            case .delivered: name = "checkmark.circle.fill"
+            case .delivered: name = "checkmark"
             case .failed: name = "exclamationmark.circle.fill"
             }
             let color =
                 state == .failed
                 ? BubbleNativeColor.systemRed : foreground.withAlphaComponent(isOverlay ? 1 : 0.7)
+            let doubleCheck = self.isRead
             #if os(macOS)
                 let configuration = NSImage.SymbolConfiguration(
                     pointSize: fontSize, weight: .regular
                 )
                 .applying(.init(paletteColors: [color]))
-                symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
                     .withSymbolConfiguration(configuration)
+                if state == .delivered, let image {
+                    symbol = NSImage(
+                        size: CGSize(width: symbolWidth, height: fontSize), flipped: false
+                    ) { _ in
+                        image.draw(in: CGRect(x: 0, y: 0, width: fontSize, height: fontSize))
+                        if doubleCheck {
+                            image.draw(
+                                in: CGRect(
+                                    x: fontSize * 0.5, y: 0, width: fontSize, height: fontSize))
+                        }
+                        return true
+                    }
+                } else {
+                    symbol = image
+                }
             #else
                 let configuration = UIImage.SymbolConfiguration(
                     pointSize: fontSize, weight: .regular
                 )
                 .applying(UIImage.SymbolConfiguration(paletteColors: [color]))
-                symbol = UIImage(systemName: name, withConfiguration: configuration)
+                let image = UIImage(systemName: name, withConfiguration: configuration)
+                if state == .delivered, let image {
+                    symbol = UIGraphicsImageRenderer(
+                        size: CGSize(width: symbolWidth, height: fontSize)
+                    ).image { _ in
+                        image.draw(in: CGRect(x: 0, y: 0, width: fontSize, height: fontSize))
+                        if doubleCheck {
+                            image.draw(
+                                in: CGRect(
+                                    x: fontSize * 0.5, y: 0, width: fontSize, height: fontSize))
+                        }
+                    }
+                } else {
+                    symbol = image
+                }
             #endif
         } else {
             symbol = nil
@@ -91,7 +125,8 @@ struct MessageMetadata {
                 ? " " + AppLanguage.localized("(Edited)") : "")
         self.init(
             time: time, state: row.isOutgoing ? row.entry.displayState : nil,
-            isOutgoing: row.isOutgoing, isOverlay: isOverlay, fontSize: fontSize)
+            isOutgoing: row.isOutgoing, isRead: row.isRead, isOverlay: isOverlay, fontSize: fontSize
+        )
     }
 
     var accessibilityLabel: String {
@@ -100,7 +135,7 @@ struct MessageMetadata {
         switch state {
         case .queued: label = AppLanguage.localized("Queued")
         case .sending: label = AppLanguage.localized("Sending")
-        case .delivered: label = AppLanguage.localized("Sent")
+        case .delivered: label = AppLanguage.localized(isRead ? "Read" : "Sent")
         case .failed: label = AppLanguage.localized("Failed to send")
         }
         return "\(time), \(label)"
@@ -110,9 +145,9 @@ struct MessageMetadata {
         guard symbol != nil, frame.width > 0, size.width > 0 else { return .zero }
         let scale = min(1, frame.width / size.width)
         return CGRect(
-            x: frame.minX + (size.width - fontSize) * scale,
+            x: frame.minX + (size.width - symbolWidth) * scale,
             y: frame.minY + (size.height - fontSize) / 2 * scale,
-            width: fontSize * scale,
+            width: symbolWidth * scale,
             height: fontSize * scale
         )
     }

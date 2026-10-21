@@ -39,7 +39,7 @@ struct AvatarView: View {
         .overlay(alignment: .bottomTrailing) {
             if isOnline {
                 Circle()
-                    .fill(.green)
+                    .fill(ChahuaTheme.online)
                     .frame(width: diameter * scale * 0.24, height: diameter * scale * 0.24)
                     .overlay {
                         Circle().strokeBorder(.background, lineWidth: diameter * scale * 0.045)

@@ -970,6 +970,31 @@ private final class DraftStorageProbe {
 
 actor FakeChatAPI: ChahuaAPIClient {
     var chatQueries: [ListChatsQuery] = []
+    private var receiptVisibility: ReadReceiptVisibility = .friends
+    private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
+
+    func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
+        ReadReceiptResponse()
+    }
+    func readReceiptSettings() async throws -> ReadReceiptSettingsResponse {
+        .init(visibility: receiptVisibility)
+    }
+    func updateReadReceiptSettings(visibility: ReadReceiptVisibility) async throws
+        -> ReadReceiptSettingsResponse
+    {
+        receiptVisibility = visibility
+        return .init(visibility: visibility)
+    }
+    func friendReadReceiptSettings(peerUID: Int32) async throws -> FriendReadReceiptSettingsResponse
+    {
+        .init(override: receiptOverrides[peerUID] ?? .inherit)
+    }
+    func updateFriendReadReceiptSettings(peerUID: Int32, override: FriendReadReceiptOverride)
+        async throws -> FriendReadReceiptSettingsResponse
+    {
+        receiptOverrides[peerUID] = override
+        return .init(override: override)
+    }
     private var chatResults: [Result<ListChatsResponse, Error>]
     private var threadResults: [Result<ListThreadsResponse, Error>]
     private var archivedChatResults: [Result<ListChatsResponse, Error>]

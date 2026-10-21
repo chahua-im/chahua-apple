@@ -8,6 +8,110 @@ import XCTest
 final class ConversationTimelineModelTests: XCTestCase {
     private var cancellables: Set<AnyCancellable> = []
 
+    func testRevokedReceiptCannotBeRestoredByLateResponse() async throws {
+        let source = ScriptedTimelineSource(pages: [.success(try livePage(ids: 1...2))])
+        var release: CheckedContinuation<MessageID?, Never>?
+        var revoked = false
+        let started = expectation(description: "Original receipt request suspended")
+        let denied = expectation(description: "Privacy refresh denied")
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
+            messageStore: source.store,
+            fetchReadReceipt: { _ in
+                if revoked {
+                    denied.fulfill()
+                    return nil
+                }
+                return await withCheckedContinuation {
+                    release = $0
+                    started.fulfill()
+                }
+            })
+        await model.open()
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [started], timeout: 2)
+        revoked = true
+        model.refreshReadReceipt(clear: true)
+        await fulfillment(of: [denied], timeout: 2)
+        release?.resume(returning: MessageID(2))
+        await source.drain()
+        XCTAssertFalse(
+            model.rows.contains {
+                if case .message(let row) = $0 { return row.isRead }
+                return false
+            })
+        model.close()
+    }
+
+    func testThreadReceiptsUseSeparateRootCursorAndRevokeOnPrivacyChange() async throws {
+        let messages = [
+            try TimelineTestFixtures.message(id: 10, at: 1),
+            try TimelineTestFixtures.message(id: 11, at: 2, fields: ["replyRootId": "10"]),
+            try TimelineTestFixtures.message(id: 12, at: 3, fields: ["replyRootId": "10"]),
+            try TimelineTestFixtures.message(
+                id: 13, senderID: 2, at: 4, fields: ["replyRootId": "10"]),
+            try TimelineTestFixtures.message(id: 14, at: 5, fields: ["replyRootId": "10"]),
+        ]
+        let source = ScriptedTimelineSource(pages: [
+            .success(try TimelineTestFixtures.page(messages))
+        ])
+        var hidden = false
+        var failedRequests: XCTestExpectation?
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
+            messageStore: source.store, threadID: "10",
+            fetchReadReceipt: { threadID in
+                if hidden {
+                    failedRequests?.fulfill()
+                    throw StubError()
+                }
+                return MessageID(threadID == nil ? 9 : 13)
+            })
+        await model.open()
+        let received = expectation(description: "Thread receipt published")
+        model.updates.first { snapshot in
+            snapshot.rows.contains {
+                if case .message(let row) = $0 { return row.isRead }
+                return false
+            }
+        }.sink { _ in received.fulfill() }.store(in: &cancellables)
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [received], timeout: 2)
+        let readIDs = model.rows.compactMap { row -> MessageID? in
+            guard case .message(let message) = row, message.isRead else { return nil }
+            return message.entry.serverID
+        }
+        XCTAssertEqual(readIDs, [MessageID(11), MessageID(12)])
+
+        hidden = true
+        let ordinaryFailure = expectation(description: "Both refresh requests fail")
+        ordinaryFailure.expectedFulfillmentCount = 2
+        failedRequests = ordinaryFailure
+        model.refreshReadReceipt()
+        await fulfillment(of: [ordinaryFailure], timeout: 2)
+        XCTAssertTrue(
+            model.rows.contains {
+                if case .message(let row) = $0 { return row.isRead }
+                return false
+            })
+        let privacyFailure = expectation(description: "Both privacy refresh requests fail")
+        privacyFailure.expectedFulfillmentCount = 2
+        failedRequests = privacyFailure
+        model.refreshReadReceipt(clear: true)
+        XCTAssertFalse(
+            model.rows.contains {
+                if case .message(let row) = $0 { return row.isRead }
+                return false
+            })
+        await fulfillment(of: [privacyFailure], timeout: 2)
+        XCTAssertFalse(
+            model.rows.contains {
+                if case .message(let row) = $0 { return row.isRead }
+                return false
+            })
+        model.close()
+    }
+
     func testReplyJumpReusesLoadedTargetAndLoadsMissingHistory() async throws {
         let (model, source, _) = try makeModel(pages: [
             .success(try livePage(ids: 10...12)),

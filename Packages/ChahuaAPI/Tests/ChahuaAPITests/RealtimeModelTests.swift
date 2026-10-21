@@ -9,6 +9,21 @@ final class RealtimeModelTests: XCTestCase {
     private let largeMessageID = MessageID(9_007_199_254_740_993)
     private let timestamp = "2026-09-01T12:34:56.123Z"
 
+    func testReadReceiptInvalidationDistinguishesPrivacyRevocationFromProgress() throws {
+        guard
+            case .readReceiptChanged(let progress) = try event(
+                "readReceiptChanged", #"{"chatId":"42"}"#)
+        else { return XCTFail("Expected receipt progress") }
+        XCTAssertEqual(progress.chatId, "42")
+        XCTAssertNil(progress.privacyChanged)
+        guard
+            case .readReceiptChanged(let privacy) = try event(
+                "readReceiptChanged", #"{"chatId":"42","privacyChanged":true}"#)
+        else { return XCTFail("Expected receipt privacy revocation") }
+        XCTAssertEqual(privacy.chatId, "42")
+        XCTAssertEqual(privacy.privacyChanged, true)
+    }
+
     func testMessageVariantsPreserveOpaqueIDsAndOptionalContext() throws {
         guard case .message(let created) = try event("message", messageJSON) else {
             return XCTFail("Expected message")

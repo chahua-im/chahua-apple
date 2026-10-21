@@ -19,6 +19,7 @@ struct TimelineMessageRow: Hashable {
     let isOutgoing: Bool
     let groupPosition: TimelineGroupPosition
     let showsSenderName: Bool
+    var isRead = false
 }
 
 struct TimelineDateSeparatorRow: Hashable {
@@ -64,9 +65,11 @@ struct TimelineRowsBuilder {
     }
 
     /// `entries` are confirmed messages in server order followed by pending sends.
-    func build(_ entries: [ConversationTimelineEntry], unreadBeforeMessageID: MessageID? = nil)
-        -> [TimelineRow]
-    {
+    func build(
+        _ entries: [ConversationTimelineEntry], unreadBeforeMessageID: MessageID? = nil,
+        readReceiptID: MessageID? = nil, rootReadReceiptID: MessageID? = nil,
+        threadID: String? = nil
+    ) -> [TimelineRow] {
         guard !entries.isEmpty else { return [] }
 
         var rows: [TimelineRow] = []
@@ -117,7 +120,14 @@ struct TimelineRowsBuilder {
                         entry: entry,
                         isOutgoing: isOutgoing,
                         groupPosition: groupPosition,
-                        showsSenderName: showsSenderName
+                        showsSenderName: showsSenderName,
+                        isRead: isOutgoing
+                            && entry.remoteMessage.map { message in
+                                let receipt =
+                                    threadID != nil && message.replyRootId == nil
+                                    ? rootReadReceiptID : readReceiptID
+                                return receipt.map { message.id <= $0 } ?? false
+                            } == true
                     )))
         }
 

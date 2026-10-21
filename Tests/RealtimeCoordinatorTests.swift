@@ -1036,6 +1036,31 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     private var holdsPresenceUpdate = false
     private var heldPresenceUpdate: CheckedContinuation<PresenceSettingsResponse, Error>?
     var hasHeldPresenceUpdate: Bool { heldPresenceUpdate != nil }
+    private var receiptVisibility: ReadReceiptVisibility = .friends
+    private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
+
+    func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
+        ReadReceiptResponse()
+    }
+    func readReceiptSettings() async throws -> ReadReceiptSettingsResponse {
+        .init(visibility: receiptVisibility)
+    }
+    func updateReadReceiptSettings(visibility: ReadReceiptVisibility) async throws
+        -> ReadReceiptSettingsResponse
+    {
+        receiptVisibility = visibility
+        return .init(visibility: visibility)
+    }
+    func friendReadReceiptSettings(peerUID: Int32) async throws -> FriendReadReceiptSettingsResponse
+    {
+        .init(override: receiptOverrides[peerUID] ?? .inherit)
+    }
+    func updateFriendReadReceiptSettings(peerUID: Int32, override: FriendReadReceiptOverride)
+        async throws -> FriendReadReceiptSettingsResponse
+    {
+        receiptOverrides[peerUID] = override
+        return .init(override: override)
+    }
 
     func presenceSettings() async throws -> PresenceSettingsResponse {
         PresenceSettingsResponse(visibility: visibility)

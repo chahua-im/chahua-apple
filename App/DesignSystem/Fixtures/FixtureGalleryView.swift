@@ -18,6 +18,9 @@ struct FixtureGalleryView: View {
                 List {
                     #if DEBUG
                         Section("Native timeline verification") {
+                            NavigationLink("Message status workshop") {
+                                MessageDeliveryStatusPreview()
+                            }
                             NavigationLink("Images, replies, threads and delivery states") {
                                 TimelineBubbleFixtureView()
                             }

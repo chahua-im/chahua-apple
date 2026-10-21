@@ -27,6 +27,7 @@ struct ChahuaApp: App {
             if ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
                 || ProcessInfo.processInfo.arguments.contains("-fixture-gallery")
                 || ProcessInfo.processInfo.arguments.contains("-bubble-timeline")
+                || ProcessInfo.processInfo.arguments.contains("-message-status-preview")
             {
                 compositionRoot = nil
                 return
@@ -46,6 +47,8 @@ struct ChahuaApp: App {
             #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-fixture-gallery") {
                     FixtureGalleryView()
+                } else if ProcessInfo.processInfo.arguments.contains("-message-status-preview") {
+                    MessageDeliveryStatusPreview()
                 } else {
                     appRoot
                 }

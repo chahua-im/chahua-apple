@@ -185,6 +185,23 @@ private actor HeldPinAPI: ChahuaAPIClient {
     private var deletes: [Int: CheckedContinuation<Void, Error>] = [:]
     private var waiter: (count: Int, continuation: CheckedContinuation<Void, Never>)?
 
+    func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
+        throw APIError.unavailable
+    }
+    func readReceiptSettings() async throws -> ReadReceiptSettingsResponse {
+        throw APIError.unavailable
+    }
+    func updateReadReceiptSettings(visibility: ReadReceiptVisibility) async throws
+        -> ReadReceiptSettingsResponse
+    { throw APIError.unavailable }
+    func friendReadReceiptSettings(peerUID: Int32) async throws -> FriendReadReceiptSettingsResponse
+    {
+        throw APIError.unavailable
+    }
+    func updateFriendReadReceiptSettings(peerUID: Int32, override: FriendReadReceiptOverride)
+        async throws -> FriendReadReceiptSettingsResponse
+    { throw APIError.unavailable }
+
     func waitForRequests(_ count: Int) async {
         guard requestCount < count else { return }
         await withCheckedContinuation { waiter = (count, $0) }

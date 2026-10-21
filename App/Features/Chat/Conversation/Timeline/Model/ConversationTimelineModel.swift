@@ -38,6 +38,11 @@ final class ConversationTimelineModel: ObservableObject {
     private let messageStore: ConversationMessageStore
     private let builder: TimelineRowsBuilder
     private let markRead: (@MainActor (MessageID) async throws -> Void)?
+    private let fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)?
+    private var readReceiptID: MessageID?
+    private var rootReadReceiptID: MessageID?
+    private var receiptRevision = 0
+    private var receiptTask: Task<Void, Never>?
     private var window = TimelineWindow()
     private var observation: AnyCancellable?
     private var deferredCreates: [ConversationMessageStableKey: MessageResponse] = [:]
@@ -76,7 +81,8 @@ final class ConversationTimelineModel: ObservableObject {
         chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource,
         messageStore: ConversationMessageStore, threadID: String? = nil,
         calendar: Calendar = .autoupdatingCurrent,
-        markRead: (@MainActor (MessageID) async throws -> Void)? = nil
+        markRead: (@MainActor (MessageID) async throws -> Void)? = nil,
+        fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)? = nil
     ) {
         self.chatID = chatID
         self.threadID = threadID
@@ -85,6 +91,7 @@ final class ConversationTimelineModel: ObservableObject {
         self.source = source
         self.messageStore = messageStore
         self.markRead = markRead
+        self.fetchReadReceipt = fetchReadReceipt
         builder = TimelineRowsBuilder(
             currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar)
         observeChanges()
@@ -94,6 +101,50 @@ final class ConversationTimelineModel: ObservableObject {
     func setRealtimeStatus(_ status: RealtimeConnectionStatus) {
         guard state.realtimeStatus != status else { return }
         state.realtimeStatus = status
+        if status == .connected {
+            refreshReadReceipt()
+        } else {
+            cancelReadReceipt(clear: true)
+        }
+    }
+
+    /// Receipt requests have their own revision: pagination must not revoke a valid read position.
+    func refreshReadReceipt(clear: Bool = false) {
+        cancelReadReceipt(clear: clear)
+        guard readTrackingActive, let fetchReadReceipt else { return }
+        let revision = receiptRevision
+        receiptTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                async let scope = fetchReadReceipt(threadID)
+                async let root = threadID == nil ? nil : fetchReadReceipt(nil)
+                let (scopeID, rootID) = try await (scope, root)
+                guard !Task.isCancelled, receiptRevision == revision, readTrackingActive else {
+                    return
+                }
+                if readReceiptID != scopeID || rootReadReceiptID != rootID {
+                    readReceiptID = scopeID
+                    rootReadReceiptID = rootID
+                    lastEntries = nil
+                    publish()
+                }
+            } catch {
+                // Ordinary refresh failures retain authorized receipts; privacy changes clear first.
+            }
+            if receiptRevision == revision { receiptTask = nil }
+        }
+    }
+
+    private func cancelReadReceipt(clear: Bool) {
+        receiptRevision &+= 1
+        receiptTask?.cancel()
+        receiptTask = nil
+        if clear, readReceiptID != nil || rootReadReceiptID != nil {
+            readReceiptID = nil
+            rootReadReceiptID = nil
+            lastEntries = nil
+            publish()
+        }
     }
 
     /// Unlike fixture-oriented loadInitial, every appearance requests a fresh entry window.
@@ -249,6 +300,11 @@ final class ConversationTimelineModel: ObservableObject {
     func setReadTrackingActive(_ active: Bool) {
         guard readTrackingActive != active else { return }
         readTrackingActive = active
+        if active {
+            refreshReadReceipt()
+        } else {
+            cancelReadReceipt(clear: false)
+        }
         cancelReadCandidate()
         if active {
             // Both hosts remeasure and report on every snapshot, even at the same revision.
@@ -755,6 +811,7 @@ final class ConversationTimelineModel: ObservableObject {
     private func storeDidChange(_ change: ConversationChange) {
         switch change {
         case .reset:
+            cancelReadReceipt(clear: true)
             invalidateRequests()
             clearWindow()
         case .pendingChanged(let changedChatID):
@@ -846,7 +903,7 @@ final class ConversationTimelineModel: ObservableObject {
                 mutateServerID(rootID) { $0.replacingThreadReplyCount(payload.replyCount) }
             }
         case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
-            .threadMembershipChanged,
+            .threadMembershipChanged, .readReceiptChanged,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
             .friendRequestReceived, .friendRequestResolved, .friendshipRemoved, .unknown:
             break
@@ -989,7 +1046,9 @@ final class ConversationTimelineModel: ObservableObject {
                 return !message.isDeleted && !deletedIDs.contains(message.id)
             }
             let newRows = builder.build(
-                visibleEntries, unreadBeforeMessageID: unreadBeforeMessageID)
+                visibleEntries, unreadBeforeMessageID: unreadBeforeMessageID,
+                readReceiptID: readReceiptID, rootReadReceiptID: rootReadReceiptID,
+                threadID: threadID)
             if newRows != rows { rows = newRows }
             lastEntries = entries
             snapshotRevision &+= 1

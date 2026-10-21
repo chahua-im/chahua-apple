@@ -25,11 +25,10 @@
                         }
                     }
                     Section("Privacy and Security") {
-                        Label(
-                            SettingsPage.presencePrivacy.title,
-                            systemImage: SettingsPage.presencePrivacy.symbol
-                        )
-                        .tag(SettingsPage.presencePrivacy)
+                        ForEach(SettingsPage.privacyPages) { page in
+                            Label(page.title, systemImage: page.symbol)
+                                .tag(page)
+                        }
                     }
                     Section("Stickers") {
                         ForEach(SettingsPage.stickerPages) { page in

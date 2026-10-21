@@ -156,4 +156,6 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
 public struct FriendRelationshipResponse: Codable, Hashable, Sendable {
     public let peerUid: Int32
     public let canDm: Bool
+    /// Omitted only by older servers; never infer friendship from DM write permission.
+    public let isFriend: Bool?
 }

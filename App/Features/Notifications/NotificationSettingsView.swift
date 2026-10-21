@@ -3,13 +3,15 @@ import SwiftUI
 import UserNotifications
 
 enum SettingsPage: String, Identifiable {
-    case language, appearance, conversations, presencePrivacy, storage, reactions, stickerPacks,
-        notifications
+    case language, appearance, conversations, presencePrivacy, readReceiptPrivacy, storage,
+        reactions,
+        stickerPacks, notifications
 
     static let generalPages: [Self] = [
         .language, .appearance, .conversations, .storage,
     ]
     static let stickerPages: [Self] = [.reactions, .stickerPacks]
+    static let privacyPages: [Self] = [.presencePrivacy, .readReceiptPrivacy]
     var id: Self { self }
 
     var title: LocalizedStringKey {
@@ -18,6 +20,7 @@ enum SettingsPage: String, Identifiable {
         case .appearance: "Appearance"
         case .conversations: "Conversations"
         case .presencePrivacy: "Last Seen & Online"
+        case .readReceiptPrivacy: "Read Receipts"
         case .storage: "Storage"
         case .reactions: "Quick Reaction"
         case .stickerPacks: "Manage Sticker Packs"
@@ -31,6 +34,7 @@ enum SettingsPage: String, Identifiable {
         case .appearance: "paintpalette"
         case .conversations: "bubble.left.and.bubble.right"
         case .presencePrivacy: "eye"
+        case .readReceiptPrivacy: "checkmark.message"
         case .storage: "internaldrive"
         case .reactions: "face.smiling"
         case .stickerPacks: "square.stack"
@@ -120,6 +124,9 @@ struct NotificationSettingsView: View {
         if page == .presencePrivacy {
             PresencePrivacySettingsView(store: chatStore, grouped: grouped)
                 .id(ObjectIdentifier(chatStore))
+        } else if page == .readReceiptPrivacy {
+            ReadReceiptPrivacySettingsView(store: chatStore, grouped: grouped)
+                .id(ObjectIdentifier(chatStore))
         } else if page == .reactions {
             ReactionManagementView(library: chatStore.stickers, currentUserID: me.uid)
         } else if page == .stickerPacks {
@@ -167,7 +174,7 @@ struct NotificationSettingsView: View {
     @ViewBuilder
     private func pageRows(_ page: SettingsPage, showsDividers: Bool) -> some View {
         switch page {
-        case .reactions, .stickerPacks, .presencePrivacy:
+        case .reactions, .stickerPacks, .presencePrivacy, .readReceiptPrivacy:
             EmptyView()
         case .language:
             LabeledContent("App language") {
