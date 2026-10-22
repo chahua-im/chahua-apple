@@ -3,8 +3,9 @@
     import ChahuaAPI
     import SwiftUI
 
-    /// AppKit is intentional here: per-row SwiftUI hosts incurred measured layout and
-    /// AttributeGraph work. Cached timeline geometry remains the sole sizing authority.
+    /// AppKit is intentional here: whole-row SwiftUI hosts incurred measured layout
+    /// and AttributeGraph work. Cached native geometry remains the sizing authority;
+    /// only shared controls, such as delivery status, use small SwiftUI hosts.
     @MainActor
     final class TimelineBubbleContentView: NSView {
         private(set) var binding: TimelineRowBinding?
@@ -130,6 +131,7 @@
                         failureAction: failureAction, geometry: geometry, fontSize: e.bodySize,
                         document: p.markdown
                     ), resetSelection: resetSelection)
+                view.setVisible(visible)
             } else {
                 textView?.clear()
                 textView?.isHidden = true
@@ -140,7 +142,8 @@
                 view.configure(
                     metadata, overlay: p.metadataIsOverlay && localFrames[.media] != nil,
                     failureAction: failureAction)
-                // Audio hosts the shared footer behind native timestamp/status.
+                view.setVisible(visible)
+                // Audio hosts the shared footer behind the native timestamp and shared status.
                 sections.addSubview(view, positioned: .above, relativeTo: nil)
             } else {
                 metadataView?.clear()
@@ -204,6 +207,8 @@
             guard self.visible != visible else { return }
             self.visible = visible
             mediaView?.setVisible(visible && mediaView?.isHidden == false)
+            textView?.setVisible(visible && textView?.isHidden == false)
+            metadataView?.setVisible(visible && metadataView?.isHidden == false)
             if !visible, let controller = voiceController {
                 // Native row visibility is updated inside NSViewRepresentable.updateNSView.
                 // Teardown must publish only after that SwiftUI update completes.
@@ -736,6 +741,7 @@
         private var overlay = false
         private var failureAction: (() -> Void)?
         private var failureButton: MetadataFailureButton?
+        private let statusView = TimelineDeliveryStatusView(frame: .zero)
         override var isFlipped: Bool { true }
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
@@ -743,12 +749,14 @@
             layer?.masksToBounds = true
             setAccessibilityElement(true)
             setAccessibilityRole(.staticText)
+            addSubview(statusView)
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
         func configure(_ metadata: MessageMetadata, overlay: Bool, failureAction: (() -> Void)?) {
             self.metadata = metadata
             self.overlay = overlay
             self.failureAction = failureAction
+            statusView.configure(metadata)
             layer?.backgroundColor = overlay ? NSColor.black.withAlphaComponent(0.45).cgColor : nil
             setAccessibilityLabel(metadata.accessibilityLabel)
             if metadata.state == .failed, failureAction != nil {
@@ -759,8 +767,6 @@
                     button = MetadataFailureButton(frame: .zero)
                     button.title = ""
                     button.isBordered = false
-                    button.imagePosition = .imageOnly
-                    button.imageScaling = .scaleProportionallyUpOrDown
                     button.setButtonType(.momentaryPushIn)
                     button.target = self
                     button.action = #selector(openFailure)
@@ -769,7 +775,6 @@
                     addSubview(button)
                     self.failureButton = button
                 }
-                button.image = metadata.symbol
                 button.isHidden = false
                 setAccessibilityElement(false)
             } else {
@@ -781,11 +786,14 @@
         }
         func clear() {
             metadata = nil
+            statusView.configure(nil)
             failureAction = nil
             failureButton?.isHidden = true
-            failureButton?.image = nil
             setAccessibilityLabel(nil)
             needsDisplay = true
+        }
+        func setVisible(_ visible: Bool) {
+            statusView.setVisible(visible)
         }
         private var drawingFrame: CGRect {
             guard let metadata else { return .zero }
@@ -801,12 +809,14 @@
         override func layout() {
             super.layout()
             layer?.cornerRadius = overlay ? min(bounds.width, bounds.height) / 2 : 0
-            failureButton?.frame = metadata?.symbolFrame(in: drawingFrame) ?? .zero
+            let frame = metadata?.statusFrame(in: drawingFrame) ?? .zero
+            statusView.frame = frame
+            failureButton?.frame = frame
         }
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                metadata?.draw(in: drawingFrame, drawsSymbol: failureButton?.isHidden != false)
+                metadata?.draw(in: drawingFrame)
             }
         }
         override func viewDidChangeEffectiveAppearance() {

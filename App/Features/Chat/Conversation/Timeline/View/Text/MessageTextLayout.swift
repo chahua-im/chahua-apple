@@ -1,3 +1,4 @@
+import CoreText
 import SwiftUI
 
 #if os(macOS)
@@ -13,6 +14,7 @@ struct MessageCodeGeometry: Equatable {
 
 struct MessageTextGeometry: Equatable {
     let size: CGSize
+    let containerWidth: CGFloat
     let bodyBounds: CGRect
     let lastLineBounds: CGRect
     let visibleBounds: CGRect
@@ -66,8 +68,8 @@ final class MessageTextLayout {
     @discardableResult
     func install(geometry: MessageTextGeometry) -> Bool {
         let changed = assignedGeometry != geometry
-        fitCodeBlocks(width: geometry.size.width)
-        let containerSize = CGSize(width: geometry.size.width, height: .greatestFiniteMagnitude)
+        fitCodeBlocks(width: geometry.containerWidth)
+        let containerSize = CGSize(width: geometry.containerWidth, height: .greatestFiniteMagnitude)
         if textContainer.size != containerSize {
             textContainer.size = containerSize
         }
@@ -91,7 +93,7 @@ final class MessageTextLayout {
         if let cachedIdealSize { return cachedIdealSize }
         let geometry = geometry(for: 1_000_000)
         let width = max(
-            geometry.bodyBounds.maxX,
+            geometry.bodyBounds.maxX + (metadata?.textTrailingOutset ?? 0),
             geometry.lastLineBounds.maxX + (storage.length > 0 && metadata != nil ? metadataGap : 0)
                 + (metadata?.size.width ?? 0))
         let size = self.geometry(for: max(1, ceil(width))).size
@@ -193,8 +195,11 @@ final class MessageTextLayout {
     func geometry(for proposedWidth: CGFloat) -> MessageTextGeometry {
         let width = proposedWidth.isFinite ? max(1, proposedWidth) : 1_000_000
         if let cachedGeometry, cachedGeometry.size.width == width { return cachedGeometry }
-        fitCodeBlocks(width: width)
-        textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
+        // Only the footer extends into the right inset; body text keeps its own wrap width.
+        let outset = min(metadata?.textTrailingOutset ?? 0, max(0, width - 1))
+        let containerWidth = width - outset
+        fitCodeBlocks(width: containerWidth)
+        textContainer.size = CGSize(width: containerWidth, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         var bodyBounds =
             storage.length == 0 ? CGRect.zero : layoutManager.usedRect(for: textContainer)
@@ -239,7 +244,11 @@ final class MessageTextLayout {
             metadata != nil && storage.length > 0
             && lastLine.maxX + metadataGap + metadataSize.width <= width
         let metadataY =
-            inline ? max(lastLine.minY, lastLine.maxY - metadataSize.height) : ceil(bodyBounds.maxY)
+            inline
+            ? max(
+                lastLine.minY,
+                lastLine.maxY - metadataSize.height + (metadata?.textBaselineDrop ?? 0))
+            : ceil(bodyBounds.maxY)
         let metadataFrame =
             metadata == nil
             ? CGRect.zero
@@ -269,11 +278,33 @@ final class MessageTextLayout {
         }
         let result = MessageTextGeometry(
             size: CGSize(width: width, height: ceil(max(bodyBounds.maxY, metadataFrame.maxY))),
+            containerWidth: containerWidth,
             bodyBounds: bodyBounds, lastLineBounds: lastLine, visibleBounds: visibleBounds,
             metadataFrame: metadataFrame, metadataIsInline: inline, codeBlocks: codeBlocks
         )
         cachedGeometry = result
         return result
+    }
+
+    /// TextKit's glyph rectangles include line leading. Core Text exposes the actual
+    /// painted bounds, including fallback fonts and color emoji, relative to that baseline.
+    func singleLineInkBounds() -> CGRect {
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphs = layoutManager.glyphRange(for: textContainer)
+        guard glyphs.length > 0 else { return .zero }
+        let fragment = layoutManager.lineFragmentRect(
+            forGlyphAt: glyphs.location, effectiveRange: nil)
+        let location = layoutManager.location(forGlyphAt: glyphs.location)
+        let line = CTLineCreateWithAttributedString(storage)
+        let ink = CTLineGetImageBounds(line, nil)
+        // Markdown can produce a whitespace-only run with no painted glyphs.
+        guard !ink.isNull, !ink.isEmpty else {
+            return layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        }
+        return CGRect(
+            x: fragment.minX + location.x + ink.minX,
+            y: fragment.minY + location.y - ink.maxY,
+            width: ink.width, height: ink.height)
     }
 }
 

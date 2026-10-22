@@ -139,6 +139,7 @@
                         failureAction: failureAction, geometry: geometry,
                         fontSize: environment.bodySize, document: presentation.markdown
                     ), resetSelection: resetSelection)
+                view.setVisible(visible)
             } else {
                 textView?.clear()
                 textView?.isHidden = true
@@ -149,6 +150,7 @@
                 view.configure(
                     metadata, overlay: presentation.metadataIsOverlay && localFrames[.media] != nil,
                     failureAction: failureAction)
+                view.setVisible(visible)
                 // A reused cell may create its media section after this view.
                 sections.bringSubviewToFront(view)
             } else {
@@ -199,6 +201,8 @@
             guard self.visible != visible else { return }
             self.visible = visible
             mediaView?.setVisible(visible && mediaView?.isHidden == false)
+            textView?.setVisible(visible && textView?.isHidden == false)
+            metadataView?.setVisible(visible && metadataView?.isHidden == false)
             if !visible, let controller = voiceController {
                 // UIKit hosting configuration may be updated in a SwiftUI view pass.
                 DispatchQueue.main.async { [weak self, weak controller] in
@@ -235,11 +239,17 @@
             guard !isHidden, alpha > 0, isUserInteractionEnabled,
                 self.point(inside: point, with: event)
             else { return nil }
-            // The retry symbol is measured inside metadata, but its 44-point target
-            // may extend beyond that section. Do not enlarge the cached section.
+            // Retry icons keep measured metadata geometry while their native
+            // 44-point targets may extend beyond the individual section.
             if let metadataView, !metadataView.isHidden,
                 let target = metadataView.hitTestFailureButton(
                     metadataView.convert(point, from: self), with: event)
+            {
+                return target
+            }
+            if let textView, !textView.isHidden,
+                let target = textView.hitTestFailureButton(
+                    textView.convert(point, from: self), with: event)
             {
                 return target
             }
@@ -634,6 +644,7 @@
         private var overlay = false
         private var failureAction: (() -> Void)?
         private var failureButton: TimelineFailureButton?
+        private let statusHost = TimelineDeliveryStatusHost(frame: .zero)
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -642,6 +653,7 @@
             layer.masksToBounds = true
             isAccessibilityElement = true
             accessibilityTraits = .staticText
+            addSubview(statusHost)
             registerForTraitChanges([
                 UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self,
                 UITraitUserInterfaceLevel.self, UITraitDisplayGamut.self, UITraitDisplayScale.self,
@@ -656,6 +668,7 @@
             self.metadata = metadata
             self.overlay = overlay
             self.failureAction = failureAction
+            statusHost.configure(metadata)
             backgroundColor = overlay ? UIColor.black.withAlphaComponent(0.45) : .clear
             accessibilityLabel = metadata.accessibilityLabel
             if metadata.state == .failed, failureAction != nil {
@@ -669,10 +682,10 @@
                     addSubview(button)
                     self.failureButton = button
                 }
-                button.configure(symbol: metadata.symbol)
+                button.configure()
                 button.isHidden = false
                 // Keep timestamp and status together, with retry available on the
-                // same element even when the drawn symbol is too small to target.
+                // same element even when the shared icon is too small to target.
                 accessibilityTraits = .button
                 accessibilityHint = AppLanguage.localized("Failed to send. Retry options")
             } else {
@@ -689,6 +702,7 @@
         func clear() {
             metadata = nil
             failureAction = nil
+            statusHost.clear()
             failureButton?.clear()
             failureButton?.isHidden = true
             accessibilityLabel = nil
@@ -696,6 +710,14 @@
             rowAccessibilityActions = nil
             accessibilityTraits = .staticText
             setNeedsDisplay()
+        }
+
+        func setVisible(_ visible: Bool) {
+            statusHost.setVisible(visible)
+        }
+
+        override var isHidden: Bool {
+            didSet { statusHost.isHidden = isHidden }
         }
 
         private var drawingFrame: CGRect {
@@ -713,7 +735,10 @@
         override func layoutSubviews() {
             super.layoutSubviews()
             layer.cornerRadius = overlay ? min(bounds.width, bounds.height) / 2 : 0
-            failureButton?.setSymbolFrame(metadata?.symbolFrame(in: drawingFrame) ?? .zero)
+            let frame = metadata?.statusFrame(in: drawingFrame) ?? .zero
+            statusHost.frame = frame
+            failureButton?.setStatusFrame(frame)
+            if let failureButton { bringSubviewToFront(failureButton) }
         }
 
         func hitTestFailureButton(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -735,7 +760,7 @@
 
         override func draw(_ rect: CGRect) {
             super.draw(rect)
-            metadata?.draw(in: drawingFrame, drawsSymbol: failureButton?.isHidden != false)
+            metadata?.draw(in: drawingFrame)
         }
 
         @objc private func openFailure() {

@@ -9,6 +9,8 @@ import SwiftUI
 #endif
 
 struct MessageMetadata {
+    static let defaultFontSize: CGFloat = 11
+
     let time: String
     let state: ConversationMessageDisplayState?
     let isRead: Bool
@@ -17,26 +19,34 @@ struct MessageMetadata {
     private let textBounds: CGRect
     let textSize: CGSize
     let fontSize: CGFloat
-    let symbol: BubbleNativeImage?
+    let statusFontSize: CGFloat
+    let checkSeparation: CGFloat
     let textOpacity: CGFloat
     let foreground: BubbleNativeColor
-    private let symbolWidth: CGFloat
+    private let statusSize: CGSize
+    private let capHeight: CGFloat
 
     init(
         time: String, state: ConversationMessageDisplayState?, isOutgoing: Bool,
-        isRead: Bool = false, isOverlay: Bool = false, fontSize: CGFloat = 12
+        isRead: Bool = false, isOverlay: Bool = false, fontSize: CGFloat = Self.defaultFontSize,
+        checkSeparation: CGFloat = MessageDeliveryStatusView.defaultCheckSeparation
     ) {
         self.time = time
         self.state = state
         self.isRead = isRead && state == .delivered
-        symbolWidth = state == .delivered ? fontSize * 1.5 : fontSize
-        textOpacity = isOverlay ? 1 : 0.7
+        statusFontSize = fontSize * 12 / 11
+        self.checkSeparation = checkSeparation
+        statusSize = MessageDeliveryStatusView.layoutSize(
+            for: statusFontSize, checkSeparation: checkSeparation)
+        textOpacity = isOverlay ? 0.85 : isOutgoing ? 0.6 : 0.7
         self.fontSize = fontSize
         foreground = isOutgoing || isOverlay ? .white : bubbleLabelColor
+        let font = BubbleNativeFont.systemFont(ofSize: fontSize)
+        capHeight = font.capHeight
         let text = NSAttributedString(
             string: time,
             attributes: [
-                .font: BubbleNativeFont.systemFont(ofSize: fontSize),
+                .font: font,
                 NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
             ])
         let line = CTLineCreateWithAttributedString(text)
@@ -55,68 +65,14 @@ struct MessageMetadata {
             typographicBounds.union(CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)).integral
         textSize = textBounds.size
         size = CGSize(
-            width: ceil(textSize.width) + (state == nil ? 0 : 4 + symbolWidth),
-            height: ceil(max(textSize.height, fontSize)))
-        if let state {
-            let name: String
-            switch state {
-            case .queued, .sending: name = "checkmark.circle"
-            case .delivered: name = "checkmark"
-            case .failed: name = "exclamationmark.circle.fill"
-            }
-            let color =
-                state == .failed
-                ? BubbleNativeColor.systemRed : foreground.withAlphaComponent(isOverlay ? 1 : 0.7)
-            let doubleCheck = self.isRead
-            #if os(macOS)
-                let configuration = NSImage.SymbolConfiguration(
-                    pointSize: fontSize, weight: .regular
-                )
-                .applying(.init(paletteColors: [color]))
-                let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-                    .withSymbolConfiguration(configuration)
-                if state == .delivered, let image {
-                    symbol = NSImage(
-                        size: CGSize(width: symbolWidth, height: fontSize), flipped: false
-                    ) { _ in
-                        image.draw(in: CGRect(x: 0, y: 0, width: fontSize, height: fontSize))
-                        if doubleCheck {
-                            image.draw(
-                                in: CGRect(
-                                    x: fontSize * 0.5, y: 0, width: fontSize, height: fontSize))
-                        }
-                        return true
-                    }
-                } else {
-                    symbol = image
-                }
-            #else
-                let configuration = UIImage.SymbolConfiguration(
-                    pointSize: fontSize, weight: .regular
-                )
-                .applying(UIImage.SymbolConfiguration(paletteColors: [color]))
-                let image = UIImage(systemName: name, withConfiguration: configuration)
-                if state == .delivered, let image {
-                    symbol = UIGraphicsImageRenderer(
-                        size: CGSize(width: symbolWidth, height: fontSize)
-                    ).image { _ in
-                        image.draw(in: CGRect(x: 0, y: 0, width: fontSize, height: fontSize))
-                        if doubleCheck {
-                            image.draw(
-                                in: CGRect(
-                                    x: fontSize * 0.5, y: 0, width: fontSize, height: fontSize))
-                        }
-                    }
-                } else {
-                    symbol = image
-                }
-            #endif
-        } else {
-            symbol = nil
-        }
+            width: ceil(textSize.width) + (state == nil ? 0 : fontSize * 2 / 11 + statusSize.width),
+            height: ceil(max(textSize.height, statusSize.height)))
     }
 
-    init(row: TimelineMessageRow, isOverlay: Bool = false, fontSize: CGFloat = 12) {
+    init(
+        row: TimelineMessageRow, isOverlay: Bool = false,
+        fontSize: CGFloat = Self.defaultFontSize
+    ) {
         let time =
             row.entry.createdAt.formatted(
                 .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(
@@ -127,6 +83,33 @@ struct MessageMetadata {
             time: time, state: row.isOutgoing ? row.entry.displayState : nil,
             isOutgoing: row.isOutgoing, isRead: row.isRead, isOverlay: isOverlay, fontSize: fontSize
         )
+    }
+
+    /// Footer-only outsets leave the body's wrapping width and padding unchanged.
+    var textTrailingOutset: CGFloat { fontSize * 2 / 11 }
+    var textBaselineDrop: CGFloat { fontSize * 2 / 11 }
+    private var textBaseline: CGFloat {
+        (size.height - textSize.height) / 2 + textBounds.maxY
+    }
+
+    var status: MessageDeliveryStatusView.Status? {
+        switch state {
+        case .queued: .queued
+        case .sending: .sending
+        case .delivered: isRead ? .read : .sent
+        case .failed: .failed
+        case nil: nil
+        }
+    }
+
+    var digitHeight: CGFloat { capHeight }
+
+    @MainActor
+    var statusContent: MessageDeliveryStatusContent? {
+        guard let status else { return nil }
+        return MessageDeliveryStatusContent(
+            status: status, size: statusFontSize, foreground: Color(foreground),
+            checkSeparation: checkSeparation, checkHeight: capHeight)
     }
 
     var accessibilityLabel: String {
@@ -141,18 +124,20 @@ struct MessageMetadata {
         return "\(time), \(label)"
     }
 
-    func symbolFrame(in frame: CGRect) -> CGRect {
-        guard symbol != nil, frame.width > 0, size.width > 0 else { return .zero }
+    func statusFrame(in frame: CGRect) -> CGRect {
+        guard state != nil, frame.width > 0, size.width > 0 else { return .zero }
         let scale = min(1, frame.width / size.width)
+        // The check's visible ink and the timestamp digits share the same center and height.
+        let statusY = textBaseline - capHeight / 2 - statusSize.height / 2
         return CGRect(
-            x: frame.minX + (size.width - symbolWidth) * scale,
-            y: frame.minY + (size.height - fontSize) / 2 * scale,
-            width: symbolWidth * scale,
-            height: fontSize * scale
+            x: frame.minX + (size.width - statusSize.width) * scale,
+            y: frame.minY + statusY * scale,
+            width: statusSize.width * scale,
+            height: statusSize.height * scale
         )
     }
 
-    func draw(in frame: CGRect, drawsSymbol: Bool = true) {
+    func draw(in frame: CGRect) {
         guard frame.width > 0, size.width > 0 else { return }
         #if os(macOS)
             let context = NSGraphicsContext.current?.cgContext
@@ -175,14 +160,5 @@ struct MessageMetadata {
         context.textPosition = .zero
         CTLineDraw(timeLine, context)
         context.restoreGState()
-        if drawsSymbol {
-            #if os(macOS)
-                symbol?.draw(
-                    in: symbolFrame(in: frame), from: .zero, operation: .sourceOver, fraction: 1,
-                    respectFlipped: true, hints: nil)
-            #else
-                symbol?.draw(in: symbolFrame(in: frame))
-            #endif
-        }
     }
 }

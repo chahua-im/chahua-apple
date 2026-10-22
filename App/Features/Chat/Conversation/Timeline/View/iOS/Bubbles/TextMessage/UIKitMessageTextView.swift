@@ -41,6 +41,7 @@
             didSet { updateAccessibilityActions() }
         }
         private var failureButton: TimelineFailureButton?
+        private let statusHost = TimelineDeliveryStatusHost(frame: .zero)
         private var codeViews: [Int: MessageCodeScrollView] = [:]
         private let spoilerAnimator = MessageSpoilerAnimator()
         /// A non-selectable UITextView does not activate links; this tap stands in for
@@ -87,6 +88,7 @@
             linkTextAttributes = [:]
             delegate = coordinator
             addGestureRecognizer(linkTap)
+            addSubview(statusHost)
             coordinator.spoilerChanged = { [weak self] in
                 guard let self else { return }
                 let safe = self.contentLayout.selectableRange(
@@ -141,6 +143,7 @@
                 if selectedRange != clamped { selectedRange = clamped }
             }
             failureAction = content.failureAction
+            statusHost.configure(contentLayout.metadata)
             if geometryChanged {
                 setNeedsLayout()
                 invalidateIntrinsicContentSize()
@@ -160,6 +163,7 @@
             for view in codeViews.values { view.removeFromSuperview() }
             codeViews.removeAll()
             failureAction = nil
+            statusHost.clear()
             rowAccessibilityActions = nil
             resignFirstResponder()
             contentLayout.update(attributedText: NSAttributedString(string: ""), metadata: nil)
@@ -171,10 +175,24 @@
             super.layoutSubviews()
             guard let geometry = contentLayout.assignedGeometry else { return }
             updateCodeViews()
-            if let failureButton, let metadata = contentLayout.metadata {
-                failureButton.setSymbolFrame(metadata.symbolFrame(in: geometry.metadataFrame))
+            if let metadata = contentLayout.metadata {
+                let frame = metadata.statusFrame(in: geometry.metadataFrame)
+                statusHost.frame = frame
+                bringSubviewToFront(statusHost)
+                failureButton?.setStatusFrame(frame)
+            }
+            if let failureButton {
                 bringSubviewToFront(failureButton)
             }
+        }
+
+        func setVisible(_ visible: Bool) {
+            statusHost.setVisible(visible)
+        }
+
+        func hitTestFailureButton(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            guard let failureButton, !failureButton.isHidden else { return nil }
+            return failureButton.hitTest(failureButton.convert(point, from: self), with: event)
         }
 
         override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool
@@ -226,7 +244,10 @@
         }
 
         override var isHidden: Bool {
-            didSet { updateSpoilerAnimation() }
+            didSet {
+                updateSpoilerAnimation()
+                statusHost.isHidden = isHidden
+            }
         }
 
         @objc private func stopSpoilerAnimation() { spoilerAnimator.stop() }
@@ -276,8 +297,7 @@
         override func draw(_ rect: CGRect) {
             super.draw(rect)
             guard let geometry = contentLayout.assignedGeometry else { return }
-            contentLayout.metadata?.draw(
-                in: geometry.metadataFrame, drawsSymbol: failureButton?.isHidden != false)
+            contentLayout.metadata?.draw(in: geometry.metadataFrame)
         }
 
         override var accessibilityValue: String? {
@@ -309,7 +329,7 @@
                 failureButton = button
             }
             updateAccessibilityActions()
-            button.configure(symbol: metadata.symbol)
+            button.configure()
             button.isHidden = false
             setNeedsLayout()
         }
@@ -340,16 +360,15 @@
         }
     }
 
-    /// Shared inline/standalone retry target: layout keeps the measured symbol frame,
-    /// while hit testing and the gesture marker retain the existing 44-point region.
+    /// A transparent native retry target preserves the row gesture marker and
+    /// 44-point hit region without replacing the shared SwiftUI failure icon.
     final class TimelineFailureButton: UIButton {
         var onActivate: (() -> Void)?
         private let marker = MessageRowGestureMarker(frame: .zero)
-        private var symbolSize: CGSize = .zero
 
         override init(frame: CGRect) {
             super.init(frame: frame)
-            imageView?.contentMode = .scaleAspectFit
+            backgroundColor = .clear
             addTarget(self, action: #selector(activate), for: .touchUpInside)
             accessibilityLabel = AppLanguage.localized("Failed to send. Retry options")
             marker.frame = bounds
@@ -358,17 +377,9 @@
 
         required init?(coder: NSCoder) { nil }
 
-        func setSymbolFrame(_ symbolFrame: CGRect) {
-            symbolSize = symbolFrame.size
+        func setStatusFrame(_ statusFrame: CGRect) {
+            frame = statusFrame
             setNeedsLayout()
-            frame = symbolFrame
-        }
-
-        override func imageRect(forContentRect contentRect: CGRect) -> CGRect {
-            CGRect(
-                x: contentRect.midX - symbolSize.width / 2,
-                y: contentRect.midY - symbolSize.height / 2,
-                width: symbolSize.width, height: symbolSize.height)
         }
 
         private var hitBounds: CGRect {
@@ -385,13 +396,11 @@
             marker.frame = hitBounds
         }
 
-        func configure(symbol: UIImage?) {
-            setImage(symbol, for: .normal)
+        func configure() {
             marker.configure(.tap { [weak self] in self?.activate() })
         }
 
         func clear() {
-            setImage(nil, for: .normal)
             marker.stop()
         }
 

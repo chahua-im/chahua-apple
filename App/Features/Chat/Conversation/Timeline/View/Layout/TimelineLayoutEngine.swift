@@ -70,7 +70,7 @@ struct TimelineLayoutEngine {
                     currentUserID: nil, isOutgoing: row.isOutgoing,
                     font: .systemFont(ofSize: e.bodySize), linksEnabled: false,
                     mentionsEnabled: false), metadata: metadata)
-            preferredText = textMeasurer.idealSize.width + 24
+            preferredText = textMeasurer.idealSize.width + 24 - (metadata?.textTrailingOutset ?? 0)
         }
         var labelFont = BubbleNativeFont.systemFont(ofSize: e.bodySize)
         if deleted {
@@ -216,44 +216,44 @@ struct TimelineLayoutEngine {
                 x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: audioHeight)
             height += audioHeight + 8
         }
+        let plainText =
+            hasBody && p.title == nil && p.reply == nil && !hasMedia && p.threadLabel == nil
         var geometry: MessageTextGeometry?
         // Omitting the sender title removes only that row and its gap, not the
         // bubble's outer text padding.
         if hasBody {
-            geometry = textMeasurer.geometry(for: innerWidth)
+            let footerOutset = min(metadata?.textTrailingOutset ?? 0, max(0, inset))
+            geometry = textMeasurer.geometry(for: innerWidth + footerOutset)
             // Snap the allocated extent before snapping its origin below. Rounding
             // both edges independently can shorten the native drawing surface at
             // fractional display scales while its installed text geometry stays tall.
             let textHeight = pixel(geometry!.size.height, e)
-            let plainText = p.title == nil && p.reply == nil && !hasMedia && p.threadLabel == nil
-            let avatarSlack: CGFloat =
-                (row.groupPosition == .single || row.groupPosition == .last) && plainText
-                ? max(0, e.avatarSize - textHeight - 2 * TimelineRowMetrics.textVerticalInset)
-                : 0
-            let extraTop = pixel(avatarSlack / 2, e)
-            // TextKit's line allocation is not the visible ink. Keep the glyphs
-            // and inline timestamp centered even when the avatar adds no slack.
+            let footerDrop = min(
+                metadata?.textBaselineDrop ?? 0,
+                max(0, geometry!.metadataFrame.maxY - geometry!.bodyBounds.maxY))
+            let bodyHeight = textHeight - footerDrop
+            // Center painted text, not the taller TextKit line allocation or the footer.
             let opticalShift: CGFloat =
-                plainText && geometry!.bodyBounds.height <= geometry!.lastLineBounds.height + 0.5
-                ? ((textHeight + 2 * TimelineRowMetrics.textVerticalInset + avatarSlack) / 2
-                    - TimelineRowMetrics.textVerticalInset - extraTop
-                    - geometry!.visibleBounds.midY) * scale
+                plainText && geometry!.metadataIsInline
+                    && geometry!.bodyBounds.height <= geometry!.lastLineBounds.height + 0.5
+                ? (bodyHeight / 2 - textMeasurer.singleLineInkBounds().midY) * scale
                 : 0
             let shift = min(
-                TimelineRowMetrics.textVerticalInset + avatarSlack - extraTop,
+                TimelineRowMetrics.textVerticalInset - footerDrop,
                 max(
-                    -TimelineRowMetrics.textVerticalInset - extraTop,
+                    -TimelineRowMetrics.textVerticalInset,
                     opticalShift.rounded() / scale))
             height +=
                 (hasMedia
                     ? 4
                     : p.reply == nil && p.title == nil
                         ? TimelineRowMetrics.textVerticalInset : 0)
-                + extraTop + shift
+                + shift
             frames[.text] = CGRect(
-                x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: textHeight)
+                x: bubbleX + inset, y: bubbleY + height,
+                width: innerWidth + footerOutset, height: textHeight)
             height +=
-                textHeight + TimelineRowMetrics.textVerticalInset + avatarSlack - extraTop - shift
+                bodyHeight + TimelineRowMetrics.textVerticalInset - shift
         } else if let label = p.standaloneText {
             if p.title == nil && p.reply == nil { height += 8 }
             let labelWidth = max(0, innerWidth - displayedSymbolSize.width - standaloneGap)
@@ -327,14 +327,21 @@ struct TimelineLayoutEngine {
                 x: bubbleX, y: bubbleY + height, width: b, height: footerHeight)
             height += footerHeight
         }
-        // A short final bubble must contain its avatar's height. Reserving that
-        // height outside the bubble would silently enlarge the inter-bubble gap.
-        if row.groupPosition == .single || row.groupPosition == .last {
+        let showsAvatar = row.groupPosition == .single || row.groupPosition == .last
+        if showsAvatar && !plainText {
             height = max(height, e.avatarSize)
         }
-        frames[.bubble] = CGRect(x: bubbleX, y: bubbleY, width: b, height: height)
-        let mainBottom = bubbleY + height
-        if row.groupPosition == .single || row.groupPosition == .last {
+        // Plain bubbles fit their contents. The row, not the bubble, reserves avatar
+        // clearance so a large avatar cannot overlap the neighboring row.
+        let rowHeight = showsAvatar ? max(height, e.avatarSize) : height
+        let bubbleOffset = pixel((rowHeight - height) / 2, e)
+        if let text = frames[.text], bubbleOffset > 0 {
+            frames[.text] = text.offsetBy(dx: 0, dy: bubbleOffset)
+        }
+        frames[.bubble] = CGRect(
+            x: bubbleX, y: bubbleY + bubbleOffset, width: b, height: height)
+        let mainBottom = bubbleY + rowHeight
+        if showsAvatar {
             frames[.avatar] = CGRect(
                 x: row.isOutgoing ? e.timelineWidth - 12 - e.avatarSize : 12,
                 y: mainBottom - e.avatarSize, width: e.avatarSize, height: e.avatarSize)

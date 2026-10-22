@@ -176,7 +176,7 @@ struct TimelineRowPresentation {
                     metadata = MessageMetadata(
                         time: time, state: message.isOutgoing ? message.entry.displayState : nil,
                         isOutgoing: message.isOutgoing, isRead: message.isRead, isOverlay: overlay,
-                        fontSize: overlay ? environment.caption2Size : environment.captionSize)
+                        fontSize: environment.caption2Size)
                     sections.append(.metadata(metadata!.size, overlay: overlay))
                 } else {
                     standaloneText =

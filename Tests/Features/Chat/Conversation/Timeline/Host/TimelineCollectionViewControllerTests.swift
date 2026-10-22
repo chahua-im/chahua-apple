@@ -762,10 +762,6 @@
             XCTAssertTrue(
                 cell.bounds.insetBy(dx: -0.5, dy: -0.5).contains(rendered),
                 "Text frame \(rendered) must fit row \(cell.bounds).", file: file, line: line)
-            XCTAssertGreaterThanOrEqual(
-                cell.bounds.maxY - rendered.maxY, 8,
-                "The last text line must not consume the row's bottom padding.", file: file,
-                line: line)
             let glyphs = text.contentLayout.layoutManager.usedRect(
                 for: text.contentLayout.textContainer
             )

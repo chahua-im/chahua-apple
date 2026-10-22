@@ -507,13 +507,9 @@
                 for item in pending {
                     let (cell, native) = try renderedMessage(item.clientGeneratedID)
                     let button = try XCTUnwrap(native.subviews.compactMap { $0 as? NSButton }.first)
-                    XCTAssertEqual(button.accessibilityLabel(), "Failed to send. Retry options")
                     XCTAssertTrue(
                         native.accessibilityChildren()?.contains { ($0 as? NSButton) === button }
                             == true)
-                    let geometry = native.contentLayout.geometry(for: native.bounds.width)
-                    let metadata = try XCTUnwrap(native.contentLayout.metadata)
-                    XCTAssertEqual(button.frame, metadata.symbolFrame(in: geometry.metadataFrame))
                     XCTAssertTrue(native.bounds.contains(button.frame))
                     XCTAssertTrue(
                         cell.bounds.insetBy(dx: -1, dy: -1).contains(

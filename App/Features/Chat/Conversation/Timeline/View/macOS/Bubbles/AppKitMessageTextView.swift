@@ -39,6 +39,7 @@
             didSet { updateFailureButton() }
         }
         private var failureButton: NSButton?
+        private let statusView = TimelineDeliveryStatusView(frame: .zero)
         private var codeViews: [Int: MessageCodeScrollView] = [:]
         private let spoilerAnimator = MessageSpoilerAnimator()
 
@@ -60,6 +61,7 @@
             // text selection and link hovering use the same cursor handling.
             linkTextAttributes = [.cursor: NSCursor.pointingHand]
             delegate = coordinator
+            addSubview(statusView)
             coordinator.spoilerChanged = { [weak self] in
                 guard let self else { return }
                 let selections = self.selectedRanges
@@ -105,6 +107,7 @@
                 if selectedRange() != clamped { setSelectedRange(clamped) }
             }
             failureAction = content.failureAction
+            statusView.configure(contentLayout.metadata)
             if geometryChanged { needsLayout = true }
             needsDisplay = true
             updateCodeViews()
@@ -122,8 +125,13 @@
             codeViews.removeAll()
             failureAction = nil
             contentLayout.update(attributedText: NSAttributedString(string: ""), metadata: nil)
+            statusView.configure(nil)
             setSelectedRange(NSRange(location: 0, length: 0))
             needsDisplay = true
+        }
+
+        func setVisible(_ visible: Bool) {
+            statusView.setVisible(visible)
         }
 
         override func copy(_ sender: Any?) {
@@ -236,8 +244,6 @@
                 button = BubbleFailureButton(frame: .zero)
                 button.title = ""
                 button.isBordered = false
-                button.imagePosition = .imageOnly
-                button.imageScaling = .scaleProportionallyUpOrDown
                 button.setButtonType(.momentaryPushIn)
                 button.target = self
                 button.action = #selector(openFailureOptions)
@@ -247,7 +253,6 @@
                 failureButton = button
             }
             button.isHidden = false
-            button.image = metadata.symbol
             needsLayout = true
         }
 
@@ -261,17 +266,16 @@
             guard let geometry = contentLayout.assignedGeometry else { return }
             updateCodeViews()
 
-            if let metadata = contentLayout.metadata {
-                failureButton?.frame = metadata.symbolFrame(in: geometry.metadataFrame)
-            }
+            let frame = contentLayout.metadata?.statusFrame(in: geometry.metadataFrame) ?? .zero
+            statusView.frame = frame
+            failureButton?.frame = frame
         }
 
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
             guard let geometry = contentLayout.assignedGeometry else { return }
             effectiveAppearance.performAsCurrentDrawingAppearance {
-                contentLayout.metadata?.draw(
-                    in: geometry.metadataFrame, drawsSymbol: failureButton?.isHidden != false)
+                contentLayout.metadata?.draw(in: geometry.metadataFrame)
             }
         }
 
