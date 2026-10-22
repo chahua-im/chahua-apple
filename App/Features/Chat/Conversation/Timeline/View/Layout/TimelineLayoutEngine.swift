@@ -133,7 +133,30 @@ struct TimelineLayoutEngine {
         let preferred = max(
             preferredMedia?.width ?? 0, preferredAudio, preferredText,
             metadata.map { $0.size.width + 24 } ?? 0, preferredTitle)
-        let b = min(c, pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
+        var b = min(c, pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
+        if hasBody, !hasMedia, let metadata {
+            let bodyWidth = min(b, max(1, b - 24))
+            let footerOutset = min(metadata.textTrailingOutset, max(0, (b - bodyWidth) / 2))
+            let original = textMeasurer.geometry(for: bodyWidth + footerOutset)
+            if !original.metadataIsInline {
+                // The inline reservation no longer contributes content once the footer
+                // moves below the body. Keep only actual text and other section widths.
+                let compact = min(
+                    b,
+                    pixel(
+                        max(
+                            original.bodyBounds.maxX + 24, metadata.size.width + 24,
+                            preferredTitle, preferredReply, preferredThread), e))
+                if compact < b {
+                    let fitted = textMeasurer.geometry(
+                        for: max(1, compact - 24) + footerOutset)
+                    // Ink rounding or paragraph indents must not introduce another line.
+                    if fitted.bodyBounds.height <= original.bodyBounds.height {
+                        b = compact
+                    }
+                }
+            }
+        }
         let bubbleX = centralX + (row.isOutgoing ? c - b : 0)
         let innerWidth = min(b, max(1, b - 24))
         let inset = max(0, (b - innerWidth) / 2)

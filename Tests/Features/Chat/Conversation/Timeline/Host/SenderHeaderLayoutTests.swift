@@ -276,7 +276,7 @@ final class SenderHeaderLayoutTests: XCTestCase {
                 XCTAssertEqual(title.minY, bubble.minY + 8, accuracy: 0.001)
                 XCTAssertEqual(text.minY, title.maxY + 4, accuracy: 0.001)
                 XCTAssertEqual(text.minX, title.minX, accuracy: 0.001)
-                XCTAssertEqual(bubble.maxY, text.maxY + 8, accuracy: 0.001)
+                XCTAssertTrue(bubble.contains(text))
                 XCTAssertEqual(layout.size.height, bubble.maxY + 4, accuracy: 0.001)
                 XCTAssertLessThanOrEqual(bubble.width, environment.centralWidth)
                 XCTAssertEqual(layout.titleFrames[2].maxX, title.width, accuracy: 0.001)

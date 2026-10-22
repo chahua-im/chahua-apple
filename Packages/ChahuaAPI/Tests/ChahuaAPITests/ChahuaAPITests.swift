@@ -9,6 +9,133 @@ final class ChahuaAPITests: XCTestCase {
         super.tearDown()
     }
 
+    func testActivityIDsAndAcknowledgementPreserveSnapshotBoundaryAndThreadScope() async throws {
+        let requests = RequestRecorder()
+        let boundary = "2026-10-20T00:00:00.123456789+00:00"
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            switch request.url?.path {
+            case "/chats/42/mentions":
+                return (200, #"{"messageIds":["9007199254740995","9007199254740993"]}"#)
+            case "/chats/42/reactions":
+                return (200, #"{"messageIds":["9007199254740993"],"readThrough":"\#(boundary)"}"#)
+            case "/chats/42/reactions/read":
+                return (200, #"{"unreadReactions":2}"#)
+            default: return (404, "")
+            }
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        let threadID = MessageID(9_007_199_254_740_991)
+        let mentions = try await client.unreadMentions(chatID: "42", threadID: threadID)
+        XCTAssertEqual(
+            mentions.messageIds,
+            [MessageID(9_007_199_254_740_995), MessageID(9_007_199_254_740_993)])
+        let reactions = try await client.unreadReactions(chatID: "42", threadID: threadID)
+        XCTAssertEqual(reactions.messageIds, [MessageID(9_007_199_254_740_993)])
+        XCTAssertEqual(reactions.readThrough, boundary)
+        let ack = try await client.acknowledgeReactions(
+            chatID: "42", threadID: threadID, readThrough: reactions.readThrough)
+        XCTAssertEqual(
+            ack.unreadReactions, 2, "Activity arriving after the snapshot remains unread.")
+        _ = try await client.unreadMentions(chatID: "42", threadID: nil)
+        _ = try await client.unreadReactions(chatID: "42", threadID: nil)
+        _ = try await client.acknowledgeReactions(chatID: "42", threadID: nil, readThrough: nil)
+
+        let recorded = requests.values
+        XCTAssertEqual(recorded.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET", "POST"])
+        for request in recorded {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+        }
+        for request in recorded.prefix(2) {
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?
+                    .queryItems,
+                [URLQueryItem(name: "threadId", value: threadID.description)])
+        }
+        let body = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(recorded[2])) as? [String: String])
+        XCTAssertEqual(body, ["threadId": threadID.description, "readThrough": boundary])
+        XCTAssertNil(recorded[3].url?.query)
+        XCTAssertNil(recorded[4].url?.query)
+        let departure = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(recorded[5])) as? [String: String])
+        XCTAssertEqual(
+            departure, [:], "Departure acknowledgement deliberately has no snapshot boundary.")
+    }
+
+    func testConversationUnreadSummaryEncodesSelectorsAndDecodesDistinctCounters() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (
+                200,
+                #"{"summaries":[{"key":"groups","unreadAttentionCount":7,"unreadConversationCount":3,"unreadMessageCount":19,"unreadUnmutedAttentionCount":5,"unreadUnmutedConversationCount":2,"unreadUnmutedMessageCount":11}]}"#
+            )
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        let views = [
+            ConversationView(
+                key: "groups",
+                selector: .init(
+                    archived: false, categories: [.group, .groupThread],
+                    exclude: [.init(chatId: "42", threadId: MessageID(9_007_199_254_740_993))],
+                    include: [.init(chatId: "43")])),
+            ConversationView(
+                key: "archived-dms",
+                selector: .init(
+                    archived: true, categories: [.dm, .dmThread])),
+        ]
+        let response = try await client.conversationUnreadSummaries(views: views)
+        XCTAssertEqual(
+            response.summaries,
+            [
+                .init(
+                    key: "groups", unreadAttentionCount: 7, unreadConversationCount: 3,
+                    unreadMessageCount: 19, unreadUnmutedAttentionCount: 5,
+                    unreadUnmutedConversationCount: 2, unreadUnmutedMessageCount: 11)
+            ])
+        let request = try XCTUnwrap(requests.values.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/conversations/unread-summary")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+        XCTAssertEqual(
+            try JSONCoding.decoder.decode(
+                ConversationUnreadRequest.self, from: requestBody(request)
+            ).views, views)
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(request)) as? [String: Any])
+        let encodedViews = try XCTUnwrap(object["views"] as? [[String: Any]])
+        let selector = try XCTUnwrap(encodedViews[0]["selector"] as? [String: Any])
+        XCTAssertEqual(selector["categories"] as? [String], ["group", "groupThread"])
+        XCTAssertEqual(selector["archived"] as? Bool, false)
+        XCTAssertEqual(
+            (selector["exclude"] as? [[String: String]])?.first?["threadId"], "9007199254740993")
+        XCTAssertNil((selector["include"] as? [[String: String]])?.first?["threadId"])
+    }
+
+    func testReadStateCountersDecodeLegacyPayloadAndPreserveServerActivity() throws {
+        let legacy = try JSONCoding.decoder.decode(
+            ReadStateResponse.self,
+            from: Data(#"{"unreadCount":3,"lastReadMessageId":"9007199254740993"}"#.utf8))
+        XCTAssertEqual(legacy.unreadMentions, 0)
+        XCTAssertEqual(legacy.unreadReactions, 0)
+        let current = try JSONCoding.decoder.decode(
+            ReadStateResponse.self,
+            from: Data(
+                #"{"unreadCount":3,"unreadMentions":2,"unreadReactions":5,"lastReadMessageId":"9007199254740993"}"#
+                    .utf8))
+        XCTAssertEqual(current.unreadMentions, 2)
+        XCTAssertEqual(current.unreadReactions, 5)
+        XCTAssertEqual(current.lastReadMessageId, legacy.lastReadMessageId)
+        XCTAssertEqual(
+            try JSONCoding.decoder.decode(
+                ReadStateResponse.self, from: JSONCoding.encoder.encode(current)), current)
+    }
+
     func testAuthenticateInstallsValidatedTokenForLaterRequests() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
@@ -360,6 +487,20 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(response.chats[1].peer?.username, "Grace")
         XCTAssertEqual(response.chats[1].peer?.userGroup?.groupId, 7)
         XCTAssertEqual(response.nextCursor, "11")
+        XCTAssertEqual(response.chats[0].unreadMentions, 0)
+        XCTAssertEqual(response.chats[0].unreadReactions, 0)
+        var currentChat = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONCoding.encoder.encode(response.chats[0]))
+                as? [String: Any])
+        currentChat["unreadMentions"] = 2
+        currentChat["unreadReactions"] = 5
+        let withActivity = try JSONCoding.decoder.decode(
+            ChatListItem.self, from: JSONSerialization.data(withJSONObject: currentChat))
+        XCTAssertEqual(withActivity.unreadMentions, 2)
+        XCTAssertEqual(withActivity.unreadReactions, 5)
+        XCTAssertEqual(
+            try JSONCoding.decoder.decode(
+                ChatListItem.self, from: JSONCoding.encoder.encode(withActivity)), withActivity)
 
         XCTAssertEqual(requests.values.count, 1)
         let request = try XCTUnwrap(requests.values.first)
@@ -451,6 +592,24 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertNil(thread.lastReply?.message)
         XCTAssertEqual(thread.replyCount, 4)
         XCTAssertEqual(thread.unreadCount, 2)
+        XCTAssertEqual(thread.unreadMentions, 0)
+        XCTAssertEqual(thread.unreadReactions, 0)
+        XCTAssertEqual(
+            thread.chatKind, .dm, "Legacy snapshots must not infer group-only attention.")
+        var currentThread = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONCoding.encoder.encode(thread))
+                as? [String: Any])
+        currentThread["unreadMentions"] = 1
+        currentThread["unreadReactions"] = 4
+        currentThread["chatKind"] = "group"
+        let withActivity = try JSONCoding.decoder.decode(
+            ThreadListItem.self, from: JSONSerialization.data(withJSONObject: currentThread))
+        XCTAssertEqual(withActivity.unreadMentions, 1)
+        XCTAssertEqual(withActivity.unreadReactions, 4)
+        XCTAssertEqual(withActivity.chatKind, .group)
+        XCTAssertEqual(
+            try JSONCoding.decoder.decode(
+                ThreadListItem.self, from: JSONCoding.encoder.encode(withActivity)), withActivity)
         XCTAssertEqual(
             thread.lastReplyAt.timeIntervalSince(thread.subscribedAt), 3723.456, accuracy: 0.0001)
         XCTAssertEqual(first.nextCursor, cursor)

@@ -1039,6 +1039,35 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     private var receiptVisibility: ReadReceiptVisibility = .friends
     private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
 
+    private enum UnexpectedActivityCall: Error { case unread }
+    func conversationUnreadSummaries(views: [ConversationView]) async throws
+        -> ConversationUnreadResponse
+    {
+        // This transport has no conversations; preserve each requested selector's identity.
+        .init(
+            summaries: views.map {
+                .init(
+                    key: $0.key, unreadAttentionCount: 0, unreadConversationCount: 0,
+                    unreadMessageCount: 0, unreadUnmutedAttentionCount: 0,
+                    unreadUnmutedConversationCount: 0, unreadUnmutedMessageCount: 0)
+            })
+    }
+    func unreadMentions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadMentionIDsResponse
+    {
+        throw UnexpectedActivityCall.unread
+    }
+    func unreadReactions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadReactionIDsResponse
+    {
+        throw UnexpectedActivityCall.unread
+    }
+    func acknowledgeReactions(chatID: String, threadID: MessageID?, readThrough: String?)
+        async throws -> UnreadReactionsAckResponse
+    {
+        throw UnexpectedActivityCall.unread
+    }
+
     func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
         ReadReceiptResponse()
     }

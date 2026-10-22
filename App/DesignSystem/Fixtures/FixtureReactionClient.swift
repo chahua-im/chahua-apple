@@ -8,6 +8,27 @@
     final class FixtureReactionClient: ChahuaAPIClient {
         var failNextMutation = false
 
+        func conversationUnreadSummaries(views: [ConversationView]) async throws
+            -> ConversationUnreadResponse
+        {
+            throw Failure.unexpectedOperation
+        }
+        func unreadMentions(chatID: String, threadID: MessageID?) async throws
+            -> UnreadMentionIDsResponse
+        {
+            throw Failure.unexpectedOperation
+        }
+        func unreadReactions(chatID: String, threadID: MessageID?) async throws
+            -> UnreadReactionIDsResponse
+        {
+            throw Failure.unexpectedOperation
+        }
+        func acknowledgeReactions(chatID: String, threadID: MessageID?, readThrough: String?)
+            async throws -> UnreadReactionsAckResponse
+        {
+            throw Failure.unexpectedOperation
+        }
+
         func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
             throw APIError.unavailable
         }

@@ -1,6 +1,54 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Jump to next mention or reply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Jump to next mention or reply" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "跳转到下一条提及或回复" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "跳至下一則提及或回覆" } }
+      }
+    },
+    "Jump to next reaction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Jump to next reaction" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "跳转到下一条回应" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "跳至下一則回應" } }
+      }
+    },
+    "%lld unread mentions and replies" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld unread mentions and replies" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 条未读提及和回复" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 則未讀提及和回覆" } }
+      }
+    },
+    "%lld unread reactions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld unread reactions" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 条未读回应" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 則未讀回應" } }
+      }
+    },
+    "Unread mentions and replies" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unread mentions and replies" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未读提及和回复" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "未讀提及和回覆" } }
+      }
+    },
+    "Unread reactions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unread reactions" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未读回应" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "未讀回應" } }
+      }
+    },
     "Read" : {
       "extractionState" : "manual",
       "localizations" : {

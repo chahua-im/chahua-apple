@@ -12,6 +12,52 @@ import XCTest
 
 @MainActor
 final class MessageTextLayoutTests: XCTestCase {
+    func testSeparateFooterDoesNotRetainFailedInlineWidth() throws {
+        for text in ["现在基本内部都有大规模的 AI 扫 bug", "The timestamp needs its own row"] {
+            for bodySize in [CGFloat(17), CGFloat(28)] {
+                for outgoing in [false, true] {
+                    let message = try TimelineTestFixtures.message(
+                        id: 1, senderID: outgoing ? 1 : 2, at: 1, text: text)
+                    let row = TimelineRow.message(
+                        .init(
+                            entry: .remote(message), isOutgoing: outgoing,
+                            groupPosition: .last, showsSenderName: false))
+                    let wideEnvironment = TimelineLayoutEnvironment.current(
+                        timelineWidth: 2_000, bodySize: bodySize,
+                        caption2Size: bodySize * 11 / 17)
+                    let presentation = TimelineRowPresentation.make(
+                        row: row, currentUserID: 1, isThreadTimeline: false,
+                        environment: wideEnvironment)
+                    let metadata = try XCTUnwrap(presentation.metadata)
+                    let measurement = MessageTextLayout(
+                        attributedText: MessageTextContent.attributedText(
+                            text: text, mentions: [], currentUserID: 1, isOutgoing: outgoing,
+                            font: .systemFont(ofSize: bodySize)), metadata: metadata)
+                    let natural = measurement.geometry(for: 2_000)
+                    let centralWidth = natural.bodyBounds.width + 24 + metadata.size.width / 2
+                    let environment = TimelineLayoutEnvironment.current(
+                        timelineWidth: centralWidth + 2 * TimelineRowMetrics.rowHorizontalInset
+                            + 2 * (wideEnvironment.avatarSize + TimelineRowMetrics.laneGap),
+                        bodySize: bodySize, caption2Size: bodySize * 11 / 17)
+                    let engine = TimelineLayoutEngine()
+                    let layout = engine.layout(presentation, environment: environment)
+                    let bubble = try XCTUnwrap(layout.frames[.bubble])
+                    let geometry = try XCTUnwrap(layout.textGeometry)
+                    XCTAssertFalse(geometry.metadataIsInline)
+                    XCTAssertEqual(
+                        geometry.bodyBounds.height, natural.bodyBounds.height, accuracy: 0.5)
+                    XCTAssertEqual(
+                        bubble.width, max(geometry.bodyBounds.width, metadata.size.width) + 24,
+                        accuracy: 1 / environment.displayScale)
+                    XCTAssertGreaterThanOrEqual(
+                        geometry.metadataFrame.minY, geometry.bodyBounds.maxY)
+                    let wide = engine.layout(presentation, environment: wideEnvironment)
+                    XCTAssertTrue(try XCTUnwrap(wide.textGeometry).metadataIsInline)
+                }
+            }
+        }
+    }
+
     func testHeaderlessInlineBubblesCenterInkWithoutGrowingToAvatarHeight() throws {
         for text in ["Hello", "得很多年", "👨‍👩‍👧‍👦"] {
             for bodySize in [CGFloat(13), CGFloat(28)] {

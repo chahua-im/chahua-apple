@@ -7,7 +7,6 @@
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
-        @ScaledMetric(relativeTo: .caption2) private var jumpBadgeDiameter: CGFloat = 22
         @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
         private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
             .rawValue
@@ -32,38 +31,19 @@
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                         .overlay { headerBackdrop }
-                    if model.showsJumpToLatest {
-                        Button {
-                            Task { await model.jumpTowardLatest() }
-                        } label: {
-                            jumpToLatestSymbol
-                                .overlay(alignment: .topTrailing) {
-                                    if model.jumpUnreadCount > 0 {
-                                        Text("\(model.jumpUnreadCount)")
-                                            .font(.caption2.bold())
-                                            .lineLimit(1)
-                                            .fixedSize()
-                                            .padding(.horizontal, 5)
-                                            .frame(
-                                                minWidth: jumpBadgeDiameter,
-                                                minHeight: jumpBadgeDiameter
-                                            )
-                                            .foregroundStyle(.white)
-                                            .background(unreadBadgeColor.color, in: Capsule())
-                                            .offset(x: 8, y: -8)
-                                    }
-                                }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Jump to latest messages")
-                        .accessibilityValue(
-                            model.jumpUnreadCount > 0
-                                ? AppLanguage.localized("\(model.jumpUnreadCount) unread messages")
-                                : ""
-                        )
-                        .padding(ChahuaTheme.Spacing.large)
-                        .padding(.bottom, chatComposerInset)
-                    }
+                    TimelineNavigationControls(
+                        showsJumpToLatest: model.showsJumpToLatest,
+                        unreadMessageCount: model.jumpUnreadCount,
+                        unreadMentionCount: model.unreadMentionJumpCount,
+                        unreadReactionCount: model.unreadReactionJumpCount,
+                        isBusy: model.activityJumpInProgress || isRepositioning,
+                        badgeColor: unreadBadgeColor,
+                        jumpToLatest: { Task { await model.jumpTowardLatest() } },
+                        jumpToMention: { Task { await model.jumpToNextMention() } },
+                        jumpToReaction: { Task { await model.jumpToNextReaction() } }
+                    )
+                    .padding(ChahuaTheme.Spacing.large)
+                    .padding(.bottom, chatComposerInset)
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
             }
@@ -86,18 +66,6 @@
                     Spacer(minLength: 0)
                 }
                 .ignoresSafeArea(.container, edges: .top)
-            }
-        }
-        @ViewBuilder
-        private var jumpToLatestSymbol: some View {
-            let symbol = Image(systemName: "chevron.down")
-                .font(.headline)
-                .frame(width: 44, height: 44)
-                .contentShape(Circle())
-            if #available(macOS 26, iOS 26, *) {
-                symbol.glassEffect(.regular.interactive(), in: Circle())
-            } else {
-                symbol.background(.regularMaterial, in: Circle())
             }
         }
 

@@ -26,9 +26,11 @@ struct ConversationListRow: View {
         return until > .now
     }
 
+    private var usesMutedBadges: Bool { item.hasMutedBadges() }
+
     private var threadParentKind: ChatKind? {
         guard case .thread(let thread) = item else { return nil }
-        return store.state.chats.first(where: { $0.id == thread.chatId })?.kind
+        return thread.chatKind
     }
 
     var body: some View {
@@ -74,21 +76,23 @@ struct ConversationListRow: View {
                         }
                     }
                     .modifier(ConversationListSubtitleStyle(isSelected: isSelected))
+                    if item.unreadMentions > 0 {
+                        activityBadge {
+                            Text("@")
+                        }
+                        .accessibilityLabel("Unread mentions and replies")
+                    }
+                    if item.unreadReactions > 0 {
+                        activityBadge {
+                            Image(systemName: "heart.fill")
+                        }
+                        .accessibilityLabel("Unread reactions")
+                    }
                     if item.unreadCount > 0 {
-                        Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(isMuted ? Color.primary : Color.white)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background {
-                                if isMuted {
-                                    Capsule().fill(.quaternary)
-                                } else {
-                                    Capsule().fill(badgeColor.color)
-                                }
-                            }
-                            .fixedSize()
-                            .accessibilityLabel("\(item.unreadCount) unread messages")
+                        activityBadge {
+                            Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
+                        }
+                        .accessibilityLabel("\(item.unreadCount) unread messages")
                     } else if isMuted {
                         Image(systemName: "bell.slash.fill")
                             .font(.footnote)
@@ -109,6 +113,24 @@ struct ConversationListRow: View {
 
     private var subtitleColor: Color {
         isSelected ? Color.white.opacity(0.88) : .secondary
+    }
+
+    private func activityBadge<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(usesMutedBadges ? Color.primary : Color.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background {
+                if usesMutedBadges {
+                    Capsule().fill(.quaternary)
+                } else {
+                    Capsule().fill(badgeColor.color)
+                }
+            }
+            .fixedSize()
     }
 
     private func activityLabel(now: Date) -> String {
@@ -205,7 +227,7 @@ struct ConversationListSubtitleStyle: ViewModifier {
                         chatId: id, chatName: "Design team", threadRootMessage: message,
                         participants: [message.sender], lastReply: message, replyCount: 8,
                         lastReplyAt: message.createdAt, unreadCount: unread,
-                        subscribedAt: message.createdAt, archived: false))
+                        chatKind: .group, subscribedAt: message.createdAt, archived: false))
             }
 
             examples = [

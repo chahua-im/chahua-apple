@@ -12,6 +12,7 @@ struct ChatState: Equatable {
     var realtimeStatus: RealtimeConnectionStatus = .idle
     var userPresence: [Int32: UserPresenceResponse] = [:]
     var groupPresence: [String: GroupPresenceResponse] = [:]
+    var conversationUnreadSummaries: [ConversationUnreadSummary] = []
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
     var chatListRefreshFailed = false
@@ -93,6 +94,9 @@ final class ChatStore: ObservableObject {
     private var recoveryDirty = Set<String>()
     private var recoveryGeneration = 0
     private var timelines: [ObjectIdentifier: WeakTimeline] = [:]
+    private var summaryTask: Task<Void, Never>?
+    private var summaryDirty = false
+    private var foregroundActive = true
     private var groupMutationStates: [String: GroupMutationState] = [:]
 
     private struct GroupMutationState {
@@ -278,6 +282,7 @@ final class ChatStore: ObservableObject {
     }
 
     func setForegroundActive(_ active: Bool) {
+        foregroundActive = active
         if !active { clearPresence() }
         outgoingQueue.requestForegroundActive(active)
         if !active {
@@ -381,6 +386,7 @@ final class ChatStore: ObservableObject {
                 }
             }
             updateTimelineReadStates()
+            invalidateUnreadSummaries()
             state[keyPath: list.phase] = .loaded
             state[keyPath: list.refreshFailed] = false
         } catch {
@@ -689,7 +695,9 @@ final class ChatStore: ObservableObject {
             ChatListItem(
                 id: chat.id, name: chat.name, avatar: chat.avatar,
                 lastMessageAt: chat.lastMessageAt,
-                unreadCount: chat.unreadCount, lastReadMessageId: chat.lastReadMessageId,
+                unreadCount: chat.unreadCount,
+                unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions,
+                lastReadMessageId: chat.lastReadMessageId,
                 lastMessage: chat.lastMessage, mutedUntil: mutedUntil, archived: archived,
                 kind: chat.kind, peer: chat.peer))
     }
@@ -758,6 +766,8 @@ final class ChatStore: ObservableObject {
                 id: info.id, name: info.name, avatar: info.avatar,
                 lastMessageAt: cached?.lastMessageAt,
                 unreadCount: cached?.unreadCount ?? 0,
+                unreadMentions: cached?.unreadMentions ?? 0,
+                unreadReactions: cached?.unreadReactions ?? 0,
                 lastReadMessageId: cached?.lastReadMessageId,
                 lastMessage: cached?.lastMessage,
                 mutedUntil: cached?.mutedUntil,
@@ -774,6 +784,7 @@ final class ChatStore: ObservableObject {
         // Every invalidation fences all four snapshots, including membership changes
         // whose realtime payload carries identifiers but not the new archive state.
         listStateRevision += 1
+        invalidateUnreadSummaries()
         dirtyLists.formUnion(ListKind.allCases)
         guard invalidationTask == nil else { return }
         let requestGeneration = generation
@@ -805,6 +816,9 @@ final class ChatStore: ObservableObject {
             conversationMessages.apply(
                 .messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
             invalidateChatList()
+            refreshVisibleActivity(
+                chatID: message.chatId, threadID: message.replyRootId?.description,
+                mentions: true, reactions: false)
         case .messageDeleted(let message):
             drafts.redactReplyTargets([message.id], chatID: message.chatId)
             conversationMessages.apply(
@@ -841,6 +855,12 @@ final class ChatStore: ObservableObject {
             invalidateChatList()
             threadSubscriptionInvalidations.send(
                 ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId))
+        case .notification(let payload):
+            invalidateChatList()
+            refreshVisibleActivity(
+                chatID: payload.chatId, threadID: payload.threadRootId?.description,
+                mentions: payload.notificationType != .reaction,
+                reactions: payload.notificationType == .reaction)
         case .readReceiptChanged(let payload):
             for model in visibleTimelines() where model.chatID == payload.chatId {
                 model.refreshReadReceipt(clear: payload.privacyChanged == true)
@@ -1149,6 +1169,100 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// Coalesces invalidations, including ones arriving while a snapshot is in flight.
+    private func invalidateUnreadSummaries() {
+        summaryDirty = true
+        guard summaryTask == nil else { return }
+        let requestGeneration = generation
+        let currentRefresh = refreshGeneration
+        summaryTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == requestGeneration, refreshGeneration == currentRefresh {
+                    summaryTask = nil
+                }
+            }
+            repeat {
+                summaryDirty = false
+                do {
+                    let response = try await performGroupRequest(generation: requestGeneration) {
+                        try await self.apiClient.conversationUnreadSummaries(
+                            views: ConversationTabBadges.unreadViews)
+                    }
+                    guard refreshGeneration == currentRefresh else { return }
+                    state.conversationUnreadSummaries = response.summaries
+                } catch {
+                    guard generation == requestGeneration, refreshGeneration == currentRefresh,
+                        !Task.isCancelled
+                    else { return }
+                    // Preserve the last authorized snapshot; the next invalidation retries.
+                }
+            } while summaryDirty && !Task.isCancelled
+        }
+    }
+
+    private func refreshVisibleActivity(
+        chatID: String, threadID: String?, mentions: Bool = true, reactions: Bool = true
+    ) {
+        for model in visibleTimelines()
+        where model.chatID == chatID && model.threadID == threadID {
+            model.refreshUnreadActivity(mentions: mentions, reactions: reactions)
+        }
+    }
+
+    func unreadMentions(chatID: String, threadID: String?) async throws -> UnreadMentionIDsResponse
+    {
+        guard foregroundActive else { throw CancellationError() }
+        let root = try activityThreadID(threadID)
+        return try await performGroupRequest(generation: generation) {
+            try await apiClient.unreadMentions(chatID: chatID, threadID: root)
+        }
+    }
+
+    func unreadReactions(chatID: String, threadID: String?) async throws
+        -> UnreadReactionIDsResponse
+    {
+        guard foregroundActive else { throw CancellationError() }
+        let root = try activityThreadID(threadID)
+        return try await performGroupRequest(generation: generation) {
+            try await apiClient.unreadReactions(chatID: chatID, threadID: root)
+        }
+    }
+
+    func acknowledgeReactions(chatID: String, threadID: String?, readThrough: String?) async throws
+        -> UnreadReactionsAckResponse
+    {
+        guard foregroundActive else { throw CancellationError() }
+        let root = try activityThreadID(threadID)
+        let response = try await performGroupRequest(generation: generation) {
+            try await apiClient.acknowledgeReactions(
+                chatID: chatID, threadID: root, readThrough: readThrough)
+        }
+        guard foregroundActive else { throw CancellationError() }
+        // Reaction acknowledgement never advances the ordinary message read cursor.
+        if let threadID, let thread = thread(chatID: chatID, threadID: threadID) {
+            applyReadState(
+                .init(
+                    lastReadMessageId: thread.lastReadMessageId, unreadCount: thread.unreadCount,
+                    unreadMentions: thread.unreadMentions, unreadReactions: response.unreadReactions
+                ),
+                chatID: chatID, threadID: threadID)
+        } else if threadID == nil, let chat = chat(id: chatID) {
+            applyReadState(
+                .init(
+                    lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
+                    unreadMentions: chat.unreadMentions, unreadReactions: response.unreadReactions),
+                chatID: chatID, threadID: nil)
+        }
+        return response
+    }
+
+    private func activityThreadID(_ threadID: String?) throws -> MessageID? {
+        guard let threadID else { return nil }
+        guard let root = MessageID(threadID) else { throw APIError.unexpectedResponse }
+        return root
+    }
+
     func reactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse
     {
@@ -1341,7 +1455,10 @@ final class ChatStore: ObservableObject {
                     lastReply: thread.lastReply, replyCount: thread.replyCount,
                     lastReplyAt: thread.lastReplyAt,
                     unreadCount: response.unreadCount,
+                    unreadMentions: response.unreadMentions,
+                    unreadReactions: response.unreadReactions,
                     lastReadMessageId: response.lastReadMessageId,
+                    chatKind: thread.chatKind,
                     subscribedAt: thread.subscribedAt, archived: thread.archived))
         } else if threadID == nil, let chat = chat(id: chatID) {
             install(
@@ -1349,6 +1466,8 @@ final class ChatStore: ObservableObject {
                     id: chat.id, name: chat.name, avatar: chat.avatar,
                     lastMessageAt: chat.lastMessageAt,
                     unreadCount: response.unreadCount,
+                    unreadMentions: response.unreadMentions,
+                    unreadReactions: response.unreadReactions,
                     lastReadMessageId: response.lastReadMessageId,
                     lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil,
                     archived: chat.archived,
@@ -1359,10 +1478,14 @@ final class ChatStore: ObservableObject {
             model.updateReadState(
                 unreadCount: response.unreadCount, lastReadMessageID: response.lastReadMessageId)
         }
+        invalidateUnreadSummaries()
     }
 
     func cancelRealtimeRecovery() {
         pins.cancelLoads()
+        summaryTask?.cancel()
+        summaryTask = nil
+        summaryDirty = false
         refreshGeneration += 1
         for task in refreshTasks.values { task.cancel() }
         refreshTasks.removeAll()

@@ -4,8 +4,8 @@
     import SwiftUI
 
     /// Per-row NSHostingView layout and AttributeGraph work made timeline scrolling
-    /// expensive. Keep the table, state chrome and interaction preview native while
-    /// preserving the shared model and the table's cached-geometry transactions.
+    /// expensive. Keep the table, state panels and interaction preview native while
+    /// hosting the small shared navigation controls above the cached-geometry table.
     @MainActor
     final class TimelineViewController: NSViewController {
         private let model: ConversationTimelineModel
@@ -49,9 +49,9 @@
             interactionController.timelineView = view
             // Never share this replaceable transaction slot with table layout work.
             displayScheduler = TimelineDisplayScheduler(view: view)
-            model.$state.sink { [weak self] _ in self?.requestRefresh() }.store(in: &subscriptions)
-            model.$rows.sink { [weak self] _ in self?.requestRefresh() }.store(in: &subscriptions)
-            model.$viewportRevision.sink { [weak self] _ in self?.requestRefresh() }
+            // Activity counts can change without a timeline snapshot or row update.
+            // Coalesce all published changes onto the next display turn.
+            model.objectWillChange.sink { [weak self] _ in self?.requestRefresh() }
                 .store(in: &subscriptions)
             model.updates.sink { [weak self] _ in self?.requestRefresh() }.store(in: &subscriptions)
             let notifications = NotificationCenter.default

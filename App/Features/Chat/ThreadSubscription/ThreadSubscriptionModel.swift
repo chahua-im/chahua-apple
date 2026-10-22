@@ -14,7 +14,9 @@ extension ThreadListItem {
             chatId: chatId, chatName: chatName, chatAvatar: chatAvatar,
             threadRootMessage: threadRootMessage, participants: participants,
             lastReply: lastReply, replyCount: replyCount, lastReplyAt: lastReplyAt,
-            unreadCount: unreadCount, lastReadMessageId: lastReadMessageId,
+            unreadCount: unreadCount, unreadMentions: unreadMentions,
+            unreadReactions: unreadReactions, lastReadMessageId: lastReadMessageId,
+            chatKind: chatKind,
             subscribedAt: subscribedAt, archived: archived)
     }
 }

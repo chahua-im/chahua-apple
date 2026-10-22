@@ -62,6 +62,22 @@ public protocol ChahuaAPIClient: Sendable {
     /// `ListThreadsQuery.before` for the next page.
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse
 
+    /// Returns server-calculated counts for each caller-defined conversation selector.
+    func conversationUnreadSummaries(views: [ConversationView]) async throws
+        -> ConversationUnreadResponse
+
+    /// Group mentions and replies share a newest-first message queue, scoped to the main chat or thread.
+    func unreadMentions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadMentionIDsResponse
+
+    /// Returns unread reaction targets and the opaque snapshot boundary for acknowledgement.
+    func unreadReactions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadReactionIDsResponse
+
+    /// Acknowledges the queried snapshot; omit `readThrough` only when leaving the conversation.
+    func acknowledgeReactions(chatID: String, threadID: MessageID?, readThrough: String?)
+        async throws -> UnreadReactionsAckResponse
+
     /// Archives the current member's chat and mutes it indefinitely (204).
     func archiveChat(chatID: String) async throws
 

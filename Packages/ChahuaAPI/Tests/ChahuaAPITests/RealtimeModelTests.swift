@@ -9,6 +9,35 @@ final class RealtimeModelTests: XCTestCase {
     private let largeMessageID = MessageID(9_007_199_254_740_993)
     private let timestamp = "2026-09-01T12:34:56.123Z"
 
+    func testDirectedActivityNotificationsDecodeKindsAndExactScopes() throws {
+        for kind in [NotificationType.mention, .reply, .reaction] {
+            guard
+                case .notification(let payload) = try event(
+                    "notification",
+                    #"{"actorUid":2,"actorName":"Ada","chatId":"42","messageId":"9007199254740993","notificationType":"\#(kind.rawValue)","threadRootId":"9"}"#
+                )
+            else { return XCTFail("Expected directed activity") }
+            XCTAssertEqual(payload.notificationType, kind)
+            XCTAssertEqual(payload.actorUid, 2)
+            XCTAssertEqual(payload.actorName, "Ada")
+            XCTAssertEqual(payload.chatId, "42")
+            XCTAssertEqual(payload.messageId, largeMessageID)
+            XCTAssertEqual(payload.threadRootId, MessageID(9))
+        }
+        guard
+            case .notification(let mainChat) = try event(
+                "notification",
+                #"{"actorUid":3,"chatId":"42","messageId":"9","notificationType":"reaction"}"#
+            )
+        else { return XCTFail("Expected main chat activity") }
+        XCTAssertNil(mainChat.threadRootId)
+        XCTAssertNil(mainChat.actorName)
+        XCTAssertThrowsError(
+            try event(
+                "notification",
+                #"{"actorUid":3,"chatId":"42","messageId":"9","notificationType":"unknown"}"#))
+    }
+
     func testReadReceiptInvalidationDistinguishesPrivacyRevocationFromProgress() throws {
         guard
             case .readReceiptChanged(let progress) = try event(

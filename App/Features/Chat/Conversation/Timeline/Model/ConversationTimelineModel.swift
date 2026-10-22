@@ -8,6 +8,12 @@ enum TimelineInitialPosition: Equatable {
     case unread(after: MessageID?)
 }
 
+enum TimelineMessageJumpOutcome: Equatable {
+    case reached
+    case missing
+    case failed
+}
+
 @MainActor
 final class ConversationTimelineModel: ObservableObject {
     static let pageSize: Int64 = 50
@@ -23,6 +29,9 @@ final class ConversationTimelineModel: ObservableObject {
     @Published private(set) var state = ConversationTimelineState()
     @Published private(set) var rows: [TimelineRow] = []
     @Published private(set) var bottomVisibleMessageDate: Date?
+    @Published private(set) var unreadMentionJumpCount = 0
+    @Published private(set) var unreadReactionJumpCount = 0
+    @Published private(set) var activityJumpInProgress = false
     var isAtLiveEdge: Bool { window.isAtLiveEdge }
     var jumpUnreadCount: Int64 { state.live.unreadCount }
     var showsJumpToLatest: Bool {
@@ -63,6 +72,7 @@ final class ConversationTimelineModel: ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     private var olderTask: Task<Void, Never>?
     private var newerTask: Task<Void, Never>?
+    private var accountResetObservation: AnyCancellable?
     // A committed pending publication invalidates the host's viewport revision before reveal runs.
     private var canReuseLatestWindowAfterPendingChange = false
     // The entry boundary is frozen until the next open, independent of read receipts.
@@ -76,13 +86,36 @@ final class ConversationTimelineModel: ObservableObject {
     private var readCandidateMature = false
     private var readDwellTask: Task<Void, Never>?
     private var readSendTask: Task<Void, Never>?
+    private let isGroupChat: Bool
+    private let fetchUnreadMentions:
+        (@MainActor (String?) async throws -> UnreadMentionIDsResponse)?
+    private let fetchUnreadReactions:
+        (@MainActor (String?) async throws -> UnreadReactionIDsResponse)?
+    private let acknowledgeReactions:
+        (@MainActor (String?, String?) async throws -> UnreadReactionsAckResponse)?
+    private var mentionTargets: Set<MessageID> = []
+    private var reactionTargets: Set<MessageID> = []
+    // Activity revisions are independent of history pagination and repositioning.
+    private var activityRevision = 0
+    private var mentionTask: Task<Void, Never>?
+    private var reactionTask: Task<Void, Never>?
+    private var leaveReactionTask: Task<Void, Never>?
+    private var leaveReactionRevision: Int?
+    private var mentionsDirty = false
+    private var reactionsDirty = false
+    private var accountWasReset = false
 
     init(
         chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource,
         messageStore: ConversationMessageStore, threadID: String? = nil,
         calendar: Calendar = .autoupdatingCurrent,
         markRead: (@MainActor (MessageID) async throws -> Void)? = nil,
-        fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)? = nil
+        fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)? = nil,
+        fetchUnreadMentions: (@MainActor (String?) async throws -> UnreadMentionIDsResponse)? = nil,
+        fetchUnreadReactions: (@MainActor (String?) async throws -> UnreadReactionIDsResponse)? =
+            nil,
+        acknowledgeReactions:
+            (@MainActor (String?, String?) async throws -> UnreadReactionsAckResponse)? = nil
     ) {
         self.chatID = chatID
         self.threadID = threadID
@@ -92,8 +125,20 @@ final class ConversationTimelineModel: ObservableObject {
         self.messageStore = messageStore
         self.markRead = markRead
         self.fetchReadReceipt = fetchReadReceipt
+        self.isGroupChat = isGroupChat
+        self.fetchUnreadMentions = fetchUnreadMentions
+        self.fetchUnreadReactions = fetchUnreadReactions
+        self.acknowledgeReactions = acknowledgeReactions
         builder = TimelineRowsBuilder(
             currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar)
+        // A final leave acknowledgement can outlive timeline observation. Keep the account
+        // fence subscribed until the model dies so it cannot write for a replacement login.
+        accountResetObservation = messageStore.changes.sink { [weak self] change in
+            guard case .reset = change, let self else { return }
+            accountWasReset = true
+            setReadTrackingActive(false)
+            resetUnreadActivity()
+        }
         observeChanges()
         publish()
     }
@@ -103,6 +148,7 @@ final class ConversationTimelineModel: ObservableObject {
         state.realtimeStatus = status
         if status == .connected {
             refreshReadReceipt()
+            refreshUnreadActivity()
         } else {
             cancelReadReceipt(clear: true)
         }
@@ -155,10 +201,28 @@ final class ConversationTimelineModel: ObservableObject {
         await loadInitial(position: position)
     }
 
-    func close() {
+    func close(acknowledgingActivity: Bool = false) {
+        let shouldAcknowledge = acknowledgingActivity && readTrackingActive
         setReadTrackingActive(false)
+        resetUnreadActivity()
         invalidateRequests()
         observation = nil
+        if shouldAcknowledge, let acknowledgeReactions {
+            let revision = activityRevision
+            let scope = threadID
+            leaveReactionRevision = revision
+            leaveReactionTask = Task { [self] in
+                defer {
+                    if leaveReactionRevision == revision {
+                        leaveReactionTask = nil
+                        leaveReactionRevision = nil
+                        startReactionRefresh()
+                    }
+                }
+                guard !Task.isCancelled, activityRevision == revision else { return }
+                _ = try? await acknowledgeReactions(scope, nil)
+            }
+        }
     }
 
     func loadInitial(position: TimelineInitialPosition = .liveEdge) async {
@@ -298,10 +362,20 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func setReadTrackingActive(_ active: Bool) {
+        if !active {
+            cancelUnreadActivity()
+            if activityJumpInProgress { invalidateRequests() }
+        }
+        guard !active || !accountWasReset else { return }
         guard readTrackingActive != active else { return }
+        if active {
+            activityRevision &+= 1
+            leaveReactionTask?.cancel()
+        }
         readTrackingActive = active
         if active {
             refreshReadReceipt()
+            refreshUnreadActivity()
         } else {
             cancelReadReceipt(clear: false)
         }
@@ -318,6 +392,150 @@ final class ConversationTimelineModel: ObservableObject {
             // reactivation can never issue overlapping writes.
             readSendTask?.cancel()
             viewportRevision = nil
+        }
+    }
+
+    /// IDs belong to the foreground session, not the cached list badges. Invalidation while
+    /// either stream is suspended coalesces into one more request for that stream.
+    func refreshUnreadActivity(mentions: Bool = true, reactions: Bool = true) {
+        guard readTrackingActive else { return }
+        if mentions, isGroupChat, fetchUnreadMentions != nil {
+            mentionsDirty = true
+            startMentionRefresh()
+        }
+        if reactions, fetchUnreadReactions != nil {
+            reactionsDirty = true
+            startReactionRefresh()
+        }
+    }
+
+    private func startMentionRefresh() {
+        guard mentionTask == nil, mentionsDirty, readTrackingActive,
+            let fetchUnreadMentions
+        else { return }
+        let revision = activityRevision
+        mentionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                mentionTask = nil
+                startMentionRefresh()
+            }
+            while readTrackingActive, revision == activityRevision, !Task.isCancelled,
+                mentionsDirty
+            {
+                mentionsDirty = false
+                do {
+                    let response = try await fetchUnreadMentions(threadID)
+                    guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+                        return
+                    }
+                    mentionTargets.formUnion(
+                        response.messageIds.lazy.filter { !self.isActivityTargetDeleted($0) })
+                    publishActivityCounts()
+                } catch {
+                    // Failed refreshes never discard the session's remaining targets.
+                }
+            }
+        }
+    }
+
+    private func startReactionRefresh() {
+        guard reactionTask == nil, leaveReactionTask == nil, reactionsDirty, readTrackingActive,
+            let fetchUnreadReactions
+        else { return }
+        let revision = activityRevision
+        reactionTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                reactionTask = nil
+                startReactionRefresh()
+            }
+            while readTrackingActive, revision == activityRevision, !Task.isCancelled,
+                reactionsDirty
+            {
+                reactionsDirty = false
+                do {
+                    let response = try await fetchUnreadReactions(threadID)
+                    guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+                        return
+                    }
+                    reactionTargets.formUnion(
+                        response.messageIds.lazy.filter { !self.isActivityTargetDeleted($0) })
+                    publishActivityCounts()
+                    // Never acknowledge a failed GET, or a response from an inactive session.
+                    if let acknowledgeReactions {
+                        let ack = try await acknowledgeReactions(threadID, response.readThrough)
+                        guard readTrackingActive, revision == activityRevision, !Task.isCancelled
+                        else {
+                            return
+                        }
+                        if ack.unreadReactions > 0 { reactionsDirty = true }
+                    }
+                } catch {
+                    // A notification received during the failed request still gets its rerun.
+                }
+            }
+        }
+    }
+
+    private func cancelUnreadActivity() {
+        activityRevision &+= 1
+        mentionsDirty = false
+        reactionsDirty = false
+        // Keep cancelled tasks until their callbacks return: clients may ignore cancellation.
+        mentionTask?.cancel()
+        reactionTask?.cancel()
+        leaveReactionTask?.cancel()
+    }
+
+    private func resetUnreadActivity() {
+        cancelUnreadActivity()
+        mentionTargets.removeAll()
+        reactionTargets.removeAll()
+        publishActivityCounts()
+    }
+
+    private func isActivityTargetDeleted(_ id: MessageID) -> Bool {
+        deletedIDs.contains(id)
+            || window.messages.contains(where: { $0.id == id && $0.isDeleted })
+            || deferredCreates.values.contains(where: { $0.id == id && $0.isDeleted })
+    }
+
+    private func publishActivityCounts() {
+        unreadMentionJumpCount = mentionTargets.count
+        unreadReactionJumpCount = reactionTargets.count
+    }
+
+    private func removeActivityTargets(_ ids: Set<MessageID>) {
+        mentionTargets.subtract(ids)
+        reactionTargets.subtract(ids)
+        publishActivityCounts()
+    }
+
+    func jumpToNextMention() async { await jumpToNextActivity(mention: true) }
+
+    func jumpToNextReaction() async { await jumpToNextActivity(mention: false) }
+
+    private func jumpToNextActivity(mention: Bool) async {
+        guard readTrackingActive, !activityJumpInProgress else { return }
+        activityJumpInProgress = true
+        defer { activityJumpInProgress = false }
+        let revision = activityRevision
+        while readTrackingActive, revision == activityRevision,
+            let id = (mention ? mentionTargets : reactionTargets).min()
+        {
+            let outcome = await jumpToMessage(id)
+            guard readTrackingActive, revision == activityRevision else { return }
+            switch outcome {
+            case .failed:
+                return
+            case .missing:
+                removeActivityTargets([id])
+            case .reached:
+                if mention { mentionTargets.remove(id) } else { reactionTargets.remove(id) }
+                publishActivityCounts()
+                return
+            }
         }
     }
 
@@ -606,21 +824,28 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    func jumpToMessage(_ id: MessageID, atReadBoundary: Bool = false) async {
+    @discardableResult
+    func jumpToMessage(_ id: MessageID, atReadBoundary: Bool = false) async
+        -> TimelineMessageJumpOutcome
+    {
         switch state.content {
         case .ready, .repositioning: break
-        default: return
+        default: return .failed
         }
         invalidateRequests()
         state.repositionFailure = nil
         state.content = .ready
+        if isActivityTargetDeleted(id) {
+            state.repositionFailure = .message(id)
+            return .missing
+        }
         if let rowID = rowID(forServerID: id) {
             state.live.followsLatest = false
             requestScroll(
                 atReadBoundary
                     ? .readBoundary(rowID, animated: true)
                     : .reveal(rowID, animated: true, highlight: true))
-            return
+            return .reached
         }
         state.content = .repositioning(.message(id))
         let requestGeneration = generation
@@ -641,17 +866,28 @@ final class ConversationTimelineModel: ObservableObject {
                     publish(position: .bottom(animated: false), reset: true)
                 }
             }
+            return rowID(forServerID: id) == nil ? .missing : .reached
         } catch is CancellationError {
             if generation == requestGeneration { state.content = .ready }
+            return .failed
         } catch {
-            if generation == requestGeneration {
-                state.content = .ready
-                if atReadBoundary {
-                    await jumpToLiveEdge()
-                } else {
-                    state.repositionFailure = .message(id)
+            guard generation == requestGeneration else { return .failed }
+            state.content = .ready
+            if atReadBoundary {
+                await jumpToLiveEdge()
+            } else {
+                state.repositionFailure = .message(id)
+            }
+            if error is MessageNotFound { return .missing }
+            if let apiError = error as? APIError {
+                switch apiError {
+                case .http(status: 404, body: _), .invalidResponse(statusCode: 404):
+                    return .missing
+                default:
+                    break
                 }
             }
+            return .failed
         }
     }
 
@@ -887,11 +1123,13 @@ final class ConversationTimelineModel: ObservableObject {
             }
         case .messageDeleted(let message):
             deletedIDs.insert(message.id)
+            removeActivityTargets([message.id])
             if accepts(message) { mutateKnown(message) { _ in message.redactedForDeletion() } }
             redactDeletedPreviews([message.id])
         case .messagesBulkDeleted(let payload):
             let ids = Set(payload.messageIds)
             deletedIDs.formUnion(ids)
+            removeActivityTargets(ids)
             mutateRecords { message in
                 let redacted = ids.contains(message.id) ? message.redactedForDeletion() : message
                 return redacted.redactingReplyPreview(messageIDs: ids)
@@ -903,7 +1141,7 @@ final class ConversationTimelineModel: ObservableObject {
                 mutateServerID(rootID) { $0.replacingThreadReplyCount(payload.replyCount) }
             }
         case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
-            .threadMembershipChanged, .readReceiptChanged,
+            .threadMembershipChanged, .readReceiptChanged, .notification,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
             .friendRequestReceived, .friendRequestResolved, .friendshipRemoved, .unknown:
             break

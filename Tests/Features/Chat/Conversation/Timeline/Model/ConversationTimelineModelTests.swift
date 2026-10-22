@@ -158,7 +158,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         await source.waitUntilHeld()
         await model.jumpToMessage(MessageID(11))
         source.release()
-        await oldJump.value
+        let superseded = await oldJump.value
+        XCTAssertEqual(superseded, .failed)
         XCTAssertEqual(model.state.content, .ready)
         XCTAssertEqual(
             remoteMessages(model).map(\.id), [MessageID(10), MessageID(11), MessageID(12)])
@@ -1606,6 +1607,439 @@ final class ConversationTimelineModelTests: XCTestCase {
         model.close()
     }
 
+    func testActivityEntryRestoreReconnectIgnoreZeroCachedCountsAndGateDMMentions() async throws {
+        for isGroup in [false, true] {
+            for scope in [nil, "1"] as [String?] {
+                var mentions: [String?] = []
+                var reactions: [String?] = []
+                let (model, source, _) = try makeModel(
+                    pages: [], threadID: scope, isGroupChat: isGroup,
+                    fetchUnreadMentions: {
+                        mentions.append($0)
+                        return .init(messageIds: [])
+                    },
+                    fetchUnreadReactions: {
+                        reactions.append($0)
+                        return .init(messageIds: [], readThrough: "snapshot")
+                    })
+                model.updateReadState(unreadCount: 0, lastReadMessageID: nil)
+                model.setReadTrackingActive(true)
+                await source.drain()
+                model.setReadTrackingActive(false)
+                model.refreshUnreadActivity()
+                await source.drain()
+                XCTAssertEqual(reactions.count, 1, "Background invalidations do not query.")
+                model.setReadTrackingActive(true)
+                await source.drain()
+                model.setRealtimeStatus(.connected)
+                await source.drain()
+                XCTAssertEqual(reactions.count, 3)
+                XCTAssertTrue(reactions.allSatisfy { $0 == scope })
+                XCTAssertEqual(mentions.count, isGroup ? 3 : 0)
+                XCTAssertTrue(mentions.allSatisfy { $0 == scope })
+                model.close()
+            }
+        }
+    }
+
+    func testReactionSnapshotsAcknowledgeExactBoundaryAndLoopForRemainingUnread() async throws {
+        var fetches = 0
+        var boundaries: [String?] = []
+        let finished = expectation(description: "Second snapshot acknowledged")
+        let (model, source, _) = try makeModel(
+            pages: [], threadID: "1",
+            fetchUnreadReactions: { scope in
+                XCTAssertEqual(scope, "1")
+                fetches += 1
+                return .init(
+                    messageIds: [MessageID(fetches == 1 ? 3 : 2), MessageID(3)],
+                    readThrough: fetches == 1 ? "opaque-first" : "opaque-second")
+            },
+            acknowledgeReactions: { scope, boundary in
+                XCTAssertEqual(scope, "1")
+                boundaries.append(boundary)
+                if boundaries.count == 2 { finished.fulfill() }
+                return .init(unreadReactions: boundaries.count == 1 ? 1 : 0)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [finished], timeout: 2)
+        await source.drain()
+        XCTAssertEqual(boundaries, ["opaque-first", "opaque-second"])
+        XCTAssertEqual(fetches, 2)
+        XCTAssertEqual(model.unreadReactionJumpCount, 2)
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(3))
+        XCTAssertEqual(
+            model.unreadReactionJumpCount, 2, "Counter clearing retains session targets.")
+        model.close()
+    }
+
+    func testActivityInvalidationsCoalesceIndependentlyWhileRequestsAreInFlight() async throws {
+        let held = expectation(description: "Both streams held")
+        held.expectedFulfillmentCount = 2
+        let rerun = expectation(description: "Both dirty streams rerun")
+        rerun.expectedFulfillmentCount = 2
+        var releaseMention: CheckedContinuation<Void, Never>?
+        var releaseReaction: CheckedContinuation<Void, Never>?
+        var mentions = 0
+        var reactions = 0
+        var acknowledgements = 0
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3))],
+            fetchUnreadMentions: { _ in
+                mentions += 1
+                if mentions == 1 {
+                    await withCheckedContinuation {
+                        releaseMention = $0
+                        held.fulfill()
+                    }
+                } else {
+                    rerun.fulfill()
+                }
+                return .init(messageIds: [MessageID(2)])
+            },
+            fetchUnreadReactions: { _ in
+                reactions += 1
+                if reactions == 1 {
+                    await withCheckedContinuation {
+                        releaseReaction = $0
+                        held.fulfill()
+                    }
+                } else {
+                    rerun.fulfill()
+                }
+                return .init(messageIds: [MessageID(3)], readThrough: "boundary")
+            },
+            acknowledgeReactions: { _, _ in
+                acknowledgements += 1
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        for _ in 0..<3 { model.refreshUnreadActivity() }
+        await model.open()
+        XCTAssertEqual(mentions, 1)
+        XCTAssertEqual(reactions, 1)
+        releaseMention?.resume()
+        releaseReaction?.resume()
+        await fulfillment(of: [rerun], timeout: 2)
+        await source.drain()
+        XCTAssertEqual(mentions, 2)
+        XCTAssertEqual(reactions, 2)
+        XCTAssertEqual(acknowledgements, 2, "History generation changes must not revoke activity.")
+        XCTAssertEqual(model.unreadMentionJumpCount, 1)
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        model.close()
+    }
+
+    func testFailedReactionGetDoesNotAcknowledgeOrDiscardTargets() async throws {
+        var fetches = 0
+        var acknowledgements = 0
+        let (model, source, _) = try makeModel(
+            pages: [],
+            fetchUnreadReactions: { _ in
+                fetches += 1
+                if fetches == 2 { throw StubError() }
+                return .init(messageIds: fetches == 1 ? [MessageID(2)] : [], readThrough: "same")
+            },
+            acknowledgeReactions: { _, _ in
+                acknowledgements += 1
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await source.drain()
+        model.refreshUnreadActivity(mentions: false)
+        await source.drain()
+        XCTAssertEqual(fetches, 2)
+        XCTAssertEqual(acknowledgements, 1)
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        model.refreshUnreadActivity(mentions: false)
+        await source.drain()
+        XCTAssertEqual(acknowledgements, 2)
+        XCTAssertEqual(
+            model.unreadReactionJumpCount, 1, "An empty snapshot does not replace the queue.")
+        model.close()
+    }
+
+    func testBackgroundFencesLateReactionGetAndRestoreWaitsForSingleFlight() async throws {
+        let held = expectation(description: "GET held")
+        let restored = expectation(description: "Restored session acknowledged")
+        var release: CheckedContinuation<Void, Never>?
+        var fetches = 0
+        var boundaries: [String?] = []
+        let (model, source, _) = try makeModel(
+            pages: [],
+            fetchUnreadReactions: { _ in
+                fetches += 1
+                let request = fetches
+                if request == 1 {
+                    await withCheckedContinuation {
+                        release = $0
+                        held.fulfill()
+                    }
+                }
+                return .init(messageIds: [MessageID(UInt64(request))], readThrough: "\(request)")
+            },
+            acknowledgeReactions: { _, boundary in
+                boundaries.append(boundary)
+                restored.fulfill()
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        model.setReadTrackingActive(false)
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(fetches, 1, "Cancellation-ignoring GETs cannot overlap on restore.")
+        release?.resume()
+        await fulfillment(of: [restored], timeout: 2)
+        await source.drain()
+        XCTAssertEqual(boundaries, ["2"], "A backgrounded response must never be acknowledged.")
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        model.close()
+    }
+
+    func testForegroundLeaveAcknowledgesSavedThreadScopeWithoutBoundaryAndClearsQueues()
+        async throws
+    {
+        var scopes: [String?] = []
+        var boundaries: [String?] = []
+        let leave = expectation(description: "Final scoped acknowledgement")
+        let (model, source, _) = try makeModel(
+            pages: [], threadID: "42",
+            fetchUnreadReactions: { _ in
+                .init(messageIds: [MessageID(43)], readThrough: "snapshot")
+            },
+            acknowledgeReactions: { scope, boundary in
+                scopes.append(scope)
+                boundaries.append(boundary)
+                if boundary == nil { leave.fulfill() }
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await source.drain()
+        model.close(acknowledgingActivity: true)
+        await fulfillment(of: [leave], timeout: 2)
+        XCTAssertEqual(scopes, ["42", "42"])
+        XCTAssertEqual(boundaries, ["snapshot", nil])
+        XCTAssertEqual(model.unreadReactionJumpCount, 0)
+    }
+
+    func testAccountResetFencesLateActivityAndCannotReactivateOldAccount() async throws {
+        let held = expectation(description: "GET held")
+        var release: CheckedContinuation<Void, Never>?
+        var fetches = 0
+        var acknowledgements = 0
+        let (model, source, _) = try makeModel(
+            pages: [],
+            fetchUnreadReactions: { _ in
+                fetches += 1
+                await withCheckedContinuation {
+                    release = $0
+                    held.fulfill()
+                }
+                return .init(messageIds: [MessageID(2)], readThrough: "old-account")
+            },
+            acknowledgeReactions: { _, _ in
+                acknowledgements += 1
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        source.store.reset()
+        release?.resume()
+        await source.drain()
+        model.setReadTrackingActive(true)
+        model.refreshUnreadActivity()
+        model.close(acknowledgingActivity: true)
+        await source.drain()
+        XCTAssertEqual(fetches, 1)
+        XCTAssertEqual(acknowledgements, 0)
+        XCTAssertEqual(model.unreadReactionJumpCount, 0)
+    }
+
+    func testActivityJumpsOldestFirstSkipMissingAndRetainTransientFailures() async throws {
+        let (model, source, _) = try makeModel(
+            pages: [
+                .success(try livePage(ids: 10...12)),
+                .success(try livePage(ids: 10...12)),
+                .failure(StubError()),
+                .success(try historyPage(ids: 1...3, newerCursor: MessageID(3))),
+            ],
+            fetchUnreadMentions: { _ in
+                .init(messageIds: [MessageID(11), MessageID(2), MessageID(1), MessageID(2)])
+            })
+        await model.open()
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(model.unreadMentionJumpCount, 3)
+        await model.jumpToNextMention()
+        XCTAssertEqual(source.queries.suffix(2).map(\.around), [MessageID(1), MessageID(2)])
+        XCTAssertEqual(
+            model.unreadMentionJumpCount, 2, "Missing is removed; transient failure stays.")
+        await model.jumpToNextMention()
+        XCTAssertEqual(model.unreadMentionJumpCount, 1)
+        XCTAssertEqual(
+            model.updates.value.pendingScroll?.intent,
+            .reveal(.message(.clientGenerated("client-2")), animated: false, highlight: true))
+        model.close()
+    }
+
+    func testActivityJumpSingleFlightAndRealtimeDeletionPrunesBothQueues() async throws {
+        let (model, source, _) = try makeModel(
+            pages: [
+                .success(try livePage(ids: 10...12)),
+                .success(try historyPage(ids: 1...3, newerCursor: MessageID(3))),
+            ],
+            fetchUnreadMentions: { _ in .init(messageIds: [MessageID(2), MessageID(11)]) },
+            fetchUnreadReactions: { _ in
+                .init(messageIds: [MessageID(2), MessageID(11)], readThrough: "snapshot")
+            })
+        await model.open()
+        model.setReadTrackingActive(true)
+        await source.drain()
+        source.holdNextRequest()
+        let jump = Task { await model.jumpToNextMention() }
+        await source.waitUntilHeld()
+        XCTAssertTrue(model.activityJumpInProgress)
+        await model.jumpToNextReaction()
+        XCTAssertEqual(source.queries.count, 2)
+        source.store.apply(.messageDeleted(try TimelineTestFixtures.message(id: 11, at: 11)))
+        XCTAssertEqual(model.unreadMentionJumpCount, 1)
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        source.release()
+        await jump.value
+        XCTAssertFalse(model.activityJumpInProgress)
+        XCTAssertEqual(model.unreadMentionJumpCount, 0)
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        model.close()
+    }
+
+    func testInvalidationDuringReactionAckRerunsWithoutOverlappingAcknowledgements() async throws {
+        let held = expectation(description: "ACK held")
+        let rerun = expectation(description: "Dirty snapshot acknowledged")
+        var release: CheckedContinuation<Void, Never>?
+        var fetches = 0
+        var boundaries: [String?] = []
+        let (model, source, _) = try makeModel(
+            pages: [],
+            fetchUnreadReactions: { _ in
+                fetches += 1
+                return .init(messageIds: [MessageID(UInt64(fetches))], readThrough: "\(fetches)")
+            },
+            acknowledgeReactions: { _, boundary in
+                boundaries.append(boundary)
+                if boundaries.count == 1 {
+                    await withCheckedContinuation {
+                        release = $0
+                        held.fulfill()
+                    }
+                } else {
+                    rerun.fulfill()
+                }
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        for _ in 0..<3 { model.refreshUnreadActivity(mentions: false) }
+        await source.drain()
+        XCTAssertEqual(fetches, 1)
+        XCTAssertEqual(boundaries, ["1"])
+        release?.resume()
+        await fulfillment(of: [rerun], timeout: 2)
+        await source.drain()
+        XCTAssertEqual(boundaries, ["1", "2"])
+        XCTAssertEqual(model.unreadReactionJumpCount, 2)
+        model.close()
+    }
+
+    func testReopenFencesPendingFinalAckAndBackgroundCloseDoesNotAcknowledge() async throws {
+        let held = expectation(description: "Old GET held")
+        let restored = expectation(description: "New session acknowledged")
+        var release: CheckedContinuation<Void, Never>?
+        var fetches = 0
+        var boundaries: [String?] = []
+        let (model, source, _) = try makeModel(
+            pages: [],
+            fetchUnreadReactions: { _ in
+                fetches += 1
+                let request = fetches
+                if request == 1 {
+                    await withCheckedContinuation {
+                        release = $0
+                        held.fulfill()
+                    }
+                }
+                return .init(messageIds: [MessageID(UInt64(request))], readThrough: "\(request)")
+            },
+            acknowledgeReactions: { _, boundary in
+                boundaries.append(boundary)
+                restored.fulfill()
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        model.close(acknowledgingActivity: true)
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(fetches, 1)
+        release?.resume()
+        await fulfillment(of: [restored], timeout: 2)
+        await source.drain()
+        XCTAssertEqual(boundaries, ["2"], "The old session's final ACK cannot cross reopen.")
+        model.setReadTrackingActive(false)
+        model.close(acknowledgingActivity: true)
+        await source.drain()
+        XCTAssertEqual(boundaries, ["2"], "Closing a background session never acknowledges.")
+    }
+
+    func testDeletedCachedTargetsAndHTTPNotFoundAreMissingNotTransientFailures() async throws {
+        let deleted = try TimelineTestFixtures.message(id: 1, at: 1).redactedForDeletion()
+        let (model, source, _) = try makeModel(
+            pages: [
+                .success(try TimelineTestFixtures.page([deleted])),
+                .failure(APIError.invalidResponse(statusCode: 404)),
+            ],
+            fetchUnreadMentions: { _ in .init(messageIds: [MessageID(1), MessageID(2)]) })
+        await model.open()
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(model.unreadMentionJumpCount, 1, "Cached tombstones never become targets.")
+        let cached = await model.jumpToMessage(MessageID(1))
+        XCTAssertEqual(cached, .missing)
+        XCTAssertEqual(source.queries.count, 1)
+        await model.jumpToNextMention()
+        XCTAssertEqual(
+            model.unreadMentionJumpCount, 0, "HTTP 404 drops a confirmed missing target.")
+        model.close()
+    }
+
+    func testAccountResetAfterCloseCancelsDeferredFinalAcknowledgement() async throws {
+        let held = expectation(description: "Old GET held")
+        var release: CheckedContinuation<Void, Never>?
+        var acknowledgements = 0
+        let (model, source, _) = try makeModel(
+            pages: [],
+            fetchUnreadReactions: { _ in
+                await withCheckedContinuation {
+                    release = $0
+                    held.fulfill()
+                }
+                return .init(messageIds: [MessageID(2)], readThrough: "old-account")
+            },
+            acknowledgeReactions: { _, _ in
+                acknowledgements += 1
+                return .init(unreadReactions: 0)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        model.close(acknowledgingActivity: true)
+        source.store.reset()
+        release?.resume()
+        await source.drain()
+        XCTAssertEqual(
+            acknowledgements, 0, "Unregistered old models cannot acknowledge a new account.")
+    }
+
     private func reportVisible(
         _ ids: [MessageID], to model: ConversationTimelineModel, revision: Int? = nil,
         reason: TimelineViewportChangeReason = .layout, distanceToBottom: CGFloat = 5_000
@@ -1652,7 +2086,13 @@ final class ConversationTimelineModelTests: XCTestCase {
     private func makeModel(
         pages: [Result<ListMessagesResponse, Error>],
         threadID: String? = nil,
-        markRead: (@MainActor (MessageID) async throws -> Void)? = nil
+        isGroupChat: Bool = true,
+        markRead: (@MainActor (MessageID) async throws -> Void)? = nil,
+        fetchUnreadMentions: (@MainActor (String?) async throws -> UnreadMentionIDsResponse)? = nil,
+        fetchUnreadReactions: (@MainActor (String?) async throws -> UnreadReactionIDsResponse)? =
+            nil,
+        acknowledgeReactions:
+            (@MainActor (String?, String?) async throws -> UnreadReactionsAckResponse)? = nil
     ) throws -> (
         ConversationTimelineModel, ScriptedTimelineSource,
         CurrentValueSubject<[TimelineHostSnapshot], Never>
@@ -1661,11 +2101,14 @@ final class ConversationTimelineModelTests: XCTestCase {
         let model = ConversationTimelineModel(
             chatID: "chat",
             currentUserID: 1,
-            isGroupChat: true,
+            isGroupChat: isGroupChat,
             source: source,
             messageStore: source.store,
             threadID: threadID,
-            markRead: markRead
+            markRead: markRead,
+            fetchUnreadMentions: fetchUnreadMentions,
+            fetchUnreadReactions: fetchUnreadReactions,
+            acknowledgeReactions: acknowledgeReactions
         )
         let updates = CurrentValueSubject<[TimelineHostSnapshot], Never>([])
         model.updates.sink { updates.value.append($0) }.store(in: &cancellables)

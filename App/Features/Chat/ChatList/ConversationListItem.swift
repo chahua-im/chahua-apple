@@ -10,38 +10,83 @@ enum ConversationListScope: String, CaseIterable, Identifiable {
     func includesThreads(showThreadsInMessages: Bool) -> Bool {
         self == .threads || (self == .messages && showThreadsInMessages)
     }
+
+    func summaryKey(archived: Bool, showThreadsInMessages: Bool) -> String {
+        rawValue + (self == .messages && showThreadsInMessages ? "-with-threads" : "")
+            + (archived ? "-archived" : "")
+    }
 }
 
 struct ConversationTabBadges: Equatable {
-    var groups = 0
-    var dms = 0
-    var threads = 0
-    var showThreadsInMessages = true
-
-    init(
-        chats: [ChatListItem] = [], threads: [ThreadListItem] = [], archived: Bool = false,
-        showThreadsInMessages: Bool = true, now: Date = Date()
-    ) {
-        self.showThreadsInMessages = showThreadsInMessages
-        for chat in chats where chat.archived == archived && chat.unreadCount > 0 {
-            guard archived || chat.mutedUntil.map({ $0 > now }) != true else { continue }
-            switch chat.kind {
-            case .group: groups += 1
-            case .dm: dms += 1
-            }
-        }
-        self.threads = threads.reduce(0) {
-            $0 + ($1.archived == archived && $1.unreadCount > 0 ? 1 : 0)
+    static var unreadViews: [ConversationView] {
+        [false, true].flatMap { archived in
+            ConversationListScope.allCases.map { scope in
+                view(scope: scope, archived: archived, showThreadsInMessages: false)
+            } + [view(scope: .messages, archived: archived, showThreadsInMessages: true)]
         }
     }
 
-    subscript(scope: ConversationListScope) -> Int {
+    private static func view(
+        scope: ConversationListScope, archived: Bool, showThreadsInMessages: Bool
+    ) -> ConversationView {
+        let categories: [ConversationCategory]
         switch scope {
-        case .messages: groups + dms + (showThreadsInMessages ? threads : 0)
-        case .groups: groups
-        case .dms: dms
-        case .threads: threads
+        case .groups: categories = [.group]
+        case .dms: categories = [.dm]
+        case .threads: categories = [.groupThread, .dmThread]
+        case .messages:
+            categories =
+                [.group, .dm]
+                + (showThreadsInMessages ? [.groupThread, .dmThread] : [])
         }
+        return ConversationView(
+            key: scope.summaryKey(
+                archived: archived, showThreadsInMessages: showThreadsInMessages),
+            selector: ConversationSelector(archived: archived, categories: categories))
+    }
+
+    private var summaries: [ConversationUnreadSummary]
+    var archived: Bool
+    var showThreadsInMessages: Bool
+
+    init(
+        summaries: [ConversationUnreadSummary] = [], archived: Bool = false,
+        showThreadsInMessages: Bool = true
+    ) {
+        self.summaries = summaries
+        self.archived = archived
+        self.showThreadsInMessages = showThreadsInMessages
+    }
+
+    private func summary(for scope: ConversationListScope) -> ConversationUnreadSummary? {
+        let key = scope.summaryKey(
+            archived: archived, showThreadsInMessages: showThreadsInMessages)
+        return summaries.first { $0.key == key }
+    }
+
+    subscript(scope: ConversationListScope) -> Int64 {
+        guard let summary = summary(for: scope) else { return 0 }
+        return archived ? summary.unreadConversationCount : summary.unreadUnmutedConversationCount
+    }
+
+    func attentionCount(for scope: ConversationListScope) -> Int64 {
+        guard let summary = summary(for: scope) else { return 0 }
+        return archived ? summary.unreadAttentionCount : summary.unreadUnmutedAttentionCount
+    }
+
+    func label(for scope: ConversationListScope) -> String? {
+        if attentionCount(for: scope) > 0 { return "@" }
+        let count = self[scope]
+        return count > 0 ? (count > 999 ? "999+" : String(count)) : nil
+    }
+
+    func accessibilityValue(for scope: ConversationListScope) -> String {
+        let attention = attentionCount(for: scope)
+        if attention > 0 {
+            return AppLanguage.localized("\(attention) unread mentions and replies")
+        }
+        let count = self[scope]
+        return count > 0 ? AppLanguage.localized("\(count) unread conversations") : ""
     }
 }
 
@@ -82,6 +127,27 @@ enum ConversationListItem: Hashable, Identifiable {
         switch self {
         case .chat(let chat): chat.unreadCount
         case .thread(let thread): thread.unreadCount
+        }
+    }
+
+    var unreadMentions: Int64 {
+        switch self {
+        case .chat(let chat): chat.kind == .group ? chat.unreadMentions : 0
+        case .thread(let thread): thread.chatKind == .group ? thread.unreadMentions : 0
+        }
+    }
+
+    var unreadReactions: Int64 {
+        switch self {
+        case .chat(let chat): chat.unreadReactions
+        case .thread(let thread): thread.unreadReactions
+        }
+    }
+
+    func hasMutedBadges(now: Date = .now) -> Bool {
+        switch self {
+        case .chat(let chat): chat.archived || chat.mutedUntil.map { $0 > now } == true
+        case .thread(let thread): thread.archived
         }
     }
 

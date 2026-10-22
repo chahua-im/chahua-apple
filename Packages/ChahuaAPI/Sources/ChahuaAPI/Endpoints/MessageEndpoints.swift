@@ -4,10 +4,26 @@ import Foundation
 public struct ReadStateResponse: Codable, Hashable, Sendable {
     public let lastReadMessageId: MessageID?
     public let unreadCount: Int64
+    public let unreadMentions: Int64
+    public let unreadReactions: Int64
 
-    public init(lastReadMessageId: MessageID?, unreadCount: Int64) {
+    public init(
+        lastReadMessageId: MessageID?, unreadCount: Int64, unreadMentions: Int64 = 0,
+        unreadReactions: Int64 = 0
+    ) {
         self.lastReadMessageId = lastReadMessageId
         self.unreadCount = unreadCount
+        self.unreadMentions = unreadMentions
+        self.unreadReactions = unreadReactions
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        lastReadMessageId = try container.decodeIfPresent(
+            MessageID.self, forKey: .lastReadMessageId)
+        unreadCount = try container.decode(Int64.self, forKey: .unreadCount)
+        unreadMentions = try container.decodeIfPresent(Int64.self, forKey: .unreadMentions) ?? 0
+        unreadReactions = try container.decodeIfPresent(Int64.self, forKey: .unreadReactions) ?? 0
     }
 }
 

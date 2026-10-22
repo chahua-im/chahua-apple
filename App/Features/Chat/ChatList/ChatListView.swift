@@ -140,9 +140,9 @@ struct ChatListView: View {
     }
 
     private var archivedEntry: some View {
-        let count = ConversationTabBadges(
-            chats: store.state.archivedChats, threads: store.state.archivedThreads,
-            archived: true, showThreadsInMessages: showThreadsInMessages)[scope]
+        let badges = ConversationTabBadges(
+            summaries: store.state.conversationUnreadSummaries,
+            archived: true, showThreadsInMessages: showThreadsInMessages)
         return HStack(spacing: ChahuaTheme.Spacing.medium) {
             AvatarFrame(diameter: ConversationListRow.avatarDiameter) { _ in
                 ChahuaTheme.ChatList.primary
@@ -159,13 +159,13 @@ struct ChatListView: View {
                     .modifier(ConversationListSubtitleStyle(isSelected: false))
             }
             Spacer(minLength: 8)
-            if count > 0 {
-                Text(count > 999 ? "999+" : String(count))
+            if let label = badges.label(for: scope) {
+                Text(label)
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
                     .background(.quaternary, in: Capsule())
-                    .accessibilityLabel("\(count) unread conversations")
+                    .accessibilityLabel(badges.accessibilityValue(for: scope))
             }
         }
         .modifier(ConversationListRowLayout())

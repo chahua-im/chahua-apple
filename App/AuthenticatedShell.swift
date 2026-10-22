@@ -358,8 +358,7 @@ struct AuthenticatedShell: View {
     private func chatList(archived: Bool) -> some View {
         let scope = scopeBinding(archived: archived)
         let badges = ConversationTabBadges(
-            chats: archived ? chatStore.state.archivedChats : chatStore.state.chats,
-            threads: archived ? chatStore.state.archivedThreads : chatStore.state.threads,
+            summaries: chatStore.state.conversationUnreadSummaries,
             archived: archived, showThreadsInMessages: showThreadsInMessages)
         let list = ChatListView(
             store: chatStore,

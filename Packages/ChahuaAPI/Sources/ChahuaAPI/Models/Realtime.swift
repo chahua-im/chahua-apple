@@ -8,6 +8,7 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case messageDeleted(MessageResponse)
     case messagesBulkDeleted(BulkDeletedPayload)
     case reactionUpdated(ReactionUpdatePayload)
+    case notification(NotificationPayload)
     case presenceUpdate(PresenceUpdatePayload)
     case presenceSnapshot(PresenceSnapshotPayload)
     case threadUpdate(ThreadUpdatePayload)
@@ -43,6 +44,9 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         case "reactionUpdated":
             self = .reactionUpdated(
                 try container.decode(ReactionUpdatePayload.self, forKey: .payload))
+        case "notification":
+            self = .notification(
+                try container.decode(NotificationPayload.self, forKey: .payload))
         case "presenceUpdate":
             self = .presenceUpdate(
                 try container.decode(PresenceUpdatePayload.self, forKey: .payload))
@@ -82,6 +86,34 @@ public enum RealtimeServerEvent: Decodable, Sendable {
                 try container.decode(FriendshipRemovedPayload.self, forKey: .payload))
         default: self = .unknown(type: type)
         }
+    }
+}
+
+public enum NotificationType: String, Codable, Hashable, Sendable {
+    case mention
+    case reply
+    case reaction
+}
+
+/// Recipient-directed activity, distinct from the public reaction summary update.
+public struct NotificationPayload: Decodable, Sendable {
+    public let actorName: String?
+    public let actorUid: Int32
+    public let chatId: String
+    public let messageId: MessageID
+    public let notificationType: NotificationType
+    public let threadRootId: MessageID?
+
+    public init(
+        actorName: String? = nil, actorUid: Int32, chatId: String, messageId: MessageID,
+        notificationType: NotificationType, threadRootId: MessageID? = nil
+    ) {
+        self.actorName = actorName
+        self.actorUid = actorUid
+        self.chatId = chatId
+        self.messageId = messageId
+        self.notificationType = notificationType
+        self.threadRootId = threadRootId
     }
 }
 

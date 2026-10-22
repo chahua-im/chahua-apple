@@ -317,6 +317,28 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     private var mutations: [Int: CheckedContinuation<Void, Error>] = [:]
     private var waiter: (count: Int, continuation: CheckedContinuation<Void, Never>)?
 
+    private enum UnexpectedActivityCall: Error { case unread }
+    func conversationUnreadSummaries(views: [ConversationView]) async throws
+        -> ConversationUnreadResponse
+    {
+        throw UnexpectedActivityCall.unread
+    }
+    func unreadMentions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadMentionIDsResponse
+    {
+        throw UnexpectedActivityCall.unread
+    }
+    func unreadReactions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadReactionIDsResponse
+    {
+        throw UnexpectedActivityCall.unread
+    }
+    func acknowledgeReactions(chatID: String, threadID: MessageID?, readThrough: String?)
+        async throws -> UnreadReactionsAckResponse
+    {
+        throw UnexpectedActivityCall.unread
+    }
+
     func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
         throw APIError.unavailable
     }

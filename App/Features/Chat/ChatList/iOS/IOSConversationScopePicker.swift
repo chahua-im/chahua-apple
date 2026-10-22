@@ -12,8 +12,7 @@
                     Text(scope.localizedTitle)
                         .tag(scope)
                         .accessibilityValue(
-                            badges[scope] > 0
-                                ? Text("\(badges[scope]) unread conversations") : Text("")
+                            Text(badges.accessibilityValue(for: scope))
                         )
                 }
             }
@@ -27,13 +26,16 @@
                         Color.clear
                             .frame(maxWidth: .infinity)
                             .overlay(alignment: .topTrailing) {
-                                if badges[scope] > 0 {
-                                    Text(badges[scope] > 999 ? "999+" : String(badges[scope]))
+                                if let label = badges.label(for: scope) {
+                                    Text(label)
                                         .font(.caption2.weight(.semibold).monospacedDigit())
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 5)
                                         .padding(.vertical, 2)
-                                        .background(badgeColor.color, in: Capsule())
+                                        .background(
+                                            badges.archived ? Color.gray : badgeColor.color,
+                                            in: Capsule()
+                                        )
                                         .fixedSize()
                                         .offset(x: -2, y: -4)
                                 }
@@ -54,13 +56,7 @@
         private struct IOSConversationScopePickerPreview: View {
             @State private var selection: ConversationListScope = .messages
 
-            private var badges: ConversationTabBadges {
-                var counts = ConversationTabBadges()
-                counts.groups = 12
-                counts.dms = 3
-                counts.threads = 1000
-                return counts
-            }
+            private var badges: ConversationTabBadges { ConversationTabBadges() }
 
             var body: some View {
                 ConversationScopePicker(selection: $selection, badges: badges)

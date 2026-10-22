@@ -14,7 +14,11 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
     public let replyCount: Int64
     public let lastReplyAt: Date
     public let unreadCount: Int64
+    public let unreadMentions: Int64
+    public let unreadReactions: Int64
     public let lastReadMessageId: MessageID?
+    /// Missing in older snapshots; default to DM so group-only attention is never inferred.
+    public let chatKind: ChatKind
     public let subscribedAt: Date
     public let archived: Bool
 
@@ -28,7 +32,10 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         replyCount: Int64,
         lastReplyAt: Date,
         unreadCount: Int64,
+        unreadMentions: Int64 = 0,
+        unreadReactions: Int64 = 0,
         lastReadMessageId: MessageID? = nil,
+        chatKind: ChatKind = .dm,
         subscribedAt: Date,
         archived: Bool
     ) {
@@ -41,9 +48,32 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         self.replyCount = replyCount
         self.lastReplyAt = lastReplyAt
         self.unreadCount = unreadCount
+        self.unreadMentions = unreadMentions
+        self.unreadReactions = unreadReactions
         self.lastReadMessageId = lastReadMessageId
+        self.chatKind = chatKind
         self.subscribedAt = subscribedAt
         self.archived = archived
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        chatId = try container.decode(String.self, forKey: .chatId)
+        chatName = try container.decode(String.self, forKey: .chatName)
+        chatAvatar = try container.decodeIfPresent(String.self, forKey: .chatAvatar)
+        threadRootMessage = try container.decode(MessagePreview.self, forKey: .threadRootMessage)
+        participants = try container.decode([User].self, forKey: .participants)
+        lastReply = try container.decodeIfPresent(MessagePreview.self, forKey: .lastReply)
+        replyCount = try container.decode(Int64.self, forKey: .replyCount)
+        lastReplyAt = try container.decode(Date.self, forKey: .lastReplyAt)
+        unreadCount = try container.decode(Int64.self, forKey: .unreadCount)
+        unreadMentions = try container.decodeIfPresent(Int64.self, forKey: .unreadMentions) ?? 0
+        unreadReactions = try container.decodeIfPresent(Int64.self, forKey: .unreadReactions) ?? 0
+        lastReadMessageId = try container.decodeIfPresent(
+            MessageID.self, forKey: .lastReadMessageId)
+        chatKind = try container.decodeIfPresent(ChatKind.self, forKey: .chatKind) ?? .dm
+        subscribedAt = try container.decode(Date.self, forKey: .subscribedAt)
+        archived = try container.decode(Bool.self, forKey: .archived)
     }
 }
 

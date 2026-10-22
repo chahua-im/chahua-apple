@@ -19,6 +19,7 @@ struct ChatDetailView: View {
     @State private var hasLoadedInteractionPermissions = false
     @State private var failedMessageID: String?
     @State private var showsRetryOptions = false
+    @State private var isTimelineVisible = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @Environment(\.imageDetailPresenter) private var imageDetailPresenter
@@ -92,7 +93,17 @@ struct ChatDetailView: View {
                     try await store.markRead(
                         chatID: chat.id, threadID: threadID, messageID: messageID)
                 },
-                fetchReadReceipt: fetchReadReceipt
+                fetchReadReceipt: fetchReadReceipt,
+                fetchUnreadMentions: { scope in
+                    try await store.unreadMentions(chatID: chat.id, threadID: scope)
+                },
+                fetchUnreadReactions: { scope in
+                    try await store.unreadReactions(chatID: chat.id, threadID: scope)
+                },
+                acknowledgeReactions: { scope, readThrough in
+                    try await store.acknowledgeReactions(
+                        chatID: chat.id, threadID: scope, readThrough: readThrough)
+                }
             ))
     }
 
@@ -100,6 +111,7 @@ struct ChatDetailView: View {
         deletionSurface
             .navigationTitle(navigationTitle ?? chat.chatDisplayName)
             .onAppear {
+                isTimelineVisible = true
                 if threadID == nil {
                     model.updateReadState(
                         unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
@@ -152,7 +164,7 @@ struct ChatDetailView: View {
                 Text(pins.error ?? "")
             }
             .onChange(of: scenePhase) { _, phase in
-                model.setReadTrackingActive(phase == .active)
+                model.setReadTrackingActive(isTimelineVisible && phase == .active)
             }
             .alert(
                 "Message actions",
@@ -204,9 +216,9 @@ struct ChatDetailView: View {
                 }
             }
             .onDisappear {
-                model.setReadTrackingActive(false)
+                isTimelineVisible = false
+                model.close(acknowledgingActivity: scenePhase == .active)
                 store.unregisterTimeline(model)
-                model.close()
                 Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
             }
     }

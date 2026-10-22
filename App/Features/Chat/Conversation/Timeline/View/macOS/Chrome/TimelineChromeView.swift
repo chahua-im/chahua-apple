@@ -9,11 +9,16 @@
             let state: ConversationTimelineState
             let hasRows: Bool
             let showsJumpToLatest: Bool
+            let unreadMessageCount: Int64
+            let unreadMentionCount: Int
+            let unreadReactionCount: Int
+            let activityJumpInProgress: Bool
+            let badgeColor: ConversationUnreadBadgeColor
             let headerInset: CGFloat
             let composerInset: CGFloat
         }
 
-        private enum Operation: Hashable { case initial, reconcile, jump }
+        private enum Operation: Hashable { case initial, reconcile, jump, mention, reaction }
         private weak var model: ConversationTimelineModel?
         private var presentation: Presentation?
         private var tasks: [Operation: Task<Void, Never>] = [:]
@@ -29,7 +34,10 @@
         private let repositionFailure = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
         private let reconciliationFailure = TimelineBannerView(
             cornerRadius: ChahuaTheme.Radius.small)
-        private let jumpControl = TimelineJumpControl()
+        // The native table requires an AppKit overlay to preserve its scroll geometry;
+        // only the small navigation stack is hosted, not individual message rows.
+        private var jumpControl: NSHostingView<TimelineNavigationControls>?
+        private var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
         private(set) var showsTable = false
         override var isFlipped: Bool { true }
 
@@ -37,7 +45,7 @@
             super.init(frame: frameRect)
             for child in [
                 initialLoading, initialFailure, initialBanner, olderEdge, newerEdge,
-                repositionProgress, repositionFailure, reconciliationFailure, jumpControl,
+                repositionProgress, repositionFailure, reconciliationFailure,
             ] as [NSView] {
                 child.isHidden = true
                 addSubview(child)
@@ -48,7 +56,6 @@
             newerEdge.onRetry = { [weak self] in self?.model?.retryNewer() }
             repositionFailure.onAction = { [weak self] in self?.model?.dismissRepositionFailure() }
             reconciliationFailure.onAction = { [weak self] in self?.perform(.reconcile) }
-            jumpControl.onAction = { [weak self] in self?.perform(.jump) }
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -62,8 +69,13 @@
             }
             let next = Presentation(
                 state: model.state, hasRows: !model.rows.isEmpty,
-                showsJumpToLatest: model.showsJumpToLatest, headerInset: headerInset,
-                composerInset: composerInset)
+                showsJumpToLatest: model.showsJumpToLatest,
+                unreadMessageCount: model.jumpUnreadCount,
+                unreadMentionCount: model.unreadMentionJumpCount,
+                unreadReactionCount: model.unreadReactionJumpCount,
+                activityJumpInProgress: model.activityJumpInProgress,
+                badgeColor: badgeColor,
+                headerInset: headerInset, composerInset: composerInset)
             guard presentation != next else { return }
             presentation = next
             let state = next.state
@@ -118,8 +130,26 @@
             } else {
                 reconciliationFailure.hide()
             }
-            jumpControl.isHidden = !next.showsJumpToLatest
-            jumpControl.setCount(model.jumpUnreadCount)
+            let controls = TimelineNavigationControls(
+                showsJumpToLatest: next.showsJumpToLatest,
+                unreadMessageCount: next.unreadMessageCount,
+                unreadMentionCount: next.unreadMentionCount,
+                unreadReactionCount: next.unreadReactionCount,
+                isBusy: next.activityJumpInProgress || isRepositioning,
+                badgeColor: next.badgeColor,
+                jumpToLatest: { [weak self] in self?.perform(.jump) },
+                jumpToMention: { [weak self] in self?.perform(.mention) },
+                jumpToReaction: { [weak self] in self?.perform(.reaction) })
+            if let jumpControl {
+                jumpControl.rootView = controls
+            } else {
+                let host = NSHostingView(rootView: controls)
+                jumpControl = host
+                addSubview(host)
+            }
+            jumpControl?.isHidden =
+                !next.showsJumpToLatest && next.unreadMentionCount <= 0
+                && next.unreadReactionCount <= 0
             needsLayout = true
         }
 
@@ -147,21 +177,23 @@
             }
             repositionProgress.frame = NSRect(
                 x: max(0, (width - 52) / 2), y: max(0, (height - 52) / 2), width: 52, height: 52)
-            jumpControl.frame = NSRect(
-                x: max(0, width - ChahuaTheme.Spacing.large - TimelineJumpControl.diameter),
-                y: max(
-                    0,
-                    height - presentation.composerInset - ChahuaTheme.Spacing.large
-                        - TimelineJumpControl.diameter),
-                width: TimelineJumpControl.diameter, height: TimelineJumpControl.diameter
-            )
+            if let jumpControl, !jumpControl.isHidden {
+                let size = jumpControl.fittingSize
+                jumpControl.frame = NSRect(
+                    x: max(0, width - ChahuaTheme.Spacing.large - size.width),
+                    y: max(
+                        0,
+                        height - presentation.composerInset - ChahuaTheme.Spacing.large
+                            - size.height),
+                    width: size.width, height: size.height)
+            }
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? {
             guard !isHidden, let hit = super.hitTest(point) else { return nil }
             var candidate: NSView? = hit
             while let current = candidate, current !== self {
-                if current is NSButton { return hit }
+                if current is NSButton || current === jumpControl { return hit }
                 candidate = current.superview
             }
             // Labels, materials and progress never take selection/scroll hits away
@@ -177,6 +209,8 @@
                 case .initial: await model.retryInitial()
                 case .reconcile: await model.reconcileAfterReconnect()
                 case .jump: await model.jumpTowardLatest()
+                case .mention: await model.jumpToNextMention()
+                case .reaction: await model.jumpToNextReaction()
                 }
                 self?.tasks[operation] = nil
             }
@@ -192,7 +226,7 @@
         }
 
         func setBadgeColor(_ badgeColor: ConversationUnreadBadgeColor) {
-            jumpControl.setBadgeColor(badgeColor)
+            self.badgeColor = badgeColor
         }
     }
 
@@ -459,143 +493,4 @@
         }
     }
 
-    @MainActor
-    private final class TimelineJumpControl: NSView {
-        static let diameter: CGFloat = 32
-        // Badge center relative to the button's top-right corner.
-        // Positive x moves right; negative y moves up (this view is flipped).
-        static let defaultBadgeOffset = CGPoint(x: -4, y: 0)
-        var onAction: (() -> Void)?
-        private let background = timelineChromeMaterial(
-            cornerRadius: TimelineJumpControl.diameter / 2)
-        private let button = TimelineChromeButton(
-            title: AppLanguage.localized("Jump to latest messages"), symbol: "chevron.down")
-        private let badge = timelineChromeLabel(style: .caption2)
-        private let badgeBackground = NSView()
-        private var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
-        override var isFlipped: Bool { true }
-
-        override init(frame frameRect: NSRect) {
-            super.init(frame: frameRect)
-            button.contentTintColor = .labelColor
-            button.symbolConfiguration = NSImage.SymbolConfiguration(
-                pointSize: 13, weight: .semibold)
-            button.onAction = { [weak self] in self?.onAction?() }
-            badge.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
-            badge.textColor = .white
-            badge.alignment = .center
-            badgeBackground.wantsLayer = true
-            badgeBackground.layer?.masksToBounds = true
-            badgeBackground.isHidden = true
-            badgeBackground.setAccessibilityElement(false)
-            badge.setAccessibilityElement(false)
-            addSubview(background)
-            addSubview(button)
-            badgeBackground.addSubview(badge)
-            addSubview(badgeBackground)
-            updateBadgeColor()
-        }
-
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-        func setBadgeColor(_ badgeColor: ConversationUnreadBadgeColor) {
-            guard self.badgeColor != badgeColor else { return }
-            self.badgeColor = badgeColor
-            updateBadgeColor()
-        }
-
-        func setCount(_ count: Int64) {
-            let title = AppLanguage.localized("Jump to latest messages")
-            badge.stringValue = String(max(0, count))
-            badgeBackground.isHidden = count <= 0
-            button.setAccessibilityLabel(title)
-            button.setAccessibilityValue(
-                count > 0 ? AppLanguage.localized("\(count) unread messages") : nil)
-            needsLayout = true
-        }
-
-        override func layout() {
-            super.layout()
-            background.frame = bounds
-            button.frame = bounds
-            // NSTextField does not vertically center text in an enlarged frame.
-            // Keep its fitting height and center it inside the separate badge surface.
-            let textSize = badge.fittingSize
-            let height = max(18, ceil(textSize.height) + 4)
-            let width = max(height, ceil(textSize.width) + 6)
-            badgeBackground.frame = NSRect(
-                x: bounds.maxX - width / 2 + Self.defaultBadgeOffset.x,
-                y: -height / 2 + Self.defaultBadgeOffset.y, width: width, height: height)
-            badgeBackground.layer?.cornerRadius = height / 2
-            badge.frame = NSRect(
-                x: (width - textSize.width) / 2, y: (height - textSize.height) / 2,
-                width: textSize.width, height: textSize.height)
-        }
-
-        override func hitTest(_ point: NSPoint) -> NSView? {
-            guard !isHidden, let superview else { return nil }
-            let local = convert(point, from: superview)
-            return bounds.contains(local) ? button : nil
-        }
-
-        override func viewDidChangeEffectiveAppearance() {
-            super.viewDidChangeEffectiveAppearance()
-            updateBadgeColor()
-        }
-
-        private func updateBadgeColor() {
-            effectiveAppearance.performAsCurrentDrawingAppearance {
-                badgeBackground.layer?.backgroundColor = NSColor(badgeColor.color).cgColor
-            }
-        }
-    }
-
-    #if DEBUG
-        #Preview("Jump to latest badges", traits: .fixedLayout(width: 320, height: 180)) {
-            HStack(spacing: 24) {
-                TimelineJumpPreviewControl(count: 1)
-                TimelineJumpPreviewControl(count: 1234)
-            }
-            .padding(24)
-        }
-
-        private struct TimelineJumpPreviewControl: NSViewRepresentable {
-            let count: Int64
-
-            func makeNSView(context: Context) -> TimelineJumpPreviewHost {
-                let host = TimelineJumpPreviewHost()
-                host.clipsToBounds = false
-                host.control.clipsToBounds = false
-                return host
-            }
-
-            func updateNSView(_ view: TimelineJumpPreviewHost, context: Context) {
-                view.control.setCount(count)
-            }
-
-            func sizeThatFits(
-                _ proposal: ProposedViewSize, nsView: TimelineJumpPreviewHost, context: Context
-            ) -> CGSize? {
-                CGSize(width: 120, height: 120)
-            }
-        }
-
-        private final class TimelineJumpPreviewHost: NSView {
-            let control = TimelineJumpControl()
-
-            override init(frame frameRect: NSRect) {
-                super.init(frame: frameRect)
-                addSubview(control)
-            }
-
-            required init?(coder: NSCoder) { nil }
-
-            override func layout() {
-                super.layout()
-                let size = TimelineJumpControl.diameter
-                control.frame = NSRect(
-                    x: bounds.midX - size / 2, y: bounds.midY - size / 2, width: size, height: size)
-            }
-        }
-    #endif
 #endif

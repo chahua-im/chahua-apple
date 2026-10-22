@@ -102,39 +102,80 @@ final class ConversationScopeTests: XCTestCase {
             [.init(chatID: "archived-dm")])
     }
 
-    func testArchivedBadgesCountMutedUnreadConversationsWithoutLeakingIntoInbox() {
-        let chats = [
-            ChatListItem(
-                id: "active-muted", unreadCount: 9, mutedUntil: .distantFuture, archived: false,
-                kind: .group),
-            ChatListItem(
-                id: "archived-muted", unreadCount: 7, mutedUntil: .distantFuture, archived: true,
-                kind: .group),
-            ChatListItem(id: "archived-dm", unreadCount: 2, archived: true, kind: .dm),
-            ChatListItem(id: "archived-read", unreadCount: 0, archived: true, kind: .group),
+    func testAuthoritativeBadgesPrioritizeUnmutedAttentionAndKeepArchiveSeparate() {
+        let summaries = [
+            ConversationUnreadSummary(
+                key: "groups", unreadAttentionCount: 5, unreadConversationCount: 80,
+                unreadMessageCount: 99, unreadUnmutedAttentionCount: 0,
+                unreadUnmutedConversationCount: 30, unreadUnmutedMessageCount: 40),
+            ConversationUnreadSummary(
+                key: "messages-with-threads", unreadAttentionCount: 5,
+                unreadConversationCount: 90, unreadMessageCount: 100,
+                unreadUnmutedAttentionCount: 2, unreadUnmutedConversationCount: 40,
+                unreadUnmutedMessageCount: 50),
+            ConversationUnreadSummary(
+                key: "messages-with-threads-archived", unreadAttentionCount: 1,
+                unreadConversationCount: 8, unreadMessageCount: 12,
+                unreadUnmutedAttentionCount: 0, unreadUnmutedConversationCount: 0,
+                unreadUnmutedMessageCount: 0),
         ]
-        let archived = ConversationTabBadges(chats: chats, archived: true)
-        XCTAssertEqual(archived[.groups], 1)
-        XCTAssertEqual(archived[.dms], 1)
-        XCTAssertEqual(archived[.messages], 2)
-        XCTAssertEqual(ConversationTabBadges(chats: chats)[.messages], 0)
+        let active = ConversationTabBadges(summaries: summaries)
+        XCTAssertEqual(active[.groups], 30)
+        XCTAssertEqual(active.label(for: .groups), "30", "Muted mentions must not win.")
+        XCTAssertEqual(active[.messages], 40)
+        XCTAssertEqual(active.label(for: .messages), "@")
+        XCTAssertNil(active.label(for: .dms), "Never derive missing summaries from loaded pages.")
+        let archived = ConversationTabBadges(summaries: summaries, archived: true)
+        XCTAssertEqual(archived[.messages], 8)
+        XCTAssertEqual(archived.label(for: .messages), "@")
     }
 
-    func testHidingThreadsFromMessagesKeepsThreadsBadgeAndArchivedChatCounts() throws {
-        let thread = try ScopeTestFixtures.thread(
-            chatID: "chat", id: 1, unreadCount: 3)
-        let chats = [
-            ChatListItem(id: "chat", unreadCount: 1, archived: false, kind: .group),
-            ChatListItem(id: "archived", unreadCount: 2, archived: true, kind: .dm),
+    func testMessagePreferenceSelectsItsOwnServerSummaryAndAllViewsAreRequested() {
+        let summaries = [
+            ConversationUnreadSummary(
+                key: "messages", unreadAttentionCount: 0, unreadConversationCount: 3,
+                unreadMessageCount: 4, unreadUnmutedAttentionCount: 0,
+                unreadUnmutedConversationCount: 2, unreadUnmutedMessageCount: 3),
+            ConversationUnreadSummary(
+                key: "threads", unreadAttentionCount: 0, unreadConversationCount: 7,
+                unreadMessageCount: 9, unreadUnmutedAttentionCount: 0,
+                unreadUnmutedConversationCount: 6, unreadUnmutedMessageCount: 8),
         ]
-        let active = ConversationTabBadges(
-            chats: chats, threads: [thread], showThreadsInMessages: false)
-        XCTAssertEqual(active[.messages], 1)
-        XCTAssertEqual(active[.threads], 1)
-        XCTAssertEqual(
-            ConversationTabBadges(
-                chats: chats, threads: [thread], archived: true,
-                showThreadsInMessages: false)[.messages], 1)
+        let badges = ConversationTabBadges(summaries: summaries, showThreadsInMessages: false)
+        XCTAssertEqual(badges[.messages], 2)
+        XCTAssertEqual(badges[.threads], 6)
+        XCTAssertEqual(Set(ConversationTabBadges.unreadViews.map(\.key)).count, 10)
+        XCTAssertEqual(ConversationTabBadges(summaries: summaries)[.messages], 0)
+    }
+
+    func testRowAttentionUsesWireKindAndMutedBadgesRespectTimeBoundary() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        for kind in [ChatKind.group, .dm] {
+            let chat = ConversationListItem.chat(
+                ChatListItem(
+                    id: "chat", unreadCount: 0, unreadMentions: 2, unreadReactions: 3,
+                    mutedUntil: now, archived: false, kind: kind))
+            XCTAssertEqual(chat.unreadMentions, kind == .group ? 2 : 0)
+            XCTAssertEqual(chat.unreadReactions, 3)
+            XCTAssertFalse(chat.hasMutedBadges(now: now))
+            XCTAssertTrue(chat.hasMutedBadges(now: now.addingTimeInterval(-1)))
+            let archived = ConversationListItem.chat(
+                ChatListItem(
+                    id: "archived", unreadCount: 0, unreadMentions: 1,
+                    unreadReactions: 1, archived: true, kind: kind))
+            XCTAssertTrue(archived.hasMutedBadges(now: now))
+
+            let root = try TimelineTestFixtures.message(id: 1, at: 1).replyPreview
+            let thread = ConversationListItem.thread(
+                ThreadListItem(
+                    chatId: "unloaded-parent", chatName: "", threadRootMessage: root,
+                    participants: [], replyCount: 0, lastReplyAt: now,
+                    unreadCount: 0, unreadMentions: 2, unreadReactions: 3,
+                    chatKind: kind, subscribedAt: now, archived: true))
+            XCTAssertEqual(thread.unreadMentions, kind == .group ? 2 : 0)
+            XCTAssertEqual(thread.unreadReactions, 3)
+            XCTAssertTrue(thread.hasMutedBadges(now: now))
+        }
     }
 
     func testPendingThreadRepliesStayInTheirTimelineThroughAcknowledgement() async throws {

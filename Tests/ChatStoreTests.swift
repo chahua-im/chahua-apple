@@ -6,6 +6,49 @@ import XCTest
 
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    func testMessageAndReactionReadCursorsRemainIndependentAndBackgroundCannotAcknowledge()
+        async throws
+    {
+        let chat = ChatListItem(
+            id: "chat", unreadCount: 8, unreadMentions: 2, unreadReactions: 4,
+            lastReadMessageId: MessageID(1), archived: false, kind: .group)
+        let api = FakeChatAPI(
+            chatResults: [.success(.init(chats: [chat]))],
+            readResults: [
+                .success(
+                    .init(
+                        lastReadMessageId: MessageID(9), unreadCount: 0,
+                        unreadMentions: 0, unreadReactions: 4))
+            ],
+            reactionAckResults: [.success(.init(unreadReactions: 1))])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.cancelRealtimeRecovery() }
+        await store.loadActiveChats()
+        try await store.markRead(chatID: "chat", threadID: nil, messageID: MessageID(9))
+        XCTAssertEqual(store.state.chats.first?.unreadCount, 0)
+        XCTAssertEqual(store.state.chats.first?.unreadMentions, 0)
+        XCTAssertEqual(store.state.chats.first?.unreadReactions, 4)
+
+        _ = try await store.acknowledgeReactions(
+            chatID: "chat", threadID: nil, readThrough: "2026-09-01T12:00:00Z")
+        XCTAssertEqual(store.state.chats.first?.unreadReactions, 1)
+        XCTAssertEqual(store.state.chats.first?.lastReadMessageId, MessageID(9))
+        XCTAssertEqual(store.state.chats.first?.unreadCount, 0)
+        XCTAssertEqual(store.state.chats.first?.unreadMentions, 0)
+
+        store.setForegroundActive(false)
+        do {
+            _ = try await store.acknowledgeReactions(
+                chatID: "chat", threadID: nil, readThrough: nil)
+            XCTFail("Background navigation must not consume newer reactions")
+        } catch is CancellationError {
+        }
+        let requests = await api.recordedReactionAckRequests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(store.state.chats.first?.unreadReactions, 1)
+    }
+
     func testArchiveKeepsParentIndependentAndFencesStaleRefresh() async throws {
         let parent = ChatListItem(
             id: "chat", name: "Group", unreadCount: 7, archived: false, kind: .group)
@@ -1011,6 +1054,18 @@ actor FakeChatAPI: ChahuaAPIClient {
     private let suspendArchivedChatRequests: Bool
     private var pendingChatRequest: CheckedContinuation<ListChatsResponse, Error>?
     private var chatRequestObserver: CheckedContinuation<Void, Never>?
+    private var unreadMentionsResults: [Result<UnreadMentionIDsResponse, Error>]
+    private var unreadReactionsResults: [Result<UnreadReactionIDsResponse, Error>]
+    private var reactionAckResults: [Result<UnreadReactionsAckResponse, Error>]
+    private var summaryResults: [Result<ConversationUnreadResponse, Error>]
+    struct ReactionAckRequest: Equatable, Sendable {
+        let chatID: String
+        let threadID: MessageID?
+        let readThrough: String?
+    }
+    private var reactionAckRequests: [ReactionAckRequest] = []
+    private var summaryRequests: [[ConversationView]] = []
+    private enum UnexpectedActivityCall: Error { case missingResult }
 
     init(
         chatResults: [Result<ListChatsResponse, Error>] = [],
@@ -1025,6 +1080,10 @@ actor FakeChatAPI: ChahuaAPIClient {
         archiveResults: [Result<Void, Error>] = [],
         unmuteResults: [Result<Void, Error>] = [],
         deleteResults: [Result<Void, Error>] = [],
+        unreadMentionsResults: [Result<UnreadMentionIDsResponse, Error>] = [],
+        unreadReactionsResults: [Result<UnreadReactionIDsResponse, Error>] = [],
+        reactionAckResults: [Result<UnreadReactionsAckResponse, Error>] = [],
+        summaryResults: [Result<ConversationUnreadResponse, Error>] = [],
         suspendChatRequests: Bool = false,
         suspendArchivedChatRequests: Bool = false
     ) {
@@ -1040,9 +1099,43 @@ actor FakeChatAPI: ChahuaAPIClient {
         self.archiveResults = archiveResults
         self.unmuteResults = unmuteResults
         self.deleteResults = deleteResults
+        self.unreadMentionsResults = unreadMentionsResults
+        self.unreadReactionsResults = unreadReactionsResults
+        self.reactionAckResults = reactionAckResults
+        self.summaryResults = summaryResults
         self.suspendChatRequests = suspendChatRequests
         self.suspendArchivedChatRequests = suspendArchivedChatRequests
     }
+
+    func conversationUnreadSummaries(views: [ConversationView]) async throws
+        -> ConversationUnreadResponse
+    {
+        summaryRequests.append(views)
+        guard !summaryResults.isEmpty else { throw UnexpectedActivityCall.missingResult }
+        return try summaryResults.removeFirst().get()
+    }
+    func unreadMentions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadMentionIDsResponse
+    {
+        guard !unreadMentionsResults.isEmpty else { throw UnexpectedActivityCall.missingResult }
+        return try unreadMentionsResults.removeFirst().get()
+    }
+    func unreadReactions(chatID: String, threadID: MessageID?) async throws
+        -> UnreadReactionIDsResponse
+    {
+        guard !unreadReactionsResults.isEmpty else { throw UnexpectedActivityCall.missingResult }
+        return try unreadReactionsResults.removeFirst().get()
+    }
+    func acknowledgeReactions(chatID: String, threadID: MessageID?, readThrough: String?)
+        async throws -> UnreadReactionsAckResponse
+    {
+        reactionAckRequests.append(
+            .init(chatID: chatID, threadID: threadID, readThrough: readThrough))
+        guard !reactionAckResults.isEmpty else { throw UnexpectedActivityCall.missingResult }
+        return try reactionAckResults.removeFirst().get()
+    }
+    func recordedReactionAckRequests() -> [ReactionAckRequest] { reactionAckRequests }
+    func recordedSummaryRequests() -> [[ConversationView]] { summaryRequests }
 
     func appendMessageResult(chatID: String, page: ListMessagesResponse) {
         messageResults[chatID, default: []].append(.success(page))

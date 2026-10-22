@@ -25,6 +25,8 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
     public let lastMessageAt: Date?
     /// Server-calculated unread count for the current member.
     public let unreadCount: Int64
+    public let unreadMentions: Int64
+    public let unreadReactions: Int64
     /// Current member's last-read message ID.
     public let lastReadMessageId: MessageID?
     /// Summary of the latest message, not a complete cached message.
@@ -44,6 +46,8 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         avatar: String? = nil,
         lastMessageAt: Date? = nil,
         unreadCount: Int64,
+        unreadMentions: Int64 = 0,
+        unreadReactions: Int64 = 0,
         lastReadMessageId: MessageID? = nil,
         lastMessage: MessagePreview? = nil,
         mutedUntil: Date? = nil,
@@ -56,12 +60,32 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         self.avatar = avatar
         self.lastMessageAt = lastMessageAt
         self.unreadCount = unreadCount
+        self.unreadMentions = unreadMentions
+        self.unreadReactions = unreadReactions
         self.lastReadMessageId = lastReadMessageId
         self.lastMessage = lastMessage
         self.mutedUntil = mutedUntil
         self.archived = archived
         self.kind = kind
         self.peer = peer
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+        lastMessageAt = try container.decodeIfPresent(Date.self, forKey: .lastMessageAt)
+        unreadCount = try container.decode(Int64.self, forKey: .unreadCount)
+        unreadMentions = try container.decodeIfPresent(Int64.self, forKey: .unreadMentions) ?? 0
+        unreadReactions = try container.decodeIfPresent(Int64.self, forKey: .unreadReactions) ?? 0
+        lastReadMessageId = try container.decodeIfPresent(
+            MessageID.self, forKey: .lastReadMessageId)
+        lastMessage = try container.decodeIfPresent(MessagePreview.self, forKey: .lastMessage)
+        mutedUntil = try container.decodeIfPresent(Date.self, forKey: .mutedUntil)
+        archived = try container.decode(Bool.self, forKey: .archived)
+        kind = try container.decode(ChatKind.self, forKey: .kind)
+        peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)
     }
 }
 
