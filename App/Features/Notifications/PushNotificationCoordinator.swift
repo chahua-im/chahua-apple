@@ -524,7 +524,7 @@ final class PushNotificationCoordinator: ObservableObject {
                 return notification.request.identifier
             }
             self.center.removeDeliveredNotifications(withIdentifiers: identifiers)
-            if state.chatListLoadPhase == .loaded, !state.isRefreshingChats {
+            if state.appBadgeCount != nil {
                 try? await self.center.setBadgeCount(state.unreadBadgeCount())
             }
         }

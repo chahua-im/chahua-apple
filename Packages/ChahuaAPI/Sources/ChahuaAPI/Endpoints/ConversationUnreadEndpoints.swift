@@ -6,17 +6,6 @@ private struct AcknowledgeReactionsBody: Encodable {
 }
 
 extension ChahuaClient {
-    public func conversationUnreadSummaries(views: [ConversationView]) async throws
-        -> ConversationUnreadResponse
-    {
-        try await send(
-            HTTPRequestSpec.json(
-                .post, ["conversations", "unread-summary"],
-                body: ConversationUnreadRequest(views: views)),
-            decoding: ConversationUnreadResponse.self
-        )
-    }
-
     public func unreadMentions(chatID: String, threadID: MessageID?) async throws
         -> UnreadMentionIDsResponse
     {

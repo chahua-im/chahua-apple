@@ -12,11 +12,16 @@ public struct ListChatsQuery: Sendable, Equatable {
     public var after: String?
     /// Whether to return archived rather than active chats.
     public var archived: Bool?
+    /// Restricts the page to one visible chat while retaining the archive filter.
+    public var chatId: String?
 
-    public init(limit: Int64? = nil, after: String? = nil, archived: Bool? = nil) {
+    public init(
+        limit: Int64? = nil, after: String? = nil, archived: Bool? = nil, chatId: String? = nil
+    ) {
         self.limit = limit
         self.after = after
         self.archived = archived
+        self.chatId = chatId
     }
 
     var queryItems: [URLQueryItem] {
@@ -24,6 +29,7 @@ public struct ListChatsQuery: Sendable, Equatable {
             limit.map { URLQueryItem(name: "limit", value: String($0)) },
             after.map { URLQueryItem(name: "after", value: $0) },
             archived.map { URLQueryItem(name: "archived", value: String($0)) },
+            chatId.map { URLQueryItem(name: "chatId", value: $0) },
         ].compactMap { $0 }
     }
 }
@@ -73,6 +79,13 @@ private struct UpdateGroupMemberRoleBody: Encodable {
 }
 
 extension ChahuaClient {
+    public func chatReadState(chatID: String) async throws -> ReadStateResponse {
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["chats", chatID, "unread"]),
+            decoding: ReadStateResponse.self
+        )
+    }
+
     /// Reads the authenticated user's individual presence sharing policy.
     public func presenceSettings() async throws -> PresenceSettingsResponse {
         try await send(

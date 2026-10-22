@@ -23,9 +23,9 @@ extension ThreadListItem {
 
 /// The current user's subscription to the visible thread, for thread detail.
 ///
-/// State changes apply only after the server accepts them. Realtime membership
-/// changes and new replies (which auto-subscribe repliers and mentioned members)
-/// re-read the server state.
+/// State changes apply only after the server accepts them. Absolute realtime
+/// membership snapshots supersede reads already in flight; legacy invalidations
+/// without a snapshot re-read the server state.
 @MainActor
 final class ThreadSubscriptionModel: ObservableObject {
     let key: ConversationKey
@@ -42,6 +42,7 @@ final class ThreadSubscriptionModel: ObservableObject {
     private var revision = 0
     private var loadTask: Task<Void, Never>?
     private var invalidations: AnyCancellable?
+    private var snapshots: AnyCancellable?
 
     init(chatID: String, threadID: String, store: ChatStore) {
         self.chatID = chatID
@@ -51,11 +52,23 @@ final class ThreadSubscriptionModel: ObservableObject {
         invalidations = store.threadSubscriptionInvalidations
             .filter { [key] in $0 == key }
             .sink { [weak self] _ in self?.reload() }
+        snapshots = store.threadSubscriptionChanges
+            .filter { [key] in $0.key == key }
+            .sink { [weak self] change in self?.applySnapshot(change.status) }
         reload()
     }
 
     deinit {
         loadTask?.cancel()
+    }
+
+    private func applySnapshot(_ status: ThreadSubscriptionStatus) {
+        revision &+= 1
+        loadTask?.cancel()
+        loadTask = nil
+        self.status = status
+        isLoading = false
+        loadFailed = false
     }
 
     func reload() {
@@ -85,17 +98,21 @@ final class ThreadSubscriptionModel: ObservableObject {
     func perform(_ change: ThreadSubscriptionChange) async {
         guard !isMutating else { return }
         revision &+= 1
+        let requestRevision = revision
         loadTask?.cancel()
         isLoading = false
         isMutating = true
         defer { isMutating = false }
         do {
-            status = try await store.changeThreadSubscription(
+            let updated = try await store.changeThreadSubscription(
                 change, chatID: chatID, threadID: threadID)
+            guard revision == requestRevision else { return }
+            status = updated
             loadFailed = false
         } catch is CancellationError {
             return
         } catch {
+            guard revision == requestRevision else { return }
             failureMessage = AppLanguage.localized(
                 "Couldn’t update the thread subscription. Please try again.")
         }

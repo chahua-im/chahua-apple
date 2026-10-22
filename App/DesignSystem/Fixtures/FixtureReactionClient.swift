@@ -8,11 +8,6 @@
     final class FixtureReactionClient: ChahuaAPIClient {
         var failNextMutation = false
 
-        func conversationUnreadSummaries(views: [ConversationView]) async throws
-            -> ConversationUnreadResponse
-        {
-            throw Failure.unexpectedOperation
-        }
         func unreadMentions(chatID: String, threadID: MessageID?) async throws
             -> UnreadMentionIDsResponse
         {

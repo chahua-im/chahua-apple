@@ -42,6 +42,11 @@ final class RealtimeCoordinator: ObservableObject {
     private var presenceWatchTask: Task<Void, Never>?
     private var nextPresenceRequestID: UInt64 = 0
     private var hasPresenceWatch = false
+    private var conversationObservation: AnyCancellable?
+    private var conversationWatchTask: Task<Void, Never>?
+    private var nextConversationRequestID: UInt32 = 0
+    private var unreadWatchPending = false
+    private var needsRecovery = false
 
     init(
         provider: any RealtimeConnectionProviding,
@@ -60,6 +65,12 @@ final class RealtimeCoordinator: ObservableObject {
             store.presencePrivacyInvalidations
         ).sink { [weak self] _ in
             self?.schedulePresenceWatch()
+        }
+        conversationObservation = Publishers.Merge(
+            store.$conversationStateScope.dropFirst().map { _ in false },
+            store.conversationWatchInvalidations.map { true }
+        ).sink { [weak self] includeUnread in
+            self?.scheduleConversationWatches(includeUnread: includeUnread)
         }
     }
 
@@ -84,6 +95,7 @@ final class RealtimeCoordinator: ObservableObject {
                 .appState(appState), on: connection, generation: generation, attempt: attempt)
         }
         schedulePresenceWatch()
+        scheduleConversationWatches(includeUnread: true)
         if isActive {
             presentationFailures = 0
             shortLivedReconnects = 0
@@ -91,7 +103,7 @@ final class RealtimeCoordinator: ObservableObject {
                 store.setRealtimeStatus(.reconnecting)
             }
             startIfNeeded()
-            if connection != nil { startRecovery(generation: generation) }
+            if connection != nil, needsRecovery { startRecovery(generation: generation) }
         } else {
             // Match the PWA's visibility/focus contract: inactive presence permits push
             // notifications while retaining event delivery and stateful heartbeats.
@@ -133,11 +145,13 @@ final class RealtimeCoordinator: ObservableObject {
                 hasConnected = true
                 connectionIsStable = false
                 presentationFailures = 0
+                needsRecovery = true
                 store.setRealtimeStatus(.connected)
                 enqueuePresence(
                     .appState(appState), on: socket, generation: currentGeneration,
                     attempt: currentAttempt)
                 schedulePresenceWatch()
+                scheduleConversationWatches(includeUnread: true)
                 startHeartbeat(socket, generation: currentGeneration, attempt: currentAttempt)
                 startStableReset(generation: currentGeneration, attempt: currentAttempt)
                 startRecovery(generation: currentGeneration)
@@ -186,6 +200,10 @@ final class RealtimeCoordinator: ObservableObject {
             presenceWatchTask?.cancel()
             presenceWatchTask = nil
             hasPresenceWatch = false
+            conversationWatchTask?.cancel()
+            conversationWatchTask = nil
+            unreadWatchPending = false
+            store.clearConversationWatches()
             heartbeat = nil
             stableConnection = nil
             pendingSend = nil
@@ -222,10 +240,42 @@ final class RealtimeCoordinator: ObservableObject {
         }
     }
 
+    /// Share the ordered send queue with presence and heartbeats. A local read
+    /// republishes the scope with a new ID so an older snapshot cannot undo it.
+    private func scheduleConversationWatches(includeUnread: Bool = false) {
+        unreadWatchPending = unreadWatchPending || includeUnread
+        guard conversationWatchTask == nil else { return }
+        conversationWatchTask = Task { [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else { return }
+            self.conversationWatchTask = nil
+            guard self.uid != nil, let socket = self.connection else { return }
+            let active = !self.activeScenes.isEmpty
+            if self.unreadWatchPending {
+                self.unreadWatchPending = false
+                self.nextConversationRequestID &+= 1
+                let requestID = self.nextConversationRequestID
+                self.store.beginConversationUnreadWatch(requestID: requestID)
+                self.enqueuePresence(
+                    .unread(requestID, active ? ChatStore.unreadSummaryViews : [], active),
+                    on: socket, generation: self.generation, attempt: self.attempt)
+            }
+            self.nextConversationRequestID &+= 1
+            let requestID = self.nextConversationRequestID
+            let scope = active ? self.store.conversationStateScope : []
+            self.store.beginConversationStatesWatch(requestID: requestID)
+            self.enqueuePresence(
+                .conversationStates(requestID, scope), on: socket,
+                generation: self.generation, attempt: self.attempt)
+        }
+    }
+
     private enum PresenceFrame {
         case appState(RealtimeAppState)
         case ping
         case watch(UInt64, PresenceScope)
+        case unread(UInt32, [ConversationView], Bool)
+        case conversationStates(UInt32, [ConversationRef])
     }
 
     /// Serialize state changes with pings. Cancelling a transport send closes its
@@ -254,6 +304,12 @@ final class RealtimeCoordinator: ObservableObject {
                     }
                     try await socket.sendWatchPresence(
                         requestID: requestID, userIDs: scope.userIDs, chatIDs: scope.chatIDs)
+                case .unread(let requestID, let views, let appBadge):
+                    try await socket.sendWatchConversationUnread(
+                        requestID: requestID, views: views, appBadge: appBadge)
+                case .conversationStates(let requestID, let conversations):
+                    try await socket.sendWatchConversationStates(
+                        requestID: requestID, conversations: conversations)
                 case .ping:
                     // A simultaneous heartbeat must never reset an outstanding
                     // deadline; both timers can wake together after suspension.
@@ -284,6 +340,8 @@ final class RealtimeCoordinator: ObservableObject {
             async let archived: Void = self.store.refreshArchivedConversations()
             async let messages: Void = self.store.reconcileVisibleTimelines()
             _ = await (chats, archived, messages)
+            guard !Task.isCancelled, self.generation == currentGeneration else { return }
+            self.needsRecovery = false
         }
     }
 
@@ -344,6 +402,11 @@ final class RealtimeCoordinator: ObservableObject {
         presenceWatchTask?.cancel()
         presenceWatchTask = nil
         hasPresenceWatch = false
+        conversationWatchTask?.cancel()
+        conversationWatchTask = nil
+        unreadWatchPending = false
+        store.clearConversationWatches()
+        needsRecovery = false
         runner = nil
         heartbeat = nil
         stableConnection = nil

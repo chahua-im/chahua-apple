@@ -62,10 +62,6 @@ public protocol ChahuaAPIClient: Sendable {
     /// `ListThreadsQuery.before` for the next page.
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse
 
-    /// Returns server-calculated counts for each caller-defined conversation selector.
-    func conversationUnreadSummaries(views: [ConversationView]) async throws
-        -> ConversationUnreadResponse
-
     /// Group mentions and replies share a newest-first message queue, scoped to the main chat or thread.
     func unreadMentions(chatID: String, threadID: MessageID?) async throws
         -> UnreadMentionIDsResponse
@@ -213,9 +209,24 @@ public protocol ChahuaAPIClient: Sendable {
     /// Advances a subscribed thread's read cursor without marking its parent chat read.
     func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
+
+    /// Fetches the current member's cursor and all counters with `GET /chats/{chatID}/unread`.
+    func chatReadState(chatID: String) async throws -> ReadStateResponse
+
+    /// Fetches authorized thread state with the chat-scoped `read-state` endpoint.
+    func threadReadState(chatID: String, threadID: String) async throws -> ReadStateResponse
 }
 
 extension ChahuaAPIClient {
+    public func chatReadState(chatID: String) async throws -> ReadStateResponse {
+        throw APIError.unavailable
+    }
+
+    public func threadReadState(chatID: String, threadID: String) async throws -> ReadStateResponse
+    {
+        throw APIError.unavailable
+    }
+
     public func presenceSettings() async throws -> PresenceSettingsResponse {
         throw APIError.unavailable
     }

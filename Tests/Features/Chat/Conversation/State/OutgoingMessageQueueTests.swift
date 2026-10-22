@@ -1075,11 +1075,6 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     private var maximum: [String: Int] = [:]
 
     private enum UnexpectedActivityCall: Error { case unread }
-    func conversationUnreadSummaries(views: [ConversationView]) async throws
-        -> ConversationUnreadResponse
-    {
-        throw UnexpectedActivityCall.unread
-    }
     func unreadMentions(chatID: String, threadID: MessageID?) async throws
         -> UnreadMentionIDsResponse
     {

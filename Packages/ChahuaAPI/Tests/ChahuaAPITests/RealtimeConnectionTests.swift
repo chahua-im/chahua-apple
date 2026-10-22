@@ -118,6 +118,62 @@ final class RealtimeConnectionTests: XCTestCase {
         }
     }
 
+    func testConversationWatchesSendFlatSelectorsExactIDsAndCancellation() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        do {
+            let client = ChahuaClient(
+                configuration: ChahuaConfiguration(baseURL: await server.baseURL),
+                token: "installed")
+            let connection = try await client.openRealtimeConnection()
+            let scope = [
+                ConversationRef(
+                    chatId: "9223372036854775807", threadId: MessageID(9_007_199_254_740_993)),
+                ConversationRef(chatId: "42"),
+            ]
+            let views = [
+                ConversationView(
+                    key: "custom",
+                    selector: .init(
+                        archived: false, categories: [.group, .groupThread],
+                        exclude: [.init(chatId: "43")], include: scope))
+            ]
+            try await connection.sendWatchConversationUnread(
+                requestID: UInt32.max, views: views, appBadge: true)
+            try await connection.sendWatchConversationStates(requestID: 7, conversations: scope)
+            try await connection.sendWatchConversationUnread(
+                requestID: 0, views: [], appBadge: false)
+            try await connection.sendWatchConversationStates(requestID: 8, conversations: [])
+            try await connection.sendPing(state: .active)
+            guard case .pong = try await connection.receive() else {
+                return XCTFail("Expected heartbeat pong")
+            }
+            let frames = await server.clientFrames
+            XCTAssertEqual(
+                frames,
+                [
+                    .init(type: "auth", ticket: "installed", state: nil),
+                    .init(
+                        type: "watchConversationUnread", ticket: nil, state: nil,
+                        requestId: UInt64(UInt32.max), views: views, appBadge: true),
+                    .init(
+                        type: "watchConversationStates", ticket: nil, state: nil,
+                        requestId: 7, conversations: scope),
+                    .init(
+                        type: "watchConversationUnread", ticket: nil, state: nil,
+                        requestId: 0, views: [], appBadge: false),
+                    .init(
+                        type: "watchConversationStates", ticket: nil, state: nil,
+                        requestId: 8, conversations: []),
+                    .init(type: "ping", ticket: nil, state: "active"),
+                ])
+            await connection.close()
+            await server.stop()
+        } catch {
+            await server.stop()
+            throw error
+        }
+    }
+
     func testRefreshAndReconnectShareNewCredentialWithoutAdditionalRefresh() async throws {
         let server = try await RealtimeLoopbackServer.start()
         do {
@@ -437,6 +493,29 @@ private actor RealtimeLoopbackServer {
                         clientFrames.append(frame)
                         continue
                     }
+                    if frame.type == "watchConversationUnread"
+                        || frame.type == "watchConversationStates"
+                    {
+                        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        let expectedKeys: Set<String> =
+                            frame.type == "watchConversationUnread"
+                            ? ["type", "requestId", "views", "appBadge"]
+                            : ["type", "requestId", "conversations"]
+                        guard opcode == 1, let object, Set(object.keys) == expectedKeys,
+                            let requestId = frame.requestId, requestId <= UInt32.max
+                        else { throw APIError.unexpectedResponse }
+                        if frame.type == "watchConversationUnread" {
+                            guard frame.views != nil, frame.appBadge != nil else {
+                                throw APIError.unexpectedResponse
+                            }
+                        } else {
+                            guard frame.conversations != nil else {
+                                throw APIError.unexpectedResponse
+                            }
+                        }
+                        clientFrames.append(frame)
+                        continue
+                    }
                     guard opcode == 1, frame.state == "active" || frame.state == "inactive",
                         frame.type == "appState" || frame.type == "ping"
                     else { throw APIError.unexpectedResponse }
@@ -490,6 +569,9 @@ private actor RealtimeLoopbackServer {
         var requestId: UInt64? = nil
         var userIds: [Int32]? = nil
         var chatIds: [String]? = nil
+        var views: [ConversationView]? = nil
+        var appBadge: Bool? = nil
+        var conversations: [ConversationRef]? = nil
     }
 }
 

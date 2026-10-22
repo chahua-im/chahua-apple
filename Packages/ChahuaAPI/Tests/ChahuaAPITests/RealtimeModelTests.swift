@@ -9,6 +9,105 @@ final class RealtimeModelTests: XCTestCase {
     private let largeMessageID = MessageID(9_007_199_254_740_993)
     private let timestamp = "2026-09-01T12:34:56.123Z"
 
+    func testConversationWatchesDecodeAbsoluteSnapshotsAndPartialUpdates() throws {
+        guard
+            case .conversationUnread(let summary) = try event(
+                "conversationUnread",
+                #"{"requestId":4294967295,"full":true,"appBadgeCount":12,"summaries":[{"key":"groups","unreadMessageCount":19,"unreadUnmutedMessageCount":11,"unreadConversationCount":3,"unreadUnmutedConversationCount":2,"unreadAttentionCount":7,"unreadUnmutedAttentionCount":5}]}"#
+            )
+        else { return XCTFail("Expected unread snapshot") }
+        XCTAssertEqual(summary.requestId, UInt32.max)
+        XCTAssertTrue(summary.full)
+        XCTAssertEqual(summary.appBadgeCount, 12)
+        XCTAssertEqual(
+            summary.summaries,
+            [
+                .init(
+                    key: "groups", unreadAttentionCount: 7, unreadConversationCount: 3,
+                    unreadMessageCount: 19, unreadUnmutedAttentionCount: 5,
+                    unreadUnmutedConversationCount: 2, unreadUnmutedMessageCount: 11)
+            ])
+        guard
+            case .conversationUnread(let partial) = try event(
+                "conversationUnread", #"{"requestId":0,"full":false,"summaries":[]}"#
+            )
+        else { return XCTFail("Expected unread partial") }
+        XCTAssertFalse(partial.full)
+        XCTAssertNil(partial.appBadgeCount)
+        guard
+            case .conversationStates(let states) = try event(
+                "conversationStates",
+                #"{"requestId":7,"full":false,"states":[{"chatId":"9223372036854775807","threadId":"9007199254740993","accessible":true,"lastReadMessageId":"9007199254740993","unreadCount":4,"unreadMentions":2,"unreadReactions":1},{"chatId":"42","threadId":null,"accessible":false,"lastReadMessageId":null,"unreadCount":0,"unreadMentions":0,"unreadReactions":0}]}"#
+            )
+        else { return XCTFail("Expected states") }
+        XCTAssertEqual(states.requestId, 7)
+        XCTAssertFalse(states.full)
+        XCTAssertEqual(
+            states.states[0],
+            .init(
+                chatId: "9223372036854775807", threadId: largeMessageID, accessible: true,
+                lastReadMessageId: largeMessageID, unreadCount: 4, unreadMentions: 2,
+                unreadReactions: 1))
+        XCTAssertFalse(states.states[1].accessible)
+        XCTAssertNil(states.states[1].threadId)
+        XCTAssertNil(states.states[1].lastReadMessageId)
+        guard
+            case .conversationUnreadError(let unreadError) = try event(
+                "conversationUnreadError", #"{"requestId":8}"#
+            )
+        else { return XCTFail("Expected unread error") }
+        XCTAssertEqual(unreadError.requestId, 8)
+        guard
+            case .conversationStatesError(let statesError) = try event(
+                "conversationStatesError", #"{"requestId":9}"#
+            )
+        else { return XCTFail("Expected states error") }
+        XCTAssertEqual(statesError.requestId, 9)
+    }
+
+    func testMalformedConversationWatchFramesFailInsteadOfBecomingUnknown() throws {
+        for (name, payload) in [
+            ("conversationUnread", #"{"requestId":1,"full":true}"#),
+            ("conversationUnread", #"{"requestId":4294967296,"full":true,"summaries":[]}"#),
+            ("conversationUnreadError", #"{"requestId":-1}"#),
+            ("conversationStatesError", "{}"),
+            (
+                "conversationStates",
+                #"{"requestId":1,"full":true,"states":[{"chatId":"42","accessible":true,"unreadCount":0,"unreadMentions":0}]}"#
+            ),
+        ] {
+            XCTAssertThrowsError(try event(name, payload))
+        }
+    }
+
+    func testScopedReceiptsMembershipAndBulkReconciliationDecodeOptionalFields() throws {
+        guard
+            case .readReceiptChanged(let receipt) = try event(
+                "readReceiptChanged",
+                #"{"chatId":"42","readerUid":17,"threadRootId":"9007199254740993"}"#
+            )
+        else { return XCTFail("Expected scoped receipt") }
+        XCTAssertEqual(receipt.readerUid, 17)
+        XCTAssertEqual(receipt.threadRootId, largeMessageID)
+        guard
+            case .threadMembershipChanged(let membership) = try event(
+                "threadMembershipChanged",
+                #"{"chatId":"42","threadRootId":"9","status":{"subscribed":true,"archived":false}}"#
+            )
+        else { return XCTFail("Expected absolute membership") }
+        XCTAssertEqual(membership.status, .init(subscribed: true, archived: false))
+        for complete in [false, true] {
+            guard
+                case .messagesBulkDeleted(let batch) = try event(
+                    "messagesBulkDeleted",
+                    #"{"chatId":"42","messageIds":[],"complete":\#(complete),"threadRootIds":["9007199254740993"]}"#
+                )
+            else { return XCTFail("Expected reconciliation batch") }
+            XCTAssertEqual(batch.complete, complete)
+            XCTAssertEqual(batch.threadRootIds, [largeMessageID])
+        }
+    }
+
     func testDirectedActivityNotificationsDecodeKindsAndExactScopes() throws {
         for kind in [NotificationType.mention, .reply, .reaction] {
             guard
@@ -45,6 +144,8 @@ final class RealtimeModelTests: XCTestCase {
         else { return XCTFail("Expected receipt progress") }
         XCTAssertEqual(progress.chatId, "42")
         XCTAssertNil(progress.privacyChanged)
+        XCTAssertNil(progress.readerUid)
+        XCTAssertNil(progress.threadRootId)
         guard
             case .readReceiptChanged(let privacy) = try event(
                 "readReceiptChanged", #"{"chatId":"42","privacyChanged":true}"#)
@@ -82,6 +183,8 @@ final class RealtimeModelTests: XCTestCase {
         else { return XCTFail("Expected bulk delete") }
         XCTAssertEqual(bulk.chatId, "42")
         XCTAssertEqual(bulk.messageIds, [largeMessageID, MessageID(9)])
+        XCTAssertNil(bulk.complete)
+        XCTAssertNil(bulk.threadRootIds)
         guard
             case .reactionUpdated(let reaction) = try event(
                 "reactionUpdated",
@@ -107,6 +210,7 @@ final class RealtimeModelTests: XCTestCase {
                 "threadMembershipChanged", #"{"threadRootId":"9","chatId":"42"}"#)
         else { return XCTFail("Expected membership") }
         XCTAssertEqual(membership.threadRootId, "9")
+        XCTAssertNil(membership.status)
         guard
             case .chatArchiveStateChanged(let archive) = try event(
                 "chatArchiveStateChanged", #"{"chatId":"42","archived":false}"#)

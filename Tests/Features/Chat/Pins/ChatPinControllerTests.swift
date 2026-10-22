@@ -186,11 +186,6 @@ private actor HeldPinAPI: ChahuaAPIClient {
     private var waiter: (count: Int, continuation: CheckedContinuation<Void, Never>)?
 
     private enum UnexpectedActivityCall: Error { case unread }
-    func conversationUnreadSummaries(views: [ConversationView]) async throws
-        -> ConversationUnreadResponse
-    {
-        throw UnexpectedActivityCall.unread
-    }
     func unreadMentions(chatID: String, threadID: MessageID?) async throws
         -> UnreadMentionIDsResponse
     {

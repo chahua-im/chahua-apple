@@ -11,6 +11,14 @@ public protocol RealtimeConnection: Sendable {
     /// Replaces this socket's watch (up to 100 users and 4 groups).
     /// Empty arrays unsubscribe; callers serialize updates and correlate snapshots by request ID.
     func sendWatchPresence(requestID: UInt64, userIDs: [Int32], chatIDs: [String]) async throws
+    /// Replaces unread summary selectors; empty views and `false` cancel the watch.
+    func sendWatchConversationUnread(
+        requestID: UInt32, views: [ConversationView], appBadge: Bool
+    ) async throws
+    /// Replaces the explicit conversation state scope; an empty scope cancels the watch.
+    func sendWatchConversationStates(
+        requestID: UInt32, conversations: [ConversationRef]
+    ) async throws
     func close() async
 }
 
@@ -77,6 +85,20 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
             WatchPresenceFrame(requestId: requestID, userIds: userIDs, chatIds: chatIDs))
     }
 
+    func sendWatchConversationUnread(
+        requestID: UInt32, views: [ConversationView], appBadge: Bool
+    ) async throws {
+        try await send(
+            WatchConversationUnreadFrame(requestId: requestID, views: views, appBadge: appBadge))
+    }
+
+    func sendWatchConversationStates(
+        requestID: UInt32, conversations: [ConversationRef]
+    ) async throws {
+        try await send(
+            WatchConversationStatesFrame(requestId: requestID, conversations: conversations))
+    }
+
     func close() {
         guard !isClosed else { return }
         isClosed = true
@@ -117,5 +139,18 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
         let requestId: UInt64
         let userIds: [Int32]
         let chatIds: [String]
+    }
+
+    private struct WatchConversationUnreadFrame: Encodable {
+        let type = "watchConversationUnread"
+        let requestId: UInt32
+        let views: [ConversationView]
+        let appBadge: Bool
+    }
+
+    private struct WatchConversationStatesFrame: Encodable {
+        let type = "watchConversationStates"
+        let requestId: UInt32
+        let conversations: [ConversationRef]
     }
 }

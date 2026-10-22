@@ -14,6 +14,7 @@ struct ChatListView: View {
     let onSelectConversation: (ConversationListItem) -> Void
     @State private var isPullRefreshing = false
     @State private var revealedConversationID: ConversationKey?
+    @State private var conversationStateConsumer = UUID()
     #if os(macOS)
         @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
@@ -52,6 +53,9 @@ struct ChatListView: View {
             threads: archivedMode ? store.state.archivedThreads : store.state.threads,
             scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages,
             draftUpdatedAt: drafts.draftUpdatedAt)
+        let conversationRefs = items.map {
+            ConversationRef(chatId: $0.id.chatID, threadId: $0.id.threadID.flatMap(MessageID.init))
+        }
         let loadStatus = ConversationListLoadStatus(
             state: store.state, scope: scope, archivedMode: archivedMode,
             showThreadsInMessages: showThreadsInMessages,
@@ -116,7 +120,13 @@ struct ChatListView: View {
         .onChange(of: scope) { _, _ in revealedConversationID = nil }
         .onChange(of: archivedMode) { _, _ in revealedConversationID = nil }
         .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
-        .onDisappear { revealedConversationID = nil }
+        .onDisappear {
+            revealedConversationID = nil
+            store.removeConversationStateScope(for: conversationStateConsumer)
+        }
+        .task(id: conversationRefs) {
+            store.setConversationStateScope(conversationRefs, for: conversationStateConsumer)
+        }
         .task(
             id: LoadID(
                 scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages

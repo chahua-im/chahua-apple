@@ -201,6 +201,8 @@ extension RealtimeServerEvent {
         case .threadUpdate(let payload): payload.chatId
         case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
             .threadMembershipChanged, .readReceiptChanged, .notification,
+            .conversationUnread, .conversationUnreadError, .conversationStates,
+            .conversationStatesError,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
             .friendRequestReceived, .friendRequestResolved, .friendshipRemoved, .unknown:
             nil

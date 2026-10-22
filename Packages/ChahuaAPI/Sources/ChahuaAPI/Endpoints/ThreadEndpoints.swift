@@ -8,11 +8,17 @@ public struct ListThreadsQuery: Sendable, Equatable {
     public var limit: Int?
     public var before: String?
     public var archived: Bool?
+    /// Restricts the page to one subscribed root while retaining the archive filter.
+    public var rootId: MessageID?
 
-    public init(limit: Int? = nil, before: String? = nil, archived: Bool? = nil) {
+    public init(
+        limit: Int? = nil, before: String? = nil, archived: Bool? = nil,
+        rootId: MessageID? = nil
+    ) {
         self.limit = limit
         self.before = before
         self.archived = archived
+        self.rootId = rootId
     }
 
     var queryItems: [URLQueryItem] {
@@ -20,6 +26,7 @@ public struct ListThreadsQuery: Sendable, Equatable {
             limit.map { URLQueryItem(name: "limit", value: String($0)) },
             before.map { URLQueryItem(name: "before", value: $0) },
             archived.map { URLQueryItem(name: "archived", value: String($0)) },
+            rootId.map { URLQueryItem(name: "rootId", value: $0.description) },
         ].compactMap { $0 }
     }
 }
@@ -39,6 +46,15 @@ public struct ThreadSubscriptionStatus: Codable, Hashable, Sendable {
 }
 
 extension ChahuaClient {
+    public func threadReadState(chatID: String, threadID: String) async throws -> ReadStateResponse
+    {
+        try await send(
+            HTTPRequestSpec(
+                method: .get, path: ["chats", chatID, "threads", threadID, "read-state"]),
+            decoding: ReadStateResponse.self
+        )
+    }
+
     public func archiveThread(chatID: String, threadID: String) async throws {
         try await send(
             HTTPRequestSpec(method: .put, path: ["chats", chatID, "threads", threadID, "archive"]))

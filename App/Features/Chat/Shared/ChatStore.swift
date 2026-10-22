@@ -13,6 +13,7 @@ struct ChatState: Equatable {
     var userPresence: [Int32: UserPresenceResponse] = [:]
     var groupPresence: [String: GroupPresenceResponse] = [:]
     var conversationUnreadSummaries: [ConversationUnreadSummary] = []
+    var appBadgeCount: Int64?
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
     var chatListRefreshFailed = false
@@ -32,17 +33,17 @@ struct ChatState: Equatable {
 }
 
 extension ChatState {
-    /// The app-icon badge, matching the backend: top-level unread only, excluding
-    /// muted and archived chats; threads never count. `excludingChatID` drops one
-    /// chat, e.g. the one on screen for an in-app back-button badge.
+    /// Uses the server's app-icon snapshot; a loaded-row total is only a fallback
+    /// before the first authorized websocket publication.
     func unreadBadgeCount(excludingChatID: String? = nil, now: Date = Date()) -> Int {
-        let total = chats.reduce(Int64(0)) { total, chat in
-            guard chat.id != excludingChatID, !chat.archived,
-                chat.mutedUntil.map({ $0 <= now }) ?? true
-            else { return total }
-            return min(Int64(UInt32.max), total + max(0, min(Int64(UInt32.max), chat.unreadCount)))
+        var total = appBadgeCount ?? 0
+        var excluded: Int64 = 0
+        for chat in chats where !chat.archived && (chat.mutedUntil.map { $0 <= now } ?? true) {
+            let count = max(0, min(Int64(UInt32.max), chat.unreadCount))
+            if appBadgeCount == nil { total = min(Int64(UInt32.max), total + count) }
+            if chat.id == excludingChatID { excluded = count }
         }
-        return Int(total)
+        return Int(max(0, min(Int64(UInt32.max), total - max(0, excluded))))
     }
 }
 
@@ -53,6 +54,27 @@ final class ChatStore: ObservableObject {
     @Published private(set) var presenceScope = PresenceScope()
     private var presenceConsumers: [UUID: PresenceScope] = [:]
     private var presenceRequestID: UInt64?
+    static let unreadSummaryViews = ConversationTabBadges.unreadViews
+    private static let unreadSummaryKeys = Set(unreadSummaryViews.map(\.key))
+    @Published private(set) var conversationStateScope: [ConversationRef] = []
+    let conversationWatchInvalidations = PassthroughSubject<Void, Never>()
+    private var conversationConsumers: [UUID: [ConversationRef]] = [:]
+    private var unreadRequestID: UInt32?
+    private var unreadFullRequestID: UInt32?
+    private var statesRequestID: UInt32?
+    private var statesFullRequestID: UInt32?
+    private var watchedConversations = Set<ConversationKey>()
+    private var readyConversations = Set<ConversationKey>()
+    private var conversationReadStates: [ConversationKey: ReadStateResponse] = [:]
+    private var localStateWrites: [ConversationKey: Int] = [:]
+    private var membershipStates: [ConversationKey: ThreadSubscriptionStatus] = [:]
+    private var membershipRevision = 0
+    private var rowRevisions: [ConversationKey: Int] = [:]
+    private var rowTasks: [ConversationKey: Task<Void, Never>] = [:]
+    private var dirtyRows = Set<ConversationKey>()
+    private var stateFallbackTask: Task<Void, Never>?
+    private var stateFallbackGeneration = 0
+    private var fallbackKeys = Set<ConversationKey>()
     @Published var currentUserProfile: MeResponse? {
         didSet {
             stickers.setAccount(currentUserProfile?.uid)
@@ -94,8 +116,6 @@ final class ChatStore: ObservableObject {
     private var recoveryDirty = Set<String>()
     private var recoveryGeneration = 0
     private var timelines: [ObjectIdentifier: WeakTimeline] = [:]
-    private var summaryTask: Task<Void, Never>?
-    private var summaryDirty = false
     private var foregroundActive = true
     private var groupMutationStates: [String: GroupMutationState] = [:]
 
@@ -232,7 +252,7 @@ final class ChatStore: ObservableObject {
                 chatID: message.chatId, threadID: message.replyRootId,
                 with: pendingProjection(chatID: message.chatId, threadID: message.replyRootId),
                 acknowledging: message)
-            invalidateChatList()
+            receivePreview(message, isNew: true)
         }
     }
 
@@ -287,6 +307,10 @@ final class ChatStore: ObservableObject {
         outgoingQueue.requestForegroundActive(active)
         if !active {
             drafts.scheduleBackgroundFlush()
+            stateFallbackTask?.cancel()
+            stateFallbackGeneration += 1
+            stateFallbackTask = nil
+            fallbackKeys.removeAll()
         }
     }
 
@@ -364,6 +388,11 @@ final class ChatStore: ObservableObject {
                     state.archivedChats.removeAll { ids.contains($0.id) }
                     state.chats = chats
                 }
+                for chat in chats {
+                    conversationReadStates[.init(chatID: chat.id)] = .init(
+                        lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
+                        unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions)
+                }
             case .threads, .archivedThreads:
                 let threads = try await fetchThreadList(
                     archived: list.archived, generation: requestGeneration,
@@ -384,9 +413,19 @@ final class ChatStore: ObservableObject {
                     state.archivedThreads.removeAll { keys.contains($0.conversationKey) }
                     state.threads = threads
                 }
+                for thread in threads {
+                    conversationReadStates[thread.conversationKey] = .init(
+                        lastReadMessageId: thread.lastReadMessageId,
+                        unreadCount: thread.unreadCount,
+                        unreadMentions: thread.unreadMentions,
+                        unreadReactions: thread.unreadReactions)
+                    cacheMembership(
+                        .init(subscribed: true, archived: thread.archived),
+                        key: thread.conversationKey)
+                }
             }
             updateTimelineReadStates()
-            invalidateUnreadSummaries()
+            fallbackConversationStates()
             state[keyPath: list.phase] = .loaded
             state[keyPath: list.refreshFailed] = false
         } catch {
@@ -499,6 +538,8 @@ final class ChatStore: ObservableObject {
         _ action: ConversationListAction, conversation: ConversationKey,
         generation requestGeneration: Int
     ) async {
+        beginLocalStateWrite(conversation)
+        defer { finishLocalStateWrite(conversation, generation: requestGeneration) }
         let item: ConversationListItem
         if let threadID = conversation.threadID {
             guard let thread = thread(chatID: conversation.chatID, threadID: threadID) else {
@@ -577,7 +618,11 @@ final class ChatStore: ObservableObject {
                 guard generation == requestGeneration else { return }
                 applyReadState(response, chatID: conversation.chatID, threadID: nil)
             }
-            invalidateChatList()
+            listStateRevision += 1
+            if conversation.threadID != nil, action == .archive || action == .unarchive {
+                applyMembership(
+                    .init(subscribed: true, archived: action == .archive), key: conversation)
+            }
         } catch {
             guard generation == requestGeneration, !(error is CancellationError), !Task.isCancelled
             else { return }
@@ -601,21 +646,53 @@ final class ChatStore: ObservableObject {
             }
     }
 
-    /// Emits a thread whenever the current user's subscription may have changed:
-    /// explicit membership changes and new replies (which auto-subscribe repliers
-    /// and mentioned members). Payloads carry no state; listeners re-read it.
+    /// Legacy events without an absolute membership status require an HTTP reread.
     let threadSubscriptionInvalidations = PassthroughSubject<ConversationKey, Never>()
+    let threadSubscriptionChanges =
+        PassthroughSubject<(key: ConversationKey, status: ThreadSubscriptionStatus), Never>()
+
+    private func cacheMembership(_ status: ThreadSubscriptionStatus, key: ConversationKey) {
+        guard membershipStates[key] != status else { return }
+        membershipStates[key] = status
+        membershipRevision += 1
+        threadSubscriptionChanges.send((key: key, status: status))
+    }
+
+    private func applyMembership(_ status: ThreadSubscriptionStatus, key: ConversationKey) {
+        guard membershipStates[key] != status else { return }
+        cacheMembership(status, key: key)
+        listStateRevision += 1
+        rowRevisions[key, default: 0] += 1
+        if !status.subscribed {
+            state.threads.removeAll { $0.conversationKey == key }
+            state.archivedThreads.removeAll { $0.conversationKey == key }
+        } else if let threadID = key.threadID,
+            let current = thread(chatID: key.chatID, threadID: threadID)
+        {
+            install(current.withArchived(status.archived))
+        } else {
+            reconcileRow(key)
+        }
+    }
 
     func threadSubscriptionStatus(chatID: String, threadID: String) async throws
         -> ThreadSubscriptionStatus
     {
         try Task.checkCancellation()
         let requestGeneration = generation
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        if let cached = membershipStates[key] { return cached }
+        let revision = membershipRevision
         do {
             let status = try await apiClient.threadSubscriptionStatus(
                 chatID: chatID, threadID: threadID)
             try Task.checkCancellation()
             guard generation == requestGeneration else { throw CancellationError() }
+            if membershipRevision != revision {
+                if let current = membershipStates[key] { return current }
+                throw CancellationError()
+            }
+            cacheMembership(status, key: key)
             return status
         } catch {
             guard generation == requestGeneration else { throw CancellationError() }
@@ -627,11 +704,14 @@ final class ChatStore: ObservableObject {
     /// Applies a thread-detail subscription change and returns the resulting state.
     ///
     /// Serialized with list swipe actions for the same chat; thread lists move only
-    /// after the server accepts the change, then refresh to pick up new rows.
+    /// after server acceptance; unknown rows are reconciled by their root identifier.
     func changeThreadSubscription(
         _ change: ThreadSubscriptionChange, chatID: String, threadID: String
     ) async throws -> ThreadSubscriptionStatus {
         let requestGeneration = generation
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        beginLocalStateWrite(key)
+        defer { finishLocalStateWrite(key, generation: requestGeneration) }
         let status: ThreadSubscriptionStatus = try await serializeGroupMutation(chatID: chatID) {
             guard self.generation == requestGeneration else { throw CancellationError() }
             do {
@@ -653,14 +733,14 @@ final class ChatStore: ObservableObject {
             }
         }
         guard generation == requestGeneration else { throw CancellationError() }
-        if let listed = thread(chatID: chatID, threadID: threadID) {
-            install(listed.withArchived(status.archived))
-        }
-        invalidateChatList()
+        applyMembership(status, key: key)
         return status
     }
 
     private func install(_ chat: ChatListItem) {
+        conversationReadStates[.init(chatID: chat.id)] = .init(
+            lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
+            unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions)
         let target: WritableKeyPath<ChatState, [ChatListItem]> =
             chat.archived ? \.archivedChats : \.chats
         let other: WritableKeyPath<ChatState, [ChatListItem]> =
@@ -674,6 +754,9 @@ final class ChatStore: ObservableObject {
     }
 
     private func install(_ thread: ThreadListItem) {
+        conversationReadStates[thread.conversationKey] = .init(
+            lastReadMessageId: thread.lastReadMessageId, unreadCount: thread.unreadCount,
+            unreadMentions: thread.unreadMentions, unreadReactions: thread.unreadReactions)
         let target: WritableKeyPath<ChatState, [ThreadListItem]> =
             thread.archived ? \.archivedThreads : \.threads
         let other: WritableKeyPath<ChatState, [ThreadListItem]> =
@@ -688,6 +771,8 @@ final class ChatStore: ObservableObject {
         } else {
             state[keyPath: target].insert(thread, at: 0)
         }
+        cacheMembership(
+            .init(subscribed: true, archived: thread.archived), key: thread.conversationKey)
     }
 
     private func applyArchiveState(to chat: ChatListItem, archived: Bool, mutedUntil: Date?) {
@@ -780,11 +865,130 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    private func invalidateChatList() {
-        // Every invalidation fences all four snapshots, including membership changes
-        // whose realtime payload carries identifiers but not the new archive state.
+    /// Identifier-filtered reads reconcile only rows whose membership/preview is unknown.
+    private func reconcileRow(_ key: ConversationKey) {
+        dirtyRows.insert(key)
+        rowRevisions[key, default: 0] += 1
         listStateRevision += 1
-        invalidateUnreadSummaries()
+        guard rowTasks[key] == nil else { return }
+        let requestGeneration = generation
+        let currentRefresh = refreshGeneration
+        rowTasks[key] = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == requestGeneration, refreshGeneration == currentRefresh {
+                    rowTasks[key] = nil
+                }
+            }
+            repeat {
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                guard generation == requestGeneration, refreshGeneration == currentRefresh else {
+                    return
+                }
+                guard localStateWrites[key] == nil else { return }
+                dirtyRows.remove(key)
+                let revision = rowRevisions[key, default: 0]
+                do {
+                    if let threadID = key.threadID, let rootID = MessageID(threadID) {
+                        let preferred =
+                            membershipStates[key]?.archived
+                            ?? thread(chatID: key.chatID, threadID: threadID)?.archived ?? false
+                        var found: ThreadListItem?
+                        for archived in [preferred, !preferred] {
+                            let response = try await apiClient.listThreads(
+                                query: .init(archived: archived, rootId: rootID))
+                            try Task.checkCancellation()
+                            found = response.threads.first { $0.conversationKey == key }
+                            if found != nil { break }
+                        }
+                        guard generation == requestGeneration, refreshGeneration == currentRefresh
+                        else { return }
+                        if rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil {
+                            if let found {
+                                install(found)
+                            } else {
+                                state.threads.removeAll { $0.conversationKey == key }
+                                state.archivedThreads.removeAll { $0.conversationKey == key }
+                            }
+                        } else {
+                            dirtyRows.insert(key)
+                        }
+                    } else {
+                        let preferred = chat(id: key.chatID)?.archived ?? false
+                        var found: ChatListItem?
+                        for archived in [preferred, !preferred] {
+                            let response = try await apiClient.listChats(
+                                query: .init(archived: archived, chatId: key.chatID))
+                            try Task.checkCancellation()
+                            found = response.chats.first { $0.id == key.chatID }
+                            if found != nil { break }
+                        }
+                        guard generation == requestGeneration, refreshGeneration == currentRefresh
+                        else { return }
+                        if rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil {
+                            if let found {
+                                install(found)
+                            } else {
+                                state.chats.removeAll { $0.id == key.chatID }
+                                state.archivedChats.removeAll { $0.id == key.chatID }
+                            }
+                        } else {
+                            dirtyRows.insert(key)
+                        }
+                    }
+                    updateTimelineReadStates()
+                } catch {
+                    guard generation == requestGeneration, refreshGeneration == currentRefresh,
+                        !Task.isCancelled
+                    else { return }
+                    if case APIError.invalidToken = error { await onInvalidToken() }
+                }
+            } while dirtyRows.contains(key) && !Task.isCancelled
+        }
+    }
+
+    private func receivePreview(_ message: MessageResponse, isNew: Bool) {
+        let key = ConversationKey(
+            chatID: message.chatId, threadID: message.replyRootId?.description)
+        rowRevisions[key, default: 0] += 1
+        listStateRevision += 1
+        if let rootID = key.threadID {
+            if let current = thread(chatID: key.chatID, threadID: rootID) {
+                if current.lastReply?.id == message.id
+                    || (isNew && (current.lastReply.map { $0.id < message.id } ?? true))
+                {
+                    install(
+                        current.withActivity(
+                            lastReply: message.replyPreview, replyCount: current.replyCount,
+                            lastReplyAt: message.createdAt))
+                }
+            } else if isNew {
+                reconcileRow(key)
+            }
+        } else {
+            if let current = chat(id: key.chatID) {
+                if current.lastMessage?.id == message.id
+                    || (isNew && (current.lastMessage.map { $0.id < message.id } ?? true))
+                {
+                    install(current.withPreview(message.replyPreview))
+                }
+            } else if isNew {
+                reconcileRow(key)
+            }
+            for item in state.threads + state.archivedThreads
+            where item.chatId == message.chatId && item.threadRootMessage.id == message.id {
+                install(item.withActivity(root: message.replyPreview))
+            }
+        }
+        if !conversationStateReady(chatID: key.chatID, threadID: key.threadID) {
+            fallbackConversationStates(key)
+        }
+    }
+
+    private func invalidateChatList() {
+        // Full calibration is reserved for reconnect and changes lacking row identifiers.
+        listStateRevision += 1
+        invalidateConversationWatches()
         dirtyLists.formUnion(ListKind.allCases)
         guard invalidationTask == nil else { return }
         let requestGeneration = generation
@@ -811,11 +1015,18 @@ final class ChatStore: ObservableObject {
             let handled = await outgoingQueue.acceptAcknowledgement(normalized)
             guard generation == requestGeneration else { return }
             if !handled { conversationMessages.apply(.message(normalized)) }
-            invalidateChatList()
+            receivePreview(normalized, isNew: true)
         case .messageUpdated(let message):
             conversationMessages.apply(
                 .messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
-            invalidateChatList()
+            receivePreview(
+                message.normalizedForRealtime(currentUserID: currentUserID), isNew: false)
+            if !conversationStateReady(
+                chatID: message.chatId, threadID: message.replyRootId?.description)
+            {
+                reconcileRow(
+                    .init(chatID: message.chatId, threadID: message.replyRootId?.description))
+            }
             refreshVisibleActivity(
                 chatID: message.chatId, threadID: message.replyRootId?.description,
                 mentions: true, reactions: false)
@@ -825,7 +1036,8 @@ final class ChatStore: ObservableObject {
                 .messageDeleted(
                     message.normalizedForRealtime(currentUserID: currentUserID)
                         .redactedForDeletion()))
-            invalidateChatList()
+            receivePreview(message.redactedForDeletion(), isNew: false)
+            reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId?.description))
         case .reactionUpdated(let payload):
             conversationMessages.apply(
                 .reactionUpdated(
@@ -838,38 +1050,88 @@ final class ChatStore: ObservableObject {
         case .messagesBulkDeleted(let payload):
             drafts.redactReplyTargets(Set(payload.messageIds), chatID: payload.chatId)
             conversationMessages.apply(event)
-            invalidateChatList()
+            let ids = Set(payload.messageIds)
+            if let current = chat(id: payload.chatId), let preview = current.lastMessage,
+                ids.contains(preview.id)
+            {
+                install(current.withPreview(preview.redactedForDeletion()))
+            }
+            reconcileRow(.init(chatID: payload.chatId))
+            for item in state.threads + state.archivedThreads where item.chatId == payload.chatId {
+                let root =
+                    ids.contains(item.threadRootMessage.id)
+                    ? item.threadRootMessage.redactedForDeletion() : item.threadRootMessage
+                let reply = item.lastReply.map {
+                    ids.contains($0.id) ? $0.redactedForDeletion() : $0
+                }
+                install(item.withActivity(root: root, lastReply: reply))
+                reconcileRow(item.conversationKey)
+            }
             scheduleRecovery(chatID: payload.chatId)
         case .threadUpdate(let payload):
             conversationMessages.apply(event)
-            invalidateChatList()
-            threadSubscriptionInvalidations.send(
-                ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId))
+            let key = ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId)
+            rowRevisions[key, default: 0] += 1
+            listStateRevision += 1
+            if let current = thread(chatID: key.chatID, threadID: payload.threadRootId) {
+                install(
+                    current.withActivity(
+                        replyCount: payload.replyCount, lastReplyAt: payload.lastReplyAt))
+            } else {
+                reconcileRow(key)
+            }
+            if !conversationStateReady(chatID: key.chatID, threadID: key.threadID) {
+                fallbackConversationStates(key)
+            }
         case .chatArchiveStateChanged(let payload):
             if let chat = chat(id: payload.chatId) {
                 applyArchiveState(
                     to: chat, archived: payload.archived, mutedUntil: payload.mutedUntil)
             }
-            invalidateChatList()
+            listStateRevision += 1
+            rowRevisions[.init(chatID: payload.chatId), default: 0] += 1
+            if chat(id: payload.chatId) == nil { reconcileRow(.init(chatID: payload.chatId)) }
         case .threadMembershipChanged(let payload):
-            invalidateChatList()
-            threadSubscriptionInvalidations.send(
-                ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId))
+            let key = ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId)
+            if let status = payload.status {
+                applyMembership(status, key: key)
+            } else {
+                membershipStates.removeValue(forKey: key)
+                membershipRevision += 1
+                threadSubscriptionInvalidations.send(key)
+                reconcileRow(key)
+            }
         case .notification(let payload):
-            invalidateChatList()
+            if !conversationStateReady(
+                chatID: payload.chatId, threadID: payload.threadRootId?.description)
+            {
+                fallbackConversationStates(
+                    .init(chatID: payload.chatId, threadID: payload.threadRootId?.description))
+            }
             refreshVisibleActivity(
                 chatID: payload.chatId, threadID: payload.threadRootId?.description,
                 mentions: payload.notificationType != .reaction,
                 reactions: payload.notificationType == .reaction)
         case .readReceiptChanged(let payload):
             for model in visibleTimelines() where model.chatID == payload.chatId {
-                model.refreshReadReceipt(clear: payload.privacyChanged == true)
+                model.readReceiptChanged(payload)
             }
         case .friendRequestResolved, .friendshipRemoved:
             invalidateChatList()
             invalidateReadReceipts()
         case .stickerPackOrderUpdated(let payload):
             stickers.setPackOrder(payload.order)
+        case .conversationUnread(let payload):
+            acceptUnread(payload)
+        case .conversationUnreadError(let payload):
+            guard payload.requestId == unreadRequestID else { return }
+            unreadFullRequestID = nil
+        case .conversationStates(let payload):
+            acceptConversationStates(payload)
+        case .conversationStatesError(let payload):
+            guard payload.requestId == statesRequestID else { return }
+            statesFullRequestID = nil
+            fallbackConversationStates()
         case .presenceSnapshot(let snapshot):
             guard let presenceRequestID, snapshot.requestId == presenceRequestID,
                 state.realtimeStatus == .connected
@@ -907,7 +1169,13 @@ final class ChatStore: ObservableObject {
             guard generation == requestGeneration else { return false }
             conversationMessages.apply(.messageUpdated(updated))
             pins.applyRealtimeEvent(.messageUpdated(updated))
-            invalidateChatList()
+            receivePreview(updated, isNew: false)
+            if !conversationStateReady(
+                chatID: updated.chatId, threadID: updated.replyRootId?.description)
+            {
+                reconcileRow(
+                    .init(chatID: updated.chatId, threadID: updated.replyRootId?.description))
+            }
             return true
         } catch {
             guard generation == requestGeneration else { return false }
@@ -931,7 +1199,8 @@ final class ChatStore: ObservableObject {
             // tombstoned throughout the shared cache and cannot safely roll back.
             drafts.redactReplyTargets([message.id], chatID: message.chatId)
             conversationMessages.apply(.messageDeleted(message.redactedForDeletion()))
-            invalidateChatList()
+            receivePreview(message.redactedForDeletion(), isNew: false)
+            reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId?.description))
             return true
         } catch {
             guard generation == requestGeneration else { return false }
@@ -943,7 +1212,12 @@ final class ChatStore: ObservableObject {
     func setRealtimeStatus(_ status: RealtimeConnectionStatus) {
         guard state.realtimeStatus != status else { return }
         state.realtimeStatus = status
-        if status != .connected { clearPresence() }
+        if status != .connected {
+            clearPresence()
+            clearConversationWatches()
+            membershipStates.removeAll()
+            membershipRevision += 1
+        }
         for model in visibleTimelines() { model.setRealtimeStatus(status) }
     }
 
@@ -1092,10 +1366,12 @@ final class ChatStore: ObservableObject {
         timelines[ObjectIdentifier(model)] = WeakTimeline(value: model)
         model.setRealtimeStatus(state.realtimeStatus)
         updateReadState(for: model)
+        updateConversationStateScope()
     }
 
     func unregisterTimeline(_ model: ConversationTimelineModel) {
         timelines.removeValue(forKey: ObjectIdentifier(model))
+        updateConversationStateScope()
     }
 
     /// A committed sharing-policy change revokes cached receipts before refetching.
@@ -1112,14 +1388,27 @@ final class ChatStore: ObservableObject {
     }
 
     private func updateReadState(for model: ConversationTimelineModel) {
+        if let cached = conversationReadStates[
+            .init(chatID: model.chatID, threadID: model.threadID)]
+        {
+            model.updateReadState(
+                unreadCount: cached.unreadCount, lastReadMessageID: cached.lastReadMessageId)
+            model.updateUnreadActivityState(
+                unreadMentions: cached.unreadMentions, unreadReactions: cached.unreadReactions)
+            return
+        }
         if let threadID = model.threadID,
             let thread = thread(chatID: model.chatID, threadID: threadID)
         {
             model.updateReadState(
                 unreadCount: thread.unreadCount, lastReadMessageID: thread.lastReadMessageId)
+            model.updateUnreadActivityState(
+                unreadMentions: thread.unreadMentions, unreadReactions: thread.unreadReactions)
         } else if model.threadID == nil, let chat = chat(id: model.chatID) {
             model.updateReadState(
                 unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
+            model.updateUnreadActivityState(
+                unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions)
         }
     }
 
@@ -1169,36 +1458,208 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    /// Coalesces invalidations, including ones arriving while a snapshot is in flight.
-    private func invalidateUnreadSummaries() {
-        summaryDirty = true
-        guard summaryTask == nil else { return }
+    func setConversationStateScope(_ refs: [ConversationRef], for consumer: UUID) {
+        guard conversationConsumers[consumer] != refs else { return }
+        conversationConsumers[consumer] = refs
+        updateConversationStateScope()
+    }
+
+    func removeConversationStateScope(for consumer: UUID) {
+        guard conversationConsumers.removeValue(forKey: consumer) != nil else { return }
+        updateConversationStateScope()
+    }
+
+    private func updateConversationStateScope() {
+        func ordered(_ refs: [ConversationRef]) -> [ConversationRef] {
+            refs.sorted {
+                if $0.chatId != $1.chatId { return $0.chatId < $1.chatId }
+                return ($0.threadId?.description ?? "") < ($1.threadId?.description ?? "")
+            }
+        }
+        let active = ordered(
+            visibleTimelines().map {
+                ConversationRef(chatId: $0.chatID, threadId: $0.threadID.flatMap(MessageID.init))
+            })
+        let lists = ordered(conversationConsumers.values.flatMap { $0 })
+        var seen = Set<ConversationKey>()
+        let refs = (active + lists).filter {
+            seen.insert(ConversationKey(chatID: $0.chatId, threadID: $0.threadId?.description))
+                .inserted
+        }
+        let selected = Array(refs.prefix(512))
+        guard selected != conversationStateScope else { return }
+        statesRequestID = nil
+        statesFullRequestID = nil
+        conversationStateScope = selected
+        fallbackConversationStates()
+    }
+
+    func beginConversationUnreadWatch(requestID: UInt32) {
+        unreadRequestID = requestID
+        unreadFullRequestID = nil
+    }
+
+    func beginConversationStatesWatch(requestID: UInt32) {
+        statesRequestID = requestID
+        statesFullRequestID = nil
+        readyConversations.removeAll()
+        watchedConversations = Set(
+            conversationStateScope.map {
+                ConversationKey(chatID: $0.chatId, threadID: $0.threadId?.description)
+            })
+    }
+
+    func clearConversationWatches() {
+        unreadRequestID = nil
+        unreadFullRequestID = nil
+        statesRequestID = nil
+        statesFullRequestID = nil
+        watchedConversations.removeAll()
+        readyConversations.removeAll()
+    }
+
+    private func invalidateConversationWatches() {
+        clearConversationWatches()
+        conversationWatchInvalidations.send(())
+    }
+
+    func conversationStateReady(chatID: String, threadID: String?) -> Bool {
+        state.realtimeStatus == .connected && statesRequestID != nil
+            && statesFullRequestID == statesRequestID
+            && readyConversations.contains(.init(chatID: chatID, threadID: threadID))
+    }
+
+    private func acceptUnread(_ payload: ConversationUnreadPayload) {
+        guard state.realtimeStatus == .connected, localStateWrites.isEmpty,
+            payload.requestId == unreadRequestID,
+            payload.full || unreadFullRequestID == payload.requestId
+        else { return }
+        if payload.full { unreadFullRequestID = payload.requestId }
+        var summaries = payload.full ? [] : state.conversationUnreadSummaries
+        for summary in payload.summaries where Self.unreadSummaryKeys.contains(summary.key) {
+            if let index = summaries.firstIndex(where: { $0.key == summary.key }) {
+                summaries[index] = summary
+            } else {
+                summaries.append(summary)
+            }
+        }
+        state.conversationUnreadSummaries = summaries
+        if payload.full || payload.appBadgeCount != nil {
+            state.appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
+        }
+    }
+
+    private func acceptConversationStates(_ payload: ConversationStatesPayload) {
+        guard state.realtimeStatus == .connected, payload.requestId == statesRequestID,
+            payload.full || statesFullRequestID == payload.requestId
+        else { return }
+        if payload.full {
+            statesFullRequestID = payload.requestId
+            readyConversations.removeAll()
+        }
+        for value in payload.states {
+            let key = ConversationKey(chatID: value.chatId, threadID: value.threadId?.description)
+            guard watchedConversations.contains(key), localStateWrites[key] == nil else { continue }
+            readyConversations.insert(key)
+            rowRevisions[key, default: 0] += 1
+            if !value.accessible {
+                conversationReadStates.removeValue(forKey: key)
+                if key.threadID == nil {
+                    state.chats.removeAll { $0.id == key.chatID }
+                    state.archivedChats.removeAll { $0.id == key.chatID }
+                } else {
+                    state.threads.removeAll { $0.conversationKey == key }
+                    state.archivedThreads.removeAll { $0.conversationKey == key }
+                }
+                listStateRevision += 1
+            }
+            applyReadState(
+                .init(
+                    lastReadMessageId: value.lastReadMessageId, unreadCount: value.unreadCount,
+                    unreadMentions: value.unreadMentions, unreadReactions: value.unreadReactions),
+                chatID: key.chatID, threadID: key.threadID)
+        }
+    }
+
+    func conversationReadState(chatID: String, threadID: String?) async throws -> ReadStateResponse
+    {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        if conversationStateReady(chatID: chatID, threadID: threadID),
+            let cached = conversationReadStates[key]
+        {
+            return cached
+        }
+        let revision = rowRevisions[key, default: 0]
+        rowRevisions[key] = revision
+        let response = try await performGroupRequest(generation: generation) {
+            if let threadID {
+                return try await apiClient.threadReadState(chatID: chatID, threadID: threadID)
+            }
+            return try await apiClient.chatReadState(chatID: chatID)
+        }
+        guard rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil else {
+            if let cached = conversationReadStates[key] { return cached }
+            throw CancellationError()
+        }
+        applyReadState(response, chatID: chatID, threadID: threadID)
+        return response
+    }
+
+    private func fallbackConversationStates(_ key: ConversationKey? = nil) {
+        guard foregroundActive else { return }
+        if let key {
+            fallbackKeys.insert(key)
+        } else {
+            fallbackKeys.formUnion(
+                conversationStateScope.map {
+                    ConversationKey(chatID: $0.chatId, threadID: $0.threadId?.description)
+                })
+        }
+        guard stateFallbackTask == nil, !fallbackKeys.isEmpty else { return }
         let requestGeneration = generation
         let currentRefresh = refreshGeneration
-        summaryTask = Task { [weak self] in
+        let currentFallback = stateFallbackGeneration
+        stateFallbackTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                if generation == requestGeneration, refreshGeneration == currentRefresh {
-                    summaryTask = nil
+                if generation == requestGeneration, refreshGeneration == currentRefresh,
+                    stateFallbackGeneration == currentFallback
+                {
+                    stateFallbackTask = nil
                 }
             }
-            repeat {
-                summaryDirty = false
-                do {
-                    let response = try await performGroupRequest(generation: requestGeneration) {
-                        try await self.apiClient.conversationUnreadSummaries(
-                            views: ConversationTabBadges.unreadViews)
-                    }
-                    guard refreshGeneration == currentRefresh else { return }
-                    state.conversationUnreadSummaries = response.summaries
-                } catch {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            while !fallbackKeys.isEmpty {
+                let keys = fallbackKeys
+                fallbackKeys.removeAll()
+                for key in keys {
                     guard generation == requestGeneration, refreshGeneration == currentRefresh,
                         !Task.isCancelled
                     else { return }
-                    // Preserve the last authorized snapshot; the next invalidation retries.
+                    _ = try? await conversationReadState(chatID: key.chatID, threadID: key.threadID)
                 }
-            } while summaryDirty && !Task.isCancelled
+            }
         }
+    }
+
+    private func beginLocalStateWrite(_ key: ConversationKey) {
+        localStateWrites[key, default: 0] += 1
+        rowRevisions[key, default: 0] += 1
+        listStateRevision += 1
+        unreadRequestID = nil
+        unreadFullRequestID = nil
+    }
+
+    private func finishLocalStateWrite(_ key: ConversationKey, generation requestGeneration: Int) {
+        guard generation == requestGeneration else { return }
+        if let count = localStateWrites[key], count > 1 {
+            localStateWrites[key] = count - 1
+        } else {
+            localStateWrites.removeValue(forKey: key)
+        }
+        rowRevisions[key, default: 0] += 1
+        invalidateConversationWatches()
+        if localStateWrites[key] == nil, dirtyRows.contains(key) { reconcileRow(key) }
     }
 
     private func refreshVisibleActivity(
@@ -1234,6 +1695,10 @@ final class ChatStore: ObservableObject {
     {
         guard foregroundActive else { throw CancellationError() }
         let root = try activityThreadID(threadID)
+        let requestGeneration = generation
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        beginLocalStateWrite(key)
+        defer { finishLocalStateWrite(key, generation: requestGeneration) }
         let response = try await performGroupRequest(generation: generation) {
             try await apiClient.acknowledgeReactions(
                 chatID: chatID, threadID: root, readThrough: readThrough)
@@ -1253,6 +1718,13 @@ final class ChatStore: ObservableObject {
                     lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
                     unreadMentions: chat.unreadMentions, unreadReactions: response.unreadReactions),
                 chatID: chatID, threadID: nil)
+        } else if let cached = conversationReadStates[key] {
+            applyReadState(
+                .init(
+                    lastReadMessageId: cached.lastReadMessageId, unreadCount: cached.unreadCount,
+                    unreadMentions: cached.unreadMentions, unreadReactions: response.unreadReactions
+                ),
+                chatID: chatID, threadID: threadID)
         }
         return response
     }
@@ -1339,6 +1811,9 @@ final class ChatStore: ObservableObject {
 
     func muteGroup(chatID: String, durationSeconds: Int?) async throws -> Date {
         let requestGeneration = generation
+        let key = ConversationKey(chatID: chatID)
+        beginLocalStateWrite(key)
+        defer { finishLocalStateWrite(key, generation: requestGeneration) }
         let mutedUntil: Date = try await serializeGroupMutation(chatID: chatID) {
             guard self.generation == requestGeneration else { throw CancellationError() }
             return try await self.performGroupRequest(generation: requestGeneration) {
@@ -1350,12 +1825,15 @@ final class ChatStore: ObservableObject {
         if let chat = chat(id: chatID) {
             applyArchiveState(to: chat, archived: chat.archived, mutedUntil: mutedUntil)
         }
-        invalidateChatList()
+        listStateRevision += 1
         return mutedUntil
     }
 
     func unmuteGroup(chatID: String) async throws {
         let requestGeneration = generation
+        let key = ConversationKey(chatID: chatID)
+        beginLocalStateWrite(key)
+        defer { finishLocalStateWrite(key, generation: requestGeneration) }
         try await serializeGroupMutation(chatID: chatID) {
             guard self.generation == requestGeneration else { throw CancellationError() }
             try await self.performGroupRequest(generation: requestGeneration) {
@@ -1367,7 +1845,7 @@ final class ChatStore: ObservableObject {
             // DELETE /mute also unarchives the chat.
             applyArchiveState(to: chat, archived: false, mutedUntil: nil)
         }
-        invalidateChatList()
+        listStateRevision += 1
     }
 
     func searchMembers(chatID: String, query: ListMembersQuery) async throws -> [MemberResponse] {
@@ -1380,6 +1858,14 @@ final class ChatStore: ObservableObject {
         state.archivedChats.removeAll { $0.id == chatID }
         state.threads.removeAll { $0.chatId == chatID }
         state.archivedThreads.removeAll { $0.chatId == chatID }
+        conversationReadStates = conversationReadStates.filter { $0.key.chatID != chatID }
+        for key in rowRevisions.keys where key.chatID == chatID {
+            rowRevisions[key, default: 0] += 1
+        }
+        for key in membershipStates.keys where key.chatID == chatID {
+            cacheMembership(.init(subscribed: false, archived: false), key: key)
+        }
+        membershipRevision += 1
         recoveryTasks.removeValue(forKey: chatID)?.cancel()
         recoveryDirty.remove(chatID)
         // Fences in-flight snapshots before the next refresh can observe the leave.
@@ -1425,6 +1911,9 @@ final class ChatStore: ObservableObject {
     func markRead(chatID: String, threadID: String?, messageID: MessageID) async throws {
         try Task.checkCancellation()
         let requestGeneration = generation
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        beginLocalStateWrite(key)
+        defer { finishLocalStateWrite(key, generation: requestGeneration) }
         do {
             let response: ReadStateResponse
             if let threadID {
@@ -1447,6 +1936,9 @@ final class ChatStore: ObservableObject {
 
     private func applyReadState(_ response: ReadStateResponse, chatID: String, threadID: String?) {
         listStateRevision += 1
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        conversationReadStates[key] = response
+        rowRevisions[key, default: 0] += 1
         if let threadID, let thread = thread(chatID: chatID, threadID: threadID) {
             install(
                 ThreadListItem(
@@ -1477,15 +1969,19 @@ final class ChatStore: ObservableObject {
         for model in visibleTimelines() where model.chatID == chatID && model.threadID == threadID {
             model.updateReadState(
                 unreadCount: response.unreadCount, lastReadMessageID: response.lastReadMessageId)
+            model.updateUnreadActivityState(
+                unreadMentions: response.unreadMentions, unreadReactions: response.unreadReactions)
         }
-        invalidateUnreadSummaries()
     }
 
     func cancelRealtimeRecovery() {
         pins.cancelLoads()
-        summaryTask?.cancel()
-        summaryTask = nil
-        summaryDirty = false
+        stateFallbackTask?.cancel()
+        stateFallbackTask = nil
+        fallbackKeys.removeAll()
+        for task in rowTasks.values { task.cancel() }
+        rowTasks.removeAll()
+        dirtyRows.removeAll()
         refreshGeneration += 1
         for task in refreshTasks.values { task.cancel() }
         refreshTasks.removeAll()
@@ -1507,6 +2003,14 @@ final class ChatStore: ObservableObject {
         presenceConsumers.removeAll()
         presenceScope = PresenceScope()
         clearPresence()
+        clearConversationWatches()
+        conversationConsumers.removeAll()
+        conversationStateScope = []
+        conversationReadStates.removeAll()
+        localStateWrites.removeAll()
+        membershipStates.removeAll()
+        membershipRevision += 1
+        rowRevisions.removeAll()
         cancelQueuedGroupMutations()
         pendingListActions.removeAll()
         deletingMessageIDs.removeAll()
@@ -1520,5 +2024,32 @@ final class ChatStore: ObservableObject {
         conversationMessages.reset()
         setRealtimeStatus(.idle)
         state = ChatState()
+    }
+}
+
+extension ChatListItem {
+    fileprivate func withPreview(_ preview: MessagePreview) -> ChatListItem {
+        ChatListItem(
+            id: id, name: name, avatar: avatar, lastMessageAt: preview.createdAt,
+            unreadCount: unreadCount, unreadMentions: unreadMentions,
+            unreadReactions: unreadReactions, lastReadMessageId: lastReadMessageId,
+            lastMessage: preview, mutedUntil: mutedUntil, archived: archived,
+            kind: kind, peer: peer)
+    }
+}
+
+extension ThreadListItem {
+    fileprivate func withActivity(
+        root: MessagePreview? = nil, lastReply: MessagePreview? = nil,
+        replyCount: Int64? = nil, lastReplyAt: Date? = nil
+    ) -> ThreadListItem {
+        ThreadListItem(
+            chatId: chatId, chatName: chatName, chatAvatar: chatAvatar,
+            threadRootMessage: root ?? threadRootMessage, participants: participants,
+            lastReply: lastReply ?? self.lastReply, replyCount: replyCount ?? self.replyCount,
+            lastReplyAt: lastReplyAt ?? self.lastReplyAt, unreadCount: unreadCount,
+            unreadMentions: unreadMentions, unreadReactions: unreadReactions,
+            lastReadMessageId: lastReadMessageId, chatKind: chatKind,
+            subscribedAt: subscribedAt, archived: archived)
     }
 }

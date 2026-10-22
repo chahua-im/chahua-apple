@@ -65,56 +65,57 @@ final class ChahuaAPITests: XCTestCase {
             departure, [:], "Departure acknowledgement deliberately has no snapshot boundary.")
     }
 
-    func testConversationUnreadSummaryEncodesSelectorsAndDecodesDistinctCounters() async throws {
+    func testTargetedListsAndReadStateGETsPreserveScopesAndAllCounters() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
             requests.append(request)
-            return (
-                200,
-                #"{"summaries":[{"key":"groups","unreadAttentionCount":7,"unreadConversationCount":3,"unreadMessageCount":19,"unreadUnmutedAttentionCount":5,"unreadUnmutedConversationCount":2,"unreadUnmutedMessageCount":11}]}"#
-            )
+            switch request.url?.path {
+            case "/chats": return (200, #"{"chats":[]}"#)
+            case "/threads": return (200, #"{"threads":[]}"#)
+            default:
+                return (
+                    200,
+                    #"{"lastReadMessageId":"9007199254740993","unreadCount":3,"unreadMentions":2,"unreadReactions":5}"#
+                )
+            }
         }
         let client: any ChahuaAPIClient = ChahuaClient(
             configuration: .init(baseURL: URL(string: "https://api.example")!),
             token: "candidate", session: testSession())
-        let views = [
-            ConversationView(
-                key: "groups",
-                selector: .init(
-                    archived: false, categories: [.group, .groupThread],
-                    exclude: [.init(chatId: "42", threadId: MessageID(9_007_199_254_740_993))],
-                    include: [.init(chatId: "43")])),
-            ConversationView(
-                key: "archived-dms",
-                selector: .init(
-                    archived: true, categories: [.dm, .dmThread])),
-        ]
-        let response = try await client.conversationUnreadSummaries(views: views)
+        let root = MessageID(9_007_199_254_740_993)
+        _ = try await client.listChats(query: .init(limit: 1, archived: false, chatId: "42"))
+        _ = try await client.listThreads(query: .init(limit: 1, archived: true, rootId: root))
+        let chat = try await client.chatReadState(chatID: "42")
+        let thread = try await client.threadReadState(chatID: "42", threadID: root.description)
+        XCTAssertEqual(chat, thread)
+        XCTAssertEqual(thread.lastReadMessageId, root)
+        XCTAssertEqual(thread.unreadCount, 3)
+        XCTAssertEqual(thread.unreadMentions, 2)
+        XCTAssertEqual(thread.unreadReactions, 5)
+        let recorded = requests.values
+        XCTAssertEqual(recorded.map(\.httpMethod), ["GET", "GET", "GET", "GET"])
         XCTAssertEqual(
-            response.summaries,
+            recorded.map { $0.url?.path },
             [
-                .init(
-                    key: "groups", unreadAttentionCount: 7, unreadConversationCount: 3,
-                    unreadMessageCount: 19, unreadUnmutedAttentionCount: 5,
-                    unreadUnmutedConversationCount: 2, unreadUnmutedMessageCount: 11)
+                "/chats", "/threads", "/chats/42/unread",
+                "/chats/42/threads/9007199254740993/read-state",
             ])
-        let request = try XCTUnwrap(requests.values.first)
-        XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(request.url?.path, "/conversations/unread-summary")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
         XCTAssertEqual(
-            try JSONCoding.decoder.decode(
-                ConversationUnreadRequest.self, from: requestBody(request)
-            ).views, views)
-        let object = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: requestBody(request)) as? [String: Any])
-        let encodedViews = try XCTUnwrap(object["views"] as? [[String: Any]])
-        let selector = try XCTUnwrap(encodedViews[0]["selector"] as? [String: Any])
-        XCTAssertEqual(selector["categories"] as? [String], ["group", "groupThread"])
-        XCTAssertEqual(selector["archived"] as? Bool, false)
+            URLComponents(url: try XCTUnwrap(recorded[0].url), resolvingAgainstBaseURL: false)?
+                .queryItems,
+            [
+                .init(name: "limit", value: "1"), .init(name: "archived", value: "false"),
+                .init(name: "chatId", value: "42"),
+            ])
         XCTAssertEqual(
-            (selector["exclude"] as? [[String: String]])?.first?["threadId"], "9007199254740993")
-        XCTAssertNil((selector["include"] as? [[String: String]])?.first?["threadId"])
+            URLComponents(url: try XCTUnwrap(recorded[1].url), resolvingAgainstBaseURL: false)?
+                .queryItems,
+            [
+                .init(name: "limit", value: "1"), .init(name: "archived", value: "true"),
+                .init(name: "rootId", value: root.description),
+            ])
+        XCTAssertNil(recorded[2].url?.query)
+        XCTAssertNil(recorded[3].url?.query)
     }
 
     func testReadStateCountersDecodeLegacyPayloadAndPreserveServerActivity() throws {

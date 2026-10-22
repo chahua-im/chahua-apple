@@ -1607,7 +1607,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         model.close()
     }
 
-    func testActivityEntryRestoreReconnectIgnoreZeroCachedCountsAndGateDMMentions() async throws {
+    func testActivityResumeReusesLoadedResultsAndReconnectRefreshesScopedStreams() async throws {
         for isGroup in [false, true] {
             for scope in [nil, "1"] as [String?] {
                 var mentions: [String?] = []
@@ -1626,16 +1626,19 @@ final class ConversationTimelineModelTests: XCTestCase {
                 model.setReadTrackingActive(true)
                 await source.drain()
                 model.setReadTrackingActive(false)
-                model.refreshUnreadActivity()
                 await source.drain()
                 XCTAssertEqual(reactions.count, 1, "Background invalidations do not query.")
                 model.setReadTrackingActive(true)
                 await source.drain()
+                XCTAssertEqual(reactions.count, 1, "Successful foreground data remains fresh.")
+                XCTAssertEqual(mentions.count, isGroup ? 1 : 0)
+                model.setRealtimeStatus(.reconnecting)
+                await source.drain()
                 model.setRealtimeStatus(.connected)
                 await source.drain()
-                XCTAssertEqual(reactions.count, 3)
+                XCTAssertEqual(reactions.count, 2)
                 XCTAssertTrue(reactions.allSatisfy { $0 == scope })
-                XCTAssertEqual(mentions.count, isGroup ? 3 : 0)
+                XCTAssertEqual(mentions.count, isGroup ? 2 : 0)
                 XCTAssertTrue(mentions.allSatisfy { $0 == scope })
                 model.close()
             }
@@ -2136,7 +2139,7 @@ final class ConversationTimelineModelTests: XCTestCase {
 private struct StubError: Error {}
 
 @MainActor
-private final class ScriptedTimelineSource: TimelineMessageSource {
+final class ScriptedTimelineSource: TimelineMessageSource {
     let store = ConversationMessageStore()
     private(set) var queries: [ListMessagesQuery] = []
     private var pages: [Result<ListMessagesResponse, Error>]

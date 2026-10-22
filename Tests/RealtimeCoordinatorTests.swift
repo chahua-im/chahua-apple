@@ -881,6 +881,50 @@ final class RealtimeCoordinatorTests: XCTestCase {
         withExtendedLifetime(observation) {}
     }
 
+    func testHealthyForegroundResumeRetainsListsAndReplacesUnreadWatch() async throws {
+        let api = RealtimeTestHTTP()
+        let socket = RealtimeTestSocket()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {})
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        await eventually {
+            store.state.chatListLoadPhase == .loaded
+                && store.state.archivedChatListLoadPhase == .loaded
+                && store.state.threadListLoadPhase == .loaded
+                && store.state.archivedThreadListLoadPhase == .loaded
+        }
+        await eventually { await socket.unreadWatches.last?.appBadge == true }
+        let initialWatch = await socket.unreadWatches.last
+        let initial = try XCTUnwrap(initialWatch)
+        await socket.emit(
+            .conversationUnread(
+                .init(requestId: initial.requestID, full: true, summaries: [], appBadgeCount: 7)))
+        await eventually { store.state.unreadBadgeCount() == 7 }
+        let requestsBefore = await api.chatRequestCount
+
+        coordinator.setSceneActive(id: scene, active: false)
+        await eventually { await socket.unreadWatches.last?.appBadge == false }
+        coordinator.setSceneActive(id: scene, active: true)
+        await eventually { await socket.unreadWatches.last?.appBadge == true }
+        let resumedWatch = await socket.unreadWatches.last
+        let resumed = try XCTUnwrap(resumedWatch)
+        XCTAssertGreaterThan(resumed.requestID, initial.requestID)
+        await socket.emit(
+            .conversationUnread(
+                .init(requestId: initial.requestID, full: true, summaries: [], appBadgeCount: 99)))
+        await socket.emit(
+            .conversationUnread(
+                .init(requestId: resumed.requestID, full: true, summaries: [], appBadgeCount: 4)))
+        await eventually { store.state.unreadBadgeCount() == 4 }
+        let requestsAfter = await api.chatRequestCount
+        XCTAssertEqual(requestsAfter, requestsBefore, "Healthy resume must not reload list pages.")
+    }
+
     private func eventually(
         _ condition: () async -> Bool, file: StaticString = #filePath, line: UInt = #line
     ) async {
@@ -939,6 +983,17 @@ private actor RealtimeTestSocket: RealtimeConnection {
         case ping(RealtimeAppState)
         case watch(UInt64, [Int32], [String])
     }
+    struct UnreadWatch: Sendable {
+        let requestID: UInt32
+        let views: [ConversationView]
+        let appBadge: Bool
+    }
+    struct StateWatch: Sendable {
+        let requestID: UInt32
+        let conversations: [ConversationRef]
+    }
+    private(set) var unreadWatches: [UnreadWatch] = []
+    private(set) var stateWatches: [StateWatch] = []
     private(set) var frames: [Frame] = []
     struct Watch: Sendable {
         let requestID: UInt64
@@ -982,6 +1037,18 @@ private actor RealtimeTestSocket: RealtimeConnection {
     func sendWatchPresence(requestID: UInt64, userIDs: [Int32], chatIDs: [String]) async throws {
         guard !closed else { throw CancellationError() }
         frames.append(.watch(requestID, userIDs, chatIDs))
+    }
+    func sendWatchConversationUnread(
+        requestID: UInt32, views: [ConversationView], appBadge: Bool
+    ) async throws {
+        guard !closed else { throw CancellationError() }
+        unreadWatches.append(.init(requestID: requestID, views: views, appBadge: appBadge))
+    }
+    func sendWatchConversationStates(
+        requestID: UInt32, conversations: [ConversationRef]
+    ) async throws {
+        guard !closed else { throw CancellationError() }
+        stateWatches.append(.init(requestID: requestID, conversations: conversations))
     }
     func close() {
         closed = true
@@ -1030,6 +1097,7 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     private let holdChats: Bool
     private var chats: CheckedContinuation<Void, Never>?
     private(set) var chatRequestStarted = false
+    private(set) var chatRequestCount = 0
     init(holdChats: Bool = false) { self.holdChats = holdChats }
     private var visibility: PresenceVisibility = .everyone
     private var presenceUpdateError: APIError?
@@ -1040,18 +1108,6 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
 
     private enum UnexpectedActivityCall: Error { case unread }
-    func conversationUnreadSummaries(views: [ConversationView]) async throws
-        -> ConversationUnreadResponse
-    {
-        // This transport has no conversations; preserve each requested selector's identity.
-        .init(
-            summaries: views.map {
-                .init(
-                    key: $0.key, unreadAttentionCount: 0, unreadConversationCount: 0,
-                    unreadMessageCount: 0, unreadUnmutedAttentionCount: 0,
-                    unreadUnmutedConversationCount: 0, unreadUnmutedMessageCount: 0)
-            })
-    }
     func unreadMentions(chatID: String, threadID: MessageID?) async throws
         -> UnreadMentionIDsResponse
     {
@@ -1217,6 +1273,7 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     { throw APIError.unavailable }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         chatRequestStarted = true
+        chatRequestCount += 1
         if holdChats { await withCheckedContinuation { chats = $0 } }
         return ListChatsResponse(chats: [])
     }

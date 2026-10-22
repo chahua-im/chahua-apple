@@ -1,4 +1,5 @@
 import ChahuaAPI
+import Combine
 import Foundation
 import XCTest
 
@@ -6,6 +7,203 @@ import XCTest
 
 @MainActor
 final class ConversationScopeTests: XCTestCase {
+    func testMentionLifecycleCallsShareRequestsAndLateSnapshotsKeepDismissals() async throws {
+        let source = ScriptedTimelineSource(pages: [
+            .success(
+                try TimelineTestFixtures.page([
+                    TimelineTestFixtures.message(id: 1, at: 1),
+                    TimelineTestFixtures.message(id: 2, at: 2),
+                ]))
+        ])
+        let held = expectation(description: "Mention snapshot held")
+        var release: CheckedContinuation<Void, Never>?
+        var requests = 0
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: true, source: source,
+            messageStore: source.store,
+            fetchUnreadMentions: { _ in
+                requests += 1
+                if requests == 1 {
+                    await withCheckedContinuation {
+                        release = $0
+                        held.fulfill()
+                    }
+                }
+                return .init(messageIds: [MessageID(2)])
+            })
+        await model.open()
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        for _ in 0..<3 { model.refreshUnreadActivity(changed: false) }
+        model.setRealtimeStatus(.connected)
+        release?.resume()
+        await source.drain()
+        XCTAssertEqual(requests, 1)
+        await model.jumpToNextMention()
+        XCTAssertEqual(model.unreadMentionJumpCount, 0)
+        model.refreshUnreadActivity(mentions: true, reactions: false)
+        await source.drain()
+        XCTAssertEqual(requests, 2)
+        XCTAssertEqual(
+            model.unreadMentionJumpCount, 0, "Late snapshots cannot restore visited IDs.")
+        model.close()
+    }
+
+    func testReceiptInvalidationsFilterReadersAndCoalesceOnlyTheChangedScope() async throws {
+        let source = ScriptedTimelineSource(pages: [])
+        let held = expectation(description: "Thread receipt held")
+        let rerun = expectation(description: "Thread receipt refreshed once")
+        var release: CheckedContinuation<MessageID?, Never>?
+        var scopes: [String?] = []
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
+            messageStore: source.store, threadID: "10",
+            fetchReadReceipt: { scope in
+                scopes.append(scope)
+                if scope == "10", scopes.filter({ $0 == "10" }).count == 1 {
+                    return await withCheckedContinuation {
+                        release = $0
+                        held.fulfill()
+                    }
+                }
+                if scope == "10" { rerun.fulfill() }
+                return MessageID(12)
+            })
+        model.setReadTrackingActive(true)
+        await fulfillment(of: [held], timeout: 2)
+        model.refreshReadReceipt(changed: false)
+        model.refreshReadReceipt(changed: false)
+        model.readReceiptChanged(.init(chatId: "chat", readerUid: 1))
+        model.readReceiptChanged(
+            .init(chatId: "chat", readerUid: 2, threadRootId: MessageID(99)))
+        for _ in 0..<3 {
+            model.readReceiptChanged(
+                .init(chatId: "chat", readerUid: 2, threadRootId: MessageID(10)))
+        }
+        release?.resume(returning: MessageID(11))
+        await fulfillment(of: [rerun], timeout: 2)
+        await source.drain()
+        XCTAssertEqual(scopes.filter { $0 == "10" }.count, 2)
+        XCTAssertEqual(scopes.filter { $0 == nil }.count, 1)
+        model.readReceiptChanged(.init(chatId: "chat", readerUid: 2))
+        await source.drain()
+        XCTAssertEqual(scopes.filter { $0 == "10" }.count, 2)
+        XCTAssertEqual(scopes.filter { $0 == nil }.count, 2)
+        model.close()
+    }
+
+    func testHealthyForegroundKeepsReceiptsMessagesAndActivityUntilReconnect() async throws {
+        let initial = try TimelineTestFixtures.page([
+            TimelineTestFixtures.message(id: 1, at: 1)
+        ])
+        let source = ScriptedTimelineSource(pages: [.success(initial), .success(initial)])
+        var receiptRequests = 0
+        var reactionRequests = 0
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
+            messageStore: source.store,
+            fetchReadReceipt: { _ in
+                receiptRequests += 1
+                return MessageID(1)
+            },
+            fetchUnreadReactions: { _ in
+                reactionRequests += 1
+                return .init(messageIds: [MessageID(1)], readThrough: "snapshot")
+            })
+        await model.open()
+        model.setRealtimeStatus(.connected)
+        model.setReadTrackingActive(true)
+        await source.drain()
+        model.setReadTrackingActive(false)
+        source.store.apply(.message(try TimelineTestFixtures.message(id: 2, at: 2)))
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(receiptRequests, 1)
+        XCTAssertEqual(reactionRequests, 1)
+        XCTAssertEqual(source.queries.count, 1)
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(1), MessageID(2)])
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        XCTAssertTrue(
+            model.rows.contains {
+                if case .message(let row) = $0 { return row.isRead }
+                return false
+            })
+        model.setRealtimeStatus(.reconnecting)
+        model.setRealtimeStatus(.connected)
+        await model.reconcileAfterReconnect()
+        await source.drain()
+        XCTAssertEqual(receiptRequests, 2)
+        XCTAssertEqual(reactionRequests, 2)
+        XCTAssertEqual(source.queries.count, 2)
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        model.close()
+    }
+
+    func testKnownZeroActivityIsReusableButBackgroundChangesCannotBeLost() async throws {
+        let source = ScriptedTimelineSource(pages: [])
+        var mentions = 0
+        var reactions = 0
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: true, source: source,
+            messageStore: source.store,
+            fetchUnreadMentions: { _ in
+                mentions += 1
+                return .init(messageIds: [MessageID(2)])
+            },
+            fetchUnreadReactions: { _ in
+                reactions += 1
+                return .init(messageIds: [MessageID(3)], readThrough: "snapshot")
+            })
+        model.updateUnreadActivityState(unreadMentions: 0, unreadReactions: 0)
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(mentions, 0)
+        XCTAssertEqual(reactions, 0)
+        model.setReadTrackingActive(false)
+        model.refreshUnreadActivity()
+        model.updateUnreadActivityState(unreadMentions: 0, unreadReactions: 0)
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(mentions, 1)
+        XCTAssertEqual(reactions, 1)
+        XCTAssertEqual(model.unreadMentionJumpCount, 1)
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        model.setReadTrackingActive(false)
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(mentions, 1)
+        XCTAssertEqual(reactions, 1)
+        model.close()
+    }
+
+    func testAbsoluteMembershipUpdatesVisibleThreadWithoutInvalidatingOrdinaryReplies()
+        async throws
+    {
+        let api = FakeChatAPI()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        let model = ThreadSubscriptionModel(chatID: "chat", threadID: "10", store: store)
+        var invalidations: [ConversationKey] = []
+        let observation = store.threadSubscriptionInvalidations.sink { invalidations.append($0) }
+        defer { observation.cancel() }
+        let absolute = ThreadSubscriptionStatus(subscribed: false, archived: true)
+        await store.applyRealtimeEvent(
+            .threadMembershipChanged(
+                .init(threadRootId: "10", chatId: "chat", status: absolute)), currentUserID: 1)
+        for _ in 0..<8 { await Task.yield() }
+        XCTAssertEqual(model.status, absolute)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertFalse(model.loadFailed, "An older failed HTTP read cannot replace a snapshot.")
+        await store.applyRealtimeEvent(
+            .threadUpdate(
+                .init(
+                    threadRootId: "10", chatId: "chat", lastReplyAt: Date(), replyCount: 2)),
+            currentUserID: 1)
+        XCTAssertTrue(invalidations.isEmpty)
+        XCTAssertEqual(model.status, absolute)
+    }
+
     func testNativePullRefreshOwnsListProgressDuringLoadingAndConnectionRecovery() {
         let statuses: [RealtimeConnectionStatus] = [
             .idle, .connecting, .connected, .reconnecting, .unavailable,

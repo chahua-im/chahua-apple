@@ -11,6 +11,10 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case notification(NotificationPayload)
     case presenceUpdate(PresenceUpdatePayload)
     case presenceSnapshot(PresenceSnapshotPayload)
+    case conversationUnread(ConversationUnreadPayload)
+    case conversationUnreadError(ConversationUnreadErrorPayload)
+    case conversationStates(ConversationStatesPayload)
+    case conversationStatesError(ConversationUnreadErrorPayload)
     case threadUpdate(ThreadUpdatePayload)
     case threadMembershipChanged(ThreadMembershipChangedPayload)
     case chatArchiveStateChanged(ChatArchiveStateChangedPayload)
@@ -53,6 +57,18 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         case "presenceSnapshot":
             self = .presenceSnapshot(
                 try container.decode(PresenceSnapshotPayload.self, forKey: .payload))
+        case "conversationUnread":
+            self = .conversationUnread(
+                try container.decode(ConversationUnreadPayload.self, forKey: .payload))
+        case "conversationUnreadError":
+            self = .conversationUnreadError(
+                try container.decode(ConversationUnreadErrorPayload.self, forKey: .payload))
+        case "conversationStates":
+            self = .conversationStates(
+                try container.decode(ConversationStatesPayload.self, forKey: .payload))
+        case "conversationStatesError":
+            self = .conversationStatesError(
+                try container.decode(ConversationUnreadErrorPayload.self, forKey: .payload))
         case "threadUpdate":
             self = .threadUpdate(try container.decode(ThreadUpdatePayload.self, forKey: .payload))
         case "threadMembershipChanged":
@@ -120,20 +136,34 @@ public struct NotificationPayload: Decodable, Sendable {
 public struct ReadReceiptChangedPayload: Decodable, Sendable {
     public let chatId: String
     public let privacyChanged: Bool?
+    public let readerUid: Int32?
+    public let threadRootId: MessageID?
 
-    public init(chatId: String, privacyChanged: Bool? = nil) {
+    public init(
+        chatId: String, privacyChanged: Bool? = nil, readerUid: Int32? = nil,
+        threadRootId: MessageID? = nil
+    ) {
         self.chatId = chatId
         self.privacyChanged = privacyChanged
+        self.readerUid = readerUid
+        self.threadRootId = threadRootId
     }
 }
 
 public struct BulkDeletedPayload: Decodable, Sendable {
     public let chatId: String
     public let messageIds: [MessageID]
+    public let complete: Bool?
+    public let threadRootIds: [MessageID]?
 
-    public init(chatId: String, messageIds: [MessageID]) {
+    public init(
+        chatId: String, messageIds: [MessageID], complete: Bool? = nil,
+        threadRootIds: [MessageID]? = nil
+    ) {
         self.chatId = chatId
         self.messageIds = messageIds
+        self.complete = complete
+        self.threadRootIds = threadRootIds
     }
 }
 
@@ -228,10 +258,12 @@ public struct PresenceSnapshotPayload: Decodable, Sendable {
 public struct ThreadMembershipChangedPayload: Decodable, Sendable {
     public let threadRootId: String
     public let chatId: String
+    public let status: ThreadSubscriptionStatus?
 
-    public init(threadRootId: String, chatId: String) {
+    public init(threadRootId: String, chatId: String, status: ThreadSubscriptionStatus? = nil) {
         self.threadRootId = threadRootId
         self.chatId = chatId
+        self.status = status
     }
 }
 

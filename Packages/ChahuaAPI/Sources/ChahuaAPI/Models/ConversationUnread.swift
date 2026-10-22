@@ -73,14 +73,6 @@ public struct ConversationView: Codable, Hashable, Sendable {
     }
 }
 
-public struct ConversationUnreadRequest: Codable, Hashable, Sendable {
-    public let views: [ConversationView]
-
-    public init(views: [ConversationView]) {
-        self.views = views
-    }
-}
-
 public struct ConversationUnreadSummary: Codable, Hashable, Sendable {
     public let key: String
     /// Group mentions/replies, including muted conversations, once per message; capped at 1000.
@@ -109,10 +101,65 @@ public struct ConversationUnreadSummary: Codable, Hashable, Sendable {
     }
 }
 
-public struct ConversationUnreadResponse: Codable, Hashable, Sendable {
+/// Absolute counters for this socket's watch. Partial frames replace only listed keys.
+public struct ConversationUnreadPayload: Codable, Hashable, Sendable {
+    public let requestId: UInt32
+    public let full: Bool
     public let summaries: [ConversationUnreadSummary]
+    public let appBadgeCount: Int64?
 
-    public init(summaries: [ConversationUnreadSummary]) {
+    public init(
+        requestId: UInt32, full: Bool, summaries: [ConversationUnreadSummary],
+        appBadgeCount: Int64? = nil
+    ) {
+        self.requestId = requestId
+        self.full = full
         self.summaries = summaries
+        self.appBadgeCount = appBadgeCount
+    }
+}
+
+public struct ConversationUnreadErrorPayload: Codable, Hashable, Sendable {
+    public let requestId: UInt32
+
+    public init(requestId: UInt32) {
+        self.requestId = requestId
+    }
+}
+
+/// Authorized state for one explicit conversation; inaccessible states clear local counters.
+public struct ConversationState: Codable, Hashable, Sendable {
+    public let chatId: String
+    public let threadId: MessageID?
+    public let accessible: Bool
+    public let lastReadMessageId: MessageID?
+    public let unreadCount: Int64
+    public let unreadMentions: Int64
+    public let unreadReactions: Int64
+
+    public init(
+        chatId: String, threadId: MessageID? = nil, accessible: Bool,
+        lastReadMessageId: MessageID? = nil, unreadCount: Int64, unreadMentions: Int64,
+        unreadReactions: Int64
+    ) {
+        self.chatId = chatId
+        self.threadId = threadId
+        self.accessible = accessible
+        self.lastReadMessageId = lastReadMessageId
+        self.unreadCount = unreadCount
+        self.unreadMentions = unreadMentions
+        self.unreadReactions = unreadReactions
+    }
+}
+
+public struct ConversationStatesPayload: Codable, Hashable, Sendable {
+    public let requestId: UInt32
+    public let full: Bool
+    public let states: [ConversationState]
+
+    public init(requestId: UInt32, full: Bool, states: [ConversationState]) {
+        self.requestId = requestId
+        self.full = full
+        self.states = states
     }
 }
