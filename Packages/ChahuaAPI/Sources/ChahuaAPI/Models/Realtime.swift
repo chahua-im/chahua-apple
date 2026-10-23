@@ -18,6 +18,9 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case threadUpdate(ThreadUpdatePayload)
     case threadMembershipChanged(ThreadMembershipChangedPayload)
     case chatArchiveStateChanged(ChatArchiveStateChangedPayload)
+    case notificationSettingsChanged(NotificationSettingsResponse)
+    case chatNotificationSettingChanged(ChatNotificationSettingResponse)
+    case notificationExceptionsCleared(NotificationExceptionsCleared)
     case readReceiptChanged(ReadReceiptChangedPayload)
     case pinAdded(PinUpdatePayload)
     case threadPinAdded(PinUpdatePayload)
@@ -77,6 +80,15 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         case "chatArchiveStateChanged":
             self = .chatArchiveStateChanged(
                 try container.decode(ChatArchiveStateChangedPayload.self, forKey: .payload))
+        case "notificationSettingsChanged":
+            self = .notificationSettingsChanged(
+                try container.decode(NotificationSettingsResponse.self, forKey: .payload))
+        case "chatNotificationSettingChanged":
+            self = .chatNotificationSettingChanged(
+                try container.decode(ChatNotificationSettingResponse.self, forKey: .payload))
+        case "notificationExceptionsCleared":
+            self = .notificationExceptionsCleared(
+                try container.decode(NotificationExceptionsCleared.self, forKey: .payload))
         case "readReceiptChanged":
             self = .readReceiptChanged(
                 try container.decode(ReadReceiptChangedPayload.self, forKey: .payload))

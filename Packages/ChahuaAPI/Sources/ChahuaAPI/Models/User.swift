@@ -94,6 +94,8 @@ public struct MeResponse: Codable, Hashable, Sendable {
     public let permissions: [String]
     public let avatarUrl: String?
     public let userGroup: UserGroupTagInfo?
+    public let muteGroupChatsByDefault: Bool?
+    public let muteDirectChatsByDefault: Bool?
 }
 
 public struct StickerPackOrderItem: Codable, Hashable, Sendable {

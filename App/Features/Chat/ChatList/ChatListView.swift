@@ -16,6 +16,7 @@ struct ChatListView: View {
     @State private var revealedConversationID: ConversationKey?
     @State private var conversationStateConsumer = UUID()
     @State private var listSnapshotCache = ConversationListSnapshotCache()
+    @State private var notificationChat: ChatListItem?
     #if os(macOS)
         @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
@@ -53,7 +54,7 @@ struct ChatListView: View {
             chats: archivedMode ? store.state.archivedChats : store.state.chats,
             threads: archivedMode ? store.state.archivedThreads : store.state.threads,
             scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages,
-            draftUpdatedAt: drafts.draftUpdatedAt)
+            draftUpdatedAt: drafts.draftUpdatedAt, pendingPreviews: store.pendingListPreviews)
         let items = snapshot.items
         let loadStatus = ConversationListLoadStatus(
             state: store.state, scope: scope, archivedMode: archivedMode,
@@ -137,6 +138,12 @@ struct ChatListView: View {
             defer { isPullRefreshing = false }
             await refreshScope()
         }
+        .sheet(item: $notificationChat) { chat in
+            NavigationStack {
+                ChatNotificationSettingsView(store: store, chat: chat)
+            }
+            .frame(minWidth: 320, minHeight: 420)
+        }
         .alert(
             "Conversation actions",
             isPresented: Binding(
@@ -195,6 +202,7 @@ struct ChatListView: View {
             ConversationListRow(
                 item: item,
                 draft: drafts.draftText(chatID: item.id.chatID, threadID: item.id.threadID),
+                pending: store.pendingListPreviews[item.id],
                 store: store, currentUserID: currentUserID,
                 isSelected: selectedConversationID == item.id, badgeColor: badgeColor
             )
@@ -275,14 +283,13 @@ struct ChatListView: View {
             title: archivedMode
                 ? AppLanguage.localized("Unarchive") : AppLanguage.localized("Archive"),
             symbol: archivedMode ? "tray" : "archivebox", tint: .indigo)
-        guard case .chat(let chat) = item else { return [archive] }
-        let isMuted = (chat.mutedUntil ?? .distantPast) > Date()
+        guard case .chat = item else { return [archive] }
         return [
             archive,
             .init(
-                action: (isMuted ? ConversationListAction.unmute : .mute).rawValue,
-                title: isMuted ? AppLanguage.localized("Unmute") : AppLanguage.localized("Mute"),
-                symbol: isMuted ? "bell" : "bell.slash", tint: .orange),
+                action: ConversationListAction.notificationSettings.rawValue,
+                title: AppLanguage.localized("Notification settings"),
+                symbol: "bell", tint: .orange),
         ]
     }
 
@@ -299,6 +306,10 @@ struct ChatListView: View {
     private func perform(_ action: ConversationListAction, on item: ConversationListItem) {
         guard store.pendingListAction(for: item.id) == nil else { return }
         revealedConversationID = nil
+        if action == .notificationSettings, case .chat(let chat) = item {
+            notificationChat = chat
+            return
+        }
         Task { await store.performListAction(action, conversation: item.id) }
     }
 

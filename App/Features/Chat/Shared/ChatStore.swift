@@ -14,6 +14,7 @@ struct ChatState: Equatable {
     var groupPresence: [String: GroupPresenceResponse] = [:]
     var conversationUnreadSummaries: [ConversationUnreadSummary] = []
     var appBadgeCount: Int64?
+    var notificationDefaults: NotificationSettingsResponse?
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
     var chatListRefreshFailed = false
@@ -38,7 +39,8 @@ extension ChatState {
     func unreadBadgeCount(excludingChatID: String? = nil, now: Date = Date()) -> Int {
         var total = appBadgeCount ?? 0
         var excluded: Int64 = 0
-        for chat in chats where !chat.archived && (chat.mutedUntil.map { $0 <= now } ?? true) {
+        for chat in chats
+        where !chat.archived && !chat.notificationMuted(defaults: notificationDefaults, now: now) {
             let count = max(0, min(Int64(UInt32.max), chat.unreadCount))
             if appBadgeCount == nil { total = min(Int64(UInt32.max), total + count) }
             if chat.id == excludingChatID { excluded = count }
@@ -84,6 +86,13 @@ final class ChatStore: ObservableObject {
             stickers.setAccount(currentUserProfile?.uid)
             stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? [])
             guard currentUserProfile != oldValue else { return }
+            if state.notificationDefaults == nil, let profile = currentUserProfile,
+                let groups = profile.muteGroupChatsByDefault,
+                let direct = profile.muteDirectChatsByDefault
+            {
+                state.notificationDefaults = .init(
+                    muteGroupChatsByDefault: groups, muteDirectChatsByDefault: direct)
+            }
             // Pending rows carry the sender captured in their projection.
             for key in outgoingQueue.snapshots.keys
             where !outgoingQueue.pendingMessages(chatID: key.chatID, threadID: key.threadID).isEmpty
@@ -100,6 +109,8 @@ final class ChatStore: ObservableObject {
     let conversationMessages = ConversationMessageStore()
     let chatAccessInvalidations = PassthroughSubject<String, Never>()
     let outgoingQueue: OutgoingMessageQueue
+    let listReadReceipts = ConversationListReadReceipts()
+    @Published private(set) var pendingListPreviews: [ConversationKey: LocalOutgoingMessage] = [:]
     let reactions: MessageReactionController
     let pins: ChatPinController
     let drafts: ChatDraftStore
@@ -123,6 +134,61 @@ final class ChatStore: ObservableObject {
     private var timelines: [ObjectIdentifier: WeakTimeline] = [:]
     private var foregroundActive = true
     private var groupMutationStates: [String: GroupMutationState] = [:]
+    private var notificationRevision = 0
+    private var notificationVersions: [String: Int] = [:]
+    private var notificationSnapshots: [String: ChatNotificationSettingResponse] = [:]
+    private var defaultsRevision = 0
+    private var defaultsLoadTask: Task<Void, Error>?
+    private var defaultsLoadRequested = false
+    @Published private(set) var notificationDefaultsSaving = false
+    let notificationPreferenceChanges = PassthroughSubject<Void, Never>()
+    private var notificationExpiryTask: Task<Void, Never>?
+    private var notificationExpiry: Date?
+
+    func notificationChatSnapshot(_ chat: ChatListItem) -> ChatListItem {
+        guard notificationVersions[chat.id] != nil, let snapshot = notificationSnapshots[chat.id]
+        else { return chat }
+        return chat.withNotificationState(
+            mutedUntil: snapshot.mutedUntil, muteOverride: snapshot.muteOverride,
+            isMuted: snapshot.isMuted, archived: chat.archived)
+    }
+
+    func trackNotificationExpiry(for chat: ChatListItem) {
+        if notificationSnapshots[chat.id] == nil {
+            notificationSnapshots[chat.id] = .init(
+                chatId: chat.id, kind: chat.kind, archived: chat.archived,
+                muteOverride: chat.muteOverride, mutedUntil: chat.mutedUntil,
+                isMuted: chat.notificationMuted(defaults: state.notificationDefaults))
+        }
+        scheduleNotificationExpiry()
+    }
+
+    private func scheduleNotificationExpiry() {
+        let now = Date()
+        var next: Date?
+        func consider(_ date: Date?) {
+            guard let date, date > now else { return }
+            if next == nil || date < next! { next = date }
+        }
+        for chat in state.chats { consider(chat.mutedUntil) }
+        for chat in state.archivedChats { consider(chat.mutedUntil) }
+        for snapshot in notificationSnapshots.values { consider(snapshot.mutedUntil) }
+        guard next != notificationExpiry else { return }
+        notificationExpiryTask?.cancel()
+        notificationExpiry = next
+        guard let next else {
+            notificationExpiryTask = nil
+            return
+        }
+        notificationExpiryTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(next.timeIntervalSinceNow)) } catch { return }
+            guard let self else { return }
+            self.notificationExpiry = nil
+            self.objectWillChange.send()
+            self.notificationPreferenceChanges.send()
+            self.scheduleNotificationExpiry()
+        }
+    }
 
     private struct GroupMutationState {
         var token: UUID
@@ -252,7 +318,12 @@ final class ChatStore: ObservableObject {
                 chatID: snapshot.chatID, threadID: snapshot.threadID,
                 with: pendingProjection(chatID: snapshot.chatID, threadID: snapshot.threadID))
         case .acknowledged(let snapshot, let message):
-            if let snapshot { _ = installOutgoingSnapshot(snapshot) }
+            if let snapshot {
+                _ = installOutgoingSnapshot(snapshot)
+            } else {
+                updatePendingListPreview(
+                    for: .init(chatID: message.chatId, threadID: message.replyRootId))
+            }
             conversationMessages.replacePending(
                 chatID: message.chatId, threadID: message.replyRootId,
                 with: pendingProjection(chatID: message.chatId, threadID: message.replyRootId),
@@ -267,7 +338,17 @@ final class ChatStore: ObservableObject {
         guard snapshot.revision >= outgoingRevisions[key, default: -1] else { return false }
         outgoingRevisions[key] = snapshot.revision
         drafts.install(snapshot)
+        updatePendingListPreview(for: key)
         return true
+    }
+
+    private func updatePendingListPreview(for key: ConversationKey) {
+        pendingListPreviews[key] = outgoingQueue.pendingMessages(
+            chatID: key.chatID, threadID: key.threadID
+        ).max {
+            $0.enqueuedAt == $1.enqueuedAt
+                ? $0.enqueueSequence < $1.enqueueSequence : $0.enqueuedAt < $1.enqueuedAt
+        }
     }
 
     private func pendingProjection(chatID: String, threadID: String?) -> [PendingOutgoingMessage] {
@@ -371,6 +452,7 @@ final class ChatStore: ObservableObject {
     ) async {
         let initiallyLoaded = state[keyPath: list.phase] == .loaded
         let listRevision = listStateRevision
+        let receiptVersion = listReadReceipts.snapshot()
         if !initiallyLoaded { state[keyPath: list.phase] = .loading }
         do {
             switch list {
@@ -395,6 +477,11 @@ final class ChatStore: ObservableObject {
                     state.chats = chats
                 }
                 for chat in chats {
+                    notificationSnapshots[chat.id] = .init(
+                        chatId: chat.id, kind: chat.kind, archived: chat.archived,
+                        muteOverride: chat.muteOverride, mutedUntil: chat.mutedUntil,
+                        isMuted: chat.notificationMuted(defaults: state.notificationDefaults))
+                    acceptListReadReceipt(.chat(chat), version: receiptVersion)
                     conversationReadStates[.init(chatID: chat.id)] = .init(
                         lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
                         unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions)
@@ -420,6 +507,7 @@ final class ChatStore: ObservableObject {
                     state.threads = threads
                 }
                 for thread in threads {
+                    acceptListReadReceipt(.thread(thread), version: receiptVersion)
                     conversationReadStates[thread.conversationKey] = .init(
                         lastReadMessageId: thread.lastReadMessageId,
                         unreadCount: thread.unreadCount,
@@ -430,6 +518,7 @@ final class ChatStore: ObservableObject {
                         key: thread.conversationKey)
                 }
             }
+            scheduleNotificationExpiry()
             updateTimelineReadStates()
             fallbackConversationStates()
             state[keyPath: list.phase] = .loaded
@@ -581,8 +670,7 @@ final class ChatStore: ObservableObject {
                 switch item {
                 case .chat(let original):
                     let latest = chat(id: original.id) ?? original
-                    applyArchiveState(
-                        to: latest, archived: archived, mutedUntil: archived ? .distantFuture : nil)
+                    applyArchiveState(to: latest, archived: archived)
                 case .thread(let original):
                     let latest =
                         thread(
@@ -591,24 +679,9 @@ final class ChatStore: ObservableObject {
                         ?? original
                     install(latest.withArchived(archived))
                 }
-            case .mute, .unmute:
-                // Threads have no independent mute API. Never mutate their parent.
-                guard case .chat(let original) = item else { return }
-                let mutedUntil: Date?
-                if action == .mute {
-                    mutedUntil = try await apiClient.muteChat(
-                        chatID: conversation.chatID, durationSeconds: nil
-                    ).mutedUntil
-                } else {
-                    try await apiClient.unmuteChat(chatID: conversation.chatID)
-                    mutedUntil = nil
-                }
-                guard generation == requestGeneration else { return }
-                let latest = chat(id: conversation.chatID) ?? original
-                // DELETE /mute also unarchives the chat.
-                applyArchiveState(
-                    to: latest, archived: action == .unmute ? false : latest.archived,
-                    mutedUntil: mutedUntil)
+            case .notificationSettings:
+                // The list opens the shared notification chooser; no implicit mutation.
+                return
             case .markRead:
                 guard item.unreadCount > 0, let messageID = item.readThroughMessageID else {
                     return
@@ -744,6 +817,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func install(_ chat: ChatListItem) {
+        let previousExpiry = self.chat(id: chat.id)?.mutedUntil
         conversationReadStates[.init(chatID: chat.id)] = .init(
             lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
             unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions)
@@ -757,6 +831,7 @@ final class ChatStore: ObservableObject {
         } else {
             state[keyPath: target].insert(chat, at: 0)
         }
+        if previousExpiry != chat.mutedUntil { scheduleNotificationExpiry() }
     }
 
     private func install(_ thread: ThreadListItem) {
@@ -781,16 +856,11 @@ final class ChatStore: ObservableObject {
             .init(subscribed: true, archived: thread.archived), key: thread.conversationKey)
     }
 
-    private func applyArchiveState(to chat: ChatListItem, archived: Bool, mutedUntil: Date?) {
+    private func applyArchiveState(to chat: ChatListItem, archived: Bool) {
         install(
-            ChatListItem(
-                id: chat.id, name: chat.name, avatar: chat.avatar,
-                lastMessageAt: chat.lastMessageAt,
-                unreadCount: chat.unreadCount,
-                unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions,
-                lastReadMessageId: chat.lastReadMessageId,
-                lastMessage: chat.lastMessage, mutedUntil: mutedUntil, archived: archived,
-                kind: chat.kind, peer: chat.peer))
+            chat.withNotificationState(
+                mutedUntil: chat.mutedUntil, muteOverride: chat.muteOverride,
+                isMuted: chat.isMuted, archived: archived))
     }
 
     /// Threads may belong to an archived parent absent from the active chat list.
@@ -860,8 +930,11 @@ final class ChatStore: ObservableObject {
                 unreadMentions: cached?.unreadMentions ?? 0,
                 unreadReactions: cached?.unreadReactions ?? 0,
                 lastReadMessageId: cached?.lastReadMessageId,
+                peerLastReadMessageId: cached?.peerLastReadMessageId,
                 lastMessage: cached?.lastMessage,
-                mutedUntil: cached?.mutedUntil,
+                mutedUntil: cached != nil ? cached?.mutedUntil : info.mutedUntil,
+                muteOverride: cached != nil ? cached?.muteOverride : info.muteOverride,
+                isMuted: cached != nil ? cached?.isMuted : info.isMuted,
                 archived: cached?.archived ?? false,
                 kind: info.kind, peer: info.peer)
         } catch {
@@ -894,6 +967,7 @@ final class ChatStore: ObservableObject {
                 guard localStateWrites[key] == nil else { return }
                 dirtyRows.remove(key)
                 let revision = rowRevisions[key, default: 0]
+                let receiptVersion = listReadReceipts.snapshot()
                 do {
                     if let threadID = key.threadID, let rootID = MessageID(threadID) {
                         let preferred =
@@ -912,6 +986,7 @@ final class ChatStore: ObservableObject {
                         if rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil {
                             if let found {
                                 install(found)
+                                acceptListReadReceipt(.thread(found), version: receiptVersion)
                             } else {
                                 state.threads.removeAll { $0.conversationKey == key }
                                 state.archivedThreads.removeAll { $0.conversationKey == key }
@@ -934,6 +1009,7 @@ final class ChatStore: ObservableObject {
                         if rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil {
                             if let found {
                                 install(found)
+                                acceptListReadReceipt(.chat(found), version: receiptVersion)
                             } else {
                                 chatAccessInvalidations.send(key.chatID)
                                 state.chats.removeAll { $0.id == key.chatID }
@@ -1092,12 +1168,22 @@ final class ChatStore: ObservableObject {
             }
         case .chatArchiveStateChanged(let payload):
             if let chat = chat(id: payload.chatId) {
-                applyArchiveState(
-                    to: chat, archived: payload.archived, mutedUntil: payload.mutedUntil)
+                applyArchiveState(to: chat, archived: payload.archived)
             }
             listStateRevision += 1
             rowRevisions[.init(chatID: payload.chatId), default: 0] += 1
             if chat(id: payload.chatId) == nil { reconcileRow(.init(chatID: payload.chatId)) }
+        case .notificationSettingsChanged(let payload):
+            defaultsRevision += 1
+            state.notificationDefaults = payload
+            listStateRevision += 1
+            notificationPreferenceChanges.send()
+        case .chatNotificationSettingChanged(let payload):
+            notificationRevision += 1
+            notificationVersions[payload.chatId] = notificationRevision
+            acceptNotificationSetting(payload)
+        case .notificationExceptionsCleared(let payload):
+            acceptClearedNotificationExceptions(payload)
         case .threadMembershipChanged(let payload):
             let key = ConversationKey(chatID: payload.chatId, threadID: payload.threadRootId)
             if let status = payload.status {
@@ -1120,6 +1206,13 @@ final class ChatStore: ObservableObject {
                 mentions: payload.notificationType != .reaction,
                 reactions: payload.notificationType == .reaction)
         case .readReceiptChanged(let payload):
+            if payload.privacyChanged == true || payload.readerUid == nil
+                || payload.readerUid != currentUserProfile?.uid
+            {
+                refreshListReadReceipts(
+                    chatID: payload.chatId, threadID: payload.threadRootId?.description,
+                    clear: payload.privacyChanged == true || payload.readerUid == nil)
+            }
             for model in visibleTimelines() where model.chatID == payload.chatId {
                 model.readReceiptChanged(payload)
             }
@@ -1225,6 +1318,10 @@ final class ChatStore: ObservableObject {
             membershipStates.removeAll()
             membershipRevision += 1
         }
+        if status == .connected { refreshListReadReceipts(clear: true) }
+        if status == .connected {
+            Task { try? await loadNotificationDefaults() }
+        }
         for model in visibleTimelines() { model.setRealtimeStatus(status) }
     }
 
@@ -1270,9 +1367,14 @@ final class ChatStore: ObservableObject {
     }
 
     func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
-        try await performGroupRequest(generation: generation) {
+        let receiptVersion = listReadReceipts.snapshot()
+        let response = try await performGroupRequest(generation: generation) {
             try await apiClient.readReceipt(chatID: chatID, threadID: threadID)
         }
+        listReadReceipts.acceptIfKnown(
+            response.lastReadMessageId,
+            for: .init(chatID: chatID, threadID: threadID?.description), version: receiptVersion)
+        return response
     }
 
     func readReceiptSettings() async throws -> ReadReceiptSettingsResponse {
@@ -1386,6 +1488,9 @@ final class ChatStore: ObservableObject {
 
     /// A committed sharing-policy change revokes cached receipts before refetching.
     func invalidateReadReceipts(peerUID: Int32? = nil) {
+        // Clear every cached scope conservatively: a thread-only list may not
+        // contain the peer profile needed to safely narrow a policy change.
+        refreshListReadReceipts(clear: true)
         for model in visibleTimelines() {
             // A notification can open a conversation not present in the cached lists.
             if let peerUID, let modelPeerUID = chat(id: model.chatID)?.peer?.uid,
@@ -1394,6 +1499,35 @@ final class ChatStore: ObservableObject {
                 continue
             }
             model.refreshReadReceipt(clear: true)
+        }
+    }
+
+    private func acceptListReadReceipt(_ item: ConversationListItem, version: Int) {
+        let value: MessageID?
+        switch item {
+        case .chat(let chat):
+            guard chat.kind == .dm else { return }
+            value = chat.peerLastReadMessageId
+        case .thread(let thread):
+            guard thread.chatKind == .dm else { return }
+            value = thread.peerLastReadMessageId
+        }
+        if !listReadReceipts.accept(value, for: item.id, version: version) {
+            // A new row can arrive from a list request begun before revocation.
+            // Keep its preview, but authorize its receipt with a fresh scoped read.
+            refreshListReadReceipts(chatID: item.id.chatID, threadID: item.id.threadID)
+        }
+    }
+
+    private func refreshListReadReceipts(
+        chatID: String? = nil, threadID: String? = nil, clear: Bool = false
+    ) {
+        listReadReceipts.refresh(chatID: chatID, threadID: threadID, clear: clear) {
+            [weak self] key in
+            guard let self else { throw CancellationError() }
+            return try await readReceipt(
+                chatID: key.chatID, threadID: key.threadID.flatMap(MessageID.init)
+            ).lastReadMessageId
         }
     }
 
@@ -1819,43 +1953,190 @@ final class ChatStore: ObservableObject {
         removeGroupFromLists(chatID: chatID)
     }
 
-    func muteGroup(chatID: String, durationSeconds: Int?) async throws -> Date {
+    @discardableResult
+    func setNotificationSetting(chatID: String, request: UpdateNotificationSettingRequest)
+        async throws
+        -> ChatNotificationSettingResponse
+    {
         let requestGeneration = generation
-        let key = ConversationKey(chatID: chatID)
-        beginLocalStateWrite(key)
-        defer { finishLocalStateWrite(key, generation: requestGeneration) }
-        let mutedUntil: Date = try await serializeGroupMutation(chatID: chatID) {
+        return try await serializeGroupMutation(chatID: chatID) {
             guard self.generation == requestGeneration else { throw CancellationError() }
-            return try await self.performGroupRequest(generation: requestGeneration) {
-                try await self.apiClient.muteChat(chatID: chatID, durationSeconds: durationSeconds)
-                    .mutedUntil
+            let key = ConversationKey(chatID: chatID)
+            self.beginLocalStateWrite(key)
+            defer { self.finishLocalStateWrite(key, generation: requestGeneration) }
+            self.notificationRevision += 1
+            let revision = self.notificationRevision
+            self.notificationVersions[chatID] = revision
+            let previous = self.chat(id: chatID)
+            if let previous {
+                let override: Bool? =
+                    switch request.mode {
+                    case .inherit: nil
+                    case .alwaysMuted: true
+                    case .alwaysUnmuted: false
+                    case .temporarilyMuted: previous.muteOverride
+                    }
+                let until =
+                    request.mode == .temporarilyMuted
+                    ? Date().addingTimeInterval(TimeInterval(request.durationSeconds ?? 0)) : nil
+                let muted =
+                    (until.map { $0 > Date() } ?? false)
+                    || (override ?? self.state.notificationDefaults?.mutedByDefault(
+                        kind: previous.kind) ?? false)
+                self.acceptNotificationSetting(
+                    .init(
+                        chatId: chatID, kind: previous.kind, archived: previous.archived,
+                        muteOverride: override, mutedUntil: until, isMuted: muted))
+            }
+            do {
+                let response = try await self.performGroupRequest(generation: requestGeneration) {
+                    try await self.apiClient.updateChatNotificationSetting(
+                        chatID: chatID, request: request)
+                }
+                guard response.chatId == chatID else { throw APIError.unexpectedResponse }
+                if self.notificationVersions[chatID] == revision {
+                    self.acceptNotificationSetting(response)
+                }
+                return self.notificationSnapshots[chatID] ?? response
+            } catch {
+                if self.generation == requestGeneration,
+                    self.notificationVersions[chatID] == revision,
+                    let previous
+                {
+                    self.acceptNotificationSetting(
+                        .init(
+                            chatId: chatID, kind: previous.kind, archived: previous.archived,
+                            muteOverride: previous.muteOverride, mutedUntil: previous.mutedUntil,
+                            isMuted: previous.notificationMuted(
+                                defaults: self.state.notificationDefaults)))
+                }
+                throw error
             }
         }
-        guard generation == requestGeneration else { throw CancellationError() }
-        if let chat = chat(id: chatID) {
-            applyArchiveState(to: chat, archived: chat.archived, mutedUntil: mutedUntil)
-        }
-        listStateRevision += 1
-        return mutedUntil
     }
 
-    func unmuteGroup(chatID: String) async throws {
+    func loadNotificationDefaults() async throws {
+        defaultsLoadRequested = true
+        guard !notificationDefaultsSaving else { return }
+        if let defaultsLoadTask {
+            try await defaultsLoadTask.value
+            return
+        }
         let requestGeneration = generation
-        let key = ConversationKey(chatID: chatID)
-        beginLocalStateWrite(key)
-        defer { finishLocalStateWrite(key, generation: requestGeneration) }
-        try await serializeGroupMutation(chatID: chatID) {
-            guard self.generation == requestGeneration else { throw CancellationError() }
-            try await self.performGroupRequest(generation: requestGeneration) {
-                try await self.apiClient.unmuteChat(chatID: chatID)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.generation == requestGeneration { self.defaultsLoadTask = nil }
+            }
+            while self.defaultsLoadRequested, !self.notificationDefaultsSaving {
+                self.defaultsLoadRequested = false
+                let revision = self.defaultsRevision
+                let response = try await self.performGroupRequest(generation: requestGeneration) {
+                    try await self.apiClient.notificationSettings()
+                }
+                if self.notificationDefaultsSaving {
+                    self.defaultsLoadRequested = true
+                    return
+                }
+                guard revision == self.defaultsRevision else { continue }
+                self.defaultsRevision += 1
+                self.state.notificationDefaults = response
+                self.notificationPreferenceChanges.send()
             }
         }
-        guard generation == requestGeneration else { throw CancellationError() }
-        if let chat = chat(id: chatID) {
-            // DELETE /mute also unarchives the chat.
-            applyArchiveState(to: chat, archived: false, mutedUntil: nil)
+        defaultsLoadTask = task
+        try await task.value
+    }
+
+    func setNotificationDefault(kind: ChatKind, muted: Bool) async throws {
+        guard !notificationDefaultsSaving else { return }
+        notificationDefaultsSaving = true
+        let requestGeneration = generation
+        defaultsRevision += 1
+        let revision = defaultsRevision
+        let previous = state.notificationDefaults
+        if let previous {
+            state.notificationDefaults = .init(
+                muteGroupChatsByDefault: kind == .group ? muted : previous.muteGroupChatsByDefault,
+                muteDirectChatsByDefault: kind == .dm ? muted : previous.muteDirectChatsByDefault)
+        }
+        defer {
+            if generation == requestGeneration {
+                notificationDefaultsSaving = false
+                if defaultsLoadRequested {
+                    Task { try? await loadNotificationDefaults() }
+                }
+            }
+        }
+        do {
+            let response = try await performGroupRequest(generation: requestGeneration) {
+                try await apiClient.updateNotificationSettings(.init(kind: kind, muted: muted))
+            }
+            guard defaultsRevision == revision else { return }
+            state.notificationDefaults = response
+            listStateRevision += 1
+            notificationPreferenceChanges.send()
+        } catch {
+            if generation == requestGeneration, defaultsRevision == revision {
+                state.notificationDefaults = previous
+            }
+            throw error
+        }
+    }
+
+    func notificationExceptions(kind: ChatKind, after: String?) async throws
+        -> NotificationExceptionsResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.notificationExceptions(kind: kind, after: after)
+        }
+    }
+
+    func clearNotificationExceptions(kind: ChatKind) async throws {
+        let revision = notificationRevision
+        let response = try await performGroupRequest(generation: generation) {
+            try await apiClient.clearNotificationExceptions(kind: kind)
+        }
+        acceptClearedNotificationExceptions(response, before: revision)
+    }
+
+    private func acceptClearedNotificationExceptions(
+        _ payload: NotificationExceptionsCleared, before revision: Int? = nil
+    ) {
+        for chatID in payload.chatIds {
+            if let revision, notificationVersions[chatID, default: 0] > revision { continue }
+            notificationRevision += 1
+            notificationVersions[chatID] = notificationRevision
+            if let chat = chat(id: chatID) {
+                acceptNotificationSetting(
+                    .init(
+                        chatId: chatID, kind: payload.kind, archived: chat.archived,
+                        isMuted: state.notificationDefaults?.mutedByDefault(kind: payload.kind)
+                            ?? false))
+            } else if let previous = notificationSnapshots[chatID] {
+                acceptNotificationSetting(
+                    .init(
+                        chatId: chatID, kind: payload.kind, archived: previous.archived,
+                        isMuted: state.notificationDefaults?.mutedByDefault(kind: payload.kind)
+                            ?? false))
+            }
+        }
+        notificationPreferenceChanges.send()
+    }
+
+    private func acceptNotificationSetting(_ response: ChatNotificationSettingResponse) {
+        notificationSnapshots[response.chatId] = response
+        if let current = chat(id: response.chatId) {
+            // Notification snapshots must not roll back an independent archive mutation.
+            install(
+                current.withNotificationState(
+                    mutedUntil: response.mutedUntil, muteOverride: response.muteOverride,
+                    isMuted: response.isMuted, archived: current.archived))
         }
         listStateRevision += 1
+        rowRevisions[.init(chatID: response.chatId), default: 0] += 1
+        scheduleNotificationExpiry()
+        notificationPreferenceChanges.send()
     }
 
     func searchMembers(chatID: String, query: ListMembersQuery) async throws -> [MemberResponse] {
@@ -1998,6 +2279,7 @@ final class ChatStore: ObservableObject {
                     unreadMentions: response.unreadMentions,
                     unreadReactions: response.unreadReactions,
                     lastReadMessageId: response.lastReadMessageId,
+                    peerLastReadMessageId: thread.peerLastReadMessageId,
                     chatKind: thread.chatKind,
                     subscribedAt: thread.subscribedAt, archived: thread.archived))
         } else if threadID == nil, let chat = chat(id: chatID) {
@@ -2009,7 +2291,9 @@ final class ChatStore: ObservableObject {
                     unreadMentions: response.unreadMentions,
                     unreadReactions: response.unreadReactions,
                     lastReadMessageId: response.lastReadMessageId,
+                    peerLastReadMessageId: chat.peerLastReadMessageId,
                     lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil,
+                    muteOverride: chat.muteOverride, isMuted: chat.isMuted,
                     archived: chat.archived,
                     kind: chat.kind, peer: chat.peer))
         }
@@ -2048,6 +2332,17 @@ final class ChatStore: ObservableObject {
 
     func reset() {
         generation += 1
+        notificationRevision += 1
+        notificationVersions.removeAll()
+        notificationSnapshots.removeAll()
+        defaultsRevision += 1
+        notificationDefaultsSaving = false
+        defaultsLoadTask?.cancel()
+        defaultsLoadTask = nil
+        defaultsLoadRequested = false
+        notificationExpiryTask?.cancel()
+        notificationExpiryTask = nil
+        notificationExpiry = nil
         presenceConsumers.removeAll()
         presenceScope = PresenceScope()
         presenceScopeChanges.send(())
@@ -2066,6 +2361,8 @@ final class ChatStore: ObservableObject {
         listActionError = nil
         drafts.reset()
         outgoingRevisions.removeAll()
+        pendingListPreviews.removeAll()
+        listReadReceipts.reset()
         cancelRealtimeRecovery()
         reactions.reset()
         pins.reset()
@@ -2082,7 +2379,9 @@ extension ChatListItem {
             id: id, name: name, avatar: avatar, lastMessageAt: preview.createdAt,
             unreadCount: unreadCount, unreadMentions: unreadMentions,
             unreadReactions: unreadReactions, lastReadMessageId: lastReadMessageId,
-            lastMessage: preview, mutedUntil: mutedUntil, archived: archived,
+            peerLastReadMessageId: peerLastReadMessageId,
+            lastMessage: preview, mutedUntil: mutedUntil, muteOverride: muteOverride,
+            isMuted: isMuted, archived: archived,
             kind: kind, peer: peer)
     }
 }
@@ -2098,7 +2397,8 @@ extension ThreadListItem {
             lastReply: lastReply ?? self.lastReply, replyCount: replyCount ?? self.replyCount,
             lastReplyAt: lastReplyAt ?? self.lastReplyAt, unreadCount: unreadCount,
             unreadMentions: unreadMentions, unreadReactions: unreadReactions,
-            lastReadMessageId: lastReadMessageId, chatKind: chatKind,
+            lastReadMessageId: lastReadMessageId, peerLastReadMessageId: peerLastReadMessageId,
+            chatKind: chatKind,
             subscribedAt: subscribedAt, archived: archived)
     }
 }

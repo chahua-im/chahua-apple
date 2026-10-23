@@ -436,6 +436,35 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(ConversationTabBadges(summaries: summaries)[.messages], 0)
     }
 
+    func testNotificationOverrideDefaultsAndTemporaryExpiryMatrix() {
+        let expiry = Date(timeIntervalSince1970: 100)
+        for kind in [ChatKind.group, .dm] {
+            for defaultMuted in [false, true] {
+                let defaults = NotificationSettingsResponse(
+                    muteGroupChatsByDefault: defaultMuted, muteDirectChatsByDefault: defaultMuted)
+                for override in [nil, false, true] as [Bool?] {
+                    let chat = ChatListItem(
+                        id: "chat", unreadCount: 7, mutedUntil: expiry,
+                        muteOverride: override, isMuted: true, archived: false, kind: kind)
+                    let permanent = override ?? defaultMuted
+                    XCTAssertEqual(chat.notificationPermanentlyMuted(defaults: defaults), permanent)
+                    XCTAssertTrue(
+                        chat.notificationMuted(
+                            defaults: defaults, now: expiry.addingTimeInterval(-1)))
+                    XCTAssertEqual(
+                        chat.notificationMuted(defaults: defaults, now: expiry), permanent)
+                    XCTAssertEqual(
+                        chat.notificationMuted(
+                            defaults: defaults, now: expiry.addingTimeInterval(1)), permanent)
+                    XCTAssertEqual(chat.unreadCount, 7)
+                    XCTAssertEqual(
+                        ConversationListItem.chat(chat).hasMutedBadges(
+                            defaults: defaults, now: expiry), permanent)
+                }
+            }
+        }
+    }
+
     func testRowAttentionUsesWireKindAndMutedBadgesRespectTimeBoundary() throws {
         let now = Date(timeIntervalSince1970: 100)
         for kind in [ChatKind.group, .dm] {

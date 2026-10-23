@@ -91,7 +91,7 @@ struct ConversationTabBadges: Equatable {
 }
 
 enum ConversationListAction: String, Equatable {
-    case archive, unarchive, mute, unmute, markRead, markUnread
+    case archive, unarchive, notificationSettings, markRead, markUnread
 }
 
 enum ConversationListItem: Hashable, Identifiable {
@@ -144,9 +144,9 @@ enum ConversationListItem: Hashable, Identifiable {
         }
     }
 
-    func hasMutedBadges(now: Date = .now) -> Bool {
+    func hasMutedBadges(defaults: NotificationSettingsResponse? = nil, now: Date = .now) -> Bool {
         switch self {
-        case .chat(let chat): chat.archived || chat.mutedUntil.map { $0 > now } == true
+        case .chat(let chat): chat.archived || chat.notificationMuted(defaults: defaults, now: now)
         case .thread(let thread): thread.archived
         }
     }
@@ -163,6 +163,46 @@ enum ConversationListItem: Hashable, Identifiable {
         case .chat(let chat): chat.lastMessage
         case .thread(let thread): thread.lastReply ?? thread.threadRootMessage
         }
+    }
+
+    var isDirectMessage: Bool {
+        switch self {
+        case .chat(let chat): chat.kind == .dm
+        case .thread(let thread): thread.chatKind == .dm
+        }
+    }
+
+    func pendingPreview(_ pending: LocalOutgoingMessage?) -> LocalOutgoingMessage? {
+        guard let pending, pending.conversationKey == id,
+            pending.enqueuedAt > activityDate,
+            pending.clientGeneratedID != previewMessage?.clientGeneratedId
+        else { return nil }
+        return pending
+    }
+
+    func deliveryStatus(
+        currentUserID: Int32, hasDraft: Bool, pending: LocalOutgoingMessage?,
+        readThrough: MessageID?
+    ) -> MessageDeliveryStatusView.Status? {
+        guard !hasDraft else { return nil }
+        if let pending = pendingPreview(pending) {
+            guard pending.senderID == currentUserID, pending.messageType != .system else {
+                return nil
+            }
+            if pending.state == .failed || pending.attachments.contains(where: { $0.error != nil })
+            {
+                return nil
+            }
+            // Match the PWA list: preparation, upload, queueing and dispatch all
+            // mean sending here; failures have no list delivery indicator.
+            return .sending
+        }
+        // A topic without replies displays its root as context, not as a sent reply.
+        if case .thread(let thread) = self, thread.lastReply == nil { return nil }
+        guard let preview = previewMessage, preview.sender.uid == currentUserID,
+            preview.messageType != .system, !preview.isDeleted
+        else { return nil }
+        return isDirectMessage && readThrough.map { preview.id <= $0 } == true ? .read : .sent
     }
 
     func previewSenderName(parentKind: ChatKind? = nil) -> String? {
@@ -182,7 +222,8 @@ enum ConversationListItem: Hashable, Identifiable {
     static func entries(
         chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope,
         archived: Bool = false, showThreadsInMessages: Bool = true,
-        draftUpdatedAt: [ConversationKey: Date] = [:]
+        draftUpdatedAt: [ConversationKey: Date] = [:],
+        pendingPreviews: [ConversationKey: LocalOutgoingMessage] = [:]
     ) -> [Self] {
         // Build the final projection buffer once and sort these large chat/thread
         // values in place, without intermediate filtered or decorated arrays.
@@ -208,8 +249,12 @@ enum ConversationListItem: Hashable, Identifiable {
         result.sort {
             let lhsID = $0.id
             let rhsID = $1.id
-            let lhs = max($0.activityDate, draftUpdatedAt[lhsID] ?? .distantPast)
-            let rhs = max($1.activityDate, draftUpdatedAt[rhsID] ?? .distantPast)
+            let lhs = max(
+                $0.activityDate, draftUpdatedAt[lhsID] ?? .distantPast,
+                $0.pendingPreview(pendingPreviews[lhsID])?.enqueuedAt ?? .distantPast)
+            let rhs = max(
+                $1.activityDate, draftUpdatedAt[rhsID] ?? .distantPast,
+                $1.pendingPreview(pendingPreviews[rhsID])?.enqueuedAt ?? .distantPast)
             if lhs != rhs { return lhs > rhs }
             if lhsID.chatID != rhsID.chatID { return lhsID.chatID < rhsID.chatID }
             return (lhsID.threadID ?? "") < (rhsID.threadID ?? "")
@@ -234,6 +279,7 @@ final class ConversationListSnapshotCache {
         let archived: Bool
         let showThreadsInMessages: Bool
         let draftUpdatedAt: [ConversationKey: Date]
+        let pendingPreviews: [ConversationKey: LocalOutgoingMessage]
     }
 
     private var input: Input?
@@ -242,7 +288,8 @@ final class ConversationListSnapshotCache {
     func snapshot(
         chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope,
         archived: Bool = false, showThreadsInMessages: Bool = true,
-        draftUpdatedAt: [ConversationKey: Date] = [:]
+        draftUpdatedAt: [ConversationKey: Date] = [:],
+        pendingPreviews: [ConversationKey: LocalOutgoingMessage] = [:]
     ) -> Snapshot {
         let trace = ScrollPerformanceTrace.begin("List.Snapshot")
         defer { ScrollPerformanceTrace.end("List.Snapshot", trace) }
@@ -251,7 +298,7 @@ final class ConversationListSnapshotCache {
             threads: scope.includesThreads(showThreadsInMessages: showThreadsInMessages)
                 ? threads : [],
             scope: scope, archived: archived, showThreadsInMessages: showThreadsInMessages,
-            draftUpdatedAt: draftUpdatedAt)
+            draftUpdatedAt: draftUpdatedAt, pendingPreviews: pendingPreviews)
         // Compare complete payloads, not IDs: unread counts, edits, avatars and
         // archive/mute changes must invalidate even when order stays unchanged.
         guard input != next else {
@@ -264,7 +311,8 @@ final class ConversationListSnapshotCache {
             "List.ProjectionInput", count: next.chats.count + next.threads.count)
         let items = ConversationListItem.entries(
             chats: next.chats, threads: next.threads, scope: scope, archived: archived,
-            showThreadsInMessages: showThreadsInMessages, draftUpdatedAt: draftUpdatedAt)
+            showThreadsInMessages: showThreadsInMessages, draftUpdatedAt: draftUpdatedAt,
+            pendingPreviews: pendingPreviews)
         cached = Snapshot(
             items: items,
             conversationRefs: items.map {

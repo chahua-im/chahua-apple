@@ -1350,10 +1350,6 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func unarchiveThread(chatID: String, threadID: String) async throws {
         throw APIError.unavailable
     }
-    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
-        throw APIError.unavailable
-    }
-    func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
         throw APIError.unavailable
     }

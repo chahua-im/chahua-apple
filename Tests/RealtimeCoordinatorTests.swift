@@ -1252,10 +1252,6 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func unarchiveThread(chatID: String, threadID: String) async throws {
         throw APIError.unavailable
     }
-    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
-        throw APIError.unavailable
-    }
-    func unmuteChat(chatID: String) async throws { throw APIError.unavailable }
     func markThreadRead(chatID: String, threadID: String, messageID: MessageID) async throws
         -> ReadStateResponse
     { throw APIError.unavailable }

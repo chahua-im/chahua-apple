@@ -277,6 +277,8 @@ struct NotificationSettingsView: View {
                     .id(ObjectIdentifier(mediaContext))
             }
         case .notifications:
+            AccountNotificationPreferencesView(store: chatStore)
+            Divider()
             LabeledContent("Authorization", value: authorizationDescription)
             LabeledContent(
                 "APNs environment", value: environmentDescription(notifications.apnsEnvironment))

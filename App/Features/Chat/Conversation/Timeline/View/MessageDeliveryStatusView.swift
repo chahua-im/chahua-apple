@@ -6,7 +6,7 @@ import SwiftUI
     import UIKit
 #endif
 
-/// Shared delivery indicator used by production timeline hosts and the tuning workshop.
+/// Shared delivery indicator for timeline hosts, conversation lists and the tuning workshop.
 struct MessageDeliveryStatusView: View {
     enum Status: String, CaseIterable, Identifiable {
         case queued = "Queued"

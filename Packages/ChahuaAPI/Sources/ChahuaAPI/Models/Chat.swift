@@ -29,10 +29,14 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
     public let unreadReactions: Int64
     /// Current member's last-read message ID.
     public let lastReadMessageId: MessageID?
+    /// Server-authorized peer receipt for this DM's main conversation only.
+    public let peerLastReadMessageId: MessageID?
     /// Summary of the latest message, not a complete cached message.
     public let lastMessage: MessagePreview?
     /// Current member's mute expiry.
     public let mutedUntil: Date?
+    public let muteOverride: Bool?
+    public let isMuted: Bool?
     /// Whether this chat is archived for the current member.
     public let archived: Bool
     /// Whether this item represents a group or direct-message chat.
@@ -49,8 +53,11 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         unreadMentions: Int64 = 0,
         unreadReactions: Int64 = 0,
         lastReadMessageId: MessageID? = nil,
+        peerLastReadMessageId: MessageID? = nil,
         lastMessage: MessagePreview? = nil,
         mutedUntil: Date? = nil,
+        muteOverride: Bool? = nil,
+        isMuted: Bool? = nil,
         archived: Bool,
         kind: ChatKind,
         peer: MemberSummary? = nil
@@ -63,8 +70,11 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         self.unreadMentions = unreadMentions
         self.unreadReactions = unreadReactions
         self.lastReadMessageId = lastReadMessageId
+        self.peerLastReadMessageId = peerLastReadMessageId
         self.lastMessage = lastMessage
         self.mutedUntil = mutedUntil
+        self.muteOverride = muteOverride
+        self.isMuted = isMuted
         self.archived = archived
         self.kind = kind
         self.peer = peer
@@ -81,8 +91,12 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         unreadReactions = try container.decodeIfPresent(Int64.self, forKey: .unreadReactions) ?? 0
         lastReadMessageId = try container.decodeIfPresent(
             MessageID.self, forKey: .lastReadMessageId)
+        peerLastReadMessageId = try container.decodeIfPresent(
+            MessageID.self, forKey: .peerLastReadMessageId)
         lastMessage = try container.decodeIfPresent(MessagePreview.self, forKey: .lastMessage)
         mutedUntil = try container.decodeIfPresent(Date.self, forKey: .mutedUntil)
+        muteOverride = try container.decodeIfPresent(Bool.self, forKey: .muteOverride)
+        isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted)
         archived = try container.decode(Bool.self, forKey: .archived)
         kind = try container.decode(ChatKind.self, forKey: .kind)
         peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)
@@ -144,13 +158,16 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
     public let description: String?
     public let avatar: String?
     public let mutedUntil: Date?
+    public let muteOverride: Bool?
+    public let isMuted: Bool?
     public let myRole: GroupRole?
     public let kind: ChatKind
     public let peer: MemberSummary?
 
     public init(
         id: String, name: String? = nil, description: String? = nil, avatar: String? = nil,
-        mutedUntil: Date? = nil, myRole: GroupRole? = nil, kind: ChatKind,
+        mutedUntil: Date? = nil, muteOverride: Bool? = nil, isMuted: Bool? = nil,
+        myRole: GroupRole? = nil, kind: ChatKind,
         peer: MemberSummary? = nil
     ) {
         self.id = id
@@ -158,6 +175,8 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
         self.description = description
         self.avatar = avatar
         self.mutedUntil = mutedUntil
+        self.muteOverride = muteOverride
+        self.isMuted = isMuted
         self.myRole = myRole
         self.kind = kind
         self.peer = peer
@@ -170,6 +189,8 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
         description = try container.decodeIfPresent(String.self, forKey: .description)
         avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
         mutedUntil = try container.decodeIfPresent(Date.self, forKey: .mutedUntil)
+        muteOverride = try container.decodeIfPresent(Bool.self, forKey: .muteOverride)
+        isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted)
         myRole = try container.decodeIfPresent(GroupRole.self, forKey: .myRole)
         kind = try container.decodeIfPresent(ChatKind.self, forKey: .kind) ?? .group
         peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)

@@ -21,6 +21,9 @@ struct FixtureGalleryView: View {
                             NavigationLink("Message status workshop") {
                                 MessageDeliveryStatusPreview()
                             }
+                            NavigationLink("Conversation list delivery indicators") {
+                                ConversationListRowPreview()
+                            }
                             NavigationLink("Images, replies, threads and delivery states") {
                                 TimelineBubbleFixtureView()
                             }

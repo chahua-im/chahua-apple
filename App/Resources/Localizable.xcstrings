@@ -1,6 +1,126 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Use account default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use account default" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用账号默认设置" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "使用帳號預設設定" } }
+      }
+    },
+    "Always notify" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always notify" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终通知" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律通知" } }
+      }
+    },
+    "Always mute" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always mute" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终静音" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律靜音" } }
+      }
+    },
+    "Temporary mute" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Temporary mute" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "临时静音" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暫時靜音" } }
+      }
+    },
+    "After temporary mute, the saved preference applies." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "After temporary mute, the saved preference applies." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "临时静音结束后恢复已保存的通知设置。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暫時靜音結束後恢復已儲存的通知設定。" } }
+      }
+    },
+    "Notifications muted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Notifications muted" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "通知已静音" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "通知已靜音" } }
+      }
+    },
+    "Notifications enabled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Notifications enabled" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "通知已开启" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "通知已開啟" } }
+      }
+    },
+    "Selected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Selected" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已选中" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已選取" } }
+      }
+    },
+    "Direct messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Direct messages" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "私聊" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "私訊" } }
+      }
+    },
+    "Off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Off" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "关闭" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "關閉" } }
+      }
+    },
+    "On" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "On" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "开启" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "開啟" } }
+      }
+    },
+    "%lld exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld exceptions" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 个例外" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 個例外" } }
+      }
+    },
+    "Add exception" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add exception" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "添加例外" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "加入例外" } }
+      }
+    },
+    "Delete all exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Delete all exceptions" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除所有例外" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "刪除所有例外" } }
+      }
+    },
+    "Remove all notification exceptions?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove all notification exceptions?" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除所有例外？" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "刪除所有例外？" } }
+      }
+    },
     "" : {
       "localizations" : {
         "zh-Hans" : {

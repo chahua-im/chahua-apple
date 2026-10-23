@@ -195,10 +195,6 @@
         func unarchiveThread(chatID: String, threadID: String) async throws {
             throw Failure.unexpectedOperation
         }
-        func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
-            throw Failure.unexpectedOperation
-        }
-        func unmuteChat(chatID: String) async throws { throw Failure.unexpectedOperation }
         func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
             throw Failure.unexpectedOperation
         }

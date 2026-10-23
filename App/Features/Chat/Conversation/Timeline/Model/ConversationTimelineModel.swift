@@ -1252,6 +1252,8 @@ final class ConversationTimelineModel: ObservableObject {
             }
         case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
             .threadMembershipChanged, .readReceiptChanged, .notification,
+            .notificationSettingsChanged, .chatNotificationSettingChanged,
+            .notificationExceptionsCleared,
             .conversationUnread, .conversationUnreadError, .conversationStates,
             .conversationStatesError,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,

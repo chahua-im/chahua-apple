@@ -732,10 +732,9 @@ struct AuthenticatedShell: View {
     }
 
     private var headerChatIsMuted: Bool {
-        guard selectedConversationID?.threadID == nil,
-            let mutedUntil = searchableChat?.mutedUntil
-        else { return false }
-        return mutedUntil > Date()
+        guard selectedConversationID?.threadID == nil else { return false }
+        return searchableChat?.notificationMuted(defaults: chatStore.state.notificationDefaults)
+            == true
     }
 
     private var visibleConversation: ConversationKey? {

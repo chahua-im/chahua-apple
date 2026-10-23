@@ -62,18 +62,6 @@ public struct ListMembersQuery: Sendable, Equatable {
     }
 }
 
-public struct MuteResponse: Codable, Hashable, Sendable {
-    public let mutedUntil: Date
-
-    public init(mutedUntil: Date) {
-        self.mutedUntil = mutedUntil
-    }
-}
-
-private struct MuteBody: Encodable {
-    let durationSeconds: Int?
-}
-
 private struct UpdateGroupMemberRoleBody: Encodable {
     let role: GroupRole
 }
@@ -119,18 +107,6 @@ extension ChahuaClient {
 
     public func unarchiveChat(chatID: String) async throws {
         try await send(HTTPRequestSpec(method: .delete, path: ["chats", chatID, "archive"]))
-    }
-
-    public func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
-        try await send(
-            HTTPRequestSpec.json(
-                .put, ["group", chatID, "mute"], body: MuteBody(durationSeconds: durationSeconds)),
-            decoding: MuteResponse.self
-        )
-    }
-
-    public func unmuteChat(chatID: String) async throws {
-        try await send(HTTPRequestSpec(method: .delete, path: ["group", chatID, "mute"]))
     }
 
     /// Fetches one server-ordered chat page with authenticated `GET /chats`.

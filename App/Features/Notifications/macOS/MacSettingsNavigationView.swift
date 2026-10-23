@@ -53,7 +53,7 @@
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
             } detail: {
                 if let selection {
-                    if selection == .stickerPacks {
+                    if selection == .stickerPacks || selection == .notifications {
                         NavigationStack {
                             settings.page(selection, grouped: false)
                         }

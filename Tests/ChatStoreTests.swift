@@ -11,6 +11,163 @@ import XCTest
 
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    func testNotificationDefaultsDeferredDuringSaveAndReloadedAfterReconnect() async throws {
+        let api = FakeChatAPI()
+        await api.suspendNotificationPreferences()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        let saving = Task { try await store.setNotificationDefault(kind: .group, muted: false) }
+        await api.waitForNotificationPreferenceRequest(saving: true)
+        try await store.loadNotificationDefaults()
+        let initial = NotificationSettingsResponse(
+            muteGroupChatsByDefault: false, muteDirectChatsByDefault: false)
+        await api.resumeNotificationPreferenceRequest(saving: true, response: initial)
+        try await saving.value
+        await api.waitForNotificationPreferenceRequest(saving: false)
+
+        let joined = expectation(description: "Reconnect requests a fresh snapshot")
+        let reload = Task {
+            joined.fulfill()
+            try await store.loadNotificationDefaults()
+        }
+        await fulfillment(of: [joined], timeout: 1)
+        await api.resumeNotificationPreferenceRequest(saving: false, response: initial)
+        await api.waitForNotificationPreferenceRequest(saving: false)
+        let latest = NotificationSettingsResponse(
+            muteGroupChatsByDefault: false, muteDirectChatsByDefault: true)
+        await api.resumeNotificationPreferenceRequest(saving: false, response: latest)
+        try await reload.value
+        XCTAssertEqual(store.state.notificationDefaults, latest)
+    }
+
+    func testNotificationNavigationRetainsExplicitlyClearedCachedPreferenceFields() async throws {
+        let message = try TimelineTestFixtures.message(id: 2, chatID: "1", at: 2)
+        let chat = ChatListItem(id: "1", unreadCount: 0, archived: false, kind: .group)
+        let api = FakeChatAPI(chatResults: [.success(.init(chats: [chat]))])
+        await api.setConversationPageMetadata(
+            group: .init(
+                id: "1", mutedUntil: .distantFuture, muteOverride: true,
+                isMuted: true, kind: .group))
+        await api.setNotificationMessage(message)
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        await store.loadActiveChats()
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "1", "messageId": "2"]
+            ]))
+        let resolved = try await store.chatForNotification(route)
+        XCTAssertNil(resolved.mutedUntil)
+        XCTAssertNil(resolved.muteOverride)
+        XCTAssertNil(resolved.isMuted)
+    }
+
+    func testListReceiptsFenceOldSnapshotsAndClearAllDMTopicScopes() {
+        let receipts = ConversationListReadReceipts()
+        defer { receipts.reset() }
+        let main = ConversationKey(chatID: "chat")
+        let topic = ConversationKey(chatID: "chat", threadID: "10")
+        let other = ConversationKey(chatID: "other")
+        let version = receipts.snapshot()
+        receipts.accept(MessageID(20), for: main, version: version)
+        receipts.accept(MessageID(30), for: topic, version: version)
+        receipts.accept(MessageID(40), for: other, version: version)
+        let oldList = receipts.snapshot()
+
+        receipts.refresh(chatID: "chat", clear: true) { _ in throw CancellationError() }
+        XCTAssertNil(receipts.values[main])
+        XCTAssertNil(receipts.values[topic])
+        XCTAssertEqual(receipts.values[other], MessageID(40))
+        XCTAssertFalse(receipts.accept(MessageID(20), for: main, version: oldList))
+        XCTAssertFalse(receipts.accept(MessageID(30), for: topic, version: oldList))
+        XCTAssertFalse(
+            receipts.accept(
+                MessageID(50), for: .init(chatID: "chat", threadID: "11"), version: oldList))
+        XCTAssertNil(receipts.values[main])
+        let authorized = receipts.snapshot()
+        XCTAssertTrue(receipts.accept(MessageID(21), for: main, version: authorized))
+        XCTAssertEqual(receipts.values[main], MessageID(21))
+        XCTAssertNil(receipts.values[topic])
+        receipts.acceptIfKnown(MessageID(99), for: main, version: oldList)
+        XCTAssertEqual(receipts.values[main], MessageID(21))
+    }
+
+    func testListDeliveryUsesOnlyOwnConfirmedNonSystemPreviewAndAuthorizedDMScope() throws {
+        let own = try TimelineTestFixtures.message(id: 20, at: 1).replyPreview
+        func item(_ preview: MessagePreview, kind: ChatKind = .dm) -> ConversationListItem {
+            .chat(
+                ChatListItem(
+                    id: "chat", lastMessageAt: preview.createdAt, unreadCount: 0,
+                    lastMessage: preview, archived: false, kind: kind))
+        }
+        func status(_ item: ConversationListItem, draft: Bool = false, through: UInt64? = 20)
+            -> MessageDeliveryStatusView.Status?
+        {
+            item.deliveryStatus(
+                currentUserID: 1, hasDraft: draft, pending: nil,
+                readThrough: through.map(MessageID.init))
+        }
+        XCTAssertEqual(status(item(own)), .read)
+        XCTAssertEqual(status(item(own), through: 19), .sent)
+        XCTAssertEqual(status(item(own), through: nil), .sent)
+        XCTAssertEqual(status(item(own, kind: .group)), .sent)
+        XCTAssertNil(status(item(own), draft: true))
+        XCTAssertNil(status(item(own.redactedForDeletion())))
+        XCTAssertNil(
+            status(
+                item(try TimelineTestFixtures.message(id: 21, at: 1, type: .system).replyPreview)))
+        XCTAssertNil(
+            status(item(try TimelineTestFixtures.message(id: 21, senderID: 2, at: 1).replyPreview)))
+        let topic = ConversationListItem.thread(
+            ThreadListItem(
+                chatId: "chat", chatName: "DM topic", threadRootMessage: own,
+                participants: [own.sender], replyCount: 0, lastReplyAt: own.createdAt,
+                unreadCount: 0, chatKind: .dm, subscribedAt: own.createdAt, archived: false))
+        XCTAssertNil(status(topic))
+    }
+
+    func testListOutboxPreviewTracksQueueStateAndReordersWithoutAnOpenTimeline() async throws {
+        let h = try await openDraftHarness()
+        h.store.drafts.setDraftText("Newest outgoing", chatID: "chat")
+        let submitted = await h.store.drafts.submitDraft(chatID: "chat")
+        XCTAssertTrue(submitted)
+        let key = ConversationKey(chatID: "chat")
+        let pending = try XCTUnwrap(h.store.pendingListPreviews[key])
+        let old = try TimelineTestFixtures.message(id: 1, at: 1).replyPreview
+        let chat = ChatListItem(
+            id: "chat", lastMessageAt: old.createdAt, unreadCount: 0,
+            lastMessage: old, archived: false, kind: .dm)
+        let item = ConversationListItem.chat(chat)
+        XCTAssertEqual(
+            item.deliveryStatus(
+                currentUserID: 1, hasDraft: false, pending: pending, readThrough: MessageID(100)),
+            .sending)
+        let claim = try await h.localStore.claimNext(chatID: "chat")
+        let sending = try XCTUnwrap(claim.message)
+        XCTAssertEqual(
+            item.deliveryStatus(
+                currentUserID: 1, hasDraft: false, pending: sending, readThrough: MessageID(100)),
+            .sending)
+        let failed = try await h.localStore.fail(
+            chatID: "chat", clientGeneratedID: pending.clientGeneratedID)
+        XCTAssertNil(
+            item.deliveryStatus(
+                currentUserID: 1, hasDraft: false, pending: failed.outgoing.first,
+                readThrough: MessageID(100)))
+        let newer = ChatListItem(
+            id: "other", lastMessageAt: old.createdAt.addingTimeInterval(1), unreadCount: 0,
+            archived: false, kind: .dm)
+        let ordered = ConversationListItem.entries(
+            chats: [newer, chat],
+            threads: [], scope: .messages, pendingPreviews: h.store.pendingListPreviews)
+        XCTAssertEqual(ordered.first?.id, key)
+        XCTAssertNil(
+            item.deliveryStatus(
+                currentUserID: 1, hasDraft: true, pending: pending, readThrough: MessageID(100)))
+    }
+
     #if os(iOS)
         func testForwardedMessagesPushAndPopWithoutReloadingSourceConversation() async throws {
             let source = try TimelineTestFixtures.message(id: 1, at: 1)
@@ -435,7 +592,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(store.state.chats.isEmpty)
         XCTAssertEqual(store.state.archivedChats.first?.id, "chat")
         XCTAssertEqual(store.state.archivedChats.first?.archived, true)
-        XCTAssertNotNil(store.state.archivedChats.first?.mutedUntil)
+        XCTAssertEqual(store.state.archivedChats.first?.mutedUntil, parent.mutedUntil)
         await store.performListAction(.unarchive, conversation: .init(chatID: "chat"))
         XCTAssertTrue(store.state.chats.isEmpty)
         XCTAssertEqual(store.state.archivedChats.first?.id, "chat")
@@ -505,7 +662,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(store.state.archivedThreads.isEmpty)
     }
 
-    func testMuteGroupPreservesPreviewAndReadStateAndUnmuteUnarchives() async throws {
+    func testNotificationSettingPreservesPreviewReadStateAndArchive() async throws {
         let message = try TimelineTestFixtures.message(id: 2, at: 2)
         let chat = ChatListItem(
             id: "chat", name: "Group", lastMessageAt: Date(timeIntervalSince1970: 2),
@@ -514,15 +671,24 @@ final class ChatStoreTests: XCTestCase {
         let mutedUntil = Date(timeIntervalSince1970: 3_600)
         let api = FakeChatAPI(
             archivedChatResults: [.success(.init(chats: [chat]))],
-            muteResults: [.success(.init(mutedUntil: mutedUntil))],
-            unmuteResults: [.success(())])
+            notificationResults: [
+                .success(
+                    .init(
+                        chatId: "chat", kind: .group, archived: true,
+                        mutedUntil: mutedUntil, isMuted: true)),
+                .success(
+                    .init(
+                        chatId: "chat", kind: .group, archived: true,
+                        muteOverride: false, isMuted: false)),
+            ])
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
         defer { store.cancelRealtimeRecovery() }
         await store.loadArchivedChats()
 
-        let receivedMutedUntil = try await store.muteGroup(chatID: "chat", durationSeconds: 3_600)
-        XCTAssertEqual(receivedMutedUntil, mutedUntil)
+        let response = try await store.setNotificationSetting(
+            chatID: "chat", request: .init(mode: .temporarilyMuted, durationSeconds: 3_600))
+        XCTAssertEqual(response.mutedUntil, mutedUntil)
         let muted = try XCTUnwrap(store.state.archivedChats.first)
         XCTAssertEqual(muted.unreadCount, chat.unreadCount)
         XCTAssertEqual(muted.lastReadMessageId, chat.lastReadMessageId)
@@ -530,14 +696,15 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(muted.mutedUntil, mutedUntil)
         XCTAssertTrue(muted.archived)
 
-        try await store.unmuteGroup(chatID: "chat")
-        let unmuted = try XCTUnwrap(store.state.chats.first)
+        try await store.setNotificationSetting(chatID: "chat", request: .init(mode: .alwaysUnmuted))
+        let unmuted = try XCTUnwrap(store.state.archivedChats.first)
         XCTAssertEqual(unmuted.unreadCount, chat.unreadCount)
         XCTAssertEqual(unmuted.lastReadMessageId, chat.lastReadMessageId)
         XCTAssertEqual(unmuted.lastMessage, chat.lastMessage)
         XCTAssertNil(unmuted.mutedUntil)
-        XCTAssertFalse(unmuted.archived)
-        XCTAssertTrue(store.state.archivedChats.isEmpty)
+        XCTAssertEqual(unmuted.muteOverride, false)
+        XCTAssertTrue(unmuted.archived)
+        XCTAssertTrue(store.state.chats.isEmpty)
     }
 
     func testMarkUnreadRewindsOnlyItsArchivedChatAndPreservesStateOnFailure() async throws {
@@ -792,11 +959,17 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertFalse(store.state.threadListRefreshFailed)
     }
 
-    func testUnarchiveFencesArchivedSnapshotAndUnmuteAlsoRestoresChat() async throws {
+    func testUnarchiveFencesArchivedSnapshotAndNotificationSettingPreservesArchive() async throws {
         let archived = ChatListItem(
             id: "chat", unreadCount: 3, mutedUntil: .distantFuture, archived: true, kind: .group)
         let api = FakeChatAPI(
-            archiveResults: [.success(())], unmuteResults: [.success(())],
+            notificationResults: [
+                .success(
+                    .init(
+                        chatId: "chat", kind: .group, archived: true,
+                        muteOverride: false, isMuted: false))
+            ],
+            archiveResults: [.success(())],
             suspendArchivedChatRequests: true)
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
@@ -810,7 +983,7 @@ final class ChatStoreTests: XCTestCase {
         await store.performListAction(.unarchive, conversation: .init(chatID: "chat"))
         XCTAssertEqual(store.state.chats.first?.id, "chat")
         XCTAssertEqual(store.state.chats.first?.archived, false)
-        XCTAssertNil(store.state.chats.first?.mutedUntil)
+        XCTAssertEqual(store.state.chats.first?.mutedUntil, Date.distantFuture)
         XCTAssertTrue(store.state.archivedChats.isEmpty)
         await api.resumeChatRequest(with: .success(.init(chats: [archived])))
         await api.waitForChatRequest()
@@ -824,11 +997,11 @@ final class ChatStoreTests: XCTestCase {
                     chatId: "chat", archived: true, mutedUntil: .distantFuture)), currentUserID: 1)
         XCTAssertTrue(store.state.chats.isEmpty)
         XCTAssertEqual(store.state.archivedChats, [archived])
-        await store.performListAction(.unmute, conversation: .init(chatID: "chat"))
-        XCTAssertTrue(store.state.archivedChats.isEmpty)
-        XCTAssertEqual(store.state.chats.first?.unreadCount, 3)
-        XCTAssertEqual(store.state.chats.first?.archived, false)
-        XCTAssertNil(store.state.chats.first?.mutedUntil)
+        try await store.setNotificationSetting(chatID: "chat", request: .init(mode: .alwaysUnmuted))
+        XCTAssertTrue(store.state.chats.isEmpty)
+        XCTAssertEqual(store.state.archivedChats.first?.unreadCount, 3)
+        XCTAssertEqual(store.state.archivedChats.first?.archived, true)
+        XCTAssertNil(store.state.archivedChats.first?.mutedUntil)
     }
 
     func testResetIgnoresArchivedRequestErrorFromPreviousSession() async {
@@ -1637,6 +1810,43 @@ actor FakeChatAPI: ChahuaAPIClient {
     private var forwardedRequests: [ForwardedRequest] = []
     private var forwardedResponses: [ForwardedMessagesResponse] = []
     private var conversationPageGroup: GroupInfoResponse?
+    private var notificationMessage: MessageResponse?
+    func setNotificationMessage(_ message: MessageResponse) { notificationMessage = message }
+    private var suspendsNotificationPreferences = false
+    private var pendingNotificationPreferences:
+        [Bool: CheckedContinuation<NotificationSettingsResponse, Error>] = [:]
+    private var notificationPreferenceObservers: [Bool: CheckedContinuation<Void, Never>] = [:]
+
+    func suspendNotificationPreferences() { suspendsNotificationPreferences = true }
+
+    func waitForNotificationPreferenceRequest(saving: Bool) async {
+        if pendingNotificationPreferences[saving] != nil { return }
+        await withCheckedContinuation { notificationPreferenceObservers[saving] = $0 }
+    }
+
+    func resumeNotificationPreferenceRequest(saving: Bool, response: NotificationSettingsResponse) {
+        pendingNotificationPreferences.removeValue(forKey: saving)?.resume(returning: response)
+    }
+
+    private func notificationPreferenceRequest(saving: Bool) async throws
+        -> NotificationSettingsResponse
+    {
+        guard suspendsNotificationPreferences else { throw APIError.unavailable }
+        return try await withCheckedThrowingContinuation {
+            pendingNotificationPreferences[saving] = $0
+            notificationPreferenceObservers.removeValue(forKey: saving)?.resume()
+        }
+    }
+
+    func notificationSettings() async throws -> NotificationSettingsResponse {
+        try await notificationPreferenceRequest(saving: false)
+    }
+
+    func updateNotificationSettings(_ request: UpdateNotificationSettingsRequest) async throws
+        -> NotificationSettingsResponse
+    {
+        try await notificationPreferenceRequest(saving: true)
+    }
 
     func setConversationPageMetadata(group: GroupInfoResponse) {
         conversationPageGroup = group
@@ -1726,7 +1936,7 @@ actor FakeChatAPI: ChahuaAPIClient {
     private var archivedChatResults: [Result<ListChatsResponse, Error>]
     private var archivedThreadResults: [Result<ListThreadsResponse, Error>]
     private var removeMemberResults: [Result<Void, Error>]
-    private var muteResults: [Result<MuteResponse, Error>]
+    private var notificationResults: [Result<ChatNotificationSettingResponse, Error>]
     private var readResults: [Result<ReadStateResponse, Error>]
     private var stateResults: [Result<ReadStateResponse, Error>]
     private var stateRequests: [String] = []
@@ -1735,7 +1945,6 @@ actor FakeChatAPI: ChahuaAPIClient {
     private var stateRequestObserver: CheckedContinuation<Void, Never>?
     private var unreadResults: [Result<ReadStateResponse, Error>]
     private var archiveResults: [Result<Void, Error>]
-    private var unmuteResults: [Result<Void, Error>]
     private var deleteResults: [Result<Void, Error>]
     private var messageResults: [String: [Result<ListMessagesResponse, Error>]]
     private let suspendChatRequests: Bool
@@ -1759,12 +1968,11 @@ actor FakeChatAPI: ChahuaAPIClient {
         archivedChatResults: [Result<ListChatsResponse, Error>] = [],
         archivedThreadResults: [Result<ListThreadsResponse, Error>] = [],
         removeMemberResults: [Result<Void, Error>] = [],
-        muteResults: [Result<MuteResponse, Error>] = [],
+        notificationResults: [Result<ChatNotificationSettingResponse, Error>] = [],
         messageResults: [String: [Result<ListMessagesResponse, Error>]] = [:],
         readResults: [Result<ReadStateResponse, Error>] = [],
         unreadResults: [Result<ReadStateResponse, Error>] = [],
         archiveResults: [Result<Void, Error>] = [],
-        unmuteResults: [Result<Void, Error>] = [],
         deleteResults: [Result<Void, Error>] = [],
         unreadMentionsResults: [Result<UnreadMentionIDsResponse, Error>] = [],
         unreadReactionsResults: [Result<UnreadReactionIDsResponse, Error>] = [],
@@ -1779,12 +1987,11 @@ actor FakeChatAPI: ChahuaAPIClient {
         self.archivedChatResults = archivedChatResults
         self.archivedThreadResults = archivedThreadResults
         self.removeMemberResults = removeMemberResults
-        self.muteResults = muteResults
+        self.notificationResults = notificationResults
         self.messageResults = messageResults
         self.readResults = readResults
         self.unreadResults = unreadResults
         self.archiveResults = archiveResults
-        self.unmuteResults = unmuteResults
         self.deleteResults = deleteResults
         self.unreadMentionsResults = unreadMentionsResults
         self.unreadReactionsResults = unreadReactionsResults
@@ -1883,7 +2090,10 @@ actor FakeChatAPI: ChahuaAPIClient {
         throw APIError.unavailable
     }
     func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
-        throw APIError.unavailable
+        guard let notificationMessage, notificationMessage.chatId == chatID,
+            notificationMessage.id == messageID
+        else { throw APIError.unavailable }
+        return notificationMessage
     }
 
     func getReactionDetails(chatID: String, messageID: MessageID) async throws
@@ -1911,13 +2121,11 @@ actor FakeChatAPI: ChahuaAPIClient {
         guard !archiveResults.isEmpty else { throw APIError.unavailable }
         try archiveResults.removeFirst().get()
     }
-    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse {
-        guard !muteResults.isEmpty else { throw APIError.unavailable }
-        return try muteResults.removeFirst().get()
-    }
-    func unmuteChat(chatID: String) async throws {
-        guard !unmuteResults.isEmpty else { throw APIError.unavailable }
-        try unmuteResults.removeFirst().get()
+    func updateChatNotificationSetting(chatID: String, request: UpdateNotificationSettingRequest)
+        async throws -> ChatNotificationSettingResponse
+    {
+        guard !notificationResults.isEmpty else { throw APIError.unavailable }
+        return try notificationResults.removeFirst().get()
     }
     func markChatRead(chatID: String, messageID: MessageID) async throws -> ReadStateResponse {
         guard !readResults.isEmpty else { throw APIError.unavailable }

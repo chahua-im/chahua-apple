@@ -17,6 +17,8 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
     public let unreadMentions: Int64
     public let unreadReactions: Int64
     public let lastReadMessageId: MessageID?
+    /// Authorized receipt for replies in this topic, never its root message.
+    public let peerLastReadMessageId: MessageID?
     /// Missing in older snapshots; default to DM so group-only attention is never inferred.
     public let chatKind: ChatKind
     public let subscribedAt: Date
@@ -35,6 +37,7 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         unreadMentions: Int64 = 0,
         unreadReactions: Int64 = 0,
         lastReadMessageId: MessageID? = nil,
+        peerLastReadMessageId: MessageID? = nil,
         chatKind: ChatKind = .dm,
         subscribedAt: Date,
         archived: Bool
@@ -51,6 +54,7 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         self.unreadMentions = unreadMentions
         self.unreadReactions = unreadReactions
         self.lastReadMessageId = lastReadMessageId
+        self.peerLastReadMessageId = peerLastReadMessageId
         self.chatKind = chatKind
         self.subscribedAt = subscribedAt
         self.archived = archived
@@ -71,6 +75,8 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         unreadReactions = try container.decodeIfPresent(Int64.self, forKey: .unreadReactions) ?? 0
         lastReadMessageId = try container.decodeIfPresent(
             MessageID.self, forKey: .lastReadMessageId)
+        peerLastReadMessageId = try container.decodeIfPresent(
+            MessageID.self, forKey: .peerLastReadMessageId)
         chatKind = try container.decodeIfPresent(ChatKind.self, forKey: .chatKind) ?? .dm
         subscribedAt = try container.decode(Date.self, forKey: .subscribedAt)
         archived = try container.decode(Bool.self, forKey: .archived)

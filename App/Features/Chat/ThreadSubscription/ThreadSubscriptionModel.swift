@@ -16,6 +16,7 @@ extension ThreadListItem {
             lastReply: lastReply, replyCount: replyCount, lastReplyAt: lastReplyAt,
             unreadCount: unreadCount, unreadMentions: unreadMentions,
             unreadReactions: unreadReactions, lastReadMessageId: lastReadMessageId,
+            peerLastReadMessageId: peerLastReadMessageId,
             chatKind: chatKind,
             subscribedAt: subscribedAt, archived: archived)
     }

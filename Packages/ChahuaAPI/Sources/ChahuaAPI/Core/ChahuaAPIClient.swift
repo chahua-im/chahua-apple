@@ -84,10 +84,10 @@ public protocol ChahuaAPIClient: Sendable {
     func acknowledgeReactions(chatID: String, threadID: MessageID?, readThrough: String?)
         async throws -> UnreadReactionsAckResponse
 
-    /// Archives the current member's chat and mutes it indefinitely (204).
+    /// Archives the current member's chat without changing notification preferences (204).
     func archiveChat(chatID: String) async throws
 
-    /// Restores the current member's chat and clears its mute (204).
+    /// Restores the current member's chat without changing notification preferences (204).
     func unarchiveChat(chatID: String) async throws
 
     /// Archives only this thread subscription, not its parent chat (204).
@@ -103,14 +103,14 @@ public protocol ChahuaAPIClient: Sendable {
     /// Subscribes to a thread (204); the server also subscribes repliers and mentioned members.
     func subscribeThread(chatID: String, threadID: String) async throws
 
-    /// Mutes chat notifications with `PUT /group/{chatID}/mute`.
-    ///
-    /// A `nil` duration requests the server's indefinite mute; a non-`nil`
-    /// duration is measured in seconds.
-    func muteChat(chatID: String, durationSeconds: Int?) async throws -> MuteResponse
-
-    /// Unmutes an active chat. The server also clears its archive flag.
-    func unmuteChat(chatID: String) async throws
+    func notificationSettings() async throws -> NotificationSettingsResponse
+    func updateNotificationSettings(_ request: UpdateNotificationSettingsRequest) async throws
+        -> NotificationSettingsResponse
+    func updateChatNotificationSetting(chatID: String, request: UpdateNotificationSettingRequest)
+        async throws -> ChatNotificationSettingResponse
+    func notificationExceptions(kind: ChatKind, after: String?) async throws
+        -> NotificationExceptionsResponse
+    func clearNotificationExceptions(kind: ChatKind) async throws -> NotificationExceptionsCleared
 
     /// Fetches current membership and DM peer identity with `GET /group/{chatID}`.
     func groupInfo(chatID: String) async throws -> GroupInfoResponse

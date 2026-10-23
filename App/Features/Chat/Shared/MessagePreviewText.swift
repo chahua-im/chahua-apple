@@ -77,24 +77,49 @@ enum MessageSummaryContent {
         case .invite, .sticker, .audio, .file, .forwarded, .placeholder:
             return [.text(MessagePreviewRenderer.render(preview, labels: labels))]
         default:
-            // Keep attachment and system-message semantics identical to the API's
-            // preview renderer, but parse only the source message, never labels or names.
-            let prefix = preview.attachments.map { attachment in
-                let mime =
-                    attachment.kind.split(separator: ";", maxSplits: 1)
-                    .first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased() ?? ""
-                if mime.hasPrefix("image/") { return labels.image }
-                if mime.hasPrefix("video/") { return labels.video }
-                if mime.hasPrefix("audio/") { return labels.voiceMessage }
-                return labels.attachment
-            }.joined()
-            guard let source = preview.message,
-                !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else { return prefix.isEmpty ? [] : [.text(prefix)] }
-            let nodes = MarkdownDocument(parsing: source).summary
-            return prefix.isEmpty ? nodes : [.text(prefix + " ")] + nodes
+            return textSummary(
+                source: preview.message, attachmentKinds: preview.attachments.lazy.map(\.kind))
         }
+    }
+
+    static func summary(_ pending: LocalOutgoingMessage) -> [MarkdownInline] {
+        if let forward = pending.forwardRequest {
+            return forward.sources.count == 1
+                ? summary(forward.sources[0].replyPreview) : [.text(labels.forwarded)]
+        }
+        if let sticker = pending.sticker {
+            return [
+                .text(sticker.emoji.isEmpty ? labels.sticker : labels.sticker + " " + sticker.emoji)
+            ]
+        }
+        if pending.messageType == .audio { return [.text(labels.voiceMessage)] }
+        return textSummary(
+            source: pending.text, attachmentKinds: pending.attachments.lazy.map(\.mimeType))
+    }
+
+    private static func textSummary(
+        source: String?, attachmentKinds: some Sequence<String>
+    ) -> [MarkdownInline] {
+        var prefix = ""
+        for kind in attachmentKinds {
+            let mime =
+                kind.split(separator: ";", maxSplits: 1)
+                .first.map(String.init)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased() ?? ""
+            if mime.hasPrefix("image/") {
+                prefix += labels.image
+            } else if mime.hasPrefix("video/") {
+                prefix += labels.video
+            } else if mime.hasPrefix("audio/") {
+                prefix += labels.voiceMessage
+            } else {
+                prefix += labels.attachment
+            }
+        }
+        guard let source, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return prefix.isEmpty ? [] : [.text(prefix)] }
+        let nodes = MarkdownDocument(parsing: source).summary
+        return prefix.isEmpty ? nodes : [.text(prefix + " ")] + nodes
     }
 
     static func plain(_ nodes: [MarkdownInline], mentions: [MentionInfo]) -> String {
@@ -293,6 +318,23 @@ struct MessageSummaryText: View {
         self.color = color
         self.weight = weight
         self.lineLimit = lineLimit
+    }
+
+    init(
+        pending: LocalOutgoingMessage, fontSize: CGFloat = 17, color: Color = .secondary,
+        prefix: String = ""
+    ) {
+        let summary = MessageSummaryContent.summary(pending)
+        nodes = (prefix.isEmpty ? [] : [.strong([.text(prefix)])]) + summary
+        if let sources = pending.forwardRequest?.sources, sources.count == 1 {
+            mentions = sources[0].mentions
+        } else {
+            mentions = []
+        }
+        self.fontSize = fontSize
+        self.color = color
+        weight = .regular
+        lineLimit = 1
     }
 
     init(source: String, fontSize: CGFloat = 17, color: Color = .secondary, prefix: String = "") {

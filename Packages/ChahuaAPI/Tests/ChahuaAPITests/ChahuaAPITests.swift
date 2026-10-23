@@ -988,8 +988,11 @@ final class ChahuaAPITests: XCTestCase {
                 return (200, member)
             case ("DELETE", "/group/chat%2Fone/members/17"):
                 return (204, "")
-            case ("PUT", "/group/chat%2Fone/mute"):
-                return (200, #"{"mutedUntil":"2026-09-01T03:02:03Z"}"#)
+            case ("PUT", "/group/chat%2Fone/notification-setting"):
+                return (
+                    200,
+                    #"{"chatId":"chat/one","kind":"group","archived":true,"isMuted":true,"mutedUntil":"2026-09-01T03:02:03Z"}"#
+                )
             default:
                 return (404, "")
             }
@@ -1004,8 +1007,10 @@ final class ChahuaAPITests: XCTestCase {
         let updated = try await client.updateGroupMemberRole(
             chatID: "chat/one", uid: 17, role: .admin)
         try await client.removeGroupMember(chatID: "chat/one", uid: 17)
-        let timedMute = try await client.muteChat(chatID: "chat/one", durationSeconds: 3_600)
-        let indefiniteMute = try await client.muteChat(chatID: "chat/one", durationSeconds: nil)
+        let timedMute = try await client.updateChatNotificationSetting(
+            chatID: "chat/one", request: .init(mode: .temporarilyMuted, durationSeconds: 3_600))
+        let indefiniteMute = try await client.updateChatNotificationSetting(
+            chatID: "chat/one", request: .init(mode: .alwaysMuted))
 
         XCTAssertEqual(group.description, "Release work")
         XCTAssertEqual(group.myRole, .admin)
@@ -1027,7 +1032,8 @@ final class ChahuaAPITests: XCTestCase {
             components.map(\.percentEncodedPath),
             [
                 "/group/chat%2Fone", "/group/chat%2Fone/members", "/group/chat%2Fone/members/17",
-                "/group/chat%2Fone/members/17", "/group/chat%2Fone/mute", "/group/chat%2Fone/mute",
+                "/group/chat%2Fone/members/17", "/group/chat%2Fone/notification-setting",
+                "/group/chat%2Fone/notification-setting",
             ])
         XCTAssertEqual(
             components[1].queryItems,
@@ -1046,11 +1052,13 @@ final class ChahuaAPITests: XCTestCase {
             try JSONSerialization.jsonObject(with: requestBody(recorded[2])) as? [String: String])
         XCTAssertEqual(updateBody, ["role": "admin"])
         let timedMuteBody = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: requestBody(recorded[4])) as? [String: Int])
-        XCTAssertEqual(timedMuteBody, ["durationSeconds": 3_600])
+            try JSONSerialization.jsonObject(with: requestBody(recorded[4])) as? [String: Any])
+        XCTAssertEqual(timedMuteBody["durationSeconds"] as? Int, 3_600)
+        XCTAssertEqual(timedMuteBody["mode"] as? String, "temporarilyMuted")
         let indefiniteMuteBody = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: requestBody(recorded[5])) as? [String: Any])
         XCTAssertNil(indefiniteMuteBody["durationSeconds"])
+        XCTAssertEqual(indefiniteMuteBody["mode"] as? String, "alwaysMuted")
     }
 
     func testReactionPathsPreserveEmojiAndReservedCharactersAsSingleSegments() async throws {

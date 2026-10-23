@@ -10,9 +10,8 @@ struct GroupInfoView: View {
     let onSearch: () -> Void
 
     @State private var groupInfo: GroupInfoResponse?
-    @State private var mutedUntil: Date?
+    @State private var showsNotificationSettings = false
     @State private var isLoadingInfo = false
-    @State private var isUpdatingMute = false
     @State private var isLeaving = false
     @State private var showsLeaveConfirmation = false
     @State private var failure: GroupInfoFailure?
@@ -31,7 +30,6 @@ struct GroupInfoView: View {
         self.store = store
         self.onLeave = onLeave
         self.onSearch = onSearch
-        _mutedUntil = State(initialValue: chat.mutedUntil)
     }
 
     var body: some View {
@@ -76,8 +74,11 @@ struct GroupInfoView: View {
         #endif
         .task(id: chat.id) { await loadInfo() }
         .presenceScope(ChatPresenceDisplay.scope(for: chat), store: store)
-        .onChange(of: listedChat?.mutedUntil) { _, value in
-            if listedChat != nil { mutedUntil = value }
+        .sheet(isPresented: $showsNotificationSettings) {
+            NavigationStack {
+                ChatNotificationSettingsView(store: store, chat: notificationChat)
+            }
+            .frame(minWidth: 320, minHeight: 420)
         }
         .confirmationDialog(
             "Leave group",
@@ -177,33 +178,16 @@ struct GroupInfoView: View {
     private var actions: some View {
         VStack(spacing: 10) {
             HStack(spacing: 12) {
-                Menu {
-                    if isMuted {
-                        Button("Unmute") { Task { await unmute() } }
-                            .accessibilityIdentifier("group-unmute-button")
-                        Divider()
-                    }
-                    Button("Mute for 1 hour") { Task { await mute(for: 60 * 60) } }
-                        .accessibilityIdentifier("group-mute-1h-button")
-                    Button("Mute for 8 hours") { Task { await mute(for: 8 * 60 * 60) } }
-                        .accessibilityIdentifier("group-mute-8h-button")
-                    Button("Mute for 1 day") { Task { await mute(for: 24 * 60 * 60) } }
-                        .accessibilityIdentifier("group-mute-1d-button")
-                    Button("Mute for 7 days") { Task { await mute(for: 7 * 24 * 60 * 60) } }
-                        .accessibilityIdentifier("group-mute-7d-button")
-                    Button("Mute forever") { Task { await mute(for: nil) } }
-                        .accessibilityIdentifier("group-mute-forever-button")
+                Button {
+                    showsNotificationSettings = true
                 } label: {
                     GroupInfoActionLabel(
                         systemImage: isMuted ? "bell.slash" : "bell",
-                        title: isMuted ? "Unmute" : "Mute",
-                        isProgressing: isUpdatingMute
-                    )
+                        title: "Notifications")
                 }
-                .accessibilityIdentifier("group-mute-menu")
+                .accessibilityIdentifier("group-notification-settings")
                 .accessibilityLabel("Notification settings")
-                .accessibilityValue(muteStatus)
-                .disabled(isLeaving || isUpdatingMute)
+                .disabled(isLeaving)
 
                 Button(action: onSearch) {
                     GroupInfoActionLabel(systemImage: "magnifyingglass", title: "Search")
@@ -233,11 +217,9 @@ struct GroupInfoView: View {
             .buttonStyle(.plain)
             .frame(maxWidth: 560)
 
-            if isMuted {
-                Text(muteStatus)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            Text(LocalizedStringKey(isMuted ? "Notifications muted" : "Notifications enabled"))
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -261,87 +243,35 @@ struct GroupInfoView: View {
             ?? store.state.archivedChats.first { $0.id == chat.id }
     }
 
-    private var isMuted: Bool {
-        guard let mutedUntil else { return false }
-        return mutedUntil > Date()
+    private var notificationChat: ChatListItem {
+        if let listedChat { return listedChat }
+        guard let groupInfo else { return chat }
+        return store.notificationChatSnapshot(
+            chat.withNotificationState(
+                mutedUntil: groupInfo.mutedUntil, muteOverride: groupInfo.muteOverride,
+                isMuted: groupInfo.isMuted, archived: chat.archived))
     }
 
-    private var muteStatus: String {
-        guard isMuted, let mutedUntil else { return AppLanguage.localized("Not muted") }
-        if Calendar(identifier: .gregorian).component(.year, from: mutedUntil) >= 9000 {
-            return AppLanguage.localized("Muted forever")
-        }
-        let date = mutedUntil.formatted(date: .abbreviated, time: .shortened)
-        return AppLanguage.localized("Muted until \(date)")
+    private var isMuted: Bool {
+        notificationChat.notificationMuted(defaults: store.state.notificationDefaults)
     }
 
     private func loadInfo() async {
         guard !isLoadingInfo else { return }
         isLoadingInfo = true
         let revision = infoRevision
-        let listedMuteAtStart = listedChat?.mutedUntil
         defer { isLoadingInfo = false }
 
         do {
             let response = try await store.groupInfo(chatID: chat.id)
             try Task.checkCancellation()
             groupInfo = response
-            if infoRevision == revision, listedChat?.mutedUntil == listedMuteAtStart {
-                mutedUntil = response.mutedUntil
-            }
             if failure?.operation.isLoad == true { failure = nil }
         } catch is CancellationError {
             // The navigation container cancelled this screen's task.
         } catch {
             guard infoRevision == revision else { return }
             failure = .init(operation: .load, message: error.localizedDescription)
-        }
-    }
-
-    private func mute(for durationSeconds: Int?) async {
-        guard !isUpdatingMute, !isLeaving else { return }
-        isUpdatingMute = true
-        infoRevision &+= 1
-        let revision = infoRevision
-        failure = nil
-        defer {
-            if infoRevision == revision { isUpdatingMute = false }
-        }
-
-        do {
-            let nextMutedUntil = try await store.muteGroup(
-                chatID: chat.id, durationSeconds: durationSeconds)
-            try Task.checkCancellation()
-            guard infoRevision == revision else { return }
-            mutedUntil = nextMutedUntil
-        } catch is CancellationError {
-            // The view no longer owns the presentation state.
-        } catch {
-            guard infoRevision == revision else { return }
-            failure = .init(operation: .mute(durationSeconds), message: error.localizedDescription)
-        }
-    }
-
-    private func unmute() async {
-        guard !isUpdatingMute, !isLeaving else { return }
-        isUpdatingMute = true
-        infoRevision &+= 1
-        let revision = infoRevision
-        failure = nil
-        defer {
-            if infoRevision == revision { isUpdatingMute = false }
-        }
-
-        do {
-            try await store.unmuteGroup(chatID: chat.id)
-            try Task.checkCancellation()
-            guard infoRevision == revision else { return }
-            mutedUntil = nil
-        } catch is CancellationError {
-            // The view no longer owns the presentation state.
-        } catch {
-            guard infoRevision == revision else { return }
-            failure = .init(operation: .unmute, message: error.localizedDescription)
         }
     }
 
@@ -367,10 +297,6 @@ struct GroupInfoView: View {
         switch operation {
         case .load:
             Task { await loadInfo() }
-        case .mute(let durationSeconds):
-            Task { await mute(for: durationSeconds) }
-        case .unmute:
-            Task { await unmute() }
         case .leave:
             Task { await leaveGroup() }
         }
@@ -416,8 +342,6 @@ private struct GroupInfoActionLabel: View {
 
 private enum GroupInfoOperation {
     case load
-    case mute(Int?)
-    case unmute
     case leave
 
     var isLoad: Bool {
@@ -428,7 +352,6 @@ private enum GroupInfoOperation {
     var title: String {
         switch self {
         case .load: AppLanguage.localized("Couldn’t load group info")
-        case .mute, .unmute: AppLanguage.localized("Couldn’t update notifications")
         case .leave: AppLanguage.localized("Couldn’t leave group")
         }
     }
@@ -441,8 +364,6 @@ private struct GroupInfoFailure: Identifiable {
     var id: String {
         switch operation {
         case .load: "load"
-        case .mute: "mute"
-        case .unmute: "unmute"
         case .leave: "leave"
         }
     }
