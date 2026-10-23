@@ -20,6 +20,7 @@ struct TimelineMessageRow: Hashable {
     let groupPosition: TimelineGroupPosition
     let showsSenderName: Bool
     var isRead = false
+    var capturedReplyRedacted = false
 }
 
 struct TimelineDateSeparatorRow: Hashable {
@@ -56,6 +57,7 @@ struct TimelineRowsBuilder {
     var isGroupChat: Bool
 
     var calendar: Calendar
+    var capturedReplyRedactedIDs: Set<MessageID> = []
     func build(_ messages: [MessageResponse], unreadBeforeMessageID: MessageID? = nil)
         -> [TimelineRow]
     {
@@ -127,7 +129,10 @@ struct TimelineRowsBuilder {
                                     threadID != nil && message.replyRootId == nil
                                     ? rootReadReceiptID : readReceiptID
                                 return receipt.map { message.id <= $0 } ?? false
-                            } == true
+                            } == true,
+                        capturedReplyRedacted: entry.serverID.map {
+                            capturedReplyRedactedIDs.contains($0)
+                        } ?? false
                     )))
         }
 

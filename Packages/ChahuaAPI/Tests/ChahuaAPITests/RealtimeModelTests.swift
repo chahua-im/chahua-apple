@@ -9,6 +9,59 @@ final class RealtimeModelTests: XCTestCase {
     private let largeMessageID = MessageID(9_007_199_254_740_993)
     private let timestamp = "2026-09-01T12:34:56.123Z"
 
+    func testForwardMetadataCacheRoundTripAndCapturedReplyProjection() throws {
+        let ordinary = try JSONCoding.decoder.decode(
+            MessageResponse.self, from: Data(messageJSON.utf8))
+        XCTAssertNil(ordinary.forwardedFrom)
+        XCTAssertNil(ordinary.forwardedPreview)
+        let original = User(
+            uid: 2, gender: 0, name: "Captured sender", avatarUrl: nil, userGroup: nil)
+        let captured = ForwardedMessagePreviewResponse(
+            originalMessageId: MessageID(7), originalChatId: "source", message: "pendingAudio",
+            messageType: .placeholder, sender: original, originalCreatedAt: ordinary.createdAt)
+        let preview = ForwardedMessagesPreviewResponse(
+            total: 2, containsForwardedMessages: false, messages: [captured])
+        let forwarded = MessageResponse(
+            id: ordinary.id, chatId: ordinary.chatId, clientGeneratedId: ordinary.clientGeneratedId,
+            messageType: .text, sender: ordinary.sender, createdAt: ordinary.createdAt,
+            message: "immutable",
+            forwardedFrom: ForwardedFromInfo(
+                sender: original, originalChatId: "source", originalMessageId: MessageID(7)),
+            forwardedBundleId: "bundle", forwardedPreview: preview)
+        let decoded = try JSONDecoder().decode(
+            MessageResponse.self, from: JSONEncoder().encode(forwarded))
+        XCTAssertEqual(decoded, forwarded)
+        XCTAssertEqual(decoded.replyPreview.id, ordinary.id)
+        XCTAssertEqual(decoded.replyPreview.forwardedFromName, "Captured sender")
+        XCTAssertEqual(decoded.replacingMessageText("changed"), decoded)
+        let item = ForwardedMessageResponse(
+            originalMessageId: MessageID(8), originalChatId: "source", message: "reply",
+            messageType: .text, sender: original, originalCreatedAt: ordinary.createdAt,
+            reply: .internal(originalMessageId: captured.originalMessageId, preview: captured))
+        XCTAssertEqual(item.timelineMessage.replyToMessage?.id, captured.originalMessageId)
+        XCTAssertEqual(item.timelineMessage.replyToMessage?.messageType, .placeholder)
+        let redacted = ForwardedMessageResponse(
+            originalMessageId: MessageID(9), originalChatId: "source", message: "reply",
+            messageType: .text, sender: original, originalCreatedAt: ordinary.createdAt,
+            reply: .redacted)
+        XCTAssertNil(redacted.timelineMessage.replyToMessage)
+        let roundTrip = try JSONCoding.decoder.decode(
+            ForwardedMessageResponse.self, from: JSONCoding.encoder.encode(item))
+        XCTAssertEqual(roundTrip, item)
+        let labels = MessagePreviewRenderer.Labels(
+            attachment: "file", deleted: "deleted", image: "image", invite: "invite",
+            sticker: "sticker", video: "video", voiceMessage: "voice",
+            forwarded: "records", pendingAudio: "pending voice", nestedForward: "nested records")
+        XCTAssertEqual(
+            MessagePreviewRenderer.render(captured.replyPreview, labels: labels), "pending voice")
+        XCTAssertEqual(
+            MessagePreviewRenderer.render(ordinary.replyPreview, labels: labels), "original")
+        XCTAssertEqual(
+            MessagePreviewRenderer.render(
+                ordinary.replacingMessageText("pendingAudio").replyPreview, labels: labels),
+            "pendingAudio", "Only placeholder-typed values interpret reason codes")
+    }
+
     func testConversationWatchesDecodeAbsoluteSnapshotsAndPartialUpdates() throws {
         guard
             case .conversationUnread(let summary) = try event(

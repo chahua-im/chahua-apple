@@ -1,366 +1,111 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Jump to next mention or reply" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Jump to next mention or reply" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "跳转到下一条提及或回复" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "跳至下一則提及或回覆" } }
-      }
-    },
-    "Jump to next reaction" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Jump to next reaction" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "跳转到下一条回应" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "跳至下一則回應" } }
-      }
-    },
-    "%lld unread mentions and replies" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld unread mentions and replies" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 条未读提及和回复" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 則未讀提及和回覆" } }
-      }
-    },
-    "%lld unread reactions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld unread reactions" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 条未读回应" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 則未讀回應" } }
-      }
-    },
-    "Unread mentions and replies" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unread mentions and replies" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未读提及和回复" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "未讀提及和回覆" } }
-      }
-    },
-    "Unread reactions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unread reactions" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未读回应" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "未讀回應" } }
-      }
-    },
-    "Read" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀" } }
-      }
-    },
-    "Read Receipts" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read Receipts" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條" } }
-      }
-    },
-    "Who can see my read receipts" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Who can see my read receipts" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "谁可以查看我的已读回执" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "誰可以查看我的已讀回條" } }
-      }
-    },
-    "Read receipt sharing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read receipt sharing" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执分享" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條分享" } }
-      }
-    },
-    "Loading read receipt settings…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading read receipt settings…" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载已读回执设置…" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入已讀回條設定…" } }
-      }
-    },
-    "Failed to load read receipt settings." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed to load read receipt settings." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执设置加载失败。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條設定載入失敗。" } }
-      }
-    },
-    "Failed to load this friend's read receipt setting." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed to load this friend's read receipt setting." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此好友的已读回执设置加载失败。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此好友的已讀回條設定載入失敗。" } }
-      }
-    },
-    "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅在双方都允许分享时显示已读回执；群组对话永不显示已读回执。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "只會在雙方都允許分享時顯示已讀回條；群組對話永不顯示已讀回條。" } }
-      }
-    },
-    "Use global setting" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use global setting" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用全局设置" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "使用全域設定" } }
-      }
-    },
-    "Share with this friend" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Share with this friend" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "与这位好友分享" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "與這位好友分享" } }
-      }
-    },
-    "Hide from this friend" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Hide from this friend" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "对这位好友隐藏" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "對這位好友隱藏" } }
-      }
-    },
-    "Privacy and Security" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Privacy and Security" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "隐私与安全" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "隱私與安全" }
-        }
-      }
-    },
-    "Last Seen & Online" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last Seen & Online" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "最后上线与在线状态" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "最後上線與在線狀態" }
-        }
-      }
-    },
-    "Who can see my last seen" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Who can see my last seen" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "谁可以查看我的最后上线时间" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "誰可以查看我的最後上線時間" }
-        }
-      }
-    },
-    "Exceptions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Exceptions" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "例外" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "例外" }
-        }
-      }
-    },
-    "Never Share With" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Never Share With" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "不向以下用户共享" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "不向以下使用者分享" }
-        }
-      }
-    },
-    "Coming soon" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Coming soon" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "暂未开放" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "暫未開放" }
-        }
-      }
-    },
-    "Exceptions are not available yet." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Exceptions are not available yet." }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "例外设置暂未开放。" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "例外設定暫未開放。" }
-        }
-      }
-    },
-    "Everyone" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Everyone" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "所有人" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "所有人" }
-        }
-      }
-    },
-    "Friends" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Friends" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "仅好友" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "僅好友" }
-        }
-      }
-    },
-    "Nobody" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Nobody" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "没有人" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "沒有人" }
-        }
-      }
-    },
-    "Online status and last seen are visible only when both people allow sharing with each other. Group online counts are not affected." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Online status and last seen are visible only when both people allow sharing with each other. Group online counts are not affected." }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "在线状态和最近上线仅在双方都允许向对方分享时可见；群组在线人数不受影响。" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "在線狀態和最近上線只會在雙方都允許向對方分享時顯示；群組在線人數不受影響。" }
-        }
-      }
-    },
-    "Failed to load presence privacy settings." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Failed to load presence privacy settings." }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "在线状态隐私设置加载失败。" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "在線狀態隱私設定載入失敗。" }
-        }
-      }
-    },
-    "Save failed. Please try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Save failed. Please try again." }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "保存失败，请重试。" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "儲存失敗，請重試。" }
-        }
-      }
-    },
-    "Saved" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Saved" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "已保存" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "已儲存" }
-        }
-      }
-    },
-    "Saving…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Saving…" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "正在保存…" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "正在儲存…" }
-        }
-      }
-    },
-    "Loading presence privacy settings…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Loading presence privacy settings…" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "正在加载在线状态隐私设置…" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "正在載入在線狀態隱私設定…" }
-        }
-      }
-    },
+    "Forward" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳" } } } },
+    "Forward Thread" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发话题" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳話題" } } } },
+    "Forwarding started" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已开始转发" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已開始轉傳" } } } },
+    "Delete selected messages" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "撤回选中的消息" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "收回選取的訊息" } } } },
+    "Delete these messages?" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "撤回选中的消息？" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "收回選取的訊息？" } } } },
+    "Select up to 100 messages" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最多选择 100 条消息" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最多選取 100 則訊息" } } } },
+    "%lld messages" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 条消息" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 則訊息" } } } },
+    "Forwarded from %@" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发自 %@" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳自 %@" } } } },
+    "Chat records" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "聊天记录" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "聊天記錄" } } } },
+    "[Redacted]" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[已隐藏]" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[已隱藏]" } } } },
+    "[Chat history]" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[聊天记录]" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[聊天記錄]" } } } },
+    "[Pending voice message]" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[待转码语音]" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[待轉碼語音]" } } } },
+    "[Unavailable message]" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[消息不可用]" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[訊息無法使用]" } } } },
+    "Forward to" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发到" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳至" } } } },
+    "Search chats and threads" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "搜索聊天和话题" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "搜尋聊天與話題" } } } },
+    "Load More" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "继续加载" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "繼續載入" } } } },
+    "Preparing forward…" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在准备转发…" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在準備轉傳…" } } } },
+    "Loading conversations…" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载会话…" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入對話…" } } } },
+    "No forwarding destinations found" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "没有找到转发目标" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "找不到轉傳目標" } } } },
+    "Could not load chats" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载聊天" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入聊天" } } } },
+    "Could not load threads" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载话题" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入話題" } } } },
+    "Replace unavailable content?" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "替换不可用的内容？" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "替換無法使用的內容？" } } } },
+    "Audio still processing will be replaced with a placeholder. Continue forwarding?" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仍在转码的语音将替换为占位内容。继续转发？" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "仍在轉碼的語音將替換為佔位內容。繼續轉傳？" } } } },
+    "Deeply nested chat records will be replaced with placeholders. Continue forwarding?" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "嵌套层数过多的聊天记录将替换为占位内容。继续转发？" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "巢狀層數過多的聊天記錄將替換為佔位內容。繼續轉傳？" } } } },
+    "Audio still processing and deeply nested chat records will be replaced with placeholders. Continue forwarding?" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仍在转码的语音和嵌套层数过多的聊天记录将替换为占位内容。继续转发？" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "仍在轉碼的語音及巢狀層數過多的聊天記錄將替換為佔位內容。繼續轉傳？" } } } },
+    "Some selected messages cannot be forwarded. Close this picker and select again." : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "部分所选消息无法转发。请关闭并重新选择。" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "部分所選訊息無法轉傳。請關閉並重新選取。" } } } },
+    "Some selected messages are no longer available. Close this picker and select again." : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "部分所选消息已不可用。请关闭并重新选择。" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "部分所選訊息已無法使用。請關閉並重新選取。" } } } },
+    "You can forward at most 100 messages at once." : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "每次最多转发 100 条消息。" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "每次最多轉傳 100 則訊息。" } } } },
+    "This thread no longer has messages that can be forwarded." : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此话题已没有可转发的消息。" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此話題已沒有可轉傳的訊息。" } } } },
+    "Could not reload the messages. Choose a destination to retry." : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法重新加载消息。请选择目标重试。" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法重新載入訊息。請選擇目標重試。" } } } },
+    "Could not start forwarding. Choose a destination to retry." : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法开始转发。请选择目标重试。" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法開始轉傳。請選擇目標重試。" } } } },
+    "Loading chat history…" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载聊天记录…" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入聊天記錄…" } } } },
+    "Couldn’t load chat history" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载聊天记录" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入聊天記錄" } } } },
+    "Chat history unavailable" : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "聊天记录不可用" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "聊天記錄無法使用" } } } },
+    "This chat history is no longer available or you don’t have access." : { "extractionState" : "manual", "localizations" : {
+      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此聊天记录已不可用，或你没有访问权限。" } },
+      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此聊天記錄已無法使用，或你沒有存取權限。" } } } },
     "" : {
       "localizations" : {
         "zh-Hans" : {
@@ -374,34 +119,6 @@
             "state" : "translated",
             "value" : ""
           }
-        }
-      }
-    },
-    "%lld online · %lld members" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "%1$lld online · %2$lld members" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "%1$lld 人在线 · 共 %2$lld 人" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "%1$lld 人在線 · 共 %2$lld 人" }
-        }
-      }
-    },
-    "Online" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Online" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "在线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "在線" }
         }
       }
     },
@@ -582,6 +299,10 @@
           }
         }
       }
+    },
+    "@" : {
+      "comment" : "A character used to represent mentions and replies in a conversation.",
+      "isCommentAutoGenerated" : true
     },
     "%@ %@" : {
       "comment" : "A message that includes the name of the sender. The first argument is the sender's name. The second argument is the message content.",
@@ -781,6 +502,29 @@
         }
       }
     },
+    "%lld online · %lld members" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld online · %2$lld members"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 人在线 · 共 %2$lld 人"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 人在線 · 共 %2$lld 人"
+          }
+        }
+      }
+    },
     "%lld points" : {
       "comment" : "A slider that adjusts the width of the conversation list.",
       "isCommentAutoGenerated" : true,
@@ -873,6 +617,29 @@
         }
       }
     },
+    "%lld unread mentions and replies" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld unread mentions and replies"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条未读提及和回复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 則未讀提及和回覆"
+          }
+        }
+      }
+    },
     "%lld unread messages" : {
       "comment" : "A tooltip that describes the number of unread messages. The argument is the number of unread messages.",
       "isCommentAutoGenerated" : true,
@@ -887,6 +654,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 則未讀訊息"
+          }
+        }
+      }
+    },
+    "%lld unread reactions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld unread reactions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条未读回应"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 則未讀回應"
           }
         }
       }
@@ -2100,6 +1890,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "關閉貼紙"
+          }
+        }
+      }
+    },
+    "Coming soon" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coming soon"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂未开放"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫未開放"
           }
         }
       }
@@ -4026,6 +3839,75 @@
         }
       }
     },
+    "Everyone" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Everyone"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有人"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有人"
+          }
+        }
+      }
+    },
+    "Exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exceptions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例外"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例外"
+          }
+        }
+      }
+    },
+    "Exceptions are not available yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exceptions are not available yet."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例外设置暂未开放。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例外設定暫未開放。"
+          }
+        }
+      }
+    },
     "Failed" : {
       "comment" : "A label displayed when an image upload fails.",
       "isCommentAutoGenerated" : true,
@@ -4062,6 +3944,75 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收回訊息失敗"
+          }
+        }
+      }
+    },
+    "Failed to load presence privacy settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to load presence privacy settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在线状态隐私设置加载失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在線狀態隱私設定載入失敗。"
+          }
+        }
+      }
+    },
+    "Failed to load read receipt settings." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to load read receipt settings."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已读回执设置加载失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已讀回條設定載入失敗。"
+          }
+        }
+      }
+    },
+    "Failed to load this friend's read receipt setting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to load this friend's read receipt setting."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此好友的已读回执设置加载失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此好友的已讀回條設定載入失敗。"
           }
         }
       }
@@ -4177,6 +4128,29 @@
         }
       }
     },
+    "Friends" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Friends"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅好友"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅好友"
+          }
+        }
+      }
+    },
     "General" : {
       "comment" : "A section title for general settings options.",
       "isCommentAutoGenerated" : true,
@@ -4282,6 +4256,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "群組"
+          }
+        }
+      }
+    },
+    "Hide from this friend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hide from this friend"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对这位好友隐藏"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "對這位好友隱藏"
           }
         }
       }
@@ -4496,6 +4493,52 @@
         }
       }
     },
+    "Jump to next mention or reply" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jump to next mention or reply"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳转到下一条提及或回复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳至下一則提及或回覆"
+          }
+        }
+      }
+    },
+    "Jump to next reaction" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jump to next reaction"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳转到下一条回应"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳至下一則回應"
+          }
+        }
+      }
+    },
     "Jump to pinned message" : {
       "localizations" : {
         "zh-Hans" : {
@@ -4585,129 +4628,26 @@
         }
       }
     },
-    "Last seen recently" : {
+    "Last Seen & Online" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen recently" }
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last Seen & Online"
+          }
         },
         "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "最近上线" }
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最后上线与在线状态"
+          }
         },
         "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "最近上線" }
-        }
-      }
-    },
-    "Last seen within 30 minutes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 30 minutes" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "30 分钟内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "30 分鐘內上線" }
-        }
-      }
-    },
-    "Last seen within 1 hour" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 hour" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 小时内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 小時內上線" }
-        }
-      }
-    },
-    "Last seen within 2 hours" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 2 hours" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "2 小时内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "2 小時內上線" }
-        }
-      }
-    },
-    "Last seen within 6 hours" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 6 hours" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "6 小时内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "6 小時內上線" }
-        }
-      }
-    },
-    "Last seen within 12 hours" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 12 hours" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "12 小时内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "12 小時內上線" }
-        }
-      }
-    },
-    "Last seen within 1 day" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 day" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 天内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 天內上線" }
-        }
-      }
-    },
-    "Last seen within 1 week" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 week" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 周内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 週內上線" }
-        }
-      }
-    },
-    "Last seen within 1 month" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen within 1 month" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 个月内上线" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "1 個月內上線" }
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最後上線與在線狀態"
+          }
         }
       }
     },
@@ -4715,13 +4655,229 @@
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Last seen a long time ago" }
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen a long time ago"
+          }
         },
         "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "很久以前上线" }
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "很久以前上线"
+          }
         },
         "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "很久以前上線" }
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "很久以前上線"
+          }
+        }
+      }
+    },
+    "Last seen recently" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen recently"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線"
+          }
+        }
+      }
+    },
+    "Last seen within 1 day" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 1 day"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 天内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 天內上線"
+          }
+        }
+      }
+    },
+    "Last seen within 1 hour" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 1 hour"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 小时内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 小時內上線"
+          }
+        }
+      }
+    },
+    "Last seen within 1 month" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 1 month"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个月内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 個月內上線"
+          }
+        }
+      }
+    },
+    "Last seen within 1 week" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 1 week"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 周内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 週內上線"
+          }
+        }
+      }
+    },
+    "Last seen within 2 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 2 hours"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "2 小时内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "2 小時內上線"
+          }
+        }
+      }
+    },
+    "Last seen within 6 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 6 hours"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6 小时内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6 小時內上線"
+          }
+        }
+      }
+    },
+    "Last seen within 12 hours" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 12 hours"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "12 小时内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "12 小時內上線"
+          }
+        }
+      }
+    },
+    "Last seen within 30 minutes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within 30 minutes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "30 分钟内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "30 分鐘內上線"
+          }
         }
       }
     },
@@ -5125,6 +5281,29 @@
         }
       }
     },
+    "Loading presence privacy settings…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading presence privacy settings…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载在线状态隐私设置…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入在線狀態隱私設定…"
+          }
+        }
+      }
+    },
     "Loading reactions…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5137,6 +5316,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在載入回應…"
+          }
+        }
+      }
+    },
+    "Loading read receipt settings…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading read receipt settings…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载已读回执设置…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入已讀回條設定…"
           }
         }
       }
@@ -5955,6 +6157,29 @@
       "comment" : "A label for the user to enter a name for the sticker.",
       "isCommentAutoGenerated" : true
     },
+    "Never Share With" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Never Share With"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不向以下用户共享"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不向以下使用者分享"
+          }
+        }
+      }
+    },
     "New message" : {
       "comment" : "A button that opens a new message.",
       "isCommentAutoGenerated" : true,
@@ -6226,6 +6451,29 @@
         }
       }
     },
+    "Nobody" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nobody"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有人"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有人"
+          }
+        }
+      }
+    },
     "Not implemented yet" : {
       "localizations" : {
         "en" : {
@@ -6424,6 +6672,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "確定"
+          }
+        }
+      }
+    },
+    "Online" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Online"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在線"
+          }
+        }
+      }
+    },
+    "Online status and last seen are visible only when both people allow sharing with each other. Group online counts are not affected." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Online status and last seen are visible only when both people allow sharing with each other. Group online counts are not affected."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在线状态和最近上线仅在双方都允许向对方分享时可见；群组在线人数不受影响。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在線狀態和最近上線只會在雙方都允許向對方分享時顯示；群組在線人數不受影響。"
           }
         }
       }
@@ -6847,6 +7141,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "上一張圖片"
+          }
+        }
+      }
+    },
+    "Privacy and Security" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacy and Security"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐私与安全"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱私與安全"
           }
         }
       }
@@ -7559,6 +7876,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "有人回應後將在此處顯示。"
+          }
+        }
+      }
+    },
+    "Read" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已读"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已讀"
+          }
+        }
+      }
+    },
+    "Read receipt sharing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read receipt sharing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已读回执分享"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已讀回條分享"
+          }
+        }
+      }
+    },
+    "Read Receipts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read Receipts"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已读回执"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已讀回條"
+          }
+        }
+      }
+    },
+    "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在双方都允许分享时显示已读回执；群组对话永不显示已读回执。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只會在雙方都允許分享時顯示已讀回條；群組對話永不顯示已讀回條。"
           }
         }
       }
@@ -8449,6 +8858,29 @@
         }
       }
     },
+    "Save failed. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save failed. Please try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存失败，请重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存失敗，請重試。"
+          }
+        }
+      }
+    },
     "Save Image" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8488,6 +8920,29 @@
         }
       }
     },
+    "Saved" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已儲存"
+          }
+        }
+      }
+    },
     "Saved %@" : {
       "localizations" : {
         "zh-Hans" : {
@@ -8500,6 +8955,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已儲存 %@"
+          }
+        }
+      }
+    },
+    "Saving…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saving…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在保存…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在儲存…"
           }
         }
       }
@@ -8642,6 +9120,90 @@
             "state" : "translated",
             "value" : "選擇一個聊天"
           }
+        }
+      }
+    },
+    "Select" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Select" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "选择" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "選取" }
+        }
+      }
+    },
+    "Select message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Select message" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "选择消息" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "選取訊息" }
+        }
+      }
+    },
+    "Deselect message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Deselect message" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "取消选择消息" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "取消選取訊息" }
+        }
+      }
+    },
+    "Double-tap to select this message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Double-tap to select this message." }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "轻点两下以选择此消息。" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "點兩下以選取此訊息。" }
+        }
+      }
+    },
+    "Double-tap to deselect this message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "Double-tap to deselect this message." }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "轻点两下以取消选择此消息。" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "點兩下以取消選取此訊息。" }
+        }
+      }
+    },
+    "%lld selected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : { "state" : "translated", "value" : "%lld selected" }
+        },
+        "zh-Hans" : {
+          "stringUnit" : { "state" : "translated", "value" : "已选择 %lld 条" }
+        },
+        "zh-Hant" : {
+          "stringUnit" : { "state" : "translated", "value" : "已選取 %lld 則" }
         }
       }
     },
@@ -8805,6 +9367,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "設定"
+          }
+        }
+      }
+    },
+    "Share with this friend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share with this friend"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "与这位好友分享"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "與這位好友分享"
           }
         }
       }
@@ -10179,6 +10764,52 @@
         }
       }
     },
+    "Unread mentions and replies" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unread mentions and replies"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未读提及和回复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未讀提及和回覆"
+          }
+        }
+      }
+    },
+    "Unread reactions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unread reactions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未读回应"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未讀回應"
+          }
+        }
+      }
+    },
     "Unregistering…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10323,6 +10954,29 @@
     "Updating sticker pack…" : {
       "comment" : "A message displayed when a sticker pack is being updated.",
       "isCommentAutoGenerated" : true
+    },
+    "Use global setting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use global setting"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用全局设置"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用全域設定"
+          }
+        }
+      }
     },
     "Use your Chahua account to continue." : {
       "comment" : "A description of the login process.",
@@ -10632,6 +11286,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "WebM 貼紙需要 iOS 17.4 或以上版本。"
+          }
+        }
+      }
+    },
+    "Who can see my last seen" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Who can see my last seen"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "谁可以查看我的最后上线时间"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "誰可以查看我的最後上線時間"
+          }
+        }
+      }
+    },
+    "Who can see my read receipts" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Who can see my read receipts"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "谁可以查看我的已读回执"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "誰可以查看我的已讀回條"
           }
         }
       }

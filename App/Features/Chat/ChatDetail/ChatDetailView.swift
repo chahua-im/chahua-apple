@@ -38,6 +38,26 @@ struct ChatDetailView: View {
     @State private var deleteError = false
     @State private var stickerToView: StickerSelection?
     @State private var reactionDetailsMessage: ReactionDetailsSelection?
+    @State private var forwardRequest: ForwardSelection?
+    @State private var recordRequest: RecordSelection?
+    @State private var showsForwardStarted = false
+    @State private var selectionToDelete: TimelineBubbleActions?
+    @State private var selectionDeleteTask: Task<Void, Never>?
+    @State private var isDeletingSelection = false
+    @State private var forwardingThreadRoot: MessageResponse?
+    @State private var forwardingThreadReplyCount: Int64?
+
+    private struct ForwardSelection: Identifiable {
+        let id = UUID()
+        let sources: [MessageResponse]
+        var wholeThread = false
+        var onEnqueued: () -> Void = {}
+    }
+
+    private struct RecordSelection: Identifiable {
+        let id: MessageID
+        let chatID: String
+    }
 
     private struct StickerSelection: Identifiable {
         let id: String
@@ -108,7 +128,7 @@ struct ChatDetailView: View {
     }
 
     var body: some View {
-        deletionSurface
+        forwardingSurface
             .navigationTitle(navigationTitle ?? chat.chatDisplayName)
             .onAppear {
                 isTimelineVisible = true
@@ -120,6 +140,11 @@ struct ChatDetailView: View {
                 model.setReadTrackingActive(scenePhase == .active)
             }
             .task { await model.open(position: initialPosition) }
+            .task(id: threadID) {
+                guard let threadID, let rootID = MessageID(threadID) else { return }
+                forwardingThreadRoot = try? await store.forwardSourceMessage(
+                    chatID: chat.id, messageID: rootID)
+            }
             .task { await loadInteractionPermissions() }
             .task {
                 if threadID == nil { await pins.load(chatID: chat.id, force: true) }
@@ -215,12 +240,190 @@ struct ChatDetailView: View {
                     self.failedMessageID = nil
                 }
             }
+            .onReceive(store.conversationMessages.changes) { change in
+                guard case .realtime(.threadUpdate(let update)) = change,
+                    update.chatId == chat.id, update.threadRootId == threadID
+                else { return }
+                forwardingThreadReplyCount = update.replyCount
+            }
             .onDisappear {
+                selectionDeleteTask?.cancel()
+                selectionDeleteTask = nil
+                forwardRequest = nil
                 isTimelineVisible = false
                 model.close(acknowledgingActivity: scenePhase == .active)
                 store.unregisterTimeline(model)
                 Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
             }
+    }
+
+    private var forwardingSurface: some View {
+        forwardingSheets
+            .confirmationDialog(
+                "Delete these messages?",
+                isPresented: Binding(
+                    get: { selectionToDelete != nil },
+                    set: { if !$0 { selectionToDelete = nil } })
+            ) {
+                if let actions = selectionToDelete {
+                    Button("Delete", role: .destructive) { deleteSelection(actions: actions) }
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+            .preference(key: ForwardThreadActionKey.self, value: wholeThreadForwardAction)
+            .overlay(alignment: .top) {
+                if showsForwardStarted {
+                    Text("Forwarding started")
+                        .font(.callout)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .padding(.top, 72)
+                        .allowsHitTesting(false)
+                }
+            }
+            .task(id: showsForwardStarted) {
+                guard showsForwardStarted else { return }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                showsForwardStarted = false
+            }
+    }
+
+    private var forwardingSheets: some View {
+        deletionSurface
+            .sheet(item: $forwardRequest) { request in forwardingPicker(request) }
+            .sheet(item: $recordRequest) { request in
+                NavigationStack {
+                    ForwardedRecordsView(
+                        store: store, chatID: request.chatID, messageID: request.id
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { recordRequest = nil }
+                        }
+                    }
+                }
+                .frame(minWidth: 300, minHeight: 400)
+            }
+    }
+
+    private func forwardingPicker(_ request: ForwardSelection) -> some View {
+        let loader: (@MainActor () async throws -> [MessageResponse])?
+        if request.wholeThread {
+            loader = { @MainActor () async throws -> [MessageResponse] in
+                try await self.loadWholeThreadForForwarding()
+            }
+        } else {
+            loader = nil
+        }
+        return ForwardDestinationPicker(
+            store: store, sources: request.sources, loadSources: loader
+        ) {
+            request.onEnqueued()
+            showsForwardStarted = true
+        }
+    }
+
+    private func selectionToolbar(actions: TimelineBubbleActions) -> some View {
+        HStack(spacing: 16) {
+            Button(role: .destructive) {
+                selectionToDelete = actions
+            } label: {
+                Image(systemName: "trash")
+            }
+            .accessibilityLabel("Delete selected messages")
+            .disabled(!canDeleteSelection(actions.selectionMessages) || isDeletingSelection)
+            Spacer(minLength: 0)
+            if isDeletingSelection {
+                ProgressView().controlSize(.small)
+            }
+            Text("\(actions.selectedMessageIDs.count) messages")
+                .font(.headline)
+            Spacer(minLength: 0)
+            Button("Cancel") { actions.endMessageSelection?() }
+                .disabled(isDeletingSelection)
+            Button {
+                forwardRequest = ForwardSelection(
+                    sources: actions.selectionMessages,
+                    onEnqueued: { actions.endMessageSelection?() })
+            } label: {
+                Image(systemName: "arrowshape.turn.up.right")
+            }
+            .accessibilityLabel("Forward")
+            .disabled(actions.selectedMessageIDs.isEmpty || isDeletingSelection)
+        }
+        .buttonStyle(.borderless)
+        .padding()
+        .background(.regularMaterial, in: Capsule())
+        .padding(.horizontal, 12).padding(.bottom, 8)
+    }
+
+    private func canDeleteSelection(_ messages: [MessageResponse]) -> Bool {
+        interactionContext.canWrite && !messages.isEmpty
+            && messages.allSatisfy {
+                !$0.isDeleted
+                    && ($0.sender.uid == model.currentUserID || interactionContext.isAdmin)
+            }
+    }
+
+    private func deleteSelection(actions: TimelineBubbleActions) {
+        let messages = actions.selectionMessages
+        guard canDeleteSelection(messages), !isDeletingSelection else { return }
+        isDeletingSelection = true
+        selectionDeleteTask = Task {
+            defer {
+                isDeletingSelection = false
+                selectionDeleteTask = nil
+            }
+            for message in messages {
+                do {
+                    while outgoingQueue.forwardPlaceholderReason(for: message, merging: false)
+                        == "pendingAudio"
+                    {
+                        try await Task.sleep(for: .milliseconds(250))
+                    }
+                    try Task.checkCancellation()
+                    guard interactionContext.canWrite else { return }
+                    guard await store.deleteMessage(message) else {
+                        deleteError = true
+                        return
+                    }
+                    actions.removeSelectedMessage?(message.id)
+                } catch { return }
+            }
+            actions.endMessageSelection?()
+        }
+    }
+
+    private var wholeThreadForwardAction: ForwardThreadAction? {
+        guard let threadID else { return nil }
+        let known = (store.state.threads + store.state.archivedThreads).first {
+            $0.chatId == chat.id && $0.threadRootMessage.id.description == threadID
+        }
+        let loadedRoot =
+            model.rows.compactMap { row -> MessageResponse? in
+                guard case .message(let row) = row,
+                    row.entry.remoteMessage?.id.description == threadID
+                else { return nil }
+                return row.entry.remoteMessage
+            }.first ?? forwardingThreadRoot
+        guard
+            let count = forwardingThreadReplyCount.map({ $0 + 1 })
+                ?? known.map({ $0.replyCount + 1 })
+                ?? loadedRoot.map({ ($0.threadInfo?.replyCount ?? 0) + 1 }),
+            count <= 100, let root = loadedRoot, !root.isDeleted,
+            !model.knownDeletedMessageIDs.contains(root.id)
+        else { return nil }
+        return ForwardThreadAction(conversation: conversationKey, count: count) {
+            forwardRequest = ForwardSelection(sources: [root], wholeThread: true)
+        }
+    }
+
+    private func loadWholeThreadForForwarding() async throws -> [MessageResponse] {
+        guard let threadID else { throw ForwardDestinationPicker.SourceError.unavailable }
+        let page = try await store.fetchMessages(
+            chatID: chat.id, query: .init(max: 100, threadID: threadID))
+        guard page.olderCursor == nil else { throw ForwardDestinationPicker.SourceError.tooMany }
+        return page.messages.filter { !$0.isDeleted && $0.messageType != .system }
     }
 
     private var deletionSurface: some View {
@@ -258,16 +461,18 @@ struct ChatDetailView: View {
     }
 
     private var conversationDropSurface: some View {
-        Group {
-            #if os(macOS)
-                conversationBody(actions: bubbleActions)
-            #else
-                MessageInteractionHost(
-                    model: model, context: interactionContext, actions: bubbleActions
-                ) { actions in
-                    conversationBody(actions: actions)
-                }
-            #endif
+        MessageSelectionHost(model: model, actions: bubbleActions) { selectedActions in
+            Group {
+                #if os(macOS)
+                    conversationBody(actions: selectedActions)
+                #else
+                    MessageInteractionHost(
+                        model: model, context: interactionContext, actions: selectedActions
+                    ) { actions in
+                        conversationBody(actions: actions)
+                    }
+                #endif
+            }
         }
         .contentShape(Rectangle())
         .onDrop(of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted) { providers in
@@ -300,95 +505,102 @@ struct ChatDetailView: View {
                 .modifier(
                     ChatComposerOverlay {
                         VStack(spacing: 0) {
-                            if store.outgoingQueue.storageState == .failed || drafts.draftSaveFailed
-                            {
-                                HStack {
-                                    Text("Couldn’t save messages on this device.")
-                                        .font(.caption)
-                                    Spacer(minLength: 8)
-                                    Button("Retry") { Task { await store.retryLocalStorage() } }
-                                }
-                                .padding(12)
-                                .background(
-                                    .regularMaterial, in: RoundedRectangle(cornerRadius: 16)
-                                )
-                                .padding(.horizontal, 12)
-                            } else if store.outgoingQueue.storageState == .loading {
-                                ProgressView("Loading saved messages…")
-                                    .controlSize(.small)
+                            if interactiveActions.isSelectingMessages {
+                                selectionToolbar(actions: interactiveActions)
+                            } else {
+                                if store.outgoingQueue.storageState == .failed
+                                    || drafts.draftSaveFailed
+                                {
+                                    HStack {
+                                        Text("Couldn’t save messages on this device.")
+                                            .font(.caption)
+                                        Spacer(minLength: 8)
+                                        Button("Retry") { Task { await store.retryLocalStorage() } }
+                                    }
                                     .padding(12)
                                     .background(
-                                        .regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                            }
-                            MessageComposerView(
-                                text: composerText,
-                                attachmentState: composerAttachments,
-                                maxHeight: max(36, geometry.size.height / 3),
-                                isEnabled: interactionContext.canWrite,
-                                canSend: canSubmitComposer,
-                                onSubmit: submitComposer,
-                                onCompositionChanged: { composing in
-                                    isComposerComposing = composing
-                                    guard editingMessage == nil else { return }
-                                    drafts.setDraftComposing(
-                                        composing, chatID: chat.id, threadID: threadID)
-                                },
-                                replyToMessage: drafts.draftReply(
-                                    chatID: chat.id, threadID: threadID),
-                                replyFocusRequest: replyFocusRequest,
-                                onCancelReply: {
-                                    drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID)
-                                },
-                                onOpenReply: { id in Task { await model.jumpToMessage(id) } },
-                                editingMessage: editingMessage,
-                                onCancelEdit: cancelEditing,
-                                onRequestEditLastMessage: requestEditLastOwnMessage,
-                                attachments: outgoingQueue.draftAttachments(
-                                    chatID: chat.id, threadID: threadID),
-                                attachmentProgress: outgoingQueue.attachmentProgress,
-                                compressionEnabled: outgoingQueue.compressionEnabled(
-                                    chatID: chat.id, threadID: threadID),
-                                onImportImages: { urls in
-                                    try await drafts.flushForAttachmentChange(
-                                        chatID: chat.id, threadID: threadID)
-                                    try await outgoingQueue.importImages(
-                                        urls: urls, chatID: chat.id, threadID: threadID)
-                                },
-                                onRemoveAttachment: { id in
-                                    try await drafts.flushForAttachmentChange(
-                                        chatID: chat.id, threadID: threadID)
-                                    try await outgoingQueue.removeAttachment(
-                                        id: id, chatID: chat.id, threadID: threadID)
-                                },
-                                onRetryAttachment: { id in
-                                    try await drafts.flushForAttachmentChange(
-                                        chatID: chat.id, threadID: threadID)
-                                    try await outgoingQueue.retryAttachment(
-                                        id: id, chatID: chat.id, threadID: threadID)
-                                },
-                                onCompressionChanged: { enabled in
-                                    try await drafts.flushForAttachmentChange(
-                                        chatID: chat.id, threadID: threadID)
-                                    try await outgoingQueue.setCompressionEnabled(
-                                        enabled, chatID: chat.id, threadID: threadID)
-                                },
-                                onReorderAttachments: { ids in
-                                    try await drafts.flushForAttachmentChange(
-                                        chatID: chat.id, threadID: threadID)
-                                    try await outgoingQueue.reorderAttachments(
-                                        ids: ids, chatID: chat.id, threadID: threadID)
-                                },
-                                onDiscardAttachments: {
-                                    try await drafts.discardAttachments(
-                                        chatID: chat.id, threadID: threadID)
-                                },
-                                stickerLibrary: store.stickers,
-                                onSendSticker: sendSticker,
-                                onSendVoice: sendVoice,
-                                onSearchMembers: { query in
-                                    try await store.searchMembers(chatID: chat.id, query: query)
+                                        .regularMaterial, in: RoundedRectangle(cornerRadius: 16)
+                                    )
+                                    .padding(.horizontal, 12)
+                                } else if store.outgoingQueue.storageState == .loading {
+                                    ProgressView("Loading saved messages…")
+                                        .controlSize(.small)
+                                        .padding(12)
+                                        .background(
+                                            .regularMaterial, in: RoundedRectangle(cornerRadius: 16)
+                                        )
                                 }
-                            )
+                                MessageComposerView(
+                                    text: composerText,
+                                    attachmentState: composerAttachments,
+                                    maxHeight: max(36, geometry.size.height / 3),
+                                    isEnabled: interactionContext.canWrite,
+                                    canSend: canSubmitComposer,
+                                    onSubmit: submitComposer,
+                                    onCompositionChanged: { composing in
+                                        isComposerComposing = composing
+                                        guard editingMessage == nil else { return }
+                                        drafts.setDraftComposing(
+                                            composing, chatID: chat.id, threadID: threadID)
+                                    },
+                                    replyToMessage: drafts.draftReply(
+                                        chatID: chat.id, threadID: threadID),
+                                    replyFocusRequest: replyFocusRequest,
+                                    onCancelReply: {
+                                        drafts.setDraftReply(
+                                            nil, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } },
+                                    editingMessage: editingMessage,
+                                    onCancelEdit: cancelEditing,
+                                    onRequestEditLastMessage: requestEditLastOwnMessage,
+                                    attachments: outgoingQueue.draftAttachments(
+                                        chatID: chat.id, threadID: threadID),
+                                    attachmentProgress: outgoingQueue.attachmentProgress,
+                                    compressionEnabled: outgoingQueue.compressionEnabled(
+                                        chatID: chat.id, threadID: threadID),
+                                    onImportImages: { urls in
+                                        try await drafts.flushForAttachmentChange(
+                                            chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.importImages(
+                                            urls: urls, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onRemoveAttachment: { id in
+                                        try await drafts.flushForAttachmentChange(
+                                            chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.removeAttachment(
+                                            id: id, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onRetryAttachment: { id in
+                                        try await drafts.flushForAttachmentChange(
+                                            chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.retryAttachment(
+                                            id: id, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onCompressionChanged: { enabled in
+                                        try await drafts.flushForAttachmentChange(
+                                            chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.setCompressionEnabled(
+                                            enabled, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onReorderAttachments: { ids in
+                                        try await drafts.flushForAttachmentChange(
+                                            chatID: chat.id, threadID: threadID)
+                                        try await outgoingQueue.reorderAttachments(
+                                            ids: ids, chatID: chat.id, threadID: threadID)
+                                    },
+                                    onDiscardAttachments: {
+                                        try await drafts.discardAttachments(
+                                            chatID: chat.id, threadID: threadID)
+                                    },
+                                    stickerLibrary: store.stickers,
+                                    onSendSticker: sendSticker,
+                                    onSendVoice: sendVoice,
+                                    onSearchMembers: { query in
+                                        try await store.searchMembers(chatID: chat.id, query: query)
+                                    }
+                                )
+                            }
                         }
                     })
         }
@@ -416,6 +628,18 @@ struct ChatDetailView: View {
 
     private var bubbleActions: TimelineBubbleActions {
         var actions = TimelineBubbleActions()
+        actions.interactionContext = interactionContext
+        actions.openAttachment = { attachment in
+            guard let url = URL(string: attachment.url) else { return }
+            openURL(url)
+        }
+        actions.isSelectionBusy = isDeletingSelection
+        actions.forwardMessage = { message in
+            forwardRequest = ForwardSelection(sources: [message])
+        }
+        actions.openForwardedMessages = { message in
+            recordRequest = RecordSelection(id: message.id, chatID: message.chatId)
+        }
         if let imageDetailPresenter {
             actions.openMedia = { gallery in
                 var gallery = gallery
@@ -642,7 +866,8 @@ struct ChatDetailView: View {
     private func isEditable(_ message: MessageResponse) -> Bool {
         MessageActionPolicy(
             messageType: message.messageType, text: message.message, isDeleted: message.isDeleted,
-            isOwn: message.sender.uid == model.currentUserID, context: interactionContext
+            isOwn: message.sender.uid == model.currentUserID,
+            isForwarded: message.forwardedFrom != nil, context: interactionContext
         ).availability(of: .edit) == .enabled
     }
 
@@ -673,7 +898,8 @@ struct ChatDetailView: View {
     }
 
     private func changePending(_ pending: PendingOutgoingMessage, revoke: Bool) {
-        guard !pending.dispatchClaimed, revoke || pending.messageType == .text,
+        guard !pending.dispatchClaimed,
+            revoke || (pending.messageType == .text && pending.forwardRequest == nil),
             !drafts.committingDrafts.contains(conversationKey), editingMessage == nil
         else { return }
         Task {

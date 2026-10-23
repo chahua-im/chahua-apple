@@ -192,6 +192,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var onOpenInfo: (() -> Void)?
     /// Search lives on the info page; the header only binds ⌘F, with no visible button.
     var onSearch: (() -> Void)?
+    var onForward: (() -> Void)?
     /// The trailing slot holds its own control (e.g. the thread subscription menu)
     /// rather than a decorative avatar.
     var trailingIsControl = false
@@ -219,7 +220,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
                         .horizontal,
                         max(
                             backBadgeCount > 0 ? 92 : 52,
-                            trailingIsControl ? 52 : Self.avatarDiameter * avatarScale + 8))
+                            onForward != nil
+                                ? 104
+                                : trailingIsControl ? 52 : Self.avatarDiameter * avatarScale + 8))
                 HStack {
                     navigationControl
                     Spacer(minLength: 0)
@@ -285,6 +288,22 @@ struct ChatFloatingHeader<Avatar: View>: View {
     /// its label, and is not clipped, so the interactive glass can bulge and highlight
     /// on press instead of the touch landing on a flat, clipped avatar image.
     private var trailingControls: some View {
+        HStack(spacing: 8) {
+            if let onForward {
+                Button(action: onForward) {
+                    Image(systemName: "arrowshape.turn.up.right")
+                        .font(.system(size: 20))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Forward Thread")
+                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+            }
+            trailingAvatar
+        }
+    }
+
+    private var trailingAvatar: some View {
         let isInteractive = onOpenInfo != nil || trailingIsControl
         return Group {
             if let onOpenInfo {

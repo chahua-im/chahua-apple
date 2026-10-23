@@ -50,14 +50,14 @@
                 tile.onOpen = { [weak self] in self?.openSticker() }
                 tile.setVisible(visible)
                 clearTiles(after: 1)
-            } else if row.entry.messageType == .text {
+            } else if row.entry.messageType == .text || row.entry.messageType == .file {
                 let pending: [LocalOutgoingAttachment]
                 if case .pending(let message) = row.entry {
                     pending = message.attachments
                 } else {
                     pending = []
                 }
-                let attachments = row.entry.remoteMessage?.attachments ?? []
+                let attachments = row.entry.presentationMessage?.attachments ?? []
                 let count = pending.isEmpty ? attachments.count : pending.count
                 itemFrames =
                     count == 1
@@ -80,7 +80,10 @@
                             captionSize: environment.captionSize,
                             mediaContext: binding.mediaContext,
                             canOpen: !binding.context.isInteractionPreview
-                                && binding.actions.openMedia != nil)
+                                && (attachments[index].isDocumentAttachment
+                                    ? binding.actions.openAttachment != nil
+                                    : binding.actions.openMedia != nil)
+                        )
                     }
                     tile.onOpen = { [weak self] in self?.openAttachment(at: index) }
                     tile.setVisible(visible)
@@ -137,11 +140,15 @@
 
         private func openAttachment(at index: Int) {
             guard let binding, !binding.context.isInteractionPreview,
-                let action = binding.actions.openMedia,
-                case .message(let row) = binding.presentation.row,
-                let gallery = MessageImageGallery(entry: row.entry, attachmentIndex: index)
+                case .message(let row) = binding.presentation.row
             else { return }
-            action(gallery)
+            if let attachments = row.entry.presentationMessage?.attachments,
+                attachments.indices.contains(index), attachments[index].isDocumentAttachment
+            {
+                binding.actions.openAttachment?(attachments[index])
+            } else if let gallery = MessageImageGallery(entry: row.entry, attachmentIndex: index) {
+                binding.actions.openMedia?(gallery)
+            }
         }
 
         private func openSticker() {
@@ -162,6 +169,7 @@
         private var stickerView: StickerMediaSurfaceView?
         private let warningSymbol = NSImageView(frame: .zero)
         private let warningLabel = NSTextField(wrappingLabelWithString: "")
+        private let documentSizeLabel = NSTextField(labelWithString: "")
         private let playSymbol = NSImageView(frame: .zero)
         private let playBackground = NSView(frame: .zero)
         private let overflowShade = NSView(frame: .zero)
@@ -178,6 +186,7 @@
         private var gallery = false
         private var captionSize: CGFloat = 12
         private var overflowCount = 0
+        private var document = false
 
         override var isFlipped: Bool { true }
 
@@ -200,6 +209,9 @@
             surface.addSubview(warningSymbol)
             configureLabel(warningLabel)
             surface.addSubview(warningLabel)
+            configureLabel(documentSizeLabel)
+            documentSizeLabel.maximumNumberOfLines = 1
+            surface.addSubview(documentSizeLabel)
             playBackground.wantsLayer = true
             playBackground.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.5).cgColor
             playBackground.layer?.cornerRadius = 22
@@ -243,6 +255,7 @@
             let kind = attachment.kind.lowercased()
             let video = kind.hasPrefix("video/")
             configureSurface(gallery: gallery, video: video, overflow: overflow)
+            document = attachment.isDocumentAttachment
             if video {
                 // No poster frame is generated for remote videos: a neutral dark tile with a
                 // play badge opens the viewer, which streams the video with AVKit.
@@ -251,6 +264,19 @@
                 surface.layer?.backgroundColor = NSColor(white: 0.15, alpha: 1).cgColor
                 playBackground.isHidden = false
                 playSymbol.isHidden = false
+            } else if document {
+                imageView.clear()
+                imageView.isHidden = true
+                surface.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+                showWarning(symbol: "doc", label: attachment.fileName, color: .labelColor)
+                warningLabel.maximumNumberOfLines = 1
+                warningLabel.alignment = .left
+                warningLabel.lineBreakMode = .byTruncatingMiddle
+                documentSizeLabel.stringValue = attachment.documentSize
+                documentSizeLabel.alignment = .left
+                documentSizeLabel.font = .systemFont(ofSize: captionSize * 0.9)
+                documentSizeLabel.textColor = .secondaryLabelColor
+                documentSizeLabel.isHidden = false
             } else {
                 imageView.configure(
                     url: URL(string: attachment.url), contentMode: gallery ? .fill : .fit,
@@ -258,13 +284,15 @@
                     showsBlurredBackdrop: !gallery,
                     thumbnailPixelSize: pixelSize(displayScale), mediaContext: mediaContext)
             }
-            isEnabled = canOpen && (video || kind.hasPrefix("image/"))
+            isEnabled = canOpen && (document || video || kind.hasPrefix("image/"))
             setAccessibilityRole(isEnabled ? .button : .image)
             setAccessibilityLabel(
-                video
-                    ? AppLanguage.localized("Play video")
-                    : isEnabled
-                        ? AppLanguage.localized("Open image") : AppLanguage.localized("Image"))
+                document
+                    ? attachment.fileName + ", " + documentSizeLabel.stringValue
+                    : video
+                        ? AppLanguage.localized("Play video")
+                        : isEnabled
+                            ? AppLanguage.localized("Open image") : AppLanguage.localized("Image"))
             needsLayout = true
             window?.invalidateCursorRects(for: self)
         }
@@ -433,6 +461,15 @@
                 x: 8, y: bounds.midY + 5, width: max(0, bounds.width - 16), height: labelHeight)
             warningSymbol.frame = CGRect(
                 x: bounds.midX - 12, y: bounds.midY - 27, width: 24, height: 24)
+            if document {
+                warningSymbol.frame = CGRect(x: 16, y: bounds.midY - 12, width: 24, height: 24)
+                warningLabel.frame = CGRect(
+                    x: 52, y: bounds.midY - lineHeight,
+                    width: max(0, bounds.width - 64), height: lineHeight)
+                documentSizeLabel.frame = CGRect(
+                    x: 52, y: bounds.midY,
+                    width: max(0, bounds.width - 64), height: lineHeight)
+            }
             refreshVisibility()
         }
 
@@ -476,6 +513,12 @@
         }
 
         private func resetChrome() {
+            document = false
+            documentSizeLabel.isHidden = true
+            documentSizeLabel.stringValue = ""
+            warningLabel.maximumNumberOfLines = 2
+            warningLabel.alignment = .center
+            warningLabel.lineBreakMode = .byWordWrapping
             imageView.isHidden = false
             warningSymbol.isHidden = true
             warningLabel.isHidden = true

@@ -34,6 +34,9 @@ struct TimelineRowPresentation {
     let environment: TimelineLayoutEnvironment
     let title: TitleContent?
     let reply: MessagePreview?
+    let originLabel: String?
+    let originalReply: MessagePreview?
+    let forwardedCardLines: [String]
     let markdown: MarkdownDocument?
     let metadata: MessageMetadata?
     let metadataIsOverlay: Bool
@@ -55,6 +58,9 @@ struct TimelineRowPresentation {
         else { return nil }
         switch message.entry {
         case .pending(let pending):
+            if let remote = pending.optimisticMessage, let attachment = remote.attachments.first {
+                return URL(string: attachment.url)
+            }
             guard pending.attachments.count == 1, let attachment = pending.attachments.first,
                 attachment.mimeType.lowercased().hasPrefix("audio/"),
                 !attachment.uploadPath.isEmpty
@@ -79,6 +85,9 @@ struct TimelineRowPresentation {
     ) -> Self {
         var title: TitleContent?
         var reply: MessagePreview?
+        var originLabel: String?
+        var originalReply: MessagePreview?
+        var forwardedCardLines: [String] = []
         var markdown: MarkdownDocument?
         var metadata: MessageMetadata?
         var overlay = false
@@ -87,12 +96,16 @@ struct TimelineRowPresentation {
         var sections: [RowSectionKey] = []
         switch row {
         case .message(let message):
-            let remote = message.entry.remoteMessage
+            let remote = message.entry.presentationMessage
             let deleted = remote?.isDeleted == true
             let system = message.entry.messageType == .system
             let sticker = message.entry.messageType == .sticker
             let audio = message.entry.messageType == .audio
-            let supported = message.entry.messageType == .text || sticker || audio
+            let card = message.entry.messageType == .forwarded
+            let placeholder = message.entry.messageType == .placeholder
+            let supported =
+                message.entry.messageType == .text || message.entry.messageType == .file || sticker
+                || audio || card || placeholder
             sections.append(
                 .kind(
                     system
@@ -114,7 +127,7 @@ struct TimelineRowPresentation {
                     sender?.name.flatMap { $0.isEmpty ? nil : $0 }
                     ?? "User \(message.entry.senderID)"
                 title =
-                    message.showsSenderName && !sticker
+                    message.showsSenderName && !sticker && !card
                     ? .init(
                         name: name, userGroup: sender?.userGroup,
                         genderGlyph: sender?.gender == 2 ? "♀" : "♂") : nil
@@ -125,18 +138,46 @@ struct TimelineRowPresentation {
                         avatar: message.groupPosition == .single || message.groupPosition == .last))
                 sections.append(.title(title))
                 if !deleted && supported {
+                    if !sticker && !card, let origin = remote?.forwardedFrom {
+                        originLabel = AppLanguage.localized(
+                            "Forwarded from \(origin.sender.name ?? "User \(origin.sender.uid)")")
+                        originalReply = origin.originalReplyTo.flatMap { $0.isDeleted ? nil : $0 }
+                    }
+                    if message.capturedReplyRedacted {
+                        originLabel = AppLanguage.localized("[Redacted]")
+                    }
+                    if let originLabel { sections.append(.standalone(originLabel, author: nil)) }
+                    if let originalReply { sections.append(.reply(originalReply)) }
+                    if card {
+                        forwardedCardLines = [AppLanguage.localized("Chat records")]
+                        if let preview = remote?.forwardedPreview {
+                            forwardedCardLines += preview.messages.prefix(3).map {
+                                "\($0.sender.name ?? "User \($0.sender.uid)"): \(MessageSummaryContent.forwardedSummary($0))"
+                            }
+                            forwardedCardLines.append(
+                                AppLanguage.localized("\(preview.total) messages"))
+                        }
+                        sections.append(
+                            .standalone(forwardedCardLines.joined(separator: "\n"), author: nil))
+                    }
                     reply = message.entry.replyToMessage.flatMap { $0.isDeleted ? nil : $0 }
                     if let reply {
                         // Source/mention changes can alter styles and concealed
                         // glyph widths even when the plain summary is unchanged.
                         sections.append(.reply(reply))
                     }
-                    let text = message.entry.text ?? ""
-                    let hasBody = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    let text =
+                        placeholder
+                        ? MessageSummaryContent.placeholderLabel(message.entry.text)
+                        : message.entry.text ?? ""
+                    let hasBody =
+                        !card && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     let dimensions: [CGSize]
-                    if audio {
+                    if audio || card || placeholder {
                         dimensions = []
-                    } else if case .pending(let pending) = message.entry {
+                    } else if case .pending(let pending) = message.entry,
+                        pending.forwardRequest == nil
+                    {
                         dimensions = pending.attachments.map(\.mediaDimensions)
                     } else {
                         dimensions = (remote?.attachments ?? []).map(\.mediaDimensions)
@@ -212,7 +253,9 @@ struct TimelineRowPresentation {
             sections = [.kind("unread"), .standalone(standaloneText!, author: nil)]
         }
         return .init(
-            row: row, environment: environment, title: title, reply: reply, markdown: markdown,
+            row: row, environment: environment, title: title, reply: reply,
+            originLabel: originLabel, originalReply: originalReply,
+            forwardedCardLines: forwardedCardLines, markdown: markdown,
             metadata: metadata,
             metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText,
             layoutKey: .init(sections: sections))

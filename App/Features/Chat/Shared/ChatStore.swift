@@ -94,6 +94,7 @@ final class ChatStore: ObservableObject {
     @Published var listActionError: String?
     @Published private(set) var deletingMessageIDs = Set<MessageID>()
     let conversationMessages = ConversationMessageStore()
+    let chatAccessInvalidations = PassthroughSubject<String, Never>()
     let outgoingQueue: OutgoingMessageQueue
     let reactions: MessageReactionController
     let pins: ChatPinController
@@ -289,7 +290,8 @@ final class ChatStore: ObservableObject {
                 },
                 state: state, replyToMessage: message.replyToMessage,
                 attachments: message.attachments, dispatchClaimed: message.dispatchClaimed,
-                editRevision: message.editRevision, sticker: message.sticker
+                editRevision: message.editRevision, sticker: message.sticker,
+                forwardRequest: message.forwardRequest
             )
         }
     }
@@ -929,6 +931,7 @@ final class ChatStore: ObservableObject {
                             if let found {
                                 install(found)
                             } else {
+                                chatAccessInvalidations.send(key.chatID)
                                 state.chats.removeAll { $0.id == key.chatID }
                                 state.archivedChats.removeAll { $0.id == key.chatID }
                             }
@@ -1854,6 +1857,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func removeGroupFromLists(chatID: String) {
+        chatAccessInvalidations.send(chatID)
         state.chats.removeAll { $0.id == chatID }
         state.archivedChats.removeAll { $0.id == chatID }
         state.threads.removeAll { $0.chatId == chatID }
@@ -1870,6 +1874,43 @@ final class ChatStore: ObservableObject {
         recoveryDirty.remove(chatID)
         // Fences in-flight snapshots before the next refresh can observe the leave.
         invalidateChatList()
+    }
+
+    func forwardDestinationChats(query: ListChatsQuery) async throws -> ListChatsResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.listChats(query: query)
+        }
+    }
+
+    func forwardDestinationThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.listThreads(query: query)
+        }
+    }
+
+    func forwardSourceMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.getMessage(chatID: chatID, messageID: messageID)
+        }
+    }
+
+    func forwardedMessages(chatID: String, messageID: MessageID, bundleID: String? = nil)
+        async throws -> ForwardedMessagesResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.getForwardedMessages(
+                chatID: chatID, messageID: messageID, bundleID: bundleID)
+        }
+    }
+
+    func savedForwardedMessages(savedMessageID: String, bundleID: String? = nil)
+        async throws -> ForwardedMessagesResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.getSavedForwardedMessages(
+                savedMessageID: savedMessageID, bundleID: bundleID)
+        }
     }
 
     func fetchMessages(chatID: String, query: ListMessagesQuery = .init()) async throws

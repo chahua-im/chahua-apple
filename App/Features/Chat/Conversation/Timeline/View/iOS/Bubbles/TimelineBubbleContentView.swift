@@ -18,6 +18,9 @@
         private var localFrames: [TimelineSectionID: CGRect] = [:]
         private var headerView: TimelineHeaderView?
         private var replyView: TimelineReplyView?
+        private var originalReplyView: TimelineReplyView?
+        private var originView: BubbleLabel?
+        private var forwardedCardView: TimelineForwardedCardView?
         private var mediaView: TimelineMediaView?
         private var voiceView: (UIView & UIContentView)?
         private var voiceController: VoicePlaybackController?
@@ -92,6 +95,58 @@
                 headerView?.clear()
                 headerView?.isHidden = true
             }
+            if let origin = presentation.originLabel, localFrames[.origin] != nil {
+                let view = originView ?? BubbleLabel()
+                if originView == nil {
+                    originView = view
+                    sections.addSubview(view)
+                }
+                view.isHidden = false
+                view.text = origin
+                view.font = .italicSystemFont(ofSize: environment.captionSize)
+                view.textColor =
+                    row.isOutgoing ? UIColor.white.withAlphaComponent(0.7) : .secondaryLabel
+            } else {
+                originView?.isHidden = true
+            }
+            if let reply = presentation.originalReply, localFrames[.originalReply] != nil {
+                let view = originalReplyView ?? TimelineReplyView(frame: .zero)
+                if originalReplyView == nil {
+                    originalReplyView = view
+                    sections.addSubview(view)
+                }
+                view.isHidden = false
+                view.configure(
+                    reply, outgoing: row.isOutgoing, filled: isFilled,
+                    fontSize: environment.captionSize,
+                    frames: binding.layout.originalReplyContentFrames, enabled: false)
+            } else {
+                originalReplyView?.clear()
+                originalReplyView?.isHidden = true
+            }
+            if localFrames[.forwardedCard] != nil {
+                let view = forwardedCardView ?? TimelineForwardedCardView(frame: .zero)
+                if forwardedCardView == nil {
+                    forwardedCardView = view
+                    sections.addSubview(view)
+                }
+                view.isHidden = false
+                view.configure(
+                    lines: presentation.forwardedCardLines, fontSize: environment.captionSize,
+                    outgoing: row.isOutgoing,
+                    enabled: !binding.context.isInteractionPreview
+                        && !binding.actions.isSelectingMessages && row.entry.remoteMessage != nil
+                        && binding.actions.openForwardedMessages != nil)
+                view.onActivate = { [weak self] in
+                    guard let binding = self?.binding,
+                        case .message(let row) = binding.presentation.row,
+                        let message = row.entry.remoteMessage
+                    else { return }
+                    binding.actions.openForwardedMessages?(message)
+                }
+            } else {
+                forwardedCardView?.isHidden = true
+            }
             if localFrames[.reply] != nil, let reply = presentation.reply {
                 let view = replyView ?? makeReply()
                 view.isHidden = false
@@ -130,11 +185,15 @@
                 view.allowsSelection = isPreview
                 view.apply(
                     MessageTextContent(
-                        text: row.entry.text ?? "",
-                        mentions: row.entry.remoteMessage?.mentions ?? [],
+                        text: row.entry.messageType == .placeholder
+                            ? MessageSummaryContent.placeholderLabel(row.entry.text)
+                            : row.entry.text ?? "",
+                        mentions: row.entry.presentationMessage?.mentions ?? [],
                         currentUserID: binding.context.currentUserID, isOutgoing: row.isOutgoing,
-                        action: isPreview ? nil : binding.actions.openLink,
-                        mentionAction: isPreview ? nil : binding.actions.openMention,
+                        action: isPreview || binding.actions.interactionContext.isReadOnly
+                            ? nil : binding.actions.openLink,
+                        mentionAction: isPreview || binding.actions.interactionContext.isReadOnly
+                            ? nil : binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? presentation.metadata : nil,
                         failureAction: failureAction, geometry: geometry,
                         fontSize: environment.bodySize, document: presentation.markdown
@@ -176,6 +235,10 @@
 
         func clear() {
             binding = nil
+            originView?.isHidden = true
+            originalReplyView?.clear()
+            originalReplyView?.isHidden = true
+            forwardedCardView?.isHidden = true
             localFrames.removeAll(keepingCapacity: true)
             visible = false
             headerView?.clear()
@@ -227,6 +290,9 @@
             sections.frame = bounds
             headerView?.frame = localFrames[.title] ?? .zero
             replyView?.frame = localFrames[.reply] ?? .zero
+            originView?.frame = localFrames[.origin] ?? .zero
+            originalReplyView?.frame = localFrames[.originalReply] ?? .zero
+            forwardedCardView?.frame = localFrames[.forwardedCard] ?? .zero
             mediaView?.frame = localFrames[.media] ?? .zero
             voiceView?.frame = localFrames[.audio] ?? .zero
             textView?.frame = localFrames[.text] ?? .zero
@@ -273,7 +339,7 @@
             let mediaOnly = localFrames[.media] != nil && localFrames[.text] == nil
             return !sticker
                 && (!mediaOnly || binding.presentation.reply != nil
-                    || binding.presentation.title != nil)
+                    || binding.presentation.title != nil || binding.presentation.originLabel != nil)
         }
 
         private var failureAction: (() -> Void)? {
@@ -572,9 +638,7 @@
             self.filled = filled
             self.fontSize = fontSize
             contentFrames = frames
-            author.text =
-                preview.sender.name.flatMap { $0.isEmpty ? nil : $0 }
-                ?? "User \(preview.sender.uid)"
+            author.text = MessageSummaryContent.author(preview)
             author.font = .systemFont(ofSize: fontSize * 11 / 12, weight: .semibold)
             isEnabled = enabled
             accessibilityTraits = isEnabled ? .button : .staticText

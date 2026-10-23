@@ -6,6 +6,208 @@ import XCTest
 
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    func testForwardedRecordsUseFullCapturedTimelineAndBundleLocalReplies() async throws {
+        let original = try TimelineTestFixtures.message(
+            id: 1, chatID: "source", at: 1, text: "Captured original")
+        let preview = ForwardedMessagePreviewResponse(
+            originalMessageId: original.id, originalChatId: original.chatId,
+            message: original.message, messageType: original.messageType,
+            sender: original.sender, originalCreatedAt: original.createdAt)
+        let captured: [ForwardedMessageResponse] = (1...55).map { index in
+            let reply: ForwardedReplyResponse?
+            if index == 2 {
+                reply = .internal(originalMessageId: original.id, preview: preview)
+            } else if index == 3 {
+                reply = .redacted
+            } else {
+                reply = nil
+            }
+            return ForwardedMessageResponse(
+                originalMessageId: MessageID(UInt64(index)), originalChatId: original.chatId,
+                message: index == 1
+                    ? original.message : index == 4 ? "pendingAudio" : "Captured \(index)",
+                messageType: index == 4 ? .placeholder : index == 5 ? .forwarded : .text,
+                sender: original.sender,
+                originalCreatedAt: original.createdAt.addingTimeInterval(Double(index)),
+                reply: reply, forwardedBundleId: index == 5 ? "child" : nil)
+        }
+        let response = ForwardedMessagesResponse(total: captured.count, messages: captured)
+        let child = ForwardedMessagesResponse(total: 1, messages: [captured[0]])
+        let api = FakeChatAPI()
+        await api.setForwardedResponses([response, child])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        let session = ForwardedRecordsSession(
+            store: store, root: .chat(chatID: "destination", messageID: MessageID(900)))
+        session.load(.root)
+        let snapshot = try await waitForForwardedSnapshot(session)
+        let rows = snapshot.timeline.rows.compactMap { row -> TimelineMessageRow? in
+            if case .message(let message) = row { return message }
+            return nil
+        }
+        XCTAssertEqual(rows.count, 55, "The fixed snapshot must not truncate at live page size")
+        XCTAssertEqual(rows.map(\.entry.serverID), captured.map { Optional($0.originalMessageId) })
+        XCTAssertTrue(rows.allSatisfy(\.isOutgoing))
+        XCTAssertEqual(rows[1].entry.remoteMessage?.replyToMessage?.id, original.id)
+        XCTAssertEqual(rows[1].entry.remoteMessage?.replyToMessage?.message, original.message)
+        XCTAssertTrue(rows[2].capturedReplyRedacted)
+        XCTAssertNil(rows[2].entry.remoteMessage?.replyToMessage)
+        XCTAssertEqual(rows[3].entry.remoteMessage?.messageType, .placeholder)
+        XCTAssertEqual(rows[3].entry.remoteMessage?.message, "pendingAudio")
+        XCTAssertTrue(rows[3].entry.remoteMessage?.attachments.isEmpty == true)
+        XCTAssertEqual(snapshot.childBundleIDs, ["child"])
+        let internalJump = await snapshot.timeline.jumpToMessage(original.id)
+        XCTAssertEqual(internalJump, .reached)
+        let absentJump = await snapshot.timeline.jumpToMessage(MessageID(999))
+        XCTAssertEqual(absentJump, .missing)
+
+        session.load(.bundle("child"))
+        _ = try await waitForForwardedSnapshot(session, key: .bundle("child"))
+        session.load(.root)
+        let preserved = try await waitForForwardedSnapshot(session)
+        XCTAssertTrue(
+            preserved === snapshot, "Returning from a child preserves the parent timeline")
+        let requests = await api.recordedForwardedRequests()
+        XCTAssertEqual(
+            requests,
+            [
+                .chat(chatID: "destination", messageID: MessageID(900), bundleID: nil),
+                .chat(chatID: "destination", messageID: MessageID(900), bundleID: "child"),
+            ])
+        let originalChatRequests = await api.recordedMessageChatIDs()
+        XCTAssertTrue(originalChatRequests.isEmpty, "Captured replies must never hydrate originals")
+        XCTAssertTrue(store.conversationStateScope.isEmpty, "Record timelines do not subscribe")
+    }
+
+    func testForwardedRecordRootDeletionAndAccessLossFenceDelayedChildResponses() async throws {
+        for losesMembership in [false, true] {
+            let original = try TimelineTestFixtures.message(id: 1, at: 1)
+            let card = ForwardedMessageResponse(
+                originalMessageId: original.id, originalChatId: original.chatId,
+                message: nil, messageType: .forwarded, sender: original.sender,
+                originalCreatedAt: original.createdAt, forwardedBundleId: "child")
+            let response = ForwardedMessagesResponse(total: 1, messages: [card])
+            let api = FakeChatAPI(removeMemberResults: [.success(())])
+            await api.setForwardedResponses([response])
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            defer { store.reset() }
+            store.currentUserProfile = try JSONDecoder().decode(
+                MeResponse.self,
+                from: Data(
+                    #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                        .utf8))
+            let session = ForwardedRecordsSession(
+                store: store, root: .chat(chatID: "chat", messageID: MessageID(900)))
+            session.load(.root)
+            let snapshot = try await waitForForwardedSnapshot(session)
+            XCTAssertFalse(snapshot.timeline.rows.isEmpty)
+            await api.suspendNextForwardedRequest()
+            session.load(.bundle("child"))
+            await api.waitForForwardedRequest()
+
+            if losesMembership {
+                try await store.leaveGroup(chatID: "chat", uid: 1)
+            } else {
+                let deletedRoot = try TimelineTestFixtures.message(
+                    id: 900, at: 2, type: .forwarded, isDeleted: true)
+                store.conversationMessages.apply(.messageDeleted(deletedRoot))
+            }
+            guard case .unavailable = session.phase(for: .root) else {
+                return XCTFail("Root authority loss must immediately make all records unavailable")
+            }
+            XCTAssertTrue(
+                snapshot.timeline.rows.isEmpty, "Already captured content must be cleared")
+            await api.resumeForwardedRequest(with: response)
+            try await Task.sleep(for: .milliseconds(30))
+            session.load(.root, retry: true)
+            guard case .unavailable = session.phase(for: .bundle("child")) else {
+                return XCTFail(
+                    "A late authorized-before-revocation result must not restore content")
+            }
+            XCTAssertTrue(session.records.isEmpty)
+            let requests = await api.recordedForwardedRequests()
+            XCTAssertEqual(requests.count, 2, "Unavailable roots cannot retry with stale authority")
+        }
+    }
+
+    func testSavedForwardedRecordsSurviveSourceDeletionAndChatDeparture() async throws {
+        let original = try TimelineTestFixtures.message(id: 1, at: 1)
+        let captured = ForwardedMessageResponse(
+            originalMessageId: original.id, originalChatId: original.chatId,
+            message: original.message, messageType: original.messageType,
+            sender: original.sender, originalCreatedAt: original.createdAt)
+        let response = ForwardedMessagesResponse(total: 1, messages: [captured])
+        let card = ForwardedMessageResponse(
+            originalMessageId: MessageID(2), originalChatId: original.chatId,
+            message: nil, messageType: .forwarded, sender: original.sender,
+            originalCreatedAt: original.createdAt, forwardedBundleId: "saved-child")
+        let rootResponse = ForwardedMessagesResponse(total: 2, messages: [captured, card])
+        let api = FakeChatAPI(removeMemberResults: [.success(())])
+        await api.setForwardedResponses([rootResponse])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        let session = ForwardedRecordsSession(store: store, root: .saved(messageID: "saved-root"))
+        session.load(.root)
+        let snapshot = try await waitForForwardedSnapshot(session)
+        await api.suspendNextForwardedRequest()
+        session.load(.bundle("saved-child"))
+        await api.waitForForwardedRequest()
+        store.conversationMessages.apply(.messageDeleted(original.redactedForDeletion()))
+        let deletedWrapper = try TimelineTestFixtures.message(
+            id: 900, at: 2, type: .forwarded, isDeleted: true)
+        store.conversationMessages.apply(.messageDeleted(deletedWrapper))
+        try await store.leaveGroup(chatID: "chat", uid: 1)
+        let preserved = try await waitForForwardedSnapshot(session)
+        XCTAssertTrue(preserved === snapshot, "Saved ownership is independent of live chat access")
+        XCTAssertEqual(snapshot.timeline.rows.compactMap(\.messageID), [original.id, MessageID(2)])
+        await api.resumeForwardedRequest(with: response)
+        let child = try await waitForForwardedSnapshot(session, key: .bundle("saved-child"))
+        XCTAssertEqual(child.timeline.rows.compactMap(\.messageID), [original.id])
+        let requests = await api.recordedForwardedRequests()
+        XCTAssertEqual(
+            requests,
+            [
+                .saved(savedMessageID: "saved-root", bundleID: nil),
+                .saved(savedMessageID: "saved-root", bundleID: "saved-child"),
+            ])
+        let originalChatRequests = await api.recordedMessageChatIDs()
+        XCTAssertTrue(originalChatRequests.isEmpty)
+    }
+
+    private func waitForForwardedSnapshot(
+        _ session: ForwardedRecordsSession,
+        key: ForwardedRecordsSession.Key = .root,
+        file: StaticString = #filePath, line: UInt = #line
+    ) async throws -> ForwardedRecordSnapshot {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            switch session.phase(for: key) {
+            case .ready(let snapshot): return snapshot
+            case .failed, .unavailable:
+                XCTFail("Expected captured records to load", file: file, line: line)
+                throw FakeChatAPIError.failed
+            case .loading:
+                try await Task.sleep(for: .milliseconds(1))
+            }
+        }
+        XCTFail("Timed out loading captured records", file: file, line: line)
+        throw FakeChatAPIError.failed
+    }
+
     func testMessageAndReactionReadCursorsRemainIndependentAndBackgroundCannotAcknowledge()
         async throws
     {
@@ -1283,6 +1485,65 @@ actor FakeChatAPI: ChahuaAPIClient {
     private var receiptVisibility: ReadReceiptVisibility = .friends
     private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
 
+    enum ForwardedRequest: Equatable, Sendable {
+        case chat(chatID: String, messageID: MessageID, bundleID: String?)
+        case saved(savedMessageID: String, bundleID: String?)
+    }
+    private var forwardedRequests: [ForwardedRequest] = []
+    private var forwardedResponses: [ForwardedMessagesResponse] = []
+    private var suspendNextForwarded = false
+    private var pendingForwardedRequest: CheckedContinuation<ForwardedMessagesResponse, Error>?
+    private var forwardedRequestObserver: CheckedContinuation<Void, Never>?
+    private var messageChatIDs: [String] = []
+
+    func setForwardedResponses(_ responses: [ForwardedMessagesResponse]) {
+        forwardedResponses = responses
+    }
+
+    func suspendNextForwardedRequest() { suspendNextForwarded = true }
+
+    func getForwardedMessages(chatID: String, messageID: MessageID, bundleID: String?)
+        async throws -> ForwardedMessagesResponse
+    {
+        forwardedRequests.append(.chat(chatID: chatID, messageID: messageID, bundleID: bundleID))
+        return try await readForwardedResponse()
+    }
+
+    func getSavedForwardedMessages(savedMessageID: String, bundleID: String?)
+        async throws -> ForwardedMessagesResponse
+    {
+        forwardedRequests.append(.saved(savedMessageID: savedMessageID, bundleID: bundleID))
+        return try await readForwardedResponse()
+    }
+
+    private func readForwardedResponse() async throws -> ForwardedMessagesResponse {
+        if suspendNextForwarded {
+            suspendNextForwarded = false
+            // Deliberately ignore cancellation, just like an already delivered
+            // transport response, so the session's generation fence is exercised.
+            return try await withCheckedThrowingContinuation { continuation in
+                pendingForwardedRequest = continuation
+                forwardedRequestObserver?.resume()
+                forwardedRequestObserver = nil
+            }
+        }
+        guard !forwardedResponses.isEmpty else { throw APIError.unavailable }
+        return forwardedResponses.removeFirst()
+    }
+
+    func waitForForwardedRequest() async {
+        if pendingForwardedRequest != nil { return }
+        await withCheckedContinuation { forwardedRequestObserver = $0 }
+    }
+
+    func resumeForwardedRequest(with response: ForwardedMessagesResponse) {
+        pendingForwardedRequest?.resume(returning: response)
+        pendingForwardedRequest = nil
+    }
+
+    func recordedForwardedRequests() -> [ForwardedRequest] { forwardedRequests }
+    func recordedMessageChatIDs() -> [String] { messageChatIDs }
+
     func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
         ReadReceiptResponse()
     }
@@ -1583,6 +1844,7 @@ actor FakeChatAPI: ChahuaAPIClient {
 
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
     {
+        messageChatIDs.append(chatID)
         guard var results = messageResults[chatID], !results.isEmpty else {
             throw APIError.unavailable
         }

@@ -5,6 +5,72 @@ import XCTest
 @testable import ChahuaAPI
 
 final class LocalPersistenceTests: XCTestCase {
+    func testForwardSelectionAndKeySurviveClaimRestoreRetryWithoutConsumingDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let draft = try await store!.saveDraft(
+            chatID: "destination", threadID: "thread", text: "keep draft", editRevision: 1,
+            updatedAt: Date(), replyToMessage: preview(id: 101))
+        let sender = User(uid: 1, gender: 0, name: "Original", avatarUrl: nil, userGroup: nil)
+        let source = MessageResponse(
+            id: MessageID(9_007_199_254_740_993), chatId: "source", clientGeneratedId: "source-key",
+            messageType: .placeholder, sender: sender, createdAt: Date(timeIntervalSince1970: 10),
+            message: "pendingAudio",
+            forwardedFrom: ForwardedFromInfo(
+                sender: sender, originalChatId: "earlier", originalMessageId: MessageID(3)))
+        let request = LocalForwardRequest(
+            sourceChatID: "source", sources: [source], allowPlaceholders: true)
+        let enqueued = try await store!.enqueueForward(
+            chatID: "destination", threadID: "thread", senderID: 1, request: request)
+        XCTAssertEqual(enqueued.draft, draft.draft)
+        let pending = try XCTUnwrap(enqueued.outgoing.first)
+        XCTAssertEqual(pending.forwardRequest, request)
+        XCTAssertNil(pending.replyToMessage)
+        let claim = try await store!.claimNext(chatID: "destination", threadID: "thread")
+        XCTAssertEqual(claim.message?.clientGeneratedID, pending.clientGeneratedID)
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        let recovered = try XCTUnwrap(restored.first?.outgoing.first)
+        XCTAssertEqual(recovered.clientGeneratedID, pending.clientGeneratedID)
+        XCTAssertEqual(recovered.forwardRequest, request)
+        XCTAssertTrue(recovered.dispatchClaimed)
+        XCTAssertEqual(restored.first?.draft, draft.draft)
+        _ = try await store!.fail(
+            chatID: "destination", threadID: "thread", clientGeneratedID: pending.clientGeneratedID)
+        let retried = try await store!.retry(
+            chatID: "destination", threadID: "thread", clientGeneratedID: pending.clientGeneratedID,
+            scope: .message)
+        XCTAssertEqual(retried.outgoing.first?.forwardRequest, request)
+        XCTAssertEqual(retried.outgoing.first?.clientGeneratedID, pending.clientGeneratedID)
+    }
+
+    func testForwardedTextCannotBecomeEditableCompositionButCanBeRevoked() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        let source = MessageResponse(
+            id: MessageID(1), chatId: "source", clientGeneratedId: "original",
+            messageType: .text,
+            sender: User(uid: 1, gender: 0, name: nil, avatarUrl: nil, userGroup: nil),
+            createdAt: Date(), message: "immutable")
+        let enqueued = try await store.enqueueForward(
+            chatID: "destination", senderID: 1,
+            request: LocalForwardRequest(sourceChatID: "source", sources: [source]))
+        let pending = try XCTUnwrap(enqueued.outgoing.first)
+        do {
+            _ = try await store.blockTail(
+                chatID: "destination", itemID: pending.clientGeneratedID, expectedRevision: 0)
+            XCTFail("Forwarded text is not an editable ordinary message")
+        } catch LocalStorageError.unsupportedMessageType {}
+        let revoked = try await store.revokeTail(
+            chatID: "destination", itemID: pending.clientGeneratedID, expectedRevision: 0)
+        XCTAssertTrue(revoked.outgoing.isEmpty)
+    }
+
     func testStickerEnqueuePreservesCompositionAndDispatchesBeforeItsAttachmentsAcrossReopen()
         async throws
     {

@@ -1,0 +1,148 @@
+import ChahuaAPI
+import SwiftUI
+
+/// Read-only captured records rendered by the same timeline as a conversation.
+/// Child navigation shares root authority and leaves the underlying chat intact.
+struct ForwardedRecordsView: View {
+    @StateObject private var session: ForwardedRecordsSession
+    private let key: ForwardedRecordsSession.Key
+    @State private var childBundleID: String?
+    @State private var presentedGalleryID: UUID?
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.imageDetailPresenter) private var imageDetailPresenter
+    @Environment(\.openURL) private var openURL
+
+    init(
+        store: ChatStore, chatID: String, messageID: MessageID, bundleID: String? = nil
+    ) {
+        _session = StateObject(
+            wrappedValue: ForwardedRecordsSession(
+                store: store, root: .chat(chatID: chatID, messageID: messageID)))
+        key = .init(bundleID: bundleID)
+    }
+
+    init(store: ChatStore, savedMessageID: String, bundleID: String? = nil) {
+        _session = StateObject(
+            wrappedValue: ForwardedRecordsSession(
+                store: store, root: .saved(messageID: savedMessageID)))
+        key = .init(bundleID: bundleID)
+    }
+
+    private init(session: ForwardedRecordsSession, bundleID: String) {
+        _session = StateObject(wrappedValue: session)
+        key = .bundle(bundleID)
+    }
+
+    var body: some View {
+        content
+            .navigationTitle("Chat records")
+            .navigationDestination(item: $childBundleID) { bundleID in
+                ForwardedRecordsView(session: session, bundleID: bundleID)
+            }
+            .task(id: session.revision) {
+                session.load(key)
+            }
+            .onAppear {
+                session.setSceneActive(scenePhase == .active)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                session.setSceneActive(phase == .active)
+            }
+            .onChange(of: session.revision) { _, _ in
+                if imageDetailPresenter?.gallery?.id == presentedGalleryID {
+                    imageDetailPresenter?.dismiss()
+                }
+                presentedGalleryID = nil
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch session.phase(for: key) {
+        case .loading:
+            ProgressView("Loading chat history…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed:
+            VStack(spacing: ChahuaTheme.Spacing.small) {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+                Text("Couldn’t load chat history").font(.headline)
+                Text("Check your connection and try again.")
+                    .foregroundStyle(ChahuaTheme.secondaryText)
+                Button("Retry") { session.load(key, retry: true) }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .unavailable:
+            VStack(spacing: ChahuaTheme.Spacing.small) {
+                Image(systemName: "lock.doc").font(.largeTitle)
+                Text("Chat history unavailable").font(.headline)
+                Text("This chat history is no longer available or you don’t have access.")
+                    .foregroundStyle(ChahuaTheme.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .ready(let snapshot):
+            timeline(snapshot)
+        }
+    }
+
+    @ViewBuilder
+    private func timeline(_ snapshot: ForwardedRecordSnapshot) -> some View {
+        #if os(macOS)
+            ConversationTimelineView(
+                model: snapshot.timeline, loadsInitialAutomatically: false,
+                actions: actions(for: snapshot), interactionContext: readOnlyContext)
+        #else
+            ConversationTimelineView(
+                model: snapshot.timeline, loadsInitialAutomatically: false,
+                actions: actions(for: snapshot))
+        #endif
+    }
+
+    private var readOnlyContext: MessageInteractionContext {
+        var context = MessageInteractionContext()
+        context.isReadOnly = true
+        return context
+    }
+
+    private func actions(for snapshot: ForwardedRecordSnapshot) -> TimelineBubbleActions {
+        var actions = TimelineBubbleActions()
+        actions.interactionContext = readOnlyContext
+        actions.openAttachment = { attachment in
+            guard case .ready(let current) = session.phase(for: key), current === snapshot,
+                let url = URL(string: attachment.url)
+            else { return }
+            openURL(url)
+        }
+        if let imageDetailPresenter {
+            actions.openMedia = { gallery in
+                guard case .ready(let current) = session.phase(for: key), current === snapshot
+                else {
+                    return
+                }
+                var gallery = gallery
+                gallery.conversationTitle = String(localized: "Chat records")
+                imageDetailPresenter.present(gallery)
+                if imageDetailPresenter.gallery?.id == gallery.id {
+                    presentedGalleryID = gallery.id
+                }
+            }
+        }
+        actions.openReply = { messageID in
+            guard case .ready(let current) = session.phase(for: key), current === snapshot,
+                snapshot.messageIDs.contains(messageID)
+            else { return }
+            Task { await snapshot.timeline.jumpToMessage(messageID) }
+        }
+        actions.openForwardedMessages = { message in
+            guard case .ready(let current) = session.phase(for: key), current === snapshot,
+                message.messageType == .forwarded,
+                let bundleID = message.forwardedBundleId,
+                snapshot.childBundleIDs.contains(bundleID)
+            else { return }
+            childBundleID = bundleID
+        }
+        return actions
+    }
+}

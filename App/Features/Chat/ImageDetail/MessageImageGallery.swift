@@ -54,9 +54,9 @@ struct MessageImageGallery: Identifiable {
         let items: [MessageImageItem]
         let messageID: String
         let sentAt: Date
-        switch entry {
-        case .remote(let message):
-            guard !message.isDeleted, message.messageType == .text else { return nil }
+        if let message = entry.presentationMessage {
+            guard !message.isDeleted, message.messageType == .text || message.messageType == .file
+            else { return nil }
             messageID = message.id.description
             sentAt = message.createdAt
             items = message.attachments.map {
@@ -65,7 +65,7 @@ struct MessageImageGallery: Identifiable {
                     fileName: $0.fileName, width: $0.width.map(Int.init),
                     height: $0.height.map(Int.init))
             }
-        case .pending(let message):
+        } else if case .pending(let message) = entry {
             messageID = message.clientGeneratedID
             sentAt = message.enqueuedAt
             items = message.attachments.map {
@@ -73,6 +73,8 @@ struct MessageImageGallery: Identifiable {
                     id: $0.id, url: URL(fileURLWithPath: $0.uploadPath), contentType: $0.mimeType,
                     fileName: $0.fileName, width: $0.width, height: $0.height)
             }
+        } else {
+            return nil
         }
         guard items.indices.contains(attachmentIndex) else { return nil }
         self.init(

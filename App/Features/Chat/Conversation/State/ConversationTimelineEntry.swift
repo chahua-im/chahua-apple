@@ -49,14 +49,14 @@ enum ConversationTimelineEntry: Hashable {
     var text: String? {
         switch self {
         case .remote(let message): message.message
-        case .pending(let pending): pending.body.message
+        case .pending(let pending): pending.optimisticMessage?.message ?? pending.body.message
         }
     }
 
     var sticker: MessageStickerResponse? {
         switch self {
         case .remote(let message): message.isDeleted ? nil : message.sticker
-        case .pending(let pending): pending.sticker
+        case .pending(let pending): pending.optimisticMessage?.sticker ?? pending.sticker
         }
     }
 
@@ -83,6 +83,20 @@ enum ConversationTimelineEntry: Hashable {
         guard case .remote(let message) = self else { return nil }
         return message
     }
+
+    /// Rendering may use optimistic forwarding content without granting it remote identity.
+    var presentationMessage: MessageResponse? {
+        switch self {
+        case .remote(let message): message
+        case .pending(let pending): pending.optimisticMessage
+        }
+    }
+
+    var forwardedFrom: ForwardedFromInfo? { presentationMessage?.forwardedFrom }
+    var forwardedPreview: ForwardedMessagesPreviewResponse? {
+        presentationMessage?.forwardedPreview
+    }
+    var attachments: [AttachmentResponse] { presentationMessage?.attachments ?? [] }
 }
 
 extension ConversationMessageStableKey {

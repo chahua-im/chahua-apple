@@ -27,6 +27,41 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     public private(set) var replyToMessage: MessagePreview?
     public private(set) var sticker: MessageStickerResponse?
     public private(set) var threadInfo: ThreadInfo?
+    public private(set) var forwardedFrom: ForwardedFromInfo?
+    public private(set) var forwardedBundleId: String?
+    public private(set) var forwardedPreview: ForwardedMessagesPreviewResponse?
+
+    public init(
+        id: MessageID, chatId: String, clientGeneratedId: String, messageType: MessageType,
+        sender: User, createdAt: Date, isEdited: Bool = false, isDeleted: Bool = false,
+        hasAttachments: Bool = false, attachments: [AttachmentResponse] = [],
+        reactions: [ReactionSummary] = [], mentions: [MentionInfo] = [], message: String? = nil,
+        replyRootId: String? = nil, replyToMessage: MessagePreview? = nil,
+        sticker: MessageStickerResponse? = nil, threadInfo: ThreadInfo? = nil,
+        forwardedFrom: ForwardedFromInfo? = nil, forwardedBundleId: String? = nil,
+        forwardedPreview: ForwardedMessagesPreviewResponse? = nil
+    ) {
+        self.id = id
+        self.chatId = chatId
+        self.clientGeneratedId = clientGeneratedId
+        self.messageType = messageType
+        self.sender = sender
+        self.createdAt = createdAt
+        self.isEdited = isEdited
+        self.isDeleted = isDeleted
+        self.hasAttachments = hasAttachments
+        self.attachments = attachments
+        self.reactions = reactions
+        self.mentions = mentions
+        self.message = message
+        self.replyRootId = replyRootId
+        self.replyToMessage = replyToMessage
+        self.sticker = sticker
+        self.threadInfo = threadInfo
+        self.forwardedFrom = forwardedFrom
+        self.forwardedBundleId = forwardedBundleId
+        self.forwardedPreview = forwardedPreview
+    }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -47,6 +82,11 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         replyToMessage = try container.decodeIfPresent(MessagePreview.self, forKey: .replyToMessage)
         sticker = try container.decodeIfPresent(MessageStickerResponse.self, forKey: .sticker)
         threadInfo = try container.decodeIfPresent(ThreadInfo.self, forKey: .threadInfo)
+        forwardedFrom = try container.decodeIfPresent(
+            ForwardedFromInfo.self, forKey: .forwardedFrom)
+        forwardedBundleId = try container.decodeIfPresent(String.self, forKey: .forwardedBundleId)
+        forwardedPreview = try container.decodeIfPresent(
+            ForwardedMessagesPreviewResponse.self, forKey: .forwardedPreview)
     }
 
     public var replyPreview: MessagePreview {
@@ -57,7 +97,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
                 ? [] : attachments.map { MessagePreviewAttachment(kind: $0.kind) },
             mentions: isDeleted ? [] : mentions, isDeleted: isDeleted,
             message: isDeleted ? nil : message,
-            sticker: isDeleted ? nil : sticker.map { MessagePreviewSticker(emoji: $0.emoji) }
+            sticker: isDeleted ? nil : sticker.map { MessagePreviewSticker(emoji: $0.emoji) },
+            forwardedFromName: isDeleted ? nil : forwardedFrom?.sender.name
         )
     }
 
@@ -92,6 +133,9 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         copy.attachments = []
         copy.reactions = []
         copy.mentions = []
+        copy.forwardedFrom = nil
+        copy.forwardedBundleId = nil
+        copy.forwardedPreview = nil
         return copy
     }
 
@@ -112,6 +156,9 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     }
 
     public func replacingMessageText(_ text: String) -> Self {
+        guard forwardedFrom == nil, messageType != .forwarded, messageType != .placeholder else {
+            return self
+        }
         var copy = self
         copy.message = text
         copy.isEdited = true
@@ -134,6 +181,26 @@ public struct MessagePreview: Codable, Hashable, Sendable {
     public private(set) var isDeleted: Bool
     public private(set) var message: String?
     public private(set) var sticker: MessagePreviewSticker?
+    public private(set) var forwardedFromName: String?
+
+    public init(
+        id: MessageID, clientGeneratedId: String, createdAt: Date, sender: User,
+        messageType: MessageType, attachments: [MessagePreviewAttachment] = [],
+        mentions: [MentionInfo] = [], isDeleted: Bool = false, message: String? = nil,
+        sticker: MessagePreviewSticker? = nil, forwardedFromName: String? = nil
+    ) {
+        self.id = id
+        self.clientGeneratedId = clientGeneratedId
+        self.createdAt = createdAt
+        self.sender = sender
+        self.messageType = messageType
+        self.attachments = attachments
+        self.mentions = mentions
+        self.isDeleted = isDeleted
+        self.message = message
+        self.sticker = sticker
+        self.forwardedFromName = forwardedFromName
+    }
 
     public func redactedForDeletion() -> Self {
         var copy = self
@@ -142,16 +209,25 @@ public struct MessagePreview: Codable, Hashable, Sendable {
         copy.sticker = nil
         copy.attachments = []
         copy.mentions = []
+        copy.forwardedFromName = nil
         return copy
     }
 }
 
 public struct MessagePreviewAttachment: Codable, Hashable, Sendable {
     public let kind: String
+
+    public init(kind: String) {
+        self.kind = kind
+    }
 }
 
 public struct MessagePreviewSticker: Codable, Hashable, Sendable {
     public let emoji: String
+
+    public init(emoji: String) {
+        self.emoji = emoji
+    }
 }
 
 public struct AttachmentResponse: Codable, Hashable, Sendable {
@@ -270,6 +346,17 @@ public struct ListMessagesResponse: Codable, Hashable, Sendable {
     public let newerCursor: MessageID?
     public let nextCursor: MessageID?
     public let prevCursor: MessageID?
+
+    public init(
+        messages: [MessageResponse], olderCursor: MessageID? = nil, newerCursor: MessageID? = nil,
+        nextCursor: MessageID? = nil, prevCursor: MessageID? = nil
+    ) {
+        self.messages = messages
+        self.olderCursor = olderCursor
+        self.newerCursor = newerCursor
+        self.nextCursor = nextCursor
+        self.prevCursor = prevCursor
+    }
 }
 
 /// One result page returned by `GET /chats/{chatID}/messages/search`.

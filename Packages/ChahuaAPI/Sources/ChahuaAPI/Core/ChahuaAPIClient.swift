@@ -4,6 +4,16 @@
 /// inject deterministic transports. Every chat and message identifier is an opaque
 /// server `String`; do not convert identifiers or cursors to numeric types.
 public protocol ChahuaAPIClient: Sendable {
+    /// Immutable forwarding operations; reuse the same key and source IDs for retries.
+    func forwardMessage(chatID: String, messageID: MessageID, body: ForwardMessageBody)
+        async throws -> MessageResponse
+    func forwardMessages(chatID: String, body: ForwardMessagesBody)
+        async throws -> MessageResponse
+    func getForwardedMessages(chatID: String, messageID: MessageID, bundleID: String?)
+        async throws -> ForwardedMessagesResponse
+    func getSavedForwardedMessages(savedMessageID: String, bundleID: String?)
+        async throws -> ForwardedMessagesResponse
+
     /// Validates and installs a candidate JWT, returning the authenticated account.
     ///
     /// A production `ChahuaClient` performs `GET /users/me` with the candidate
@@ -218,6 +228,42 @@ public protocol ChahuaAPIClient: Sendable {
 }
 
 extension ChahuaAPIClient {
+    public func forwardMessage(chatID: String, messageID: MessageID, body: ForwardMessageBody)
+        async throws -> MessageResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func forwardMessages(chatID: String, body: ForwardMessagesBody)
+        async throws -> MessageResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func getForwardedMessages(
+        chatID: String, messageID: MessageID, bundleID: String?
+    ) async throws -> ForwardedMessagesResponse {
+        throw APIError.unavailable
+    }
+
+    public func getSavedForwardedMessages(savedMessageID: String, bundleID: String?)
+        async throws -> ForwardedMessagesResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func getForwardedMessages(chatID: String, messageID: MessageID)
+        async throws -> ForwardedMessagesResponse
+    {
+        try await getForwardedMessages(chatID: chatID, messageID: messageID, bundleID: nil)
+    }
+
+    public func getSavedForwardedMessages(savedMessageID: String)
+        async throws -> ForwardedMessagesResponse
+    {
+        try await getSavedForwardedMessages(savedMessageID: savedMessageID, bundleID: nil)
+    }
+
     public func chatReadState(chatID: String) async throws -> ReadStateResponse {
         throw APIError.unavailable
     }

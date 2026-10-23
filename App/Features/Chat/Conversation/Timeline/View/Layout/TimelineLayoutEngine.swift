@@ -42,15 +42,21 @@ struct TimelineLayoutEngine {
                 frames: [:], textGeometry: nil, mediaFrames: [], reactionFrames: [])
         }
         let centralX = pixel(12 + e.avatarSize + 8, e)
-        let text = row.entry.text ?? ""
-        let deleted = row.entry.remoteMessage?.isDeleted == true
+        let placeholder = row.entry.messageType == .placeholder
+        let text =
+            placeholder
+            ? MessageSummaryContent.placeholderLabel(row.entry.text) : row.entry.text ?? ""
+        let deleted = row.entry.presentationMessage?.isDeleted == true
         let sticker = row.entry.messageType == .sticker && !deleted
         let audio = row.entry.messageType == .audio && !deleted
-        let supported = row.entry.messageType == .text && !deleted
+        let supported = [.text, .file, .placeholder].contains(row.entry.messageType) && !deleted
         let hasBody = supported && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let remote = supported ? row.entry.remoteMessage?.attachments ?? [] : []
+        let remote =
+            supported && !placeholder ? row.entry.presentationMessage?.attachments ?? [] : []
         let local: [LocalOutgoingAttachment]
-        if supported, case .pending(let pending) = row.entry {
+        if supported && !placeholder, case .pending(let pending) = row.entry,
+            pending.forwardRequest == nil
+        {
             local = pending.attachments
         } else {
             local = []
@@ -82,7 +88,8 @@ struct TimelineLayoutEngine {
                 }
             #endif
         }
-        let unsupported = !supported && !sticker && !audio && !deleted
+        let unsupported =
+            !supported && !sticker && !audio && !deleted && p.forwardedCardLines.isEmpty
         let symbolSize =
             unsupported
             ? MessageNativeSymbol.size(
@@ -95,9 +102,8 @@ struct TimelineLayoutEngine {
         let preferredTitle =
             p.title.map { titleGeometry($0, width: max(0, c - 24), environment: e).size.width + 24 }
             ?? 0
-        let replySizes = p.reply.map { reply in
-            let author =
-                reply.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(reply.sender.uid)"
+        func quoteSizes(_ reply: MessagePreview) -> (author: CGSize, preview: CGSize) {
+            let author = MessageSummaryContent.author(reply)
             replyMeasurer.update(
                 MessageSummaryContent.attributedText(
                     MessageSummaryContent.summary(reply), mentions: reply.mentions,
@@ -110,9 +116,17 @@ struct TimelineLayoutEngine {
                     : replyMeasurer.size(width: 1_000_000)
             )
         }
+        let replySizes = p.reply.map(quoteSizes)
+        let originalReplySizes = p.originalReply.map(quoteSizes)
+        let preferredOrigin =
+            p.originLabel.map { singleLineSize($0, size: e.captionSize).width + 24 } ?? 0
+        let preferredCard: CGFloat = p.forwardedCardLines.isEmpty ? 0 : 284
         // Include the quote's stripe/text insets and the bubble's side padding.
         let preferredReply =
-            replySizes.map { max($0.author.width, $0.preview.width) + 19 + 24 } ?? 0
+            max(
+                replySizes.map { max($0.author.width, $0.preview.width) + 43 } ?? 0,
+                originalReplySizes.map { max($0.author.width, $0.preview.width) + 43 } ?? 0,
+                preferredOrigin, preferredCard)
         let threadContent: (symbol: CGSize, label: CGSize, chevron: CGSize)? = p.threadLabel.map {
             label in
             (
@@ -134,7 +148,7 @@ struct TimelineLayoutEngine {
             preferredMedia?.width ?? 0, preferredAudio, preferredText,
             metadata.map { $0.size.width + 24 } ?? 0, preferredTitle)
         var b = min(c, pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
-        if hasBody, !hasMedia, let metadata {
+        if hasBody, !hasMedia, let metadata, p.originLabel == nil, p.originalReply == nil {
             let bodyWidth = min(b, max(1, b - 24))
             let footerOutset = min(metadata.textTrailingOutset, max(0, (b - bodyWidth) / 2))
             let original = textMeasurer.geometry(for: bodyWidth + footerOutset)
@@ -165,6 +179,7 @@ struct TimelineLayoutEngine {
         var frames: [TimelineSectionID: CGRect] = [:]
         var titleFrames: [CGRect] = []
         var replyContentFrames: [CGRect] = []
+        var originalReplyContentFrames: [CGRect] = []
         // The preceding row contributes 4pt below its bubble. Only a new
         // sender run adds another 4pt above this bubble.
         var y: CGFloat =
@@ -181,6 +196,29 @@ struct TimelineLayoutEngine {
                 height: titleLayout.size.height)
             height += titleLayout.size.height + 4
         }
+        if let origin = p.originLabel {
+            if height == 0 { height += 8 }
+            let size = singleLineSize(origin, size: e.captionSize)
+            frames[.origin] = CGRect(
+                x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
+                height: pixel(size.height, e))
+            height += pixel(size.height, e) + 4
+        }
+        if let sizes = originalReplySizes {
+            if height == 0 { height += 8 }
+            let authorHeight = pixel(sizes.author.height, e)
+            let previewHeight = pixel(sizes.preview.height, e)
+            originalReplyContentFrames = [
+                CGRect(x: 11, y: 4, width: max(0, innerWidth - 19), height: authorHeight),
+                CGRect(
+                    x: 11, y: 6 + authorHeight, width: max(0, innerWidth - 19),
+                    height: previewHeight),
+            ]
+            let quoteHeight = authorHeight + 2 + previewHeight + 8
+            frames[.originalReply] = CGRect(
+                x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: quoteHeight)
+            height += quoteHeight + 6
+        }
         if let replySizes {
             let authorHeight = pixel(replySizes.author.height, e)
             let previewHeight = pixel(replySizes.preview.height, e)
@@ -194,6 +232,14 @@ struct TimelineLayoutEngine {
             frames[.reply] = CGRect(
                 x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: replyHeight)
             height += replyHeight + 6
+        }
+        if !p.forwardedCardLines.isEmpty {
+            if height == 0 { height += 8 }
+            let lineHeight = pixel(singleLineSize("Ag", size: e.captionSize).height + 5, e)
+            let cardHeight = CGFloat(p.forwardedCardLines.count) * lineHeight
+            frames[.forwardedCard] = CGRect(
+                x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: cardHeight)
+            height += cardHeight + 4
         }
         var mediaFrames: [CGRect] = []
         if sticker {
@@ -240,7 +286,8 @@ struct TimelineLayoutEngine {
             height += audioHeight + 8
         }
         let plainText =
-            hasBody && p.title == nil && p.reply == nil && !hasMedia && p.threadLabel == nil
+            hasBody && p.title == nil && p.reply == nil && p.originLabel == nil
+            && p.originalReply == nil && !hasMedia && p.threadLabel == nil
         var geometry: MessageTextGeometry?
         // Omitting the sender title removes only that row and its gap, not the
         // bubble's outer text padding.
@@ -387,7 +434,9 @@ struct TimelineLayoutEngine {
             frames: frames.mapValues { rounded($0, e) }, textGeometry: geometry,
             mediaFrames: mediaFrames, reactionFrames: reactionFrames,
             reactionContentFrames: reactionContentFrames, titleFrames: titleFrames,
-            replyContentFrames: replyContentFrames, standaloneSymbolSize: displayedSymbolSize,
+            replyContentFrames: replyContentFrames,
+            originalReplyContentFrames: originalReplyContentFrames,
+            standaloneSymbolSize: displayedSymbolSize,
             standaloneLabelGap: standaloneGap, threadContentFrames: threadContentFrames)
     }
 

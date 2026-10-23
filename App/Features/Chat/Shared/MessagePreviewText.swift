@@ -17,6 +17,30 @@ func messagePreview(_ preview: MessagePreview) -> String {
 }
 
 enum MessageSummaryContent {
+    static func placeholderLabel(_ reason: String?) -> String {
+        switch reason {
+        case "pendingAudio": AppLanguage.localized("[Pending voice message]")
+        case "nestedForward": AppLanguage.localized("[Chat history]")
+        default: AppLanguage.localized("[Unavailable message]")
+        }
+    }
+
+    static func author(_ preview: MessagePreview) -> String {
+        if let name = preview.forwardedFromName {
+            return AppLanguage.localized("Forwarded from \(name)")
+        }
+        return preview.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(preview.sender.uid)"
+    }
+
+    static func forwardedSummary(_ preview: ForwardedMessagePreviewResponse) -> String {
+        let value = MessagePreview(
+            id: preview.originalMessageId, clientGeneratedId: "",
+            createdAt: preview.originalCreatedAt,
+            sender: preview.sender, messageType: preview.messageType,
+            attachments: preview.attachments,
+            mentions: preview.mentions, message: preview.message, sticker: preview.sticker)
+        return messagePreview(value)
+    }
     private static let newlinePattern = try! NSRegularExpression(pattern: #"\R+"#)
 
     private static func names(in mentions: [MentionInfo]) -> [Int32: String] {
@@ -34,13 +58,17 @@ enum MessageSummaryContent {
             invite: AppLanguage.localized("[Invite]"),
             sticker: AppLanguage.localized("[Sticker]"),
             video: AppLanguage.localized("[Video]"),
-            voiceMessage: AppLanguage.localized("[Voice message]"))
+            voiceMessage: AppLanguage.localized("[Voice message]"),
+            forwarded: AppLanguage.localized("[Chat history]"),
+            pendingAudio: AppLanguage.localized("[Pending voice message]"),
+            nestedForward: AppLanguage.localized("[Chat history]"),
+            unavailable: AppLanguage.localized("[Unavailable message]"))
     }
 
     static func summary(_ preview: MessagePreview) -> [MarkdownInline] {
         if preview.isDeleted { return [.text(labels.deleted)] }
         switch preview.messageType {
-        case .invite, .sticker, .audio, .file:
+        case .invite, .sticker, .audio, .file, .forwarded, .placeholder:
             return [.text(MessagePreviewRenderer.render(preview, labels: labels))]
         default:
             // Keep attachment and system-message semantics identical to the API's

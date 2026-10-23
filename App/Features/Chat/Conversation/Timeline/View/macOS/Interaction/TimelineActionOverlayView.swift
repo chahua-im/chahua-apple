@@ -190,6 +190,8 @@
                 case .delete: available = actions.deleteMessage != nil
                 case .thread: available = actions.openThread != nil
                 case .reactionDetails: available = actions.openReactionDetails != nil
+                case .select: available = actions.toggleMessageSelection != nil
+                case .forward: available = actions.forwardMessage != nil
                 default: available = true
                 }
                 let label = action.label(
@@ -226,6 +228,7 @@
             pendingSurface.isHidden = !showsPending
             blockButton.isEnabled =
                 actions.blockPendingMessage != nil && row.entry.messageType == .text
+                && row.entry.presentationMessage?.forwardedFrom == nil
             revokeButton.isEnabled = actions.revokePendingMessage != nil
             blockButton.alphaValue = blockButton.isEnabled ? 1 : 0.4
             revokeButton.alphaValue = revokeButton.isEnabled ? 1 : 0.4

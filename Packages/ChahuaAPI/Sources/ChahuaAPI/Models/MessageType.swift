@@ -20,4 +20,6 @@ public struct MessageType: RawRepresentable, Codable, Hashable, Sendable {
     public static let sticker = MessageType(rawValue: "sticker")
     public static let invite = MessageType(rawValue: "invite")
     public static let system = MessageType(rawValue: "system")
+    public static let forwarded = MessageType(rawValue: "forwarded")
+    public static let placeholder = MessageType(rawValue: "placeholder")
 }

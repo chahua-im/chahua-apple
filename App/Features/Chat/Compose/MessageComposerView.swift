@@ -654,7 +654,7 @@ struct MessageComposerView: View {
             } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(
-                        "Reply to \(reply.sender.name.flatMap { $0.isEmpty ? nil : $0 } ?? "User \(reply.sender.uid)")"
+                        "Reply to \(MessageSummaryContent.author(reply))"
                     )
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)

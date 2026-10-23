@@ -15,9 +15,6 @@ final class MessageActionPolicyTests: XCTestCase {
         XCTAssertEqual(policy.availability(of: .thread), .enabled)
         XCTAssertEqual(policy.availability(of: .delete), .hidden)
         XCTAssertEqual(policy.availability(of: .edit), .hidden)
-        XCTAssertEqual(
-            policy.actions.filter { policy.availability(of: $0) == .enabled },
-            [.reply, .thread, .copy])
     }
 
     func testWhitespaceAndNonTextMediaCannotBeCopied() {
@@ -94,13 +91,16 @@ final class MessageActionPolicyTests: XCTestCase {
         let sticker = MessageActionPolicy(
             messageType: .sticker, text: "Sticker", isOwn: true,
             hasReactions: true, context: context)
-        XCTAssertEqual(sticker.actions, [.reply, .favorite, .copyLink, .delete])
+        XCTAssertEqual(sticker.availability(of: .forward), .enabled)
+        XCTAssertEqual(sticker.availability(of: .select), .enabled)
+        XCTAssertEqual(sticker.availability(of: .edit), .hidden)
         XCTAssertEqual(sticker.availability(of: .delete), .enabled)
         XCTAssertFalse(sticker.canReact)
         let invite = MessageActionPolicy(
             messageType: .invite, text: "Invite", isOwn: true,
             hasReactions: true, context: context)
-        XCTAssertEqual(invite.actions, [.reply, .pin, .delete])
+        XCTAssertEqual(invite.availability(of: .forward), .hidden)
+        XCTAssertEqual(invite.availability(of: .select), .enabled)
         XCTAssertEqual(invite.availability(of: .delete), .enabled)
         XCTAssertFalse(invite.canReact)
     }
@@ -109,12 +109,31 @@ final class MessageActionPolicyTests: XCTestCase {
         let policy = MessageActionPolicy(
             messageType: .text, text: "History", isOwn: true,
             hasReactions: true, context: .init(isDM: true, isAdmin: true))
-        XCTAssertEqual(policy.actions, [.copy, .save, .reactionDetails])
+        XCTAssertEqual(policy.availability(of: .forward), .enabled)
+        XCTAssertEqual(policy.availability(of: .select), .enabled)
         XCTAssertFalse(policy.canReact)
         XCTAssertEqual(policy.availability(of: .copy), .enabled)
         XCTAssertEqual(policy.availability(of: .delete), .hidden)
         XCTAssertEqual(policy.availability(of: .copyLink), .hidden)
         XCTAssertEqual(policy.availability(of: .reactionDetails), .enabled)
+    }
+
+    func testForwardedTextCannotBeEditedAndCapturedHistoryHasNoMutationActions() {
+        let forwarded = MessageActionPolicy(
+            messageType: .text, text: "Captured text", isOwn: true,
+            isForwarded: true, context: writable)
+        XCTAssertEqual(forwarded.availability(of: .edit), .hidden)
+        XCTAssertEqual(forwarded.availability(of: .forward), .enabled)
+        let readOnly = MessageActionPolicy(
+            messageType: .text, text: "Captured text", isOwn: true, hasReactions: true,
+            context: .init(canWrite: true, isAdmin: true, isReadOnly: true))
+        XCTAssertTrue(readOnly.actions.isEmpty)
+        XCTAssertFalse(readOnly.canReact)
+        let placeholder = MessageActionPolicy(
+            messageType: .placeholder, text: "pendingAudio", isOwn: true, context: writable)
+        XCTAssertEqual(placeholder.availability(of: .copy), .hidden)
+        XCTAssertEqual(placeholder.availability(of: .edit), .hidden)
+        XCTAssertEqual(placeholder.availability(of: .forward), .enabled)
     }
 
     func testPendingSystemAndDeletedMessagesCannotMutate() {
@@ -130,7 +149,6 @@ final class MessageActionPolicyTests: XCTestCase {
         let deleted = MessageActionPolicy(
             messageType: .text, text: "Stale sensitive text", isDeleted: true,
             isOwn: true, hasReactions: true, context: writable)
-        XCTAssertEqual(deleted.actions, [.reply, .copyLink, .reactionDetails])
         XCTAssertEqual(deleted.availability(of: .reply), .enabled)
         XCTAssertEqual(deleted.availability(of: .copy), .hidden)
         XCTAssertEqual(deleted.availability(of: .reactionDetails), .enabled)

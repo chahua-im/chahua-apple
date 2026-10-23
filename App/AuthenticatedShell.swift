@@ -26,6 +26,7 @@ struct AuthenticatedShell: View {
     @State private var messageNavigation: MessageNavigation?
     @State private var messageSearch: MessageSearchSession?
     @State private var groupPath: [GroupRoute] = []
+    @State private var forwardThreadAction: ForwardThreadAction?
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -128,6 +129,7 @@ struct AuthenticatedShell: View {
                 }
             #endif
         }
+        .onPreferenceChange(ForwardThreadActionKey.self) { forwardThreadAction = $0 }
         .onChange(of: chatStore.state) { _, state in
             guard let selectedConversationID, messageNavigation == nil else { return }
             let loaded =
@@ -230,6 +232,8 @@ struct AuthenticatedShell: View {
                                 ? { selectConversation(nil) } : nil,
                             onOpenInfo: infoAction,
                             onSearch: searchAction,
+                            onForward: forwardThreadAction?.conversation == headerThreadKey
+                                ? forwardThreadAction?.perform : nil,
                             trailingIsControl: headerThreadKey != nil,
                             backBadgeCount: backBadgeCount,
                             leadingAvatar: headerLeading(for: headerThreadKey)
@@ -290,6 +294,8 @@ struct AuthenticatedShell: View {
                                         onBack: { popPhoneConversation(key) },
                                         onOpenInfo: key.threadID == nil ? infoAction : nil,
                                         onSearch: searchAction,
+                                        onForward: forwardThreadAction?.conversation == key
+                                            ? forwardThreadAction?.perform : nil,
                                         trailingIsControl: key.threadID != nil,
                                         backBadgeCount: backBadgeCount,
                                         leadingAvatar: headerLeading(for: key)

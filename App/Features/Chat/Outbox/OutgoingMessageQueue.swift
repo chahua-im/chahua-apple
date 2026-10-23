@@ -23,6 +23,7 @@ final class OutgoingMessageQueue: ObservableObject {
     enum QueueError: Error {
         case storageUnavailable
         case invalidAcknowledgement
+        case invalidForwardSources
     }
 
     @Published private(set) var storageState: OutgoingStorageState = .inactive
@@ -46,6 +47,9 @@ final class OutgoingMessageQueue: ObservableObject {
     private var workers: [ConversationKey: (id: UUID, task: Task<Void, Never>)] = [:]
     private var acknowledgements: [String: MessageResponse] = [:]
     private var uncommittedFailures: [String: LocalOutgoingMessage] = [:]
+    private var pendingAudioAcknowledgements: [MessageID: MessageResponse] = [:]
+    /// Publication can beat the HTTP acknowledgement; retain that fact only for active sends.
+    private var inflightAudioPublications: [String: Bool] = [:]
     private var attachmentWorkers: [String: (id: UUID, task: Task<Void, Never>)] = [:]
     private var preparationWorker: (id: UUID, task: Task<Void, Never>)?
     private var preparingAttachmentID: String?
@@ -80,6 +84,8 @@ final class OutgoingMessageQueue: ObservableObject {
         snapshots = [:]
         acknowledgements = [:]
         uncommittedFailures = [:]
+        pendingAudioAcknowledgements = [:]
+        inflightAudioPublications = [:]
         attachmentProgress = [:]
         attachmentMutationConversations = []
         authenticationFailed = false
@@ -251,6 +257,65 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
+    /// Server-acknowledged audio remains selectable before its publication event/history row.
+    var acknowledgedPendingAudioMessages: [MessageResponse] {
+        pendingAudioAcknowledgements.values.sorted { $0.id < $1.id }
+    }
+
+    func forwardPlaceholderReason(for source: MessageResponse, merging: Bool) -> String? {
+        if source.messageType == .audio,
+            pendingAudioAcknowledgements[source.id]?.chatId == source.chatId
+        {
+            return "pendingAudio"
+        }
+        if merging, source.messageType == .forwarded,
+            source.forwardedPreview?.containsForwardedMessages == true
+        {
+            return "nestedForward"
+        }
+        return nil
+    }
+
+    /// Forwards are independent operations: destination text, reply and uploads stay untouched.
+    func enqueueForward(
+        chatID: String, threadID: String? = nil, sources: [MessageResponse],
+        allowPlaceholders: Bool = false
+    ) async throws {
+        guard let first = sources.first, sources.count <= 100,
+            Set(sources.map(\.id)).count == sources.count,
+            sources.allSatisfy({
+                $0.chatId == first.chatId && !$0.isDeleted
+                    && $0.messageType != .system && $0.messageType != .invite
+            })
+        else { throw QueueError.invalidForwardSources }
+        guard storageState == .ready, let store, let uid = requestedUID, !authenticationFailed
+        else { throw QueueError.storageUnavailable }
+        let current = generation
+        // Consent and content are captured once. Retries read only this durable request.
+        let captured = sources.sorted { $0.id < $1.id }.map { source in
+            if allowPlaceholders,
+                let reason = forwardPlaceholderReason(for: source, merging: sources.count > 1)
+            {
+                return ForwardPlaceholderProjection.replacing(source, reason: reason)
+            }
+            return source
+        }
+        let request = LocalForwardRequest(
+            sourceChatID: first.chatId, sources: captured, allowPlaceholders: allowPlaceholders)
+        do {
+            try await checkpoint(.enqueue, generation: current)
+            try Task.checkCancellation()
+            let snapshot = try await store.enqueueForward(
+                chatID: chatID, threadID: threadID, senderID: uid, request: request)
+            try checkGeneration(current)
+            publish(snapshot)
+            wakeWorker(key: snapshot.conversationKey)
+        } catch {
+            storageFailed(error, operation: "enqueue forward", generation: current)
+            throw error
+        }
+    }
+
     func enqueueSticker(
         chatID: String, threadID: String? = nil, sticker: MessageStickerResponse,
         replyToMessage: MessagePreview? = nil
@@ -335,10 +400,22 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
+    /// Successful authenticated source reads and WS publication provide affirmative finality.
+    func acceptPublishedForwardSource(_ message: MessageResponse) {
+        guard message.messageType == .audio, message.sender.uid == requestedUID else { return }
+        if pendingAudioAcknowledgements[message.id]?.chatId == message.chatId {
+            pendingAudioAcknowledgements[message.id] = nil
+        }
+        if inflightAudioPublications[message.clientGeneratedId] != nil {
+            inflightAudioPublications[message.clientGeneratedId] = true
+        }
+    }
+
     func acceptAcknowledgement(_ message: MessageResponse) async -> Bool {
         guard let store, let uid = requestedUID, !message.clientGeneratedId.isEmpty,
             message.sender.uid == uid
         else { return false }
+        acceptPublishedForwardSource(message)
         let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
         let known = snapshots[key]?.outgoing.first {
             $0.clientGeneratedID == message.clientGeneratedId
@@ -461,24 +538,65 @@ final class OutgoingMessageQueue: ObservableObject {
                 storageFailed(error, operation: "claim message", generation: current)
                 return
             }
+            let awaitingAudioPublication =
+                pending.forwardRequest == nil && pending.messageType == .audio
+            if awaitingAudioPublication {
+                inflightAudioPublications[pending.clientGeneratedID] = false
+            }
+            defer {
+                if generation == current {
+                    inflightAudioPublications[pending.clientGeneratedID] = nil
+                }
+            }
             do {
-                let body = pending.body
                 let response: MessageResponse
-                if let threadID = pending.threadID {
+                if let forward = pending.forwardRequest {
+                    if forward.messageIDs.count == 1, let sourceID = forward.messageIDs.first {
+                        response = try await apiClient.forwardMessage(
+                            chatID: pending.chatID, messageID: sourceID,
+                            body: ForwardMessageBody(
+                                sourceChatId: forward.sourceChatID,
+                                clientGeneratedId: pending.clientGeneratedID,
+                                threadId: pending.threadID,
+                                allowPlaceholders: forward.allowPlaceholders))
+                    } else {
+                        response = try await apiClient.forwardMessages(
+                            chatID: pending.chatID,
+                            body: ForwardMessagesBody(
+                                sourceChatId: forward.sourceChatID, messageIds: forward.messageIDs,
+                                clientGeneratedId: pending.clientGeneratedID,
+                                threadId: pending.threadID,
+                                allowPlaceholders: forward.allowPlaceholders))
+                    }
+                } else if let threadID = pending.threadID {
                     response = try await apiClient.sendThreadMessage(
-                        chatID: pending.chatID, threadID: threadID, body: body)
+                        chatID: pending.chatID, threadID: threadID, body: pending.body)
                 } else {
-                    response = try await apiClient.sendMessage(chatID: pending.chatID, body: body)
+                    response = try await apiClient.sendMessage(
+                        chatID: pending.chatID, body: pending.body)
                 }
                 guard generation == current else { return }
                 guard matches(response, pending: pending) else {
                     throw QueueError.invalidAcknowledgement
+                }
+                if awaitingAudioPublication,
+                    inflightAudioPublications[pending.clientGeneratedID] == false
+                {
+                    pendingAudioAcknowledgements[response.id] = response
                 }
                 // Even a socket-first success must emit this validated HTTP acknowledgement.
                 await acknowledge(response, store: store, generation: current)
             } catch {
                 guard generation == current, !Task.isCancelled, transportGeneration == transport
                 else { return }
+                // A validated WS success wins over every obsolete HTTP error, including 401.
+                if acknowledgements[pending.clientGeneratedID] != nil
+                    || snapshots[key]?.outgoing.contains(where: {
+                        $0.clientGeneratedID == pending.clientGeneratedID
+                    }) != true
+                {
+                    continue
+                }
                 let invalidToken: Bool
                 if case APIError.invalidToken = error {
                     invalidToken = true
@@ -572,6 +690,7 @@ final class OutgoingMessageQueue: ObservableObject {
         }
         let tail = snapshot.composingItem ?? snapshot.outgoing.last
         return tail?.clientGeneratedID == itemID && tail?.dispatchClaimed == false
+            && tail?.forwardRequest == nil
     }
 
     func importImages(urls: [URL], chatID: String, threadID: String? = nil) async throws {
@@ -695,6 +814,10 @@ final class OutgoingMessageQueue: ObservableObject {
         async throws
     {
         guard storageState == .ready, let store else { throw QueueError.storageUnavailable }
+        guard
+            snapshots[ConversationKey(chatID: chatID, threadID: threadID)]?.outgoing
+                .first(where: { $0.clientGeneratedID == itemID })?.forwardRequest == nil
+        else { throw QueueError.invalidForwardSources }
         let current = generation
         let snapshot = try await store.blockTail(
             chatID: chatID, threadID: threadID, itemID: itemID, expectedRevision: expectedRevision)

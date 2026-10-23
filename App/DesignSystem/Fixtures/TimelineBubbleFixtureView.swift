@@ -108,22 +108,25 @@
                         .id(ObjectIdentifier(model))
                         .modifier(fixtureComposer(model: model))
                     #else
-                        MessageInteractionHost(
-                            model: model,
-                            context: .init(
-                                canWrite: handlersEnabled, isAdmin: true, isThreadView: threadScope),
-                            actions: actions
-                        ) { interactiveActions in
-                            ConversationTimelineView(
+                        MessageSelectionHost(model: model, actions: actions) { selectionActions in
+                            MessageInteractionHost(
                                 model: model,
-                                initialPosition: ProcessInfo.processInfo.environment[
-                                    "CHAHUA_FIXTURE_MESSAGE"
-                                ].flatMap(MessageID.init).map(TimelineInitialPosition.message)
-                                    ?? .liveEdge,
-                                actions: interactiveActions
-                            )
-                            .id(ObjectIdentifier(model))
-                            .modifier(fixtureComposer(model: model))
+                                context: .init(
+                                    canWrite: handlersEnabled, isAdmin: true,
+                                    isThreadView: threadScope),
+                                actions: selectionActions
+                            ) { interactiveActions in
+                                ConversationTimelineView(
+                                    model: model,
+                                    initialPosition: ProcessInfo.processInfo.environment[
+                                        "CHAHUA_FIXTURE_MESSAGE"
+                                    ].flatMap(MessageID.init).map(TimelineInitialPosition.message)
+                                        ?? .liveEdge,
+                                    actions: interactiveActions
+                                )
+                                .id(ObjectIdentifier(model))
+                                .modifier(fixtureComposer(model: model))
+                            }
                         }
                     #endif
                 } else if let error = fixture.error {

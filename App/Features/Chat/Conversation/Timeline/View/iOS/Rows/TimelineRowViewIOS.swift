@@ -7,6 +7,7 @@
     /// work during scrolling. Prepared timeline rectangles remain the sizing authority.
     @MainActor
     final class TimelineRowView: UIView {
+        static let selectionGutterWidth: CGFloat = 44
         private(set) var binding: TimelineRowBinding?
         lazy var rowGestures = MessageRowGestureCoordinator(view: self)
         private let content = UIView()
@@ -19,6 +20,7 @@
         private var thread: TimelineThreadButton?
         private var standalone: TimelineStandaloneView?
         private var hoverReply: UIButton?
+        private var messageSelection: TimelineMessageSelectionButton?
         private let hoverMarker = MessageRowGestureMarker()
         private var visible = false
         private var hovered = false
@@ -40,6 +42,9 @@
             let changed = self.binding?.presentation.row.id != binding.presentation.row.id
             let highlightChanged =
                 self.binding?.context.isHighlighted != binding.context.isHighlighted
+            let selectionModeChanged =
+                isSelectingMessages
+                != (binding.actions.isSelectingMessages && !binding.context.isInteractionPreview)
             if changed {
                 rowGestures.cancel()
                 resetSwipe(animated: false)
@@ -52,10 +57,12 @@
                 if row.entry.messageType == .system {
                     bindStandalone(binding)
                 } else {
-                    bindMessage(binding, row: row, resetSelection: changed)
+                    bindMessage(
+                        binding, row: row, resetSelection: changed || selectionModeChanged)
                 }
             }
-            if binding.context.isInteractionPreview {
+            configureMessageSelection()
+            if binding.context.isInteractionPreview || isSelectingMessages {
                 rowMarker.stop()
                 holdMarker.stop()
             } else {
@@ -65,7 +72,9 @@
                             isEnabled: canReply, onChange: { [weak self] in self?.swipe($0) },
                             onFinish: { [weak self] in self?.resetSwipe(animated: true) },
                             onReply: { [weak self] in self?.reply() })))
-                if bubble?.isHidden == false, binding.actions.openContextMenu != nil {
+                if bubble?.isHidden == false, !binding.actions.interactionContext.isReadOnly,
+                    binding.actions.openContextMenu != nil
+                {
                     holdMarker.configure(
                         .bubble(
                             .init(
@@ -115,6 +124,10 @@
             standalone?.clear()
             standalone?.isHidden = true
             hoverReply?.isHidden = true
+            messageSelection?.clear()
+            content.isUserInteractionEnabled = true
+            content.accessibilityElementsHidden = false
+            rowGestures.setEnabled(true)
             backgroundColor = .clear
         }
         func setVisible(_ visible: Bool) {
@@ -138,6 +151,7 @@
             content.bounds = bounds
             content.center = CGPoint(x: bounds.midX, y: bounds.midY)
             rowMarker.frame = bounds
+            messageSelection?.frame = bounds
             arrow.frame = CGRect(x: bounds.maxX - 52, y: bounds.midY - 18, width: 36, height: 36)
             guard let binding else { return }
             let frames = binding.layout.frames
@@ -247,7 +261,7 @@
                 thread?.isHidden = true
             }
             bubble?.accessibilityCustomActions =
-                preview
+                preview || isSelectingMessages
                 ? nil
                 : [
                     UIAccessibilityCustomAction(
@@ -261,8 +275,59 @@
                         })
                 ]
         }
+        private var isSelectingMessages: Bool {
+            binding?.actions.isSelectingMessages == true
+                && binding?.context.isInteractionPreview == false
+        }
+
+        private var selectableMessage: MessageResponse? {
+            guard let binding, case .message(let row) = binding.presentation.row,
+                row.entry.messageType != .system, let message = row.entry.remoteMessage,
+                !message.isDeleted
+            else { return nil }
+            return message
+        }
+
+        private func configureMessageSelection() {
+            let selecting = isSelectingMessages
+            rowGestures.setEnabled(!selecting)
+            content.isUserInteractionEnabled = !selecting
+            content.accessibilityElementsHidden = selecting
+            guard selecting else {
+                messageSelection?.clear()
+                return
+            }
+            hovered = false
+            if messageSelection == nil {
+                // The native timeline owns prepared row geometry and gesture arbitration.
+                // A reusable UIKit overlay can consume every child hit target while still
+                // yielding drags to the collection view; a separate SwiftUI host cannot
+                // participate in that arbitration without per-row hosting/layout work.
+                let button = TimelineMessageSelectionButton(frame: .zero)
+                button.addAction(
+                    UIAction { [weak self] _ in self?.toggleMessageSelection() },
+                    for: .touchUpInside)
+                addSubview(button)
+                messageSelection = button
+            }
+            let message = selectableMessage
+            messageSelection?.isEnabled = binding?.actions.isSelectionBusy != true
+            messageSelection?.configure(
+                message: message,
+                selected: message.map {
+                    binding?.actions.selectedMessageIDs.contains($0.id) == true
+                } ?? false)
+        }
+
+        private func toggleMessageSelection() {
+            guard isSelectingMessages, binding?.actions.isSelectionBusy != true,
+                let message = selectableMessage
+            else { return }
+            binding?.actions.toggleMessageSelection?(message)
+        }
+
         private var canReply: Bool {
-            guard let binding, !binding.context.isInteractionPreview,
+            guard let binding, !binding.context.isInteractionPreview, !isSelectingMessages,
                 case .message(let row) = binding.presentation.row,
                 row.entry.messageType != .system, binding.actions.replyToMessage != nil
             else { return false }
@@ -277,6 +342,7 @@
         }
         private func openMenu(_ rect: CGRect, pressFeedback: MessageBubblePressFeedback? = nil) {
             guard let binding, !binding.context.isInteractionPreview,
+                !binding.actions.interactionContext.isReadOnly, !isSelectingMessages,
                 case .message(let row) = binding.presentation.row,
                 let open = binding.actions.openContextMenu
             else {
@@ -339,6 +405,60 @@
             hoverMarker.configure(.tap { [weak self] in self?.reply() })
             hoverReply?.isHidden = false
             setNeedsLayout()
+        }
+    }
+
+    /// One reused full-row target prevents media, text, avatar and reaction controls
+    /// from handling selection taps. Its image occupies only the reserved right gutter.
+    private final class TimelineMessageSelectionButton: UIButton {
+        private static let uncheckedImage = UIImage(systemName: "circle")
+        private static let checkedImage = UIImage(systemName: "checkmark.circle.fill")
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            tintColor = UIColor(ChahuaTheme.accent)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        func configure(message: MessageResponse?, selected: Bool) {
+            isHidden = false
+            isSelected = selected
+            // UIButton updates image visibility during layout; remove the state images
+            // themselves for separators and other ineligible rows.
+            setImage(message == nil ? nil : Self.uncheckedImage, for: .normal)
+            setImage(message == nil ? nil : Self.checkedImage, for: .selected)
+            isAccessibilityElement = message != nil
+            accessibilityIdentifier = message.map { "message-selection-\($0.id.rawValue)" }
+            accessibilityLabel = message.map { _ in
+                AppLanguage.localized(selected ? "Deselect message" : "Select message")
+            }
+            accessibilityHint = message.map { _ in
+                AppLanguage.localized(
+                    selected
+                        ? "Double-tap to deselect this message."
+                        : "Double-tap to select this message.")
+            }
+            accessibilityTraits = selected ? [.button, .selected] : .button
+        }
+
+        func clear() {
+            isHidden = true
+            isSelected = false
+            isHighlighted = false
+            setImage(nil, for: .normal)
+            setImage(nil, for: .selected)
+            isAccessibilityElement = false
+            accessibilityIdentifier = nil
+            accessibilityLabel = nil
+            accessibilityHint = nil
+            accessibilityTraits = .button
+        }
+
+        override func imageRect(forContentRect contentRect: CGRect) -> CGRect {
+            CGRect(
+                x: bounds.maxX - (TimelineRowView.selectionGutterWidth + 24) / 2,
+                y: bounds.midY - 12, width: 24, height: 24)
         }
     }
 

@@ -9,6 +9,226 @@
     @MainActor
     final class TimelineCollectionViewControllerTests: XCTestCase {
 
+        func testForwardedContentUsesNativeTimelineCardsAndPlaceholderBoundaries() async throws {
+            let source = try TimelineTestFixtures.message(
+                id: 10, senderID: 2, senderName: "Original author", at: 0,
+                text: "Captured reply target")
+            let preview = ForwardedMessagePreviewResponse(
+                originalMessageId: source.id, originalChatId: source.chatId,
+                message: source.message, messageType: .text, sender: source.sender,
+                originalCreatedAt: source.createdAt)
+            let forwarder = User(
+                uid: 1, gender: 0, name: "Forwarder", avatarUrl: nil, userGroup: nil)
+            var messages = [
+                MessageResponse(
+                    id: MessageID(1), chatId: "chat", clientGeneratedId: "single-forward",
+                    messageType: .text, sender: forwarder, createdAt: source.createdAt,
+                    message: "A forwarded message keeps its original context.",
+                    forwardedFrom: .init(
+                        sender: source.sender, originalChatId: "source",
+                        originalMessageId: source.id,
+                        originalReplyTo: source.replyPreview)),
+                MessageResponse(
+                    id: MessageID(2), chatId: "chat", clientGeneratedId: "merged-forward",
+                    messageType: .forwarded, sender: forwarder, createdAt: source.createdAt,
+                    forwardedBundleId: "bundle",
+                    forwardedPreview: .init(
+                        total: 2, containsForwardedMessages: false,
+                        messages: [
+                            preview,
+                            .init(
+                                originalMessageId: MessageID(11), originalChatId: source.chatId,
+                                message: "nestedForward", messageType: .placeholder,
+                                sender: source.sender, originalCreatedAt: source.createdAt),
+                        ])),
+                MessageResponse(
+                    id: MessageID(3), chatId: "chat", clientGeneratedId: "placeholder",
+                    messageType: .placeholder, sender: forwarder, createdAt: source.createdAt,
+                    message: "pendingAudio"),
+            ]
+            messages.append(
+                try TimelineTestFixtures.message(
+                    id: 4, at: 1, type: .file,
+                    fields: [
+                        "message": NSNull(), "hasAttachments": true,
+                        "attachments": [
+                            [
+                                "id": "document", "url": "https://files.example.com/report.pdf",
+                                "kind": "application/pdf", "size": 4096, "fileName": "report.pdf",
+                            ]
+                        ],
+                    ]))
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: true,
+                source: BubbleSource(page: ListMessagesResponse(messages: messages)),
+                messageStore: ConversationMessageStore(), capturedReplyRedactedIDs: [MessageID(3)])
+            var actions = TimelineBubbleActions()
+            actions.interactionContext.isReadOnly = true
+            let controller = TimelineCollectionViewController(model: model, actions: actions)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                model.close()
+            }
+            await model.loadInitial()
+            try await Task.sleep(for: .milliseconds(300))
+            window.layoutIfNeeded()
+            func rows(in view: UIView) -> [TimelineRowView] {
+                if let row = view as? TimelineRowView { return [row] }
+                return view.subviews.flatMap { rows(in: $0) }
+            }
+            let nativeRows = rows(in: window)
+            func binding(_ id: MessageID) throws -> TimelineRowBinding {
+                try XCTUnwrap(
+                    nativeRows.first { $0.binding?.presentation.row.messageID == id }?.binding)
+            }
+            let single = try binding(MessageID(1))
+            XCTAssertNotNil(single.layout.frames[.origin])
+            XCTAssertNotNil(single.layout.frames[.originalReply])
+            XCTAssertNil(
+                single.presentation.reply,
+                "Original source quotes must not become live destination replies")
+            let card = try binding(MessageID(2))
+            XCTAssertNil(
+                card.presentation.title, "Record cards do not display the forwarder's name")
+            XCTAssertNotNil(card.layout.frames[.forwardedCard])
+            let placeholder = try binding(MessageID(3))
+            XCTAssertNil(placeholder.layout.frames[.audio])
+            XCTAssertNil(placeholder.layout.frames[.media])
+            XCTAssertNil(placeholder.layout.frames[.forwardedCard])
+            XCTAssertNotNil(placeholder.layout.frames[.origin])
+            XCTAssertNil(
+                placeholder.presentation.originalReply,
+                "Redaction must not expose source reply content")
+            XCTAssertEqual(
+                placeholder.presentation.originLabel, AppLanguage.localized("[Redacted]"))
+            XCTAssertEqual(
+                messagePreview(messages[2].replyPreview),
+                AppLanguage.localized("[Pending voice message]"))
+            XCTAssertEqual(messages[0].replyPreview.forwardedFromName, "Original author")
+            XCTAssertEqual(messages[0].replyPreview.id, MessageID(1))
+            let document = try binding(MessageID(4))
+            XCTAssertNotNil(document.layout.frames[.media])
+            XCTAssertNil(document.layout.frames[.audio])
+            func labels(in view: UIView) -> [UILabel] {
+                if let label = view as? UILabel { return [label] }
+                return view.subviews.flatMap { labels(in: $0) }
+            }
+            XCTAssertTrue(
+                labels(in: window).contains { $0.text == "report.pdf" },
+                "Forwarded documents must show a filename instead of a broken image")
+            let attachment = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                })
+            attachment.name = "Forwarded content in the existing native timeline"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        func testMessageSelectionTogglesNativeRowsAndRestoresInteractionsOnCancel() async throws {
+            let messages = try [
+                TimelineTestFixtures.message(id: 1, at: 0, text: "Select this message"),
+                TimelineTestFixtures.message(id: 2, at: 1, text: "Another selectable message"),
+            ]
+            let store = ConversationMessageStore()
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: true,
+                source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
+                messageStore: store)
+            var currentActions = TimelineBubbleActions()
+            let root = MessageSelectionHost(model: model, actions: .init()) { selectionActions in
+                MessageInteractionHost(
+                    model: model, context: .init(canWrite: true), actions: selectionActions
+                ) { actions in
+                    ConversationTimelineView(
+                        model: model, loadsInitialAutomatically: false, actions: actions
+                    )
+                    .onAppear { currentActions = actions }
+                    .onChange(of: actions.isSelectingMessages) { _, _ in currentActions = actions }
+                    .onChange(of: actions.selectedMessageIDs) { _, _ in currentActions = actions }
+                }
+            }
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = UIHostingController(rootView: root)
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                model.close()
+            }
+            await model.loadInitial()
+            try await Task.sleep(for: .milliseconds(300))
+            window.layoutIfNeeded()
+            func descendants<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+                (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+            }
+            let originalBubble = try XCTUnwrap(
+                descendants(TimelineBubbleContentView.self, in: window).first)
+            let originalWidth = originalBubble.bounds.width
+            try XCTUnwrap(currentActions.toggleMessageSelection)(messages[0])
+            try await Task.sleep(for: .milliseconds(300))
+            window.layoutIfNeeded()
+            func selectionButton(_ id: MessageID) throws -> UIButton {
+                try XCTUnwrap(
+                    descendants(UIButton.self, in: window).first {
+                        $0.accessibilityIdentifier == "message-selection-\(id.rawValue)"
+                    })
+            }
+            let first = try selectionButton(messages[0].id)
+            let second = try selectionButton(messages[1].id)
+            XCTAssertTrue(first.isSelected)
+            XCTAssertFalse(second.isSelected)
+            XCTAssertTrue(first.accessibilityTraits.contains(.selected))
+            XCTAssertNil(currentActions.openContextMenu)
+            for row in descendants(TimelineRowView.self, in: window) {
+                if row.binding?.presentation.row.messageID == nil {
+                    XCTAssertTrue(
+                        descendants(UIButton.self, in: row).allSatisfy { $0.currentImage == nil },
+                        "Separators must not display selectable circles")
+                }
+                guard let binding = row.binding, case .message = binding.presentation.row,
+                    let bubble = binding.layout.frames[.bubble]
+                else { continue }
+                XCTAssertLessThanOrEqual(
+                    bubble.maxX, row.bounds.width - 44,
+                    "Selection circles must have their own gutter, not cover outgoing content")
+            }
+            let attachment = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                })
+            attachment.name = "Message selection — checked and unchecked rows"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+
+            first.sendActions(for: .touchUpInside)
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(currentActions.isSelectingMessages, "Deselecting all must not exit")
+            XCTAssertEqual(currentActions.selectedMessageIDs, [])
+            XCTAssertFalse(try selectionButton(messages[0].id).isSelected)
+            second.sendActions(for: .touchUpInside)
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(currentActions.selectedMessageIDs, [messages[1].id])
+            store.apply(.messageDeleted(messages[1].redactedForDeletion()))
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertTrue(currentActions.selectedMessageIDs.isEmpty)
+            XCTAssertTrue(currentActions.isSelectingMessages)
+            try XCTUnwrap(currentActions.endMessageSelection)()
+            try await Task.sleep(for: .milliseconds(200))
+            window.layoutIfNeeded()
+            XCTAssertFalse(currentActions.isSelectingMessages)
+            XCTAssertNotNil(currentActions.openContextMenu)
+            XCTAssertTrue(
+                descendants(UIButton.self, in: window).allSatisfy {
+                    $0.accessibilityIdentifier?.hasPrefix("message-selection-") != true
+                })
+            XCTAssertEqual(originalBubble.bounds.width, originalWidth, accuracy: 0.5)
+        }
+
         func testDeletionRemovesNativeRowsAndEmptyDateSeparators() async throws {
             let messages = try [
                 TimelineTestFixtures.message(id: 1, at: 0),

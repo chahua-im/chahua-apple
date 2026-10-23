@@ -19,6 +19,7 @@
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Environment(\.scenePhase) private var scenePhase
         @State private var target: Target?
+        private var isSelectingMessages: Bool { actions.isSelectingMessages }
 
         private struct Target {
             let key: ConversationMessageStableKey
@@ -39,14 +40,24 @@
             var result = actions
             result.interactionContext = context
             result.openContextMenu =
-                target == nil
+                target == nil && !isSelectingMessages
                 ? { row, source in
-                    guard row.entry.messageType != .system else { return }
+                    guard !isSelectingMessages, !context.isReadOnly,
+                        row.entry.messageType != .system
+                    else { return }
                     target = Target(key: row.entry.stableKey, source: source)
                 } : nil
-            if !context.canWrite { result.toggleReaction = nil }
-            if target != nil || !context.canWrite { result.replyToMessage = nil }
+            if isSelectingMessages || !context.canWrite { result.toggleReaction = nil }
+            if isSelectingMessages { result.openReactionDetails = nil }
+            if isSelectingMessages || target != nil || !context.canWrite {
+                result.replyToMessage = nil
+            }
             return result
+        }
+
+        private func toggleMessageSelection(_ message: MessageResponse) {
+            target = nil
+            actions.toggleMessageSelection?(message)
         }
 
         var body: some View {
@@ -71,10 +82,16 @@
                 .onChange(of: model.rows) { _, _ in
                     if target != nil && selectedRow == nil { target = nil }
                 }
+                .onChange(of: ObjectIdentifier(model)) { _, _ in
+                    // A replacement conversation/thread/account must not inherit selection.
+                    target = nil
+                }
                 .onChange(of: scenePhase) { _, phase in
                     if phase != .active { target = nil }
                 }
-                .onDisappear { target = nil }
+                .onDisappear {
+                    target = nil
+                }
         }
 
         @ViewBuilder
@@ -87,7 +104,8 @@
                     mediaContext: mediaContext, actions: actions,
                     animation: animation,
                     onBlock: { pending in
-                        guard pending.body.messageType == .text else { return }
+                        guard pending.body.messageType == .text, pending.forwardRequest == nil
+                        else { return }
                         self.target = nil
                         actions.blockPendingMessage?(pending)
                     },
@@ -97,19 +115,24 @@
                     },
                     isReacting: actions.isReacting(to: row.entry),
                     onReaction: { emoji in
-                        guard let liveRow = selectedRow,
+                        guard !isSelectingMessages, let liveRow = selectedRow,
                             MessageActionPolicy(row: liveRow, context: context).canReact
                         else { return }
                         actions.toggleReaction?(liveRow, emoji)
                     },
                     onAction: { action in
-                        guard let liveRow = selectedRow,
+                        guard !isSelectingMessages, let liveRow = selectedRow,
                             MessageActionPolicy(
                                 row: liveRow,
                                 context: actions.pinContext(for: liveRow, base: context)
                             ).availability(of: action) == .enabled
                         else { return }
-                        if action == .reply, let message = liveRow.entry.remoteMessage,
+                        if action == .select, let message = liveRow.entry.remoteMessage {
+                            toggleMessageSelection(message)
+                        } else if action == .forward, let message = liveRow.entry.remoteMessage {
+                            self.target = nil
+                            actions.forwardMessage?(message)
+                        } else if action == .reply, let message = liveRow.entry.remoteMessage,
                             let reply = actions.replyToMessage
                         {
                             self.target = nil

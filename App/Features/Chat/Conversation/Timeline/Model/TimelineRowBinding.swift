@@ -42,6 +42,16 @@ struct TimelineBubbleActions {
     var modifiablePendingMessageIDs: Set<String> = []
     var blockPendingMessage: ((PendingOutgoingMessage) -> Void)?
     var revokePendingMessage: ((PendingOutgoingMessage) -> Void)?
+    var isSelectingMessages = false
+    var selectedMessageIDs: Set<MessageID> = []
+    var toggleMessageSelection: ((MessageResponse) -> Void)?
+    var endMessageSelection: (() -> Void)?
+    var forwardMessage: ((MessageResponse) -> Void)?
+    var openForwardedMessages: ((MessageResponse) -> Void)?
+    var isSelectionBusy = false
+    var selectionMessages: [MessageResponse] = []
+    var removeSelectedMessage: ((MessageID) -> Void)?
+    var openAttachment: ((AttachmentResponse) -> Void)?
 }
 
 struct TimelineRowBinding {
@@ -84,6 +94,15 @@ extension TimelineBubbleActions {
             && pendingReactionMessageIDs == other.pendingReactionMessageIDs
             && modifiablePendingMessageIDs == other.modifiablePendingMessageIDs
             && interactionContext == other.interactionContext
+            && isSelectingMessages == other.isSelectingMessages
+            && selectedMessageIDs == other.selectedMessageIDs
+            && (toggleMessageSelection == nil) == (other.toggleMessageSelection == nil)
+            && (endMessageSelection == nil) == (other.endMessageSelection == nil)
+            && (forwardMessage == nil) == (other.forwardMessage == nil)
+            && (openForwardedMessages == nil) == (other.openForwardedMessages == nil)
+            && isSelectionBusy == other.isSelectionBusy
+            && (removeSelectedMessage == nil) == (other.removeSelectedMessage == nil)
+            && (openAttachment == nil) == (other.openAttachment == nil)
     }
 
     func pinContext(for row: TimelineMessageRow, base: MessageInteractionContext)

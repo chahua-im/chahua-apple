@@ -35,6 +35,10 @@
     final class AppKitMessageTextView: NSTextView {
         private let coordinator = MessageTextContent.Coordinator()
         let contentLayout: MessageTextLayout
+        var allowsContextMenu = true
+        override func menu(for event: NSEvent) -> NSMenu? {
+            allowsContextMenu ? super.menu(for: event) : nil
+        }
         var failureAction: (() -> Void)? {
             didSet { updateFailureButton() }
         }

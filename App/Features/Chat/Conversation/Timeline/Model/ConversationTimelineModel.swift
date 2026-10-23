@@ -34,6 +34,8 @@ final class ConversationTimelineModel: ObservableObject {
     @Published private(set) var activityJumpInProgress = false
     var isAtLiveEdge: Bool { window.isAtLiveEdge }
     var jumpUnreadCount: Int64 { state.live.unreadCount }
+    /// Selection survives pagination, but must discard messages deleted by realtime events.
+    var knownDeletedMessageIDs: Set<MessageID> { deletedIDs }
     var showsJumpToLatest: Bool {
         state.content == .ready
             && (!isAtLiveEdge
@@ -117,6 +119,7 @@ final class ConversationTimelineModel: ObservableObject {
         chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource,
         messageStore: ConversationMessageStore, threadID: String? = nil,
         calendar: Calendar = .autoupdatingCurrent,
+        capturedReplyRedactedIDs: Set<MessageID> = [],
         markRead: (@MainActor (MessageID) async throws -> Void)? = nil,
         fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)? = nil,
         fetchUnreadMentions: (@MainActor (String?) async throws -> UnreadMentionIDsResponse)? = nil,
@@ -138,7 +141,8 @@ final class ConversationTimelineModel: ObservableObject {
         self.fetchUnreadReactions = fetchUnreadReactions
         self.acknowledgeReactions = acknowledgeReactions
         builder = TimelineRowsBuilder(
-            currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar)
+            currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar,
+            capturedReplyRedactedIDs: capturedReplyRedactedIDs)
         // A final leave acknowledgement can outlive timeline observation. Keep the account
         // fence subscribed until the model dies so it cannot write for a replacement login.
         accountResetObservation = messageStore.changes.sink { [weak self] change in

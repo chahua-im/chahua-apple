@@ -8,10 +8,12 @@ struct MessageInteractionContext: Equatable {
     var isThreadView = false
     var isPinned = false
     var isUpdatingPin = false
+    var isReadOnly = false
 }
 
 enum MessageMenuAction: String, CaseIterable, Identifiable {
-    case copy, copyLink, reply, thread, pin, unpin, edit, delete, save, favorite, reactionDetails
+    case copy, copyLink, reply, thread, pin, unpin, edit, delete, select, forward, save, favorite,
+        reactionDetails
 
     var id: Self { self }
 }
@@ -29,6 +31,7 @@ struct MessageActionPolicy {
     let hasThreadInfo: Bool
     let isOwn: Bool
     let hasReactions: Bool
+    let isForwarded: Bool
     let context: MessageInteractionContext
 
     init(
@@ -39,6 +42,7 @@ struct MessageActionPolicy {
         hasThreadInfo: Bool = false,
         isOwn: Bool = false,
         hasReactions: Bool = false,
+        isForwarded: Bool = false,
         context: MessageInteractionContext = .init()
     ) {
         self.messageType = messageType
@@ -49,6 +53,7 @@ struct MessageActionPolicy {
         self.isOwn = isOwn
         self.hasReactions = hasReactions
         self.context = context
+        self.isForwarded = isForwarded
     }
 
     init(row: TimelineMessageRow, context: MessageInteractionContext) {
@@ -60,31 +65,34 @@ struct MessageActionPolicy {
             hasThreadInfo: row.entry.remoteMessage?.threadInfo != nil,
             isOwn: row.isOutgoing,
             hasReactions: row.entry.remoteMessage?.reactions.contains { $0.count > 0 } == true,
+            isForwarded: row.entry.presentationMessage?.forwardedFrom != nil,
             context: context
         )
     }
 
     var actions: [MessageMenuAction] {
         let order: [MessageMenuAction] = [
-            .reply, .thread, context.isPinned ? .unpin : .pin, .copy, .edit,
-            .favorite, .save, .copyLink, .delete, .reactionDetails,
+            .reply, .thread, .copy, .forward, .edit, .favorite, .save, .select,
+            .reactionDetails, .copyLink, context.isPinned ? .unpin : .pin, .delete,
         ]
         return order.filter { availability(of: $0) != .hidden }
     }
 
     var canReact: Bool {
-        context.canWrite && !isDeleted && !isPending
+        !context.isReadOnly && context.canWrite && !isDeleted && !isPending
             && messageType != .system && messageType != .sticker && messageType != .invite
     }
 
     func availability(of action: MessageMenuAction) -> MessageActionAvailability {
+        if context.isReadOnly { return .hidden }
         if messageType == .sticker,
-            ![MessageMenuAction.reply, .delete, .copyLink, .favorite].contains(action)
+            ![MessageMenuAction.reply, .delete, .copyLink, .favorite, .select, .forward].contains(
+                action)
         {
             return .hidden
         }
         if messageType == .invite,
-            ![MessageMenuAction.reply, .pin, .unpin, .delete].contains(action)
+            ![MessageMenuAction.reply, .pin, .unpin, .delete, .select].contains(action)
         {
             return .hidden
         }
@@ -120,9 +128,14 @@ struct MessageActionPolicy {
                 && !context.isUpdatingPin ? .enabled : .hidden
         case .edit:
             return context.canWrite && isOwn && messageType == .text && hasCopyableText
+                && !isForwarded
                 ? .enabled : .hidden
         case .delete:
             return context.canWrite && (isOwn || context.isAdmin) ? .enabled : .hidden
+        case .select:
+            return .enabled
+        case .forward:
+            return .enabled
         case .favorite:
             applicable = messageType == .sticker
         case .save:
@@ -135,6 +148,7 @@ struct MessageActionPolicy {
 
     private var hasCopyableText: Bool {
         messageType != .audio && messageType != .sticker && messageType != .invite
+            && messageType != .forwarded && messageType != .placeholder
             && text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }

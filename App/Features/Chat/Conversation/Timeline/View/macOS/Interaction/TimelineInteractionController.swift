@@ -285,6 +285,14 @@
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
                 dismiss()
+            case .select, .forward:
+                guard let message = row.entry.remoteMessage else { return }
+                let callback =
+                    action == .select
+                    ? actions.toggleMessageSelection : actions.forwardMessage
+                guard let callback else { return }
+                dismiss()
+                callback(message)
             case .reply:
                 guard let message = row.entry.remoteMessage, let reply = actions.replyToMessage
                 else { return }
@@ -330,7 +338,7 @@
             }
             guard case .pending(let pending) = row.entry, !pending.dispatchClaimed,
                 actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID),
-                revoke || pending.body.messageType == .text,
+                revoke || (pending.body.messageType == .text && pending.forwardRequest == nil),
                 let operation = revoke ? actions.revokePendingMessage : actions.blockPendingMessage
             else {
                 refresh()

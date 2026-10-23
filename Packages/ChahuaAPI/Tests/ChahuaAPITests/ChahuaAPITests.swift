@@ -9,6 +9,66 @@ final class ChahuaAPITests: XCTestCase {
         super.tearDown()
     }
 
+    func testForwardingRoutesPreserveSourceIDsThreadAndPlaceholderConsent() async throws {
+        let requests = RequestRecorder()
+        let sourceID = MessageID(9_007_199_254_740_993)
+        let sender = User(uid: 1, gender: 0, name: nil, avatarUrl: nil, userGroup: nil)
+        let message = MessageResponse(
+            id: sourceID, chatId: "destination", clientGeneratedId: "stable-key",
+            messageType: .placeholder, sender: sender, createdAt: Date(timeIntervalSince1970: 1),
+            message: "pendingAudio")
+        let response = String(decoding: try JSONCoding.encoder.encode(message), as: UTF8.self)
+        let details = String(
+            decoding: try JSONCoding.encoder.encode(
+                ForwardedMessagesResponse(total: 0, messages: [])),
+            as: UTF8.self)
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (200, request.httpMethod == "POST" ? response : details)
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        let single = try await client.forwardMessage(
+            chatID: "destination", messageID: sourceID,
+            body: ForwardMessageBody(
+                sourceChatId: "source", clientGeneratedId: "stable-key", threadId: "thread",
+                allowPlaceholders: true))
+        XCTAssertEqual(single.messageType, .placeholder)
+        _ = try await client.forwardMessages(
+            chatID: "destination",
+            body: ForwardMessagesBody(
+                sourceChatId: "source", messageIds: [sourceID, MessageID(4)],
+                clientGeneratedId: "merged-key"))
+        _ = try await client.getForwardedMessages(chatID: "destination", messageID: sourceID)
+        _ = try await client.getForwardedMessages(
+            chatID: "destination", messageID: sourceID, bundleID: "child")
+        _ = try await client.getSavedForwardedMessages(savedMessageID: "saved")
+        _ = try await client.getSavedForwardedMessages(savedMessageID: "saved", bundleID: "child")
+        XCTAssertEqual(
+            requests.values.map { $0.url?.path },
+            [
+                "/chats/destination/messages/9007199254740993/forward",
+                "/chats/destination/messages/forward",
+                "/chats/destination/messages/9007199254740993/forwarded-messages",
+                "/chats/destination/messages/9007199254740993/forwarded-bundles/child/messages",
+                "/saved-messages/saved/forwarded-messages",
+                "/saved-messages/saved/forwarded-bundles/child/messages",
+            ])
+        let singleBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(requests.values[0])) as? [String: Any])
+        XCTAssertEqual(singleBody["sourceChatId"] as? String, "source")
+        XCTAssertEqual(singleBody["clientGeneratedId"] as? String, "stable-key")
+        XCTAssertEqual(singleBody["threadId"] as? String, "thread")
+        XCTAssertEqual(singleBody["allowPlaceholders"] as? Bool, true)
+        XCTAssertNil(singleBody["messageIds"])
+        let mergedBody = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: requestBody(requests.values[1])) as? [String: Any])
+        XCTAssertEqual(mergedBody["messageIds"] as? [String], [sourceID.description, "4"])
+        XCTAssertEqual(mergedBody["allowPlaceholders"] as? Bool, false)
+        XCTAssertNil(mergedBody["threadId"])
+    }
+
     func testActivityIDsAndAcknowledgementPreserveSnapshotBoundaryAndThreadScope() async throws {
         let requests = RequestRecorder()
         let boundary = "2026-10-20T00:00:00.123456789+00:00"

@@ -9,6 +9,10 @@ public enum MessagePreviewRenderer {
         public let sticker: String
         public let video: String
         public let voiceMessage: String
+        public let forwarded: String
+        public let pendingAudio: String
+        public let nestedForward: String
+        public let unavailable: String
 
         public init(
             attachment: String,
@@ -17,7 +21,11 @@ public enum MessagePreviewRenderer {
             invite: String,
             sticker: String,
             video: String,
-            voiceMessage: String
+            voiceMessage: String,
+            forwarded: String = "[Chat history]",
+            pendingAudio: String = "[Pending voice message]",
+            nestedForward: String = "[Chat history]",
+            unavailable: String = "[Unavailable message]"
         ) {
             self.attachment = attachment
             self.deleted = deleted
@@ -26,6 +34,10 @@ public enum MessagePreviewRenderer {
             self.sticker = sticker
             self.video = video
             self.voiceMessage = voiceMessage
+            self.forwarded = forwarded
+            self.pendingAudio = pendingAudio
+            self.nestedForward = nestedForward
+            self.unavailable = unavailable
         }
     }
 
@@ -33,6 +45,14 @@ public enum MessagePreviewRenderer {
         if preview.isDeleted { return labels.deleted }
 
         switch preview.messageType {
+        case .forwarded:
+            return labels.forwarded
+        case .placeholder:
+            switch preview.message {
+            case "pendingAudio": return labels.pendingAudio
+            case "nestedForward": return labels.nestedForward
+            default: return labels.unavailable
+            }
         case .invite:
             return labels.invite
         case .sticker:

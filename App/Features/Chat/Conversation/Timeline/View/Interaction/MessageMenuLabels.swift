@@ -11,6 +11,8 @@ extension MessageMenuAction {
         case .unpin: "pin.slash"
         case .edit: "pencil"
         case .delete: "trash"
+        case .select: "checkmark.circle"
+        case .forward: "arrowshape.turn.up.right"
         case .save: "bookmark"
         case .favorite: "star"
         case .reactionDetails: "face.smiling"
@@ -28,6 +30,8 @@ extension MessageMenuAction {
         case .unpin: AppLanguage.localized("Unpin")
         case .edit: AppLanguage.localized("Edit")
         case .delete: AppLanguage.localized("Delete")
+        case .select: AppLanguage.localized("Select")
+        case .forward: AppLanguage.localized("Forward")
         case .save: AppLanguage.localized("Save")
         case .favorite: AppLanguage.localized("Favorite")
         case .reactionDetails: AppLanguage.localized("Reactions")

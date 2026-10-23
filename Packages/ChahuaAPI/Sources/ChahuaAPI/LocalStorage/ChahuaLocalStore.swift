@@ -175,6 +175,52 @@ public final class ChahuaLocalStore: Sendable {
         }
     }
 
+    /// Captures an independent immutable forwarding request without consuming the destination draft.
+    public func enqueueForward(
+        chatID: String, threadID: String? = nil, senderID: Int32, request: LocalForwardRequest
+    ) async throws -> LocalConversationSnapshot {
+        guard !request.sources.isEmpty, request.sources.count <= 100,
+            Set(request.messageIDs).count == request.sources.count,
+            request.sources.allSatisfy({
+                $0.chatId == request.sourceChatID && !$0.isDeleted
+                    && $0.messageType != .system && $0.messageType != .invite
+            })
+        else { throw LocalStorageError.unsupportedMessageType }
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let id = UUID().uuidString
+        let date = Date()
+        let data = try JSONEncoder().encode(request)
+        return try await database.write { db in
+            try Self.ensure(db, key)
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            try Self.insert(
+                db, key, id: id, senderID: senderID, text: "", replyData: nil,
+                date: date, revision: 0, blocked: false)
+            try db.execute(
+                sql:
+                    "UPDATE outgoing_message SET forward_request = ? WHERE client_generated_id = ?",
+                arguments: [data, id])
+            if let composition = before.composingItem {
+                // Forwarding is independent: preserve every draft field and keep it as the tail.
+                let sequence = try Int64.fetchOne(
+                    db,
+                    sql:
+                        "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
+                    arguments: [chatID, threadID ?? ""])!
+                try db.execute(
+                    sql:
+                        "UPDATE outgoing_message SET enqueue_sequence = ?, dispatch_order = ? WHERE client_generated_id = ?",
+                    arguments: [sequence, sequence, composition.clientGeneratedID])
+                try db.execute(
+                    sql:
+                        "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?",
+                    arguments: [chatID, threadID ?? ""])
+            }
+            try Self.bump(db, key)
+            return try Self.snapshot(db, key, directory: self.directory)
+        }
+    }
+
     /// Sends independently of the blocked composition without consuming its draft.
     public func enqueueSticker(
         chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,
@@ -267,7 +313,9 @@ public final class ChahuaLocalStore: Sendable {
             let item = try Self.editableTail(
                 before, itemID: itemID, expectedRevision: expectedRevision)
             guard item.isBlocked else { throw LocalStorageError.notTail }
-            guard item.messageType == .text, !attachments.contains(where: \.isAudio) else {
+            guard item.forwardRequest == nil, item.messageType == .text,
+                !attachments.contains(where: \.isAudio)
+            else {
                 throw LocalStorageError.unsupportedMessageType
             }
             guard attachments.count <= 20, Set(attachments.map(\.id)).count == attachments.count
@@ -383,7 +431,9 @@ public final class ChahuaLocalStore: Sendable {
             let before = try Self.snapshot(db, key, directory: self.directory)
             let item = try Self.editableTail(
                 before, itemID: itemID, expectedRevision: expectedRevision)
-            guard item.messageType == .text else { throw LocalStorageError.unsupportedMessageType }
+            guard item.forwardRequest == nil, item.messageType == .text else {
+                throw LocalStorageError.unsupportedMessageType
+            }
             guard !item.isBlocked else { return before }
             let revision = max(before.draft.editRevision, item.editRevision) + 1
             let date = Date()
@@ -681,6 +731,18 @@ public final class ChahuaLocalStore: Sendable {
             let sticker = try (row["sticker"] as Data?).map {
                 try JSONDecoder().decode(MessageStickerResponse.self, from: $0)
             }
+            let forward = try (row["forward_request"] as Data?).map {
+                try JSONDecoder().decode(LocalForwardRequest.self, from: $0)
+            }
+            if let forward {
+                guard !forward.sources.isEmpty, forward.sources.count <= 100,
+                    Set(forward.messageIDs).count == forward.sources.count,
+                    forward.sources.allSatisfy({ $0.chatId == forward.sourceChatID }),
+                    attachments.isEmpty, sticker == nil, !(row["is_blocked"] as Bool),
+                    (row["text"] as String).isEmpty,
+                    (row["reply_to_message"] as Data?) == nil
+                else { throw LocalStorageError.corruptRecord }
+            }
             guard sticker == nil || (attachments.isEmpty && !(row["is_blocked"] as Bool)) else {
                 throw LocalStorageError.corruptRecord
             }
@@ -701,7 +763,7 @@ public final class ChahuaLocalStore: Sendable {
                 enqueueSequence: row["enqueue_sequence"], dispatchOrder: row["enqueue_sequence"],
                 state: state, attachments: attachments, isBlocked: row["is_blocked"],
                 editRevision: row["edit_revision"], compressionEnabled: row["compression_enabled"],
-                dispatchClaimed: row["dispatch_claimed"], sticker: sticker)
+                dispatchClaimed: row["dispatch_claimed"], sticker: sticker, forwardRequest: forward)
         }
         let composing = items.last?.isBlocked == true ? items.last : nil
         guard items.filter(\.isBlocked).count == (composing == nil ? 0 : 1) else {

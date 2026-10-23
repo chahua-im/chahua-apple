@@ -26,6 +26,12 @@
             recognizer.cancelSession()
         }
 
+        func setEnabled(_ enabled: Bool) {
+            guard recognizer.isEnabled != enabled else { return }
+            if !enabled { cancel() }
+            recognizer.isEnabled = enabled
+        }
+
         fileprivate func beginPress(for session: MessageRowTouchSession) {
             guard let bubbleView = session.bubbleView else { return }
             pressFeedback?.restore()

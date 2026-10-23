@@ -139,6 +139,10 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
         // sticker identity and media required both for dispatch and offline display.
         try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN sticker BLOB")
     }
+    migrator.registerMigration("v6_forwarding_outbox") { db in
+        // Existing ordinary messages remain ordinary; forwarded snapshots are immutable payloads.
+        try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN forward_request BLOB")
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }

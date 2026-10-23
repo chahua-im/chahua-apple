@@ -78,6 +78,21 @@ public struct LocalDraft: Sendable, Equatable {
     public var compressionEnabled: Bool = true
 }
 
+/// Immutable acknowledged source selection captured once before entering the durable outbox.
+public struct LocalForwardRequest: Codable, Hashable, Sendable {
+    public let sourceChatID: String
+    public let sources: [MessageResponse]
+    public let allowPlaceholders: Bool
+
+    public init(sourceChatID: String, sources: [MessageResponse], allowPlaceholders: Bool = false) {
+        self.sourceChatID = sourceChatID
+        self.sources = sources.sorted { $0.id < $1.id }
+        self.allowPlaceholders = allowPlaceholders
+    }
+
+    public var messageIDs: [MessageID] { sources.map(\.id).sorted() }
+}
+
 public struct LocalOutgoingMessage: Sendable, Equatable {
     public enum State: String, Sendable { case queued, sending, failed }
     public let clientGeneratedID: String
@@ -100,8 +115,13 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     /// Once claimed, even an interrupted or failed request must replay the same payload.
     public var dispatchClaimed: Bool = false
     public var sticker: MessageStickerResponse? = nil
+    public var forwardRequest: LocalForwardRequest? = nil
 
     public var messageType: MessageType {
+        if let forwardRequest {
+            return forwardRequest.sources.count == 1
+                ? forwardRequest.sources[0].messageType : .forwarded
+        }
         if sticker != nil { return .sticker }
         if attachments.count == 1, attachments[0].isAudio { return .audio }
         return .text
@@ -112,6 +132,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     }
 
     public var body: CreateMessageBody {
+        precondition(forwardRequest == nil, "Forwarding must use the forwarding endpoints")
         precondition(
             isReadyForDispatch, "An unresolved attachment must never be omitted from a message")
         return CreateMessageBody(

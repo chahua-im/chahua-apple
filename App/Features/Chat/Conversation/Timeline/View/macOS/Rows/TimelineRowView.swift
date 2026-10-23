@@ -7,12 +7,14 @@
     /// itself, and keeps empty reusable section objects rather than message payloads.
     @MainActor
     final class TimelineRowView: NSView {
+        static let selectionGutterWidth: CGFloat = 44
         private(set) var binding: TimelineRowBinding?
         private var bubbleView: TimelineBubbleContentView?
         private var avatarView: TimelineAvatarView?
         private var reactionsView: TimelineReactionsView?
         private var standaloneView: TimelineStandaloneView?
         private var replyButton: TimelineHoverReplyButton?
+        private var messageSelection: TimelineMessageSelectionButton?
         private let highlightLayer = CALayer()
         private var rowTrackingArea: NSTrackingArea?
         private var isRowHovered = false
@@ -52,6 +54,7 @@
                 }
             }
             if !canReply { resetHover() }
+            configureMessageSelection()
             updateReplyVisibility()
             updateHighlight(
                 animated: !resetSelection
@@ -73,6 +76,7 @@
             standaloneView?.clear()
             standaloneView?.isHidden = true
             replyButton?.isHidden = true
+            messageSelection?.isHidden = true
             highlightLayer.removeAllAnimations()
             highlightLayer.opacity = 0
             setAccessibilityCustomActions(nil)
@@ -99,6 +103,7 @@
         override func layout() {
             super.layout()
             highlightLayer.frame = bounds
+            messageSelection?.frame = bounds
             guard let binding else { return }
             let frames = binding.layout.frames
             bubbleView?.frame = frames[.bubble] ?? .zero
@@ -133,6 +138,51 @@
         override func viewDidChangeEffectiveAppearance() {
             super.viewDidChangeEffectiveAppearance()
             updateHighlight(animated: false)
+        }
+        private var isSelectingMessages: Bool {
+            binding?.actions.isSelectingMessages == true
+                && binding?.context.isInteractionPreview == false
+        }
+
+        private var selectableMessage: MessageResponse? {
+            guard let binding, case .message(let row) = binding.presentation.row,
+                let message = row.entry.remoteMessage, !message.isDeleted,
+                message.messageType != .system
+            else { return nil }
+            return message
+        }
+
+        private func configureMessageSelection() {
+            guard isSelectingMessages else {
+                messageSelection?.isHidden = true
+                return
+            }
+            if messageSelection == nil {
+                // A native full-row overlay intercepts child controls without introducing
+                // a per-row SwiftUI host, while wheel events still reach the scroll view.
+                let button = TimelineMessageSelectionButton(frame: .zero)
+                button.target = self
+                button.action = #selector(toggleMessageSelection)
+                addSubview(button, positioned: .above, relativeTo: nil)
+                messageSelection = button
+            }
+            if let messageSelection {
+                addSubview(messageSelection, positioned: .above, relativeTo: nil)
+            }
+            let message = selectableMessage
+            messageSelection?.configure(
+                message: message,
+                selected: message.map {
+                    binding?.actions.selectedMessageIDs.contains($0.id) == true
+                } ?? false,
+                busy: binding?.actions.isSelectionBusy == true)
+        }
+
+        @objc private func toggleMessageSelection() {
+            guard isSelectingMessages, binding?.actions.isSelectionBusy != true,
+                let message = selectableMessage
+            else { return }
+            binding?.actions.toggleMessageSelection?(message)
         }
 
         private func bindStandalone(_ binding: TimelineRowBinding) {
@@ -219,7 +269,7 @@
         }
 
         private var canReply: Bool {
-            guard let binding, !binding.context.isInteractionPreview,
+            guard let binding, !binding.context.isInteractionPreview, !isSelectingMessages,
                 case .message(let row) = binding.presentation.row,
                 row.entry.messageType != .system, binding.layout.frames[.bubble] != nil,
                 binding.actions.replyToMessage != nil
@@ -290,6 +340,7 @@
         }
         private func updateAccessibilityActions() {
             guard let binding, !binding.context.isInteractionPreview,
+                !binding.actions.interactionContext.isReadOnly, !isSelectingMessages,
                 binding.actions.openContextMenu != nil,
                 case .message(let row) = binding.presentation.row, row.entry.messageType != .system,
                 binding.layout.frames[.bubble] != nil
@@ -309,6 +360,43 @@
                     })
             ])
         }
+    }
+
+    private final class TimelineMessageSelectionButton: NSButton {
+        private let symbol = NSImageView()
+        override var isFlipped: Bool { true }
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            title = ""
+            isBordered = false
+            addSubview(symbol)
+        }
+        required init?(coder: NSCoder) { nil }
+        func configure(message: MessageResponse?, selected: Bool, busy: Bool) {
+            isHidden = false
+            isEnabled = !busy
+            symbol.isHidden = message == nil
+            symbol.image = NSImage(
+                systemSymbolName: selected ? "checkmark.circle.fill" : "circle",
+                accessibilityDescription: nil)
+            symbol.contentTintColor = NSColor(ChahuaTheme.accent)
+            setAccessibilityElement(message != nil)
+            setAccessibilityLabel(
+                AppLanguage.localized(selected ? "Deselect message" : "Select message"))
+            setAccessibilityValue(selected ? 1 : 0)
+            needsLayout = true
+        }
+        override func layout() {
+            super.layout()
+            symbol.frame = CGRect(
+                x: bounds.maxX - (TimelineRowView.selectionGutterWidth + 24) / 2,
+                y: bounds.midY - 12, width: 24, height: 24)
+        }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard !isHidden, bounds.contains(convert(point, from: superview)) else { return nil }
+            return self
+        }
+        override func menu(for event: NSEvent) -> NSMenu? { nil }
     }
 
     @MainActor

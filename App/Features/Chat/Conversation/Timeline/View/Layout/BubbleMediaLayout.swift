@@ -1,5 +1,6 @@
 import ChahuaAPI
 import CoreGraphics
+import Foundation
 
 protocol BubbleMediaAttachment: Hashable {
     var id: String { get }
@@ -7,7 +8,18 @@ protocol BubbleMediaAttachment: Hashable {
 }
 
 extension AttachmentResponse: BubbleMediaAttachment {
-    var mediaDimensions: CGSize { .init(width: Int(width ?? 0), height: Int(height ?? 0)) }
+    var isDocumentAttachment: Bool {
+        let mime = kind.lowercased()
+        return !mime.hasPrefix("image/") && !mime.hasPrefix("video/") && !mime.hasPrefix("audio/")
+    }
+    var documentSize: String {
+        ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+    var mediaDimensions: CGSize {
+        isDocumentAttachment
+            ? CGSize(width: 284, height: 80)
+            : .init(width: Int(width ?? 0), height: Int(height ?? 0))
+    }
 }
 
 extension LocalOutgoingAttachment: BubbleMediaAttachment {

@@ -35,7 +35,12 @@
                 guard !actions.hasSameRendering(as: oldValue) else { return }
                 rowActions = makeRowActions()
                 guard isViewLoaded else { return }
-                refreshVisibleRoots()
+                if actions.isSelectingMessages != oldValue.isSelectingMessages {
+                    preparation = nil
+                    requestDisplayUpdate()
+                } else {
+                    refreshVisibleRoots()
+                }
             }
         }
         private lazy var rowActions = makeRowActions()
@@ -305,7 +310,11 @@
             let bodySize = MessageTextSizePreference.scaledBodySize(
                 messageTextSize, compatibleWith: traits)
             return .current(
-                timelineWidth: availableRowWidth, displayScale: traits.displayScale,
+                timelineWidth: max(
+                    1,
+                    availableRowWidth
+                        - (actions.isSelectingMessages ? TimelineRowView.selectionGutterWidth : 0)),
+                displayScale: traits.displayScale,
                 bodySize: bodySize,
                 captionSize: MessageTextSizePreference.scaledSize(
                     messageTextSize,
@@ -498,7 +507,8 @@
                     ? nil : { [weak self] in self?.actions.openMention?($0) },
                 openFailedMessage: actions.openFailedMessage == nil
                     ? nil : { [weak self] in self?.actions.openFailedMessage?($0) },
-                openContextMenu: actions.openContextMenu == nil
+                openContextMenu: actions.openContextMenu == nil || actions.isSelectingMessages
+                    || actions.interactionContext.isReadOnly
                     ? nil : { [weak self] in self?.actions.openContextMenu?($0, $1) },
                 toggleReaction: actions.toggleReaction == nil
                     ? nil : { [weak self] in self?.actions.toggleReaction?($0, $1) },
@@ -508,7 +518,23 @@
                 blockPendingMessage: actions.blockPendingMessage == nil
                     ? nil : { [weak self] in self?.actions.blockPendingMessage?($0) },
                 revokePendingMessage: actions.revokePendingMessage == nil
-                    ? nil : { [weak self] in self?.actions.revokePendingMessage?($0) }
+                    ? nil : { [weak self] in self?.actions.revokePendingMessage?($0) },
+                isSelectingMessages: actions.isSelectingMessages,
+                selectedMessageIDs: actions.selectedMessageIDs,
+                toggleMessageSelection: actions.toggleMessageSelection == nil
+                    ? nil : { [weak self] in self?.actions.toggleMessageSelection?($0) },
+                endMessageSelection: actions.endMessageSelection == nil
+                    ? nil : { [weak self] in self?.actions.endMessageSelection?() },
+                forwardMessage: actions.forwardMessage == nil
+                    ? nil : { [weak self] in self?.actions.forwardMessage?($0) },
+                openForwardedMessages: actions.openForwardedMessages == nil
+                    ? nil : { [weak self] in self?.actions.openForwardedMessages?($0) },
+                isSelectionBusy: actions.isSelectionBusy,
+                selectionMessages: actions.selectionMessages,
+                removeSelectedMessage: actions.removeSelectedMessage == nil
+                    ? nil : { [weak self] in self?.actions.removeSelectedMessage?($0) },
+                openAttachment: actions.openAttachment == nil
+                    ? nil : { [weak self] in self?.actions.openAttachment?($0) }
             )
         }
 

@@ -16,6 +16,194 @@ final class OutgoingMessageQueueTests: XCTestCase {
     /// Server IDs handed out by `response(_:)`, stable per client-generated ID.
     private var serverIDs: [String: UInt64] = [:]
 
+    func testForwardRestoresDedicatedSingleAndMergedThreadRequestsWithoutConsumingDraft()
+        async throws
+    {
+        let h = try await openHarness(foreground: false)
+        let sources = try [4, 2, 1, 3].map {
+            try TimelineTestFixtures.message(
+                id: UInt64($0), chatID: "source", at: $0, text: "captured \($0)")
+        }
+        let reply = sources[0].replyPreview
+        try await h.queue.saveDraft(
+            chatID: "chat", threadID: "thread", text: "keep composing",
+            editRevision: 1, updatedAt: Date(), replyToMessage: reply)
+        let key = ConversationKey(chatID: "chat", threadID: "thread")
+        let draft = try XCTUnwrap(h.queue.snapshots[key]?.draft)
+        try await h.queue.enqueueForward(chatID: "chat", sources: [sources[0]])
+        try await h.queue.enqueueForward(chatID: "chat", threadID: "thread", sources: sources)
+        let single = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        let merged = try XCTUnwrap(
+            h.queue.pendingMessages(chatID: "chat", threadID: "thread").first)
+        XCTAssertEqual(h.queue.snapshots[key]?.draft, draft)
+        XCTAssertTrue(single.attachments.isEmpty)
+        XCTAssertTrue(merged.attachments.isEmpty)
+        await h.close()
+
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        let restored = try XCTUnwrap(
+            reopened.queue.pendingMessages(chatID: "chat", threadID: "thread").first)
+        XCTAssertEqual(restored.forwardRequest, merged.forwardRequest)
+        XCTAssertEqual(restored.clientGeneratedID, merged.clientGeneratedID)
+        XCTAssertEqual(reopened.queue.snapshots[key]?.draft, draft)
+        let pending = PendingOutgoingMessage(
+            chatID: "chat", threadID: "thread", clientGeneratedID: restored.clientGeneratedID,
+            body: CreateMessageBody(
+                messageType: .forwarded, clientGeneratedId: restored.clientGeneratedID),
+            enqueuedAt: restored.enqueuedAt, senderID: 1, state: .queued,
+            forwardRequest: restored.forwardRequest)
+        let optimistic = try XCTUnwrap(pending.optimisticMessage)
+        XCTAssertEqual(optimistic.messageType, .forwarded)
+        XCTAssertEqual(optimistic.forwardedPreview?.total, 4)
+        XCTAssertEqual(
+            optimistic.forwardedPreview?.messages.map(\.originalMessageId),
+            sources.sorted { $0.id < $1.id }.prefix(3).map(\.id))
+        XCTAssertNil(optimistic.forwardedFrom)
+        await reopened.queue.setForegroundActive(true)
+        try await eventually { await reopened.api.requests().count == 2 }
+        let requests = await reopened.api.requests()
+        let singleIndex = try XCTUnwrap(requests.firstIndex { $0.singleForward != nil })
+        let mergedIndex = try XCTUnwrap(requests.firstIndex { $0.mergedForward != nil })
+        XCTAssertEqual(requests[singleIndex].sourceMessageID, sources[0].id)
+        XCTAssertEqual(requests[singleIndex].singleForward?.sourceChatId, "source")
+        XCTAssertEqual(
+            requests[singleIndex].singleForward?.clientGeneratedId, single.clientGeneratedID)
+        XCTAssertNil(requests[singleIndex].singleForward?.threadId)
+        XCTAssertNil(requests[singleIndex].mergedForward)
+        XCTAssertEqual(requests[mergedIndex].mergedForward?.threadId, "thread")
+        XCTAssertEqual(
+            requests[mergedIndex].mergedForward?.messageIds, restored.forwardRequest?.messageIDs)
+        XCTAssertEqual(
+            requests[mergedIndex].mergedForward?.clientGeneratedId, merged.clientGeneratedID)
+        XCTAssertNil(requests[mergedIndex].singleForward)
+        await reopened.api.finish(singleIndex, with: .success(try response(requests[singleIndex])))
+        await reopened.api.finish(mergedIndex, with: .success(try response(requests[mergedIndex])))
+        try await eventually {
+            reopened.queue.pendingMessages(chatID: "chat").isEmpty
+                && reopened.queue.pendingMessages(chatID: "chat", threadID: "thread").isEmpty
+        }
+        XCTAssertEqual(reopened.queue.snapshots[key]?.draft, draft)
+    }
+
+    func testForwardRetryKeepsCapturedPayloadAndSocketSuccessBeatsHTTPUnauthorized() async throws {
+        let h = try await openHarness(foreground: false)
+        var source = try TimelineTestFixtures.message(
+            id: 10, chatID: "source", at: 1, text: "original")
+        let other = try TimelineTestFixtures.message(id: 11, chatID: "source", at: 2)
+        try await h.queue.enqueueForward(
+            chatID: "chat", threadID: "thread", sources: [other, source], allowPlaceholders: true)
+        let captured = try XCTUnwrap(
+            h.queue.pendingMessages(chatID: "chat", threadID: "thread").first)
+        source = source.replacingMessageText("changed after enqueue")
+        try await h.queue.enqueueForward(chatID: "chat", threadID: "thread", sources: [source])
+        await h.queue.setForegroundActive(true)
+        try await eventually { await h.api.requests().count == 1 }
+        let initial = try await firstRequest(h.api)
+        await h.api.finish(0, with: .failure(QueueTestError.network))
+        try await eventually {
+            h.queue.pendingMessages(chatID: "chat", threadID: "thread").map(\.state) == [
+                .failed, .queued,
+            ]
+        }
+        try await h.queue.retry(
+            chatID: "chat", threadID: "thread", clientGeneratedID: captured.clientGeneratedID,
+            scope: .message)
+        try await eventually { await h.api.requests().count == 2 }
+        let retried = await h.api.requests()
+        XCTAssertEqual(retried[1].mergedForward, initial.mergedForward)
+        XCTAssertEqual(
+            h.queue.pendingMessages(chatID: "chat", threadID: "thread").first?.forwardRequest,
+            captured.forwardRequest)
+        XCTAssertEqual(captured.forwardRequest?.sources.first?.message, "original")
+        let accepted = await h.queue.acceptAcknowledgement(try response(retried[1]))
+        XCTAssertTrue(accepted)
+        await h.api.finish(1, with: .failure(APIError.invalidToken))
+        // The ordered successor starts only after the obsolete HTTP failure is consumed.
+        try await eventually { await h.api.requests().count == 3 }
+        let finalRequests = await h.api.requests()
+        XCTAssertNotNil(finalRequests[2].singleForward)
+        XCTAssertNil(h.invalidTokenStates)
+        await h.api.finish(2, with: .success(try response(finalRequests[2])))
+        try await eventually {
+            h.queue.pendingMessages(chatID: "chat", threadID: "thread").isEmpty
+        }
+    }
+
+    func testAcknowledgedAudioConsentIsCapturedAndPublicationCannotBeUndoneByLateHTTP() async throws
+    {
+        for publicationFirst in [false, true] {
+            let h = try await openHarness(foreground: false)
+            let store = try await h.openStore(uid: 1)
+            let file = store.directory.appendingPathComponent("voice.m4a")
+            try Data([1, 2, 3]).write(to: file)
+            var attachment = LocalOutgoingAttachment(
+                id: "voice", generation: UUID().uuidString, position: 0,
+                sourcePath: file.path, preparedPath: file.path, previewPath: file.path,
+                fileName: "voice.m4a", mimeType: "audio/mp4", width: 0, height: 0,
+                byteCount: 3)
+            _ = try await store.enqueueVoice(
+                chatID: "source", senderID: 1, clientGeneratedID: "voice-send",
+                attachment: attachment, enqueuedAt: Date())
+            // Voice enqueue accepts an imported file; upload completion is a separate checkpoint.
+            attachment.attachmentID = "uploaded-voice"
+            _ = try await store.checkpointAttachment(
+                chatID: "source", itemID: "voice-send", attachment: attachment)
+            await h.queue.retryStorage()
+            await h.queue.setForegroundActive(true)
+            try await eventually { await h.api.requests().count == 1 }
+            let audio = try TimelineTestFixtures.message(
+                id: 501, chatID: "source", at: 1, type: .audio, clientGeneratedID: "voice-send",
+                fields: [
+                    "hasAttachments": true,
+                    "attachments": [
+                        [
+                            "id": "uploaded-voice", "url": "https://example.test/voice.m4a",
+                            "kind": "audio/mp4", "size": 3, "fileName": "voice.m4a",
+                        ]
+                    ],
+                ])
+            if publicationFirst {
+                let accepted = await h.queue.acceptAcknowledgement(audio)
+                XCTAssertTrue(accepted)
+            }
+            await h.api.finish(0, with: .success(audio))
+            await h.queue.setForegroundActive(false)
+            if publicationFirst {
+                XCTAssertTrue(h.queue.acknowledgedPendingAudioMessages.isEmpty)
+                XCTAssertNil(h.queue.forwardPlaceholderReason(for: audio, merging: false))
+            } else {
+                XCTAssertEqual(h.queue.acknowledgedPendingAudioMessages, [audio])
+                XCTAssertEqual(
+                    h.queue.forwardPlaceholderReason(for: audio, merging: false), "pendingAudio")
+                try await h.queue.enqueueForward(
+                    chatID: "chat", sources: [audio], allowPlaceholders: true)
+                let pending = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+                let snapshot = try XCTUnwrap(pending.forwardRequest?.sources.first)
+                XCTAssertEqual(snapshot.id, audio.id)
+                XCTAssertEqual(snapshot.messageType, .placeholder)
+                XCTAssertEqual(snapshot.message, "pendingAudio")
+                XCTAssertTrue(snapshot.attachments.isEmpty)
+                XCTAssertNil(snapshot.sticker)
+                h.queue.acceptPublishedForwardSource(audio)
+                XCTAssertTrue(h.queue.acknowledgedPendingAudioMessages.isEmpty)
+                XCTAssertNil(h.queue.forwardPlaceholderReason(for: audio, merging: false))
+                XCTAssertEqual(
+                    h.queue.pendingMessages(chatID: "chat").first?.forwardRequest,
+                    pending.forwardRequest)
+                await h.queue.setForegroundActive(true)
+                try await eventually { await h.api.requests().count == 2 }
+                let requests = await h.api.requests()
+                XCTAssertEqual(requests[1].singleForward?.allowPlaceholders, true)
+                XCTAssertEqual(requests[1].sourceMessageID, audio.id)
+                await h.api.finish(1, with: .success(try response(requests[1])))
+                try await eventually { h.queue.pendingMessages(chatID: "chat").isEmpty }
+            }
+            await h.queue.activate(uid: 2)
+            XCTAssertTrue(h.queue.acknowledgedPendingAudioMessages.isEmpty)
+            await h.close()
+        }
+    }
+
     func testStickerSnapshotsAndFailedThreadSendSurviveRestartWithoutConsumingDrafts() async throws
     {
         let h = try await openHarness(foreground: false)
@@ -1067,6 +1255,9 @@ private actor HeldQueueAPI: ChahuaAPIClient {
         let chatID: String
         let threadID: String?
         let body: CreateMessageBody
+        var singleForward: ForwardMessageBody? = nil
+        var mergedForward: ForwardMessagesBody? = nil
+        var sourceMessageID: MessageID? = nil
     }
 
     private var recorded: [Request] = []
@@ -1218,11 +1409,34 @@ private actor HeldQueueAPI: ChahuaAPIClient {
         try await hold(chatID: chatID, threadID: threadID, body: body)
     }
 
-    private func hold(chatID: String, threadID: String?, body: CreateMessageBody) async throws
-        -> MessageResponse
+    func forwardMessage(chatID: String, messageID: MessageID, body: ForwardMessageBody)
+        async throws -> MessageResponse
     {
+        try await hold(
+            chatID: chatID, threadID: body.threadId,
+            body: CreateMessageBody(messageType: .text, clientGeneratedId: body.clientGeneratedId),
+            singleForward: body, sourceMessageID: messageID)
+    }
+
+    func forwardMessages(chatID: String, body: ForwardMessagesBody) async throws -> MessageResponse
+    {
+        try await hold(
+            chatID: chatID, threadID: body.threadId,
+            body: CreateMessageBody(
+                messageType: .forwarded, clientGeneratedId: body.clientGeneratedId),
+            mergedForward: body)
+    }
+
+    private func hold(
+        chatID: String, threadID: String?, body: CreateMessageBody,
+        singleForward: ForwardMessageBody? = nil, mergedForward: ForwardMessagesBody? = nil,
+        sourceMessageID: MessageID? = nil
+    ) async throws -> MessageResponse {
         let index = recorded.count
-        recorded.append(Request(chatID: chatID, threadID: threadID, body: body))
+        recorded.append(
+            Request(
+                chatID: chatID, threadID: threadID, body: body, singleForward: singleForward,
+                mergedForward: mergedForward, sourceMessageID: sourceMessageID))
         active[chatID, default: 0] += 1
         maximum[chatID] = max(maximum[chatID, default: 0], active[chatID, default: 0])
         return try await withCheckedThrowingContinuation { held[index] = $0 }
