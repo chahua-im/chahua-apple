@@ -35,7 +35,13 @@ struct ForwardedRecordsView: View {
 
     var body: some View {
         content
-            .navigationTitle("Chat records")
+            .environment(\.chatHeaderInset, 0)
+            .environment(\.chatComposerInset, 0)
+            .navigationTitle("Forwarded Messages")
+            #if os(iOS)
+                .toolbar(.visible, for: .navigationBar)
+                .navigationBarTitleDisplayMode(.inline)
+            #endif
             .navigationDestination(item: $childBundleID) { bundleID in
                 ForwardedRecordsView(session: session, bundleID: bundleID)
             }
@@ -60,12 +66,12 @@ struct ForwardedRecordsView: View {
     private var content: some View {
         switch session.phase(for: key) {
         case .loading:
-            ProgressView("Loading chat history…")
+            ProgressView("Loading forwarded messages…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed:
             VStack(spacing: ChahuaTheme.Spacing.small) {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle)
-                Text("Couldn’t load chat history").font(.headline)
+                Text("Couldn’t load forwarded messages").font(.headline)
                 Text("Check your connection and try again.")
                     .foregroundStyle(ChahuaTheme.secondaryText)
                 Button("Retry") { session.load(key, retry: true) }
@@ -75,8 +81,8 @@ struct ForwardedRecordsView: View {
         case .unavailable:
             VStack(spacing: ChahuaTheme.Spacing.small) {
                 Image(systemName: "lock.doc").font(.largeTitle)
-                Text("Chat history unavailable").font(.headline)
-                Text("This chat history is no longer available or you don’t have access.")
+                Text("Forwarded messages unavailable").font(.headline)
+                Text("These forwarded messages are no longer available or you don’t have access.")
                     .foregroundStyle(ChahuaTheme.secondaryText)
                     .multilineTextAlignment(.center)
             }
@@ -122,7 +128,7 @@ struct ForwardedRecordsView: View {
                     return
                 }
                 var gallery = gallery
-                gallery.conversationTitle = String(localized: "Chat records")
+                gallery.conversationTitle = String(localized: "Forwarded Messages")
                 imageDetailPresenter.present(gallery)
                 if imageDetailPresenter.gallery?.id == gallery.id {
                     presentedGalleryID = gallery.id

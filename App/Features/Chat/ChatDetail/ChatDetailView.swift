@@ -40,6 +40,7 @@ struct ChatDetailView: View {
     @State private var reactionDetailsMessage: ReactionDetailsSelection?
     @State private var forwardRequest: ForwardSelection?
     @State private var recordRequest: RecordSelection?
+    @State private var keepsTimelineForForwardedMessages = false
     @State private var showsForwardStarted = false
     @State private var selectionToDelete: TimelineBubbleActions?
     @State private var selectionDeleteTask: Task<Void, Never>?
@@ -54,7 +55,7 @@ struct ChatDetailView: View {
         var onEnqueued: () -> Void = {}
     }
 
-    private struct RecordSelection: Identifiable {
+    private struct RecordSelection: Identifiable, Hashable {
         let id: MessageID
         let chatID: String
     }
@@ -139,7 +140,13 @@ struct ChatDetailView: View {
                 store.registerTimeline(model)
                 model.setReadTrackingActive(scenePhase == .active)
             }
-            .task { await model.open(position: initialPosition) }
+            .task {
+                if keepsTimelineForForwardedMessages, model.state.content == .ready {
+                    keepsTimelineForForwardedMessages = false
+                } else {
+                    await model.open(position: initialPosition)
+                }
+            }
             .task(id: threadID) {
                 guard let threadID, let rootID = MessageID(threadID) else { return }
                 forwardingThreadRoot = try? await store.forwardSourceMessage(
@@ -251,7 +258,11 @@ struct ChatDetailView: View {
                 selectionDeleteTask = nil
                 forwardRequest = nil
                 isTimelineVisible = false
-                model.close(acknowledgingActivity: scenePhase == .active)
+                if keepsTimelineForForwardedMessages {
+                    model.setReadTrackingActive(false)
+                } else {
+                    model.close(acknowledgingActivity: scenePhase == .active)
+                }
                 store.unregisterTimeline(model)
                 Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
             }
@@ -291,18 +302,9 @@ struct ChatDetailView: View {
     private var forwardingSheets: some View {
         deletionSurface
             .sheet(item: $forwardRequest) { request in forwardingPicker(request) }
-            .sheet(item: $recordRequest) { request in
-                NavigationStack {
-                    ForwardedRecordsView(
-                        store: store, chatID: request.chatID, messageID: request.id
-                    )
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { recordRequest = nil }
-                        }
-                    }
-                }
-                .frame(minWidth: 300, minHeight: 400)
+            .navigationDestination(item: $recordRequest) { request in
+                ForwardedRecordsView(
+                    store: store, chatID: request.chatID, messageID: request.id)
             }
     }
 
@@ -638,6 +640,7 @@ struct ChatDetailView: View {
             forwardRequest = ForwardSelection(sources: [message])
         }
         actions.openForwardedMessages = { message in
+            keepsTimelineForForwardedMessages = true
             recordRequest = RecordSelection(id: message.id, chatID: message.chatId)
         }
         if let imageDetailPresenter {

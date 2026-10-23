@@ -1,111 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Forward" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳" } } } },
-    "Forward Thread" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发话题" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳話題" } } } },
-    "Forwarding started" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已开始转发" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已開始轉傳" } } } },
-    "Delete selected messages" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "撤回选中的消息" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "收回選取的訊息" } } } },
-    "Delete these messages?" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "撤回选中的消息？" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "收回選取的訊息？" } } } },
-    "Select up to 100 messages" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最多选择 100 条消息" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最多選取 100 則訊息" } } } },
-    "%lld messages" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 条消息" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 則訊息" } } } },
-    "Forwarded from %@" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发自 %@" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳自 %@" } } } },
-    "Chat records" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "聊天记录" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "聊天記錄" } } } },
-    "[Redacted]" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[已隐藏]" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[已隱藏]" } } } },
-    "[Chat history]" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[聊天记录]" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[聊天記錄]" } } } },
-    "[Pending voice message]" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[待转码语音]" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[待轉碼語音]" } } } },
-    "[Unavailable message]" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "[消息不可用]" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "[訊息無法使用]" } } } },
-    "Forward to" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "转发到" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "轉傳至" } } } },
-    "Search chats and threads" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "搜索聊天和话题" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "搜尋聊天與話題" } } } },
-    "Load More" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "继续加载" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "繼續載入" } } } },
-    "Preparing forward…" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在准备转发…" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在準備轉傳…" } } } },
-    "Loading conversations…" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载会话…" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入對話…" } } } },
-    "No forwarding destinations found" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "没有找到转发目标" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "找不到轉傳目標" } } } },
-    "Could not load chats" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载聊天" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入聊天" } } } },
-    "Could not load threads" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载话题" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入話題" } } } },
-    "Replace unavailable content?" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "替换不可用的内容？" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "替換無法使用的內容？" } } } },
-    "Audio still processing will be replaced with a placeholder. Continue forwarding?" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仍在转码的语音将替换为占位内容。继续转发？" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "仍在轉碼的語音將替換為佔位內容。繼續轉傳？" } } } },
-    "Deeply nested chat records will be replaced with placeholders. Continue forwarding?" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "嵌套层数过多的聊天记录将替换为占位内容。继续转发？" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "巢狀層數過多的聊天記錄將替換為佔位內容。繼續轉傳？" } } } },
-    "Audio still processing and deeply nested chat records will be replaced with placeholders. Continue forwarding?" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仍在转码的语音和嵌套层数过多的聊天记录将替换为占位内容。继续转发？" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "仍在轉碼的語音及巢狀層數過多的聊天記錄將替換為佔位內容。繼續轉傳？" } } } },
-    "Some selected messages cannot be forwarded. Close this picker and select again." : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "部分所选消息无法转发。请关闭并重新选择。" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "部分所選訊息無法轉傳。請關閉並重新選取。" } } } },
-    "Some selected messages are no longer available. Close this picker and select again." : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "部分所选消息已不可用。请关闭并重新选择。" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "部分所選訊息已無法使用。請關閉並重新選取。" } } } },
-    "You can forward at most 100 messages at once." : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "每次最多转发 100 条消息。" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "每次最多轉傳 100 則訊息。" } } } },
-    "This thread no longer has messages that can be forwarded." : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此话题已没有可转发的消息。" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此話題已沒有可轉傳的訊息。" } } } },
-    "Could not reload the messages. Choose a destination to retry." : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法重新加载消息。请选择目标重试。" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法重新載入訊息。請選擇目標重試。" } } } },
-    "Could not start forwarding. Choose a destination to retry." : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法开始转发。请选择目标重试。" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法開始轉傳。請選擇目標重試。" } } } },
-    "Loading chat history…" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载聊天记录…" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入聊天記錄…" } } } },
-    "Couldn’t load chat history" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载聊天记录" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入聊天記錄" } } } },
-    "Chat history unavailable" : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "聊天记录不可用" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "聊天記錄無法使用" } } } },
-    "This chat history is no longer available or you don’t have access." : { "extractionState" : "manual", "localizations" : {
-      "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此聊天记录已不可用，或你没有访问权限。" } },
-      "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此聊天記錄已無法使用，或你沒有存取權限。" } } } },
     "" : {
       "localizations" : {
         "zh-Hans" : {
@@ -234,6 +129,40 @@
         }
       }
     },
+    "[Pending voice message]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[待转码语音]"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[待轉碼語音]"
+          }
+        }
+      }
+    },
+    "[Redacted]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[已隐藏]"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[已隱藏]"
+          }
+        }
+      }
+    },
     "[Sticker]" : {
       "localizations" : {
         "en" : {
@@ -252,6 +181,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "[貼紙]"
+          }
+        }
+      }
+    },
+    "[Unavailable message]" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[消息不可用]"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "[訊息無法使用]"
           }
         }
       }
@@ -480,6 +426,23 @@
         }
       }
     },
+    "%lld messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 条消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 則訊息"
+          }
+        }
+      }
+    },
     "%lld of %lld" : {
       "localizations" : {
         "en" : {
@@ -579,6 +542,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 則回覆"
+          }
+        }
+      }
+    },
+    "%lld selected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld selected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选择 %lld 条"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已選取 %lld 則"
           }
         }
       }
@@ -1226,6 +1212,40 @@
         }
       }
     },
+    "Audio still processing and deeply nested forwarded messages will be replaced with placeholders. Continue forwarding?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍在转码的语音和嵌套层数过多的转发消息将替换为占位内容。继续转发？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍在轉碼的語音及巢狀層數過多的轉傳訊息將替換為佔位內容。繼續轉傳？"
+          }
+        }
+      }
+    },
+    "Audio still processing will be replaced with a placeholder. Continue forwarding?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍在转码的语音将替换为占位内容。继续转发？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仍在轉碼的語音將替換為佔位內容。繼續轉傳？"
+          }
+        }
+      }
+    },
     "Audio unavailable" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1654,6 +1674,23 @@
         }
       }
     },
+    "Forwarded messages unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发的消息不可用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳的訊息無法使用"
+          }
+        }
+      }
+    },
     "Chat Info" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1673,6 +1710,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "聊天資訊"
+          }
+        }
+      }
+    },
+    "Forwarded Messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发的消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳的訊息"
           }
         }
       }
@@ -1999,6 +2053,10 @@
         }
       }
     },
+    "Continue" : {
+      "comment" : "A button that confirms forwarding a message to a user.",
+      "isCommentAutoGenerated" : true
+    },
     "Conversation actions" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2165,6 +2223,57 @@
         }
       }
     },
+    "Could not load chats" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载聊天"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入聊天"
+          }
+        }
+      }
+    },
+    "Could not load threads" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载话题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入話題"
+          }
+        }
+      }
+    },
+    "Could not reload the messages. Choose a destination to retry." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法重新加载消息。请选择目标重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法重新載入訊息。請選擇目標重試。"
+          }
+        }
+      }
+    },
     "Could not sign out. Try again." : {
       "comment" : "Error message displayed when signing out fails.",
       "isCommentAutoGenerated" : true,
@@ -2179,6 +2288,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法登出，請再試一次。"
+          }
+        }
+      }
+    },
+    "Could not start forwarding. Choose a destination to retry." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法开始转发。请选择目标重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開始轉傳。請選擇目標重試。"
           }
         }
       }
@@ -2317,6 +2443,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法退出群組"
+          }
+        }
+      }
+    },
+    "Couldn’t load forwarded messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载转发的消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入轉傳的訊息"
           }
         }
       }
@@ -3182,6 +3325,23 @@
       "comment" : "A button that displays a spinner while creating a new sticker pack.",
       "isCommentAutoGenerated" : true
     },
+    "Deeply nested forwarded messages will be replaced with placeholders. Continue forwarding?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "嵌套层数过多的转发消息将替换为占位内容。继续转发？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "巢狀層數過多的轉傳訊息將替換為佔位內容。繼續轉傳？"
+          }
+        }
+      }
+    },
     "Default" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3269,6 +3429,40 @@
     "Delete Pack" : {
       "comment" : "The title of a confirmation dialog that deletes a sticker pack.",
       "isCommentAutoGenerated" : true
+    },
+    "Delete selected messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回选中的消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收回選取的訊息"
+          }
+        }
+      }
+    },
+    "Delete these messages?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤回选中的消息？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收回選取的訊息？"
+          }
+        }
+      }
     },
     "Delete this sticker pack?" : {
       "comment" : "A confirmation dialog that asks the user to delete a sticker pack.",
@@ -3384,6 +3578,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "簡介"
+          }
+        }
+      }
+    },
+    "Deselect message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deselect message"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消选择消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消選取訊息"
           }
         }
       }
@@ -3568,6 +3785,52 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "完成"
+          }
+        }
+      }
+    },
+    "Double-tap to deselect this message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Double-tap to deselect this message."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点两下以取消选择此消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點兩下以取消選取此訊息。"
+          }
+        }
+      }
+    },
+    "Double-tap to select this message." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Double-tap to select this message."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轻点两下以选择此消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點兩下以選取此訊息。"
           }
         }
       }
@@ -4124,6 +4387,91 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "請先結束錄音再播放語音訊息。"
+          }
+        }
+      }
+    },
+    "Forward" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳"
+          }
+        }
+      }
+    },
+    "Forward Thread" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发话题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳話題"
+          }
+        }
+      }
+    },
+    "Forward to" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发到"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳至"
+          }
+        }
+      }
+    },
+    "Forwarded from %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发自 %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳自 %@"
+          }
+        }
+      }
+    },
+    "Forwarding started" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已开始转发"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已開始轉傳"
           }
         }
       }
@@ -4996,6 +5344,23 @@
         }
       }
     },
+    "Load More" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续加载"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續載入"
+          }
+        }
+      }
+    },
     "Load more members" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5060,6 +5425,23 @@
         }
       }
     },
+    "Loading forwarded messages…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载转发的消息…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入轉傳的訊息…"
+          }
+        }
+      }
+    },
     "Loading conversation" : {
       "localizations" : {
         "en" : {
@@ -5096,6 +5478,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在載入對話"
+          }
+        }
+      }
+    },
+    "Loading conversations…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载会话…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入對話…"
           }
         }
       }
@@ -6303,6 +6702,23 @@
         }
       }
     },
+    "No forwarding destinations found" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有找到转发目标"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到轉傳目標"
+          }
+        }
+      }
+    },
     "No group description yet." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7117,6 +7533,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "播放語音訊息"
+          }
+        }
+      }
+    },
+    "Preparing forward…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备转发…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在準備轉傳…"
           }
         }
       }
@@ -8548,6 +8981,23 @@
       "comment" : "A confirmation dialog for renaming a sticker pack.",
       "isCommentAutoGenerated" : true
     },
+    "Replace unavailable content?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替换不可用的内容？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "替換無法使用的內容？"
+          }
+        }
+      }
+    },
     "Reply" : {
       "localizations" : {
         "en" : {
@@ -9005,6 +9455,23 @@
         }
       }
     },
+    "Search chats and threads" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索聊天和话题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋聊天與話題"
+          }
+        }
+      }
+    },
     "Search members" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9101,6 +9568,29 @@
         }
       }
     },
+    "Select" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選取"
+          }
+        }
+      }
+    },
     "Select a conversation" : {
       "localizations" : {
         "en" : {
@@ -9123,90 +9613,6 @@
         }
       }
     },
-    "Select" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Select" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "选择" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "選取" }
-        }
-      }
-    },
-    "Select message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Select message" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "选择消息" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "選取訊息" }
-        }
-      }
-    },
-    "Deselect message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Deselect message" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "取消选择消息" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "取消選取訊息" }
-        }
-      }
-    },
-    "Double-tap to select this message." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Double-tap to select this message." }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "轻点两下以选择此消息。" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "點兩下以選取此訊息。" }
-        }
-      }
-    },
-    "Double-tap to deselect this message." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "Double-tap to deselect this message." }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "轻点两下以取消选择此消息。" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "點兩下以取消選取此訊息。" }
-        }
-      }
-    },
-    "%lld selected" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : { "state" : "translated", "value" : "%lld selected" }
-        },
-        "zh-Hans" : {
-          "stringUnit" : { "state" : "translated", "value" : "已选择 %lld 条" }
-        },
-        "zh-Hant" : {
-          "stringUnit" : { "state" : "translated", "value" : "已選取 %lld 則" }
-        }
-      }
-    },
     "Select a setting" : {
       "comment" : "A label displayed when a setting hasn't been selected in the sidebar.",
       "isCommentAutoGenerated" : true
@@ -9214,6 +9620,46 @@
     "Select a sticker to remove it from this pack." : {
       "comment" : "A description of the sticker pack's contents.",
       "isCommentAutoGenerated" : true
+    },
+    "Select message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Select message"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "選取訊息"
+          }
+        }
+      }
+    },
+    "Select up to 100 messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多选择 100 条消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最多選取 100 則訊息"
+          }
+        }
+      }
     },
     "Send" : {
       "comment" : "A button that sends the composer's content.",
@@ -9577,6 +10023,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最小"
+          }
+        }
+      }
+    },
+    "Some selected messages are no longer available. Close this picker and select again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分所选消息已不可用。请关闭并重新选择。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分所選訊息已無法使用。請關閉並重新選取。"
+          }
+        }
+      }
+    },
+    "Some selected messages cannot be forwarded. Close this picker and select again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分所选消息无法转发。请关闭并重新选择。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分所選訊息無法轉傳。請關閉並重新選取。"
           }
         }
       }
@@ -10169,6 +10649,23 @@
         }
       }
     },
+    "These forwarded messages are no longer available or you don’t have access." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些转发的消息已不可用，或你没有访问权限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這些轉傳的訊息已無法使用，或你沒有存取權限。"
+          }
+        }
+      }
+    },
     "This device cannot decode this sticker’s video format." : {
       "localizations" : {
         "zh-Hans" : {
@@ -10275,6 +10772,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此貼紙不屬於任何貼紙包"
+          }
+        }
+      }
+    },
+    "This thread no longer has messages that can be forwarded." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此话题已没有可转发的消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此話題已沒有可轉傳的訊息。"
           }
         }
       }
@@ -11386,6 +11900,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最多可加入 5 個表情回應"
+          }
+        }
+      }
+    },
+    "You can forward at most 100 messages at once." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次最多转发 100 条消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次最多轉傳 100 則訊息。"
           }
         }
       }

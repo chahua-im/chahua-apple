@@ -4,8 +4,153 @@ import XCTest
 
 @testable import chahua_apple
 
+#if os(iOS)
+    import SwiftUI
+    import UIKit
+#endif
+
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    #if os(iOS)
+        func testForwardedMessagesPushAndPopWithoutReloadingSourceConversation() async throws {
+            let source = try TimelineTestFixtures.message(id: 1, at: 1)
+            let card = MessageResponse(
+                id: MessageID(10), chatId: "chat", clientGeneratedId: "forward-card",
+                messageType: .forwarded, sender: source.sender, createdAt: source.createdAt,
+                forwardedBundleId: "root",
+                forwardedPreview: .init(total: 2, containsForwardedMessages: true, messages: []))
+            let nested = ForwardedMessageResponse(
+                originalMessageId: MessageID(2), originalChatId: "source", message: nil,
+                messageType: .forwarded, sender: source.sender,
+                originalCreatedAt: source.createdAt, forwardedBundleId: "child")
+            let leaf = ForwardedMessageResponse(
+                originalMessageId: source.id, originalChatId: "source", message: source.message,
+                messageType: .text, sender: source.sender, originalCreatedAt: source.createdAt)
+            let api = FakeChatAPI(
+                messageResults: ["chat": [.success(.init(messages: [card]))]])
+            await api.setForwardedResponses([
+                .init(total: 2, messages: [leaf, nested]), .init(total: 1, messages: [leaf]),
+            ])
+            await api.setConversationPageMetadata(
+                group: .init(id: "chat", myRole: .admin, kind: .group))
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api),
+                onInvalidToken: {})
+            store.currentUserProfile = try JSONDecoder().decode(
+                MeResponse.self,
+                from: Data(
+                    #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                        .utf8))
+            var path: [String] = []
+            let root = NavigationStack(path: Binding(get: { path }, set: { path = $0 })) {
+                ChatDetailView(chat: chat(id: "chat"), currentUserID: 1, store: store)
+                    .modifier(ChatHeaderOverlay { Text("Conversation") })
+                    .toolbar(.hidden, for: .navigationBar)
+            }
+            let window = UIWindow(
+                windowScene: try XCTUnwrap(
+                    UIApplication.shared.connectedScenes.first as? UIWindowScene))
+            window.rootViewController = UIHostingController(
+                rootView: root.environment(\.scenePhase, .active))
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                store.reset()
+            }
+
+            func views<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+                (view as? T).map { [$0] } ?? view.subviews.flatMap { views(type, in: $0) }
+            }
+            func controllers<T: UIViewController>(_ type: T.Type, in controller: UIViewController)
+                -> [T]
+            {
+                (controller as? T).map { [$0] }
+                    ?? controller.children.flatMap { controllers(type, in: $0) }
+            }
+            func waitUntil(line: UInt = #line, _ ready: () -> Bool) async throws {
+                for _ in 0..<100 {
+                    if ready() { return }
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                let failure = XCTAttachment(
+                    image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                    })
+                failure.name = "Navigation timeout at line \(line)"
+                failure.lifetime = .keepAlways
+                add(failure)
+                _ = try XCTUnwrap(
+                    ready() ? true : nil, "Navigation did not reach the expected visible state",
+                    line: line)
+            }
+            try await waitUntil {
+                !views(TimelineForwardedCardView.self, in: window).isEmpty
+            }
+            let navigation = try XCTUnwrap(
+                controllers(
+                    UINavigationController.self, in: try XCTUnwrap(window.rootViewController)
+                ).first)
+            let conversationController = try XCTUnwrap(
+                controllers(
+                    TimelineCollectionViewController.self,
+                    in: try XCTUnwrap(navigation.topViewController)
+                ).first)
+            let conversationCollection = try XCTUnwrap(
+                views(UICollectionView.self, in: conversationController.view).first)
+            try await waitUntil {
+                navigation.transitionCoordinator == nil
+                    && window.rootViewController?.presentedViewController == nil
+            }
+            let position = conversationCollection.contentOffset
+            try XCTUnwrap(views(TimelineForwardedCardView.self, in: window).first)
+                .sendActions(for: .touchUpInside)
+            try await waitUntil {
+                navigation.viewControllers.count == 2
+                    && navigation.transitionCoordinator == nil
+                    && navigation.topViewController.map {
+                        !views(TimelineForwardedCardView.self, in: $0.view).isEmpty
+                    } == true
+            }
+            XCTAssertNil(window.rootViewController?.presentedViewController)
+            XCTAssertFalse(navigation.isNavigationBarHidden)
+            let parentPage = try XCTUnwrap(navigation.topViewController)
+            try XCTUnwrap(views(TimelineForwardedCardView.self, in: parentPage.view).first)
+                .sendActions(for: .touchUpInside)
+            try await waitUntil {
+                navigation.viewControllers.count == 3 && navigation.transitionCoordinator == nil
+            }
+            let attachment = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                })
+            attachment.name = "Pushed nested forwarded messages"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            navigation.popViewController(animated: false)
+            try await waitUntil { navigation.topViewController === parentPage }
+            navigation.popViewController(animated: false)
+            try await waitUntil { navigation.viewControllers.count == 1 }
+            try await Task.sleep(for: .milliseconds(200))
+            XCTAssertTrue(
+                controllers(
+                    TimelineCollectionViewController.self,
+                    in: try XCTUnwrap(navigation.topViewController)
+                ).first === conversationController)
+            XCTAssertEqual(conversationCollection.contentOffset.y, position.y, accuracy: 1)
+            let requests = await api.recordedMessageChatIDs()
+            XCTAssertEqual(
+                requests, ["chat"], "Back must not reload or reposition the source timeline")
+            let detailRequests = await api.recordedForwardedRequests()
+            XCTAssertEqual(
+                detailRequests,
+                [
+                    .chat(chatID: "chat", messageID: card.id, bundleID: nil),
+                    .chat(chatID: "chat", messageID: card.id, bundleID: "child"),
+                ])
+        }
+    #endif
+
     func testForwardedRecordsUseFullCapturedTimelineAndBundleLocalReplies() async throws {
         let original = try TimelineTestFixtures.message(
             id: 1, chatID: "source", at: 1, text: "Captured original")
@@ -1491,6 +1636,16 @@ actor FakeChatAPI: ChahuaAPIClient {
     }
     private var forwardedRequests: [ForwardedRequest] = []
     private var forwardedResponses: [ForwardedMessagesResponse] = []
+    private var conversationPageGroup: GroupInfoResponse?
+
+    func setConversationPageMetadata(group: GroupInfoResponse) {
+        conversationPageGroup = group
+    }
+
+    func listPins(chatID: String) async throws -> ListPinsResponse {
+        guard conversationPageGroup?.id == chatID else { throw APIError.unavailable }
+        return .init(pins: [])
+    }
     private var suspendNextForwarded = false
     private var pendingForwardedRequest: CheckedContinuation<ForwardedMessagesResponse, Error>?
     private var forwardedRequestObserver: CheckedContinuation<Void, Never>?
@@ -1708,7 +1863,12 @@ actor FakeChatAPI: ChahuaAPIClient {
     func requestAttachmentUpload(
         fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
-    func groupInfo(chatID: String) async throws -> GroupInfoResponse { throw APIError.unavailable }
+    func groupInfo(chatID: String) async throws -> GroupInfoResponse {
+        guard let group = conversationPageGroup, group.id == chatID else {
+            throw APIError.unavailable
+        }
+        return group
+    }
     func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse {
         throw APIError.unavailable
     }

@@ -17,10 +17,14 @@ func messagePreview(_ preview: MessagePreview) -> String {
 }
 
 enum MessageSummaryContent {
+    private static var forwardedMessagesLabel: String {
+        "[\(AppLanguage.localized("Forwarded Messages"))]"
+    }
+
     static func placeholderLabel(_ reason: String?) -> String {
         switch reason {
         case "pendingAudio": AppLanguage.localized("[Pending voice message]")
-        case "nestedForward": AppLanguage.localized("[Chat history]")
+        case "nestedForward": forwardedMessagesLabel
         default: AppLanguage.localized("[Unavailable message]")
         }
     }
@@ -59,9 +63,9 @@ enum MessageSummaryContent {
             sticker: AppLanguage.localized("[Sticker]"),
             video: AppLanguage.localized("[Video]"),
             voiceMessage: AppLanguage.localized("[Voice message]"),
-            forwarded: AppLanguage.localized("[Chat history]"),
+            forwarded: forwardedMessagesLabel,
             pendingAudio: AppLanguage.localized("[Pending voice message]"),
-            nestedForward: AppLanguage.localized("[Chat history]"),
+            nestedForward: forwardedMessagesLabel,
             unavailable: AppLanguage.localized("[Unavailable message]"))
     }
 

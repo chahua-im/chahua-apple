@@ -177,7 +177,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
         var prompt: String {
             if pendingAudio && nestedForward {
                 return AppLanguage.localized(
-                    "Audio still processing and deeply nested chat records will be replaced with placeholders. Continue forwarding?"
+                    "Audio still processing and deeply nested forwarded messages will be replaced with placeholders. Continue forwarding?"
                 )
             }
             if pendingAudio {
@@ -186,7 +186,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
                 )
             }
             return AppLanguage.localized(
-                "Deeply nested chat records will be replaced with placeholders. Continue forwarding?"
+                "Deeply nested forwarded messages will be replaced with placeholders. Continue forwarding?"
             )
         }
     }

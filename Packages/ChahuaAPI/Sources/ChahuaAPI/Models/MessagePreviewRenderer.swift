@@ -22,9 +22,9 @@ public enum MessagePreviewRenderer {
             sticker: String,
             video: String,
             voiceMessage: String,
-            forwarded: String = "[Chat history]",
+            forwarded: String = "[Forwarded Messages]",
             pendingAudio: String = "[Pending voice message]",
-            nestedForward: String = "[Chat history]",
+            nestedForward: String = "[Forwarded Messages]",
             unavailable: String = "[Unavailable message]"
         ) {
             self.attachment = attachment
