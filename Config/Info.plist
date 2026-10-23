@@ -4,6 +4,8 @@
 <dict>
 	<key>APIBaseURL</key>
 	<string>$(API_BASE_URL)</string>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -24,18 +26,18 @@
 	<string>$(APNS_ENVIRONMENT)</string>
 	<key>ChahuaSharedKeychainAccessGroup</key>
 	<string>$(CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP)</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Take photos to send in messages.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos to send in messages.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record and send voice messages.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Share and save photos and images</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save images to your Photo Library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Share and save photos and images</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
@@ -52,14 +54,14 @@
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>app.chahua.chat.composer-media-slot</string>
-			<key>UTTypeDescription</key>
-			<string>Chahua composer media slot</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>Chahua composer media slot</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.chahua.chat.composer-media-slot</string>
 		</dict>
 	</array>
 </dict>

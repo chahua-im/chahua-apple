@@ -51,7 +51,11 @@ extension ChatState {
 final class ChatStore: ObservableObject {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "conversations")
     @Published private(set) var state = ChatState()
-    @Published private(set) var presenceScope = PresenceScope()
+    // Viewport consumers change the transport watch, not visible UI state.
+    // Publishing these through ObservableObject invalidates the list that owns
+    // the consumers, reconfiguring every hosted row as avatars mount/unmount.
+    private(set) var presenceScope = PresenceScope()
+    let presenceScopeChanges = PassthroughSubject<Void, Never>()
     private var presenceConsumers: [UUID: PresenceScope] = [:]
     private var presenceRequestID: UInt64?
     static let unreadSummaryViews = ConversationTabBadges.unreadViews
@@ -1239,7 +1243,10 @@ final class ChatStore: ObservableObject {
         let scope = PresenceScope.combined(presenceConsumers.values)
         guard scope != presenceScope else { return }
         presenceRequestID = nil
+        ScrollPerformanceTrace.event(
+            "Presence.ScopeChanged", count: scope.userIDs.count + scope.chatIDs.count)
         presenceScope = scope
+        presenceScopeChanges.send(())
     }
 
     func presenceSettings() async throws -> PresenceSettingsResponse {
@@ -2043,6 +2050,7 @@ final class ChatStore: ObservableObject {
         generation += 1
         presenceConsumers.removeAll()
         presenceScope = PresenceScope()
+        presenceScopeChanges.send(())
         clearPresence()
         clearConversationWatches()
         conversationConsumers.removeAll()

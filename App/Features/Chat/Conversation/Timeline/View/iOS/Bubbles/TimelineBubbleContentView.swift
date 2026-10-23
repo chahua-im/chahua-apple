@@ -278,6 +278,12 @@
             configureAudio()
         }
 
+        func refreshMediaVisibility() {
+            guard visible, mediaView?.isHidden == false else { return }
+            // Scrolling within a tall row does not change the bubble's visibility.
+            mediaView?.refreshViewportVisibility()
+        }
+
         override func didMoveToWindow() {
             super.didMoveToWindow()
             if window == nil { setVisible(false) }

@@ -23,6 +23,7 @@
         private var messageSelection: TimelineMessageSelectionButton?
         private let hoverMarker = MessageRowGestureMarker()
         private var visible = false
+        private var mediaFullyVisible = false
         private var hovered = false
 
         override init(frame: CGRect) {
@@ -51,6 +52,7 @@
                 hovered = false
             }
             self.binding = binding  // Refresh callbacks even when rendering is unchanged.
+            mediaFullyVisible = false
             switch binding.presentation.row {
             case .dateSeparator, .unreadSeparator: bindStandalone(binding)
             case .message(let row):
@@ -111,6 +113,7 @@
             hoverMarker.stop()
             binding = nil
             visible = false
+            mediaFullyVisible = false
             hovered = false
             resetSwipe(animated: false)
             bubble?.clear()
@@ -131,6 +134,8 @@
             backgroundColor = .clear
         }
         func setVisible(_ visible: Bool) {
+            guard self.visible != visible else { return }
+            mediaFullyVisible = false
             self.visible = visible
             if !visible {
                 rowGestures.cancel()
@@ -141,6 +146,16 @@
             avatar?.setVisible(visible && avatar?.isHidden == false)
             reactions?.setVisible(visible && reactions?.isHidden == false)
             updateHover()
+        }
+        func refreshMediaVisibility(isFullyVisible: Bool) {
+            guard visible else { return }
+            // A fully exposed row has no descendant crossing the viewport edge.
+            // Refresh once on entry, including when a previously clipped tile reappears.
+            guard !isFullyVisible || !mediaFullyVisible else { return }
+            mediaFullyVisible = isFullyVisible
+            bubble?.refreshMediaVisibility()
+            avatar?.setVisible(avatar?.isHidden == false)
+            reactions?.setVisible(reactions?.isHidden == false)
         }
         override func didMoveToWindow() {
             super.didMoveToWindow()

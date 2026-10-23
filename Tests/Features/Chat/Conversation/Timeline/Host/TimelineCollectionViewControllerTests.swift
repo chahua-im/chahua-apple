@@ -1,6 +1,7 @@
 #if os(iOS)
     import ChahuaAPI
     import Combine
+    import Kingfisher
     import UIKit
     import XCTest
     import SwiftUI
@@ -758,11 +759,35 @@
             collection.setContentOffset(CGPoint(x: 0, y: 120), animated: false)
 
             for width: CGFloat in [320, 400, 800] {
+                let previousWidth = collection.bounds.width
+                let previousHeights = try model.rows.indices.compactMap {
+                    index -> (Int, CGFloat)? in
+                    guard model.rows[index].messageID != nil else { return nil }
+                    let frame = try XCTUnwrap(
+                        collection.layoutAttributesForItem(at: IndexPath(item: index, section: 0))
+                    ).frame
+                    return (index, frame.height)
+                }
                 controller.view.frame.size.width = width
                 parent.view.layoutIfNeeded()
                 controller.viewDidLayoutSubviews()
-                try await Task.sleep(for: .milliseconds(100))
-                collection.layoutIfNeeded()
+                // Offscreen rows settle in bounded display batches, not within a
+                // fixed wall-clock delay. Wait for the same reflow contract checked below.
+                func hasReflowed() -> Bool {
+                    previousHeights.allSatisfy { index, height in
+                        guard
+                            let frame = collection.layoutAttributesForItem(
+                                at: IndexPath(item: index, section: 0))?.frame
+                        else { return false }
+                        return width < previousWidth ? frame.height > height : frame.height < height
+                    }
+                }
+                let deadline = ProcessInfo.processInfo.systemUptime + 3
+                while !hasReflowed(), ProcessInfo.processInfo.systemUptime < deadline {
+                    collection.layoutIfNeeded()
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertTrue(hasReflowed(), "All rows must reflow after a width change.")
                 XCTAssertEqual(collection.bounds.width, width, accuracy: 0.5)
                 XCTAssertLessThanOrEqual(collection.contentSize.width, width + 0.5)
                 var previousBottom: CGFloat = 0
@@ -813,6 +838,89 @@
             collection.layoutIfNeeded()
             try assertTextContained(in: try XCTUnwrap(collection.cellForItem(at: path)))
             XCTAssertFalse(model.state.live.followsLatest)
+        }
+
+        func testMediaLeavesAndReentersViewportWhileTallRowStaysInstalled() async throws {
+            let fixture = MediaImageFixture(
+                data: try makeMediaPNG(red: 255, green: 0, blue: 0), suspended: true)
+            MediaImageURLProtocol.install(fixture)
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                UUID().uuidString)
+            let cache = try ImageCache(name: UUID().uuidString, cacheDirectoryURL: directory)
+            let downloader = ImageDownloader(name: UUID().uuidString)
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [MediaImageURLProtocol.self]
+            downloader.sessionConfiguration = configuration
+            let context = AppMediaContext(cache: cache, downloader: downloader)
+            defer {
+                MediaImageURLProtocol.remove(fixture)
+                cache.clearCache()
+                try? FileManager.default.removeItem(at: directory)
+            }
+            let message = try TimelineTestFixtures.message(
+                id: 1, senderID: 2, at: 0,
+                fields: [
+                    "message": String(
+                        repeating: "A tall caption keeps this row installed.\n", count: 300),
+                    "hasAttachments": true,
+                    "attachments": [
+                        [
+                            "id": "image", "url": fixture.url.absoluteString, "kind": "image/png",
+                            "size": 1, "fileName": "image.png", "width": 100, "height": 100,
+                        ]
+                    ],
+                ])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: BubbleSource(page: try TimelineTestFixtures.page([message])),
+                messageStore: ConversationMessageStore())
+            let controller = TimelineCollectionViewController(model: model, actions: .init())
+            controller.mediaContext = context
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previousWindow = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer {
+                model.close()
+                window.isHidden = true
+                window.rootViewController = nil
+                previousWindow?.makeKey()
+            }
+            await model.loadInitial()
+            try await Task.sleep(for: .milliseconds(200))
+            window.layoutIfNeeded()
+            let collection = try XCTUnwrap(
+                controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == message.id })
+            let path = IndexPath(item: index, section: 0)
+            let frame = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame
+            XCTAssertGreaterThan(frame.height, collection.bounds.height * 2)
+            let cell = try XCTUnwrap(collection.cellForItem(at: path))
+            func descendants<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+                (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+            }
+            let row = try XCTUnwrap(descendants(TimelineRowView.self, in: cell).first)
+            let media = try XCTUnwrap(descendants(TimelineMediaView.self, in: row).first)
+            let image = try XCTUnwrap(descendants(TimelineImageView.self, in: media).first)
+            let spinner = try XCTUnwrap(
+                descendants(UIActivityIndicatorView.self, in: image).first)
+            let mediaFrame = try XCTUnwrap(row.binding?.layout.frames[.media])
+            func scroll(to y: CGFloat) {
+                collection.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+                controller.scrollViewDidScroll(collection)
+            }
+            controller.scrollViewWillBeginDragging(collection)
+            scroll(to: frame.minY)
+            XCTAssertTrue(spinner.isAnimating, "The visible image must acquire and show progress")
+            scroll(to: frame.minY + mediaFrame.maxY + 32)
+            XCTAssertTrue(collection.cellForItem(at: path) === cell)
+            XCTAssertFalse(
+                spinner.isAnimating, "Offscreen media must suspend even while its row remains")
+            scroll(to: frame.minY)
+            XCTAssertTrue(collection.cellForItem(at: path) === cell)
+            XCTAssertTrue(spinner.isAnimating, "Ancestor movement must resume the same image")
+            controller.scrollViewDidEndDragging(collection, willDecelerate: false)
         }
 
         func testReplyMediaRowsKeepGeometryWhenOnlyViewportHeightChanges() async throws {

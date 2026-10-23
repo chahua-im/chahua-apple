@@ -108,6 +108,10 @@
             for tile in tiles where !tile.isHidden { tile.setVisible(visible) }
         }
 
+        func refreshViewportVisibility() {
+            for tile in tiles where !tile.isHidden { tile.refreshViewportVisibility() }
+        }
+
         override func layoutSubviews() {
             super.layoutSubviews()
             for (index, frame) in itemFrames.enumerated() where index < tiles.count {
@@ -414,6 +418,11 @@
 
         func setVisible(_ visible: Bool) {
             requestedVisible = visible
+            refreshVisibility()
+        }
+
+        func refreshViewportVisibility() {
+            guard active != (requestedVisible && timelineMediaIsVisible) else { return }
             refreshVisibility()
         }
 

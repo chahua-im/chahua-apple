@@ -109,6 +109,7 @@
         private var layoutEnvironment: TimelineLayoutEnvironment?
         private var displayScheduler: TimelineDisplayScheduler!
         private var unsettledRows: Set<TimelineRowID> = []
+        private var unsettledRowCursor = 0
         private var heightChanges = IndexSet()
         private var completingSnapshot: TimelineHostSnapshot?
         private var cancellable: AnyCancellable?
@@ -220,6 +221,7 @@
                 if environmentChanged {
                     layoutEnvironment = currentEnvironment
                     unsettledRows = Set(rows.map(\.id))
+                    unsettledRowCursor = 0
                     for index in visibleRowIndexes {
                         let oldHeight = preparedRows[rows[index].id]?.layout.size.height
                         let layout = exactLayout(for: rows[index])
@@ -335,6 +337,8 @@
         }
 
         private func exactLayout(for row: TimelineRow) -> TimelineRowLayout {
+            let trace = ScrollPerformanceTrace.begin("Timeline.ExactLayout")
+            defer { ScrollPerformanceTrace.end("Timeline.ExactLayout", trace) }
             let environment = layoutEnvironment ?? currentEnvironment
             guard environment.timelineWidth.isFinite, environment.timelineWidth > 0 else {
                 return preparedRows[row.id]?.layout ?? .empty
@@ -344,7 +348,9 @@
                 installed.row == row
             {
                 entry = installed
+                ScrollPerformanceTrace.event("Timeline.PreparedHit")
             } else {
+                ScrollPerformanceTrace.event("Timeline.Prepare")
                 entry = rowCache.prepared(row, environment: environment)
                 preparedRows[row.id] = entry
             }
@@ -353,6 +359,8 @@
         }
 
         private func bind(_ cell: TimelineCollectionViewCell, row: TimelineRow) {
+            let trace = ScrollPerformanceTrace.begin("Timeline.Bind")
+            defer { ScrollPerformanceTrace.end("Timeline.Bind", trace) }
             let oldHeight = preparedRows[row.id]?.layout.size.height
             let layout = exactLayout(for: row)
             if oldHeight != layout.size.height,
@@ -403,12 +411,19 @@
             guard !unsettledRows.isEmpty || !heightChanges.isEmpty else { return }
             while true {
                 for item in visibleItems() {
-                    let layout = exactLayout(for: rows[item.indexPath.item])
+                    let row = rows[item.indexPath.item]
+                    let needsBinding = unsettledRows.contains(row.id)
+                    let layout = exactLayout(for: row)
+                    if needsBinding,
+                        let cell = collectionView.cellForItem(at: item.indexPath)
+                            as? TimelineCollectionViewCell
+                    {
+                        bind(cell, row: row)
+                    }
                     if item.frame.height != layout.size.height {
                         heightChanges.insert(item.indexPath.item)
                     }
                 }
-                refreshVisibleRoots()
                 guard !heightChanges.isEmpty else { return }
                 UIView.performWithoutAnimation {
                     invalidateChangedHeights()
@@ -439,6 +454,8 @@
                 layoutEnvironment == currentEnvironment,
                 !unsettledRows.isEmpty || !heightChanges.isEmpty
             else { return }
+            let trace = ScrollPerformanceTrace.begin("Timeline.HeightBatch")
+            defer { ScrollPerformanceTrace.end("Timeline.HeightBatch", trace) }
             let previousPosition = position ?? capturePosition()
             let overscan = unobscuredViewport.insetBy(dx: 0, dy: -unobscuredViewport.height)
             let priority =
@@ -448,26 +465,34 @@
                         && rows.indices.contains($0.indexPath.item)
                 }
                 .map(\.indexPath.item)
-            let prioritySet = Set(priority)
-            let candidates =
-                priority
-                + rows.indices.filter {
-                    !prioritySet.contains($0) && unsettledRows.contains(rows[$0].id)
-                }
             let deadline = ProcessInfo.processInfo.systemUptime + 0.004
             var count = 0
             applying = true
-            for index in candidates where unsettledRows.contains(rows[index].id) {
+            var priorityIterator = priority.makeIterator()
+            while count < 32 && ProcessInfo.processInfo.systemUptime < deadline {
+                let index: Int
+                if let next = priorityIterator.next() {
+                    index = next
+                } else {
+                    guard unsettledRowCursor < rows.count else { break }
+                    index = unsettledRowCursor
+                    unsettledRowCursor += 1
+                }
+                guard unsettledRows.contains(rows[index].id) else { continue }
                 let previousHeight = preparedRows[rows[index].id]?.layout.size.height
                 let height = exactLayout(for: rows[index]).size.height
                 if previousHeight != height { heightChanges.insert(index) }
+                if let cell = collectionView.cellForItem(at: .init(item: index, section: 0))
+                    as? TimelineCollectionViewCell
+                {
+                    bind(cell, row: rows[index])
+                }
                 count += 1
-                if count == 32 || ProcessInfo.processInfo.systemUptime >= deadline { break }
             }
+            ScrollPerformanceTrace.event("Timeline.HeightsMeasured", count: count)
             UIView.performWithoutAnimation {
                 invalidateChangedHeights()
                 collectionView.layoutIfNeeded()
-                refreshVisibleRoots()
                 if model.state.live.followsLatest && model.isAtLiveEdge {
                     collectionView.setContentOffset(
                         .init(x: -collectionView.adjustedContentInset.left, y: bottomOffset),
@@ -548,16 +573,20 @@
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard !applying, geometry == currentGeometry else { return }
-            // A tall row can stay installed while individual images enter/leave the
-            // viewport. Refresh native media visibility without rebinding its content.
+            let trace = ScrollPerformanceTrace.begin("Timeline.Scroll")
+            defer { ScrollPerformanceTrace.end("Timeline.Scroll", trace) }
+            let viewport = unobscuredViewport
+            // Only boundary/tall rows can move individual media into or out of view.
+            // Row visibility itself is owned by willDisplay/didEndDisplaying.
             for case let cell as TimelineCollectionViewCell in collectionView.visibleCells {
-                cell.rowView.setVisible(true)
+                cell.rowView.refreshMediaVisibility(isFullyVisible: viewport.contains(cell.frame))
             }
-            position = capturePosition()
+            let items = visibleItems()
+            position = capturePosition(visibleItems: items)
             // Geometry is settled even while the reader is moving. Prefetch during the
             if !unsettledRows.isEmpty { requestDisplayUpdate() }
             // gesture/deceleration, not only after scrolling has come to a complete stop.
-            reportViewport(reason: userScrolling ? .user : .layout)
+            reportViewport(reason: userScrolling ? .user : .layout, visibleItems: items)
         }
 
         func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -818,6 +847,8 @@
         }
 
         private func visibleItems() -> [UICollectionViewLayoutAttributes] {
+            let trace = ScrollPerformanceTrace.begin("Timeline.VisibleGeometry")
+            defer { ScrollPerformanceTrace.end("Timeline.VisibleGeometry", trace) }
             let visible = unobscuredViewport
             // Visible cells can lag an offset change until the next display pass. Layout
             // geometry identifies the reader's message even if its cell is not installed yet.
@@ -830,9 +861,11 @@
                 }
         }
 
-        private func capturePosition() -> Position {
+        private func capturePosition(
+            visibleItems items: [UICollectionViewLayoutAttributes]? = nil
+        ) -> Position {
             let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
-            let message = visibleItems().lazy.filter {
+            let message = (items ?? visibleItems()).lazy.filter {
                 if case .message = self.rows[$0.indexPath.item] { return true }
                 return false
             }.min(by: { $0.indexPath < $1.indexPath })
@@ -980,7 +1013,10 @@
             applying = false
         }
 
-        private func reportViewport(reason: TimelineViewportChangeReason) {
+        private func reportViewport(
+            reason: TimelineViewportChangeReason,
+            visibleItems items: [UICollectionViewLayoutAttributes]? = nil
+        ) {
             guard !applying, !draining, latestSnapshot == nil, scrollAnimation == nil,
                 reason == .user
                     || (!userScrolling && !collectionView.isDragging
@@ -988,8 +1024,8 @@
                 installedRevision >= 0, installedRevision == model.updates.value.revision,
                 geometry == currentGeometry, layoutEnvironment == currentEnvironment
             else { return }
-            position = capturePosition()
-            let visibleItems = visibleItems()
+            let visibleItems = items ?? visibleItems()
+            position = capturePosition(visibleItems: visibleItems)
             let visible = visibleItems.map(\.indexPath.item)
             let unobscured = unobscuredViewport
             let fullyVisibleMessageIDs = visibleItems.sorted { $0.indexPath < $1.indexPath }

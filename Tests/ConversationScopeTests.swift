@@ -53,6 +53,7 @@ final class ConversationScopeTests: XCTestCase {
         let source = ScriptedTimelineSource(pages: [])
         let held = expectation(description: "Thread receipt held")
         let rerun = expectation(description: "Thread receipt refreshed once")
+        let parentRefreshed = expectation(description: "Parent receipt refreshed")
         var release: CheckedContinuation<MessageID?, Never>?
         var scopes: [String?] = []
         let model = ConversationTimelineModel(
@@ -67,6 +68,9 @@ final class ConversationScopeTests: XCTestCase {
                     }
                 }
                 if scope == "10" { rerun.fulfill() }
+                if scope == nil, scopes.filter({ $0 == nil }).count == 2 {
+                    parentRefreshed.fulfill()
+                }
                 return MessageID(12)
             })
         model.setReadTrackingActive(true)
@@ -86,7 +90,7 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(scopes.filter { $0 == "10" }.count, 2)
         XCTAssertEqual(scopes.filter { $0 == nil }.count, 1)
         model.readReceiptChanged(.init(chatId: "chat", readerUid: 2))
-        await source.drain()
+        await fulfillment(of: [parentRefreshed], timeout: 2)
         XCTAssertEqual(scopes.filter { $0 == "10" }.count, 2)
         XCTAssertEqual(scopes.filter { $0 == nil }.count, 2)
         model.close()
@@ -99,21 +103,36 @@ final class ConversationScopeTests: XCTestCase {
         let source = ScriptedTimelineSource(pages: [.success(initial), .success(initial)])
         var receiptRequests = 0
         var reactionRequests = 0
+        let ready = expectation(description: "Read receipt and reaction activity installed")
+        let reconnectedReceipt = expectation(description: "Receipt refreshed after reconnect")
+        let reconnectedReactions = expectation(description: "Reactions refreshed after reconnect")
         let model = ConversationTimelineModel(
             chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
             messageStore: source.store,
             fetchReadReceipt: { _ in
                 receiptRequests += 1
+                if receiptRequests == 2 { reconnectedReceipt.fulfill() }
                 return MessageID(1)
             },
             fetchUnreadReactions: { _ in
                 reactionRequests += 1
+                if reactionRequests == 2 { reconnectedReactions.fulfill() }
                 return .init(messageIds: [MessageID(1)], readThrough: "snapshot")
             })
+        let readiness = model.$rows.combineLatest(model.$unreadReactionJumpCount)
+            .first { rows, reactions in
+                reactions == 1
+                    && rows.contains {
+                        if case .message(let row) = $0 { return row.isRead }
+                        return false
+                    }
+            }
+            .sink { _ in ready.fulfill() }
+        defer { readiness.cancel() }
         await model.open()
         model.setRealtimeStatus(.connected)
         model.setReadTrackingActive(true)
-        await source.drain()
+        await fulfillment(of: [ready], timeout: 2)
         model.setReadTrackingActive(false)
         source.store.apply(.message(try TimelineTestFixtures.message(id: 2, at: 2)))
         model.setReadTrackingActive(true)
@@ -131,7 +150,7 @@ final class ConversationScopeTests: XCTestCase {
         model.setRealtimeStatus(.reconnecting)
         model.setRealtimeStatus(.connected)
         await model.reconcileAfterReconnect()
-        await source.drain()
+        await fulfillment(of: [reconnectedReceipt, reconnectedReactions], timeout: 2)
         XCTAssertEqual(receiptRequests, 2)
         XCTAssertEqual(reactionRequests, 2)
         XCTAssertEqual(source.queries.count, 2)
@@ -298,6 +317,77 @@ final class ConversationScopeTests: XCTestCase {
                 chats: chats, threads: threads, scope: .dms, archived: true
             ).map(\.id),
             [.init(chatID: "archived-dm")])
+    }
+
+    func testListSnapshotRefreshesPayloadsWithStableConversationIDs() throws {
+        let cache = ConversationListSnapshotCache()
+        let original = ChatListItem(
+            id: "group", name: "Original", lastMessageAt: Date(timeIntervalSince1970: 20),
+            unreadCount: 0, archived: false, kind: .group)
+        let updated = ChatListItem(
+            id: "group", name: "Renamed", lastMessageAt: Date(timeIntervalSince1970: 20),
+            unreadCount: 3, mutedUntil: .distantFuture, archived: false, kind: .group)
+        let thread = try ScopeTestFixtures.thread(chatID: "group", id: 1, unreadCount: 0)
+        let updatedThread = try ScopeTestFixtures.thread(chatID: "group", id: 1, unreadCount: 2)
+        let before = cache.snapshot(chats: [original], threads: [thread], scope: .messages)
+        let after = cache.snapshot(chats: [updated], threads: [updatedThread], scope: .messages)
+        XCTAssertEqual(before.items.map(\.id), after.items.map(\.id))
+        XCTAssertEqual(after.items, [.thread(updatedThread), .chat(updated)])
+        XCTAssertEqual(after.items.map(\.unreadCount), [2, 3])
+        XCTAssertEqual(after.items.last?.title, "Renamed")
+        XCTAssertEqual(after.conversationRefs, before.conversationRefs)
+        XCTAssertEqual(
+            after.conversationRefs,
+            [
+                ConversationRef(chatId: "group", threadId: MessageID(1)),
+                ConversationRef(chatId: "group"),
+            ])
+    }
+
+    func testListSnapshotTracksDraftRemovalMembershipAndScopeChanges() throws {
+        let cache = ConversationListSnapshotCache()
+        let group = ChatListItem(
+            id: "group", lastMessageAt: Date(timeIntervalSince1970: 20),
+            unreadCount: 0, archived: false, kind: .group)
+        let dm = ChatListItem(
+            id: "dm", lastMessageAt: Date(timeIntervalSince1970: 30),
+            unreadCount: 0, archived: false, kind: .dm)
+        let archived = ChatListItem(id: "archived", unreadCount: 0, archived: true, kind: .group)
+        let thread = try ScopeTestFixtures.thread(chatID: "group", id: 1)
+        let parentKey = group.id
+        let drafted = cache.snapshot(
+            chats: [group, dm], threads: [thread], scope: .messages,
+            draftUpdatedAt: [.init(chatID: parentKey): Date(timeIntervalSince1970: 60)])
+        XCTAssertEqual(drafted.items.first?.id, .init(chatID: parentKey))
+        let cleared = cache.snapshot(chats: [group, dm], threads: [thread], scope: .messages)
+        XCTAssertEqual(cleared.items, [.thread(thread), .chat(dm), .chat(group)])
+        let withoutThreads = cache.snapshot(
+            chats: [group, dm], threads: [thread], scope: .messages, showThreadsInMessages: false)
+        XCTAssertEqual(withoutThreads.items, [.chat(dm), .chat(group)])
+        XCTAssertEqual(withoutThreads.conversationRefs.count, 2)
+        XCTAssertEqual(
+            cache.snapshot(chats: [group, dm], threads: [thread], scope: .groups).items,
+            [.chat(group)])
+        XCTAssertEqual(
+            cache.snapshot(
+                chats: [group, dm, archived], threads: [thread], scope: .messages, archived: true
+            ).items,
+            [.chat(archived)])
+        let paged = cache.snapshot(chats: [group], threads: [thread], scope: .messages)
+        XCTAssertEqual(paged.items, [.thread(thread), .chat(group)])
+        XCTAssertEqual(paged.conversationRefs.count, 2)
+    }
+
+    func testListActivityTiesKeepChatAndLexicalThreadOrderingWithOlderDrafts() throws {
+        let group = ChatListItem(
+            id: "group", lastMessageAt: Date(timeIntervalSince1970: 40),
+            unreadCount: 0, archived: false, kind: .group)
+        let first = try ScopeTestFixtures.thread(chatID: "group", id: 10)
+        let second = try ScopeTestFixtures.thread(chatID: "group", id: 2)
+        let entries = ConversationListItem.entries(
+            chats: [group], threads: [second, first], scope: .messages,
+            draftUpdatedAt: [.init(chatID: "group"): Date(timeIntervalSince1970: 1)])
+        XCTAssertEqual(entries, [.chat(group), .thread(first), .thread(second)])
     }
 
     func testAuthoritativeBadgesPrioritizeUnmutedAttentionAndKeepArchiveSeparate() {

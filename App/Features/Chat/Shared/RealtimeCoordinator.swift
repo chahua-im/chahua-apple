@@ -61,7 +61,7 @@ final class RealtimeCoordinator: ObservableObject {
         self.sleep = sleep
         self.jitter = jitter
         presenceObservation = Publishers.Merge(
-            store.$presenceScope.dropFirst().map { _ in () },
+            store.presenceScopeChanges,
             store.presencePrivacyInvalidations
         ).sink { [weak self] _ in
             self?.schedulePresenceWatch()

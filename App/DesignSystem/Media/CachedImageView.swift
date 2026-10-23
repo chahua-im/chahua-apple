@@ -12,7 +12,7 @@ struct CachedImageView<Content: View>: View {
             if let image = cachedImage(for: url) {
                 content(.success(swiftUIImage(image)))
             } else {
-                KFImage(url)
+                tracedImage(for: url)
                     .setProcessor(processor)
                     .scaleFactor(1)
                     .targetCache(mediaContext?.cache ?? .default)
@@ -39,11 +39,27 @@ struct CachedImageView<Content: View>: View {
         }
     }
 
+    private func tracedImage(for url: URL) -> KFImage {
+        let image = KFImage(url)
+        guard ScrollPerformanceTrace.isRequested else { return image }
+        return image.onSuccess { result in
+            switch result.cacheType {
+            case .memory: ScrollPerformanceTrace.event("Image.LoadMemory")
+            case .disk: ScrollPerformanceTrace.event("Image.LoadDisk")
+            case .none: ScrollPerformanceTrace.event("Image.LoadUncached")
+            }
+        }
+    }
+
     private func cachedImage(for url: URL) -> KFCrossPlatformImage? {
-        (mediaContext?.cache ?? .default).retrieveImageInMemoryCache(
+        let trace = ScrollPerformanceTrace.begin("Image.MemoryLookup")
+        defer { ScrollPerformanceTrace.end("Image.MemoryLookup", trace) }
+        let image = (mediaContext?.cache ?? .default).retrieveImageInMemoryCache(
             forKey: url.absoluteString,
             options: [.processor(processor), .scaleFactor(1)]
         )
+        ScrollPerformanceTrace.event(image == nil ? "Image.MemoryMiss" : "Image.MemoryHit")
+        return image
     }
 }
 

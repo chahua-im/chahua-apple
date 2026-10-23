@@ -15,6 +15,7 @@ struct ChatListView: View {
     @State private var isPullRefreshing = false
     @State private var revealedConversationID: ConversationKey?
     @State private var conversationStateConsumer = UUID()
+    @State private var listSnapshotCache = ConversationListSnapshotCache()
     #if os(macOS)
         @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
@@ -48,14 +49,12 @@ struct ChatListView: View {
     }
 
     var body: some View {
-        let items = ConversationListItem.entries(
+        let snapshot = listSnapshotCache.snapshot(
             chats: archivedMode ? store.state.archivedChats : store.state.chats,
             threads: archivedMode ? store.state.archivedThreads : store.state.threads,
             scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages,
             draftUpdatedAt: drafts.draftUpdatedAt)
-        let conversationRefs = items.map {
-            ConversationRef(chatId: $0.id.chatID, threadId: $0.id.threadID.flatMap(MessageID.init))
-        }
+        let items = snapshot.items
         let loadStatus = ConversationListLoadStatus(
             state: store.state, scope: scope, archivedMode: archivedMode,
             showThreadsInMessages: showThreadsInMessages,
@@ -124,8 +123,9 @@ struct ChatListView: View {
             revealedConversationID = nil
             store.removeConversationStateScope(for: conversationStateConsumer)
         }
-        .task(id: conversationRefs) {
-            store.setConversationStateScope(conversationRefs, for: conversationStateConsumer)
+        .task(id: snapshot.conversationRefs) {
+            store.setConversationStateScope(
+                snapshot.conversationRefs, for: conversationStateConsumer)
         }
         .task(
             id: LoadID(

@@ -70,6 +70,8 @@ enum MessageSummaryContent {
     }
 
     static func summary(_ preview: MessagePreview) -> [MarkdownInline] {
+        let trace = ScrollPerformanceTrace.begin("Summary.Parse")
+        defer { ScrollPerformanceTrace.end("Summary.Parse", trace) }
         if preview.isDeleted { return [.text(labels.deleted)] }
         switch preview.messageType {
         case .invite, .sticker, .audio, .file, .forwarded, .placeholder:
@@ -116,6 +118,8 @@ enum MessageSummaryContent {
         _ nodes: [MarkdownInline], mentions: [MentionInfo], font: BubbleNativeFont,
         color: BubbleNativeColor
     ) -> NSAttributedString {
+        let trace = ScrollPerformanceTrace.begin("Summary.Attributes")
+        defer { ScrollPerformanceTrace.end("Summary.Attributes", trace) }
         let output = NSMutableAttributedString(string: "")
         let names = names(in: mentions)
         var spoilerID = 0
@@ -163,6 +167,57 @@ enum MessageSummaryContent {
             }
         }
         render(nodes, attributes: [.font: font, .foregroundColor: color])
+        return output
+    }
+
+    static func containsSpoilers(_ nodes: [MarkdownInline]) -> Bool {
+        nodes.contains { node in
+            switch node {
+            case .spoiler: true
+            case .strong(let children), .emphasis(let children), .strikethrough(let children),
+                .link(_, let children):
+                containsSpoilers(children)
+            default: false
+            }
+        }
+    }
+
+    /// Bridge the canonical renderer's styles explicitly: Foundation's default
+    /// NSAttributedString conversion retains native keys, not SwiftUI attributes.
+    static func swiftUIText(_ text: NSAttributedString) -> AttributedString {
+        let trace = ScrollPerformanceTrace.begin("Summary.Bridge")
+        defer { ScrollPerformanceTrace.end("Summary.Bridge", trace) }
+        let source = text.string
+        var output = AttributedString(source)
+        var sourceIndex = source.utf16.startIndex
+        var outputIndex = output.unicodeScalars.startIndex
+        text.enumerateAttributes(in: NSRange(location: 0, length: text.length)) {
+            attributes, range, _ in
+            // Markdown runs can split a combining character or a ZWJ emoji.
+            // Walk scalar boundaries, not grapheme-only String-to-AttributedString indices.
+            let sourceEnd = source.utf16.index(sourceIndex, offsetBy: range.length)
+            let scalarCount = source.unicodeScalars.distance(from: sourceIndex, to: sourceEnd)
+            let upper = output.unicodeScalars.index(outputIndex, offsetBy: scalarCount)
+            var styles = AttributeContainer()
+            if let font = attributes[.font] as? BubbleNativeFont {
+                styles.font = Font(font)
+            }
+            if let color = attributes[.foregroundColor] as? BubbleNativeColor {
+                styles.foregroundColor = Color(color)
+            }
+            if let color = attributes[.backgroundColor] as? BubbleNativeColor {
+                styles.backgroundColor = Color(color)
+            }
+            if (attributes[.underlineStyle] as? Int ?? 0) != 0 {
+                styles.underlineStyle = Text.LineStyle(pattern: .solid)
+            }
+            if (attributes[.strikethroughStyle] as? Int ?? 0) != 0 {
+                styles.strikethroughStyle = Text.LineStyle(pattern: .solid)
+            }
+            output[outputIndex..<upper].setAttributes(styles)
+            sourceIndex = sourceEnd
+            outputIndex = upper
+        }
         return output
     }
 }
@@ -250,12 +305,22 @@ struct MessageSummaryText: View {
     }
 
     var body: some View {
-        MessageSummaryRepresentable(
-            attributedText: MessageSummaryContent.attributedText(
-                nodes, mentions: mentions,
-                font: .systemFont(ofSize: fontSize * fontScale, weight: weight),
-                color: BubbleNativeColor(color)),
-            accessibilityText: MessageSummaryContent.plain(nodes, mentions: mentions),
-            lineLimit: lineLimit)
+        let text = MessageSummaryContent.attributedText(
+            nodes, mentions: mentions,
+            font: .systemFont(ofSize: fontSize * fontScale, weight: weight),
+            color: BubbleNativeColor(color))
+        let accessibilityText = MessageSummaryContent.plain(nodes, mentions: mentions)
+        if MessageSummaryContent.containsSpoilers(nodes) {
+            // Only spoilers need TextKit's glyph rectangles and native particle mask.
+            MessageSummaryRepresentable(
+                attributedText: text, accessibilityText: accessibilityText, lineLimit: lineLimit)
+        } else {
+            Text(MessageSummaryContent.swiftUIText(text))
+                .lineLimit(lineLimit == 0 ? nil : lineLimit)
+                .truncationMode(.tail)
+                .textSelection(.disabled)
+                .accessibilityLabel(accessibilityText)
+                .allowsHitTesting(false)
+        }
     }
 }

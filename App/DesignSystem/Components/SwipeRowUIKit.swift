@@ -18,10 +18,13 @@
         @ViewBuilder let content: () -> Content
 
         func makeUIView(context: Context) -> SwipeRowUIKitContainer {
-            SwipeRowUIKitContainer()
+            ScrollPerformanceTrace.event("Swipe.Created")
+            return SwipeRowUIKitContainer()
         }
 
         func updateUIView(_ view: SwipeRowUIKitContainer, context: Context) {
+            let trace = ScrollPerformanceTrace.begin("Swipe.Update")
+            defer { ScrollPerformanceTrace.end("Swipe.Update", trace) }
             view.setContent(content(), environment: context.environment)
             view.configure(
                 id: id, leading: leadingAction, trailing: trailingActions,
@@ -44,6 +47,8 @@
     }
 
     final class SwipeRowUIKitContainer: UIView, UIGestureRecognizerDelegate {
+        private static let actionSymbolConfiguration = UIImage.SymbolConfiguration(
+            pointSize: SwipeRowMetrics.symbolSize, weight: .semibold)
         private let leadingClip = UIView()
         private let trailingClip = UIView()
         private let leadingButton = UIButton(type: .system)
@@ -61,6 +66,16 @@
         private var isDragging = false
         private var isArmed = false
         private var previousWidth: CGFloat = 0
+        private struct OffsetLayout: Equatable {
+            let bounds: CGRect
+            let offset: CGFloat
+            let direction: CGFloat
+            let hasLeading: Bool
+            let trailingCount: Int
+            let isBusy: Bool
+        }
+
+        private var appliedOffsetLayout: OffsetLayout?
         private var onRevealChanged: ((Bool) -> Void)?
         private var onAction: ((String) -> Void)?
         private lazy var feedback = UIImpactFeedbackGenerator(style: .medium)
@@ -102,6 +117,8 @@
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
         func setContent<Content: View>(_ content: Content, environment: EnvironmentValues) {
+            let trace = ScrollPerformanceTrace.begin("Swipe.HostContent")
+            defer { ScrollPerformanceTrace.end("Swipe.HostContent", trace) }
             // UIHostingConfiguration supplies native self-sizing without inventing a
             // child view-controller hierarchy for every SwiftUI List row.
             let configuration = UIHostingConfiguration {
@@ -119,6 +136,8 @@
         }
 
         func contentSize(fitting width: CGFloat) -> CGSize {
+            let trace = ScrollPerformanceTrace.begin("Swipe.SizeFit")
+            defer { ScrollPerformanceTrace.end("Swipe.SizeFit", trace) }
             let height =
                 hostedContent?.systemLayoutSizeFitting(
                     CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
@@ -133,6 +152,8 @@
             isBusy: Bool, isRevealed: Bool, reduceMotion: Bool, isRightToLeft: Bool,
             onRevealChanged: @escaping (Bool) -> Void, onAction: @escaping (String) -> Void
         ) {
+            let trace = ScrollPerformanceTrace.begin("Swipe.Controls")
+            defer { ScrollPerformanceTrace.end("Swipe.Controls", trace) }
             let nextDirection: CGFloat = isRightToLeft ? -1 : 1
             let identityChanged = identity != id
             let actionsChanged = leadingAction != leading || trailingActions != trailing
@@ -174,7 +195,7 @@
         private func configure(_ button: UIButton, action: SwipeRowAction) {
             button.setImage(UIImage(systemName: action.symbol), for: .normal)
             button.setPreferredSymbolConfiguration(
-                .init(pointSize: SwipeRowMetrics.symbolSize, weight: .semibold), forImageIn: .normal
+                Self.actionSymbolConfiguration, forImageIn: .normal
             )
             button.tintColor = .white
             button.backgroundColor = UIColor(action.tint)
@@ -202,6 +223,7 @@
         }
 
         func detach() {
+            ScrollPerformanceTrace.event("Swipe.Detached")
             onRevealChanged = nil
             onAction = nil
             close(animated: false, notify: false)
@@ -211,6 +233,8 @@
 
         override func layoutSubviews() {
             super.layoutSubviews()
+            let trace = ScrollPerformanceTrace.begin("Swipe.Layout")
+            defer { ScrollPerformanceTrace.end("Swipe.Layout", trace) }
             if previousWidth > 0, previousWidth != bounds.width {
                 close(animated: false, notify: false)
                 // Geometry can change during a SwiftUI update; clear shared reveal
@@ -228,6 +252,14 @@
         }
 
         private func applyOffset() {
+            let layout = OffsetLayout(
+                bounds: bounds, offset: offset, direction: direction,
+                hasLeading: leadingAction != nil, trailingCount: trailingButtons.count,
+                isBusy: isBusy)
+            // List self-sizing can lay out an unchanged row repeatedly. Neither
+            // scrolling nor a content refresh needs to rewrite swipe geometry.
+            guard appliedOffsetLayout != layout else { return }
+            appliedOffsetLayout = layout
             hostedContent?.transform = CGAffineTransform(translationX: offset * direction, y: 0)
             let leadingWidth = max(0, offset)
             let trailingWidth = max(0, -offset)

@@ -6,7 +6,9 @@ struct ConversationListRow: View {
 
     let item: ConversationListItem
     let draft: String
-    @ObservedObject var store: ChatStore
+    // Only the avatar consumes live presence/parent state; keep the text and
+    // badges driven by the list's item snapshot rather than every store event.
+    let store: ChatStore
     let currentUserID: Int32
     let isSelected: Bool
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
@@ -14,6 +16,14 @@ struct ConversationListRow: View {
     @Environment(\.calendar) private var calendar
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var subtitleHeight: CGFloat = 19
+
+    // Row creation and minute ticks must not rebuild Foundation's formatter.
+    // View rendering serializes access on the main actor, including locale changes.
+    @MainActor private static let relativeTimeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.dateTimeStyle = .numeric
+        return formatter
+    }()
 
     private var titleLayout: AnyLayout {
         dynamicTypeSize.isAccessibilitySize
@@ -133,14 +143,13 @@ struct ConversationListRow: View {
             .fixedSize()
     }
 
-    private func activityLabel(now: Date) -> String {
+    @MainActor private func activityLabel(now: Date) -> String {
         let date = item.activityDate
         guard date != .distantPast else { return "" }
         if calendar.isDate(date, inSameDayAs: now) {
             let minutes = max(1, Int(now.timeIntervalSince(date) / 60))
-            let formatter = RelativeDateTimeFormatter()
-            formatter.locale = locale
-            formatter.dateTimeStyle = .numeric
+            let formatter = Self.relativeTimeFormatter
+            if formatter.locale != locale { formatter.locale = locale }
             return formatter.localizedString(
                 from: minutes < 60
                     ? DateComponents(minute: -minutes) : DateComponents(hour: -(minutes / 60)))

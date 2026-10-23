@@ -149,6 +149,9 @@
         }
 
         func setVisible(_ visible: Bool) {
+            if requestedVisible == visible {
+                guard active != (visible && timelineMediaIsVisible) else { return }
+            }
             requestedVisible = visible
             refreshVisibility()
         }

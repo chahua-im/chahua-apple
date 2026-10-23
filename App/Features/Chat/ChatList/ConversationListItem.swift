@@ -184,24 +184,96 @@ enum ConversationListItem: Hashable, Identifiable {
         archived: Bool = false, showThreadsInMessages: Bool = true,
         draftUpdatedAt: [ConversationKey: Date] = [:]
     ) -> [Self] {
+        // Build the final projection buffer once and sort these large chat/thread
+        // values in place, without intermediate filtered or decorated arrays.
         var result: [Self] = []
+        result.reserveCapacity(
+            (scope.includesChats ? chats.count : 0)
+                + (scope.includesThreads(showThreadsInMessages: showThreadsInMessages)
+                    ? threads.count : 0))
         if scope.includesChats {
-            result += chats.filter {
-                $0.archived == archived
-                    && (scope == .messages || (scope == .groups && $0.kind == .group)
-                        || (scope == .dms && $0.kind == .dm))
-            }.map(Self.chat)
+            for chat in chats
+            where chat.archived == archived
+                && (scope == .messages || (scope == .groups && chat.kind == .group)
+                    || (scope == .dms && chat.kind == .dm))
+            {
+                result.append(.chat(chat))
+            }
         }
         if scope.includesThreads(showThreadsInMessages: showThreadsInMessages) {
-            result += threads.filter { $0.archived == archived }.map(Self.thread)
+            for thread in threads where thread.archived == archived {
+                result.append(.thread(thread))
+            }
         }
-        return result.sorted {
-            let lhs = max($0.activityDate, draftUpdatedAt[$0.id] ?? .distantPast)
-            let rhs = max($1.activityDate, draftUpdatedAt[$1.id] ?? .distantPast)
+        result.sort {
+            let lhsID = $0.id
+            let rhsID = $1.id
+            let lhs = max($0.activityDate, draftUpdatedAt[lhsID] ?? .distantPast)
+            let rhs = max($1.activityDate, draftUpdatedAt[rhsID] ?? .distantPast)
             if lhs != rhs { return lhs > rhs }
-            if $0.id.chatID != $1.id.chatID { return $0.id.chatID < $1.id.chatID }
-            return ($0.id.threadID ?? "") < ($1.id.threadID ?? "")
+            if lhsID.chatID != rhsID.chatID { return lhsID.chatID < rhsID.chatID }
+            return (lhsID.threadID ?? "") < (rhsID.threadID ?? "")
         }
+        return result
+    }
+}
+
+/// View-local memoization: broad store notifications and swipe ownership changes
+/// do not change list membership, ordering, or its conversation-state scope.
+@MainActor
+final class ConversationListSnapshotCache {
+    struct Snapshot {
+        var items: [ConversationListItem] = []
+        var conversationRefs: [ConversationRef] = []
+    }
+
+    private struct Input: Equatable {
+        let chats: [ChatListItem]
+        let threads: [ThreadListItem]
+        let scope: ConversationListScope
+        let archived: Bool
+        let showThreadsInMessages: Bool
+        let draftUpdatedAt: [ConversationKey: Date]
+    }
+
+    private var input: Input?
+    private var cached = Snapshot()
+
+    func snapshot(
+        chats: [ChatListItem], threads: [ThreadListItem], scope: ConversationListScope,
+        archived: Bool = false, showThreadsInMessages: Bool = true,
+        draftUpdatedAt: [ConversationKey: Date] = [:]
+    ) -> Snapshot {
+        let trace = ScrollPerformanceTrace.begin("List.Snapshot")
+        defer { ScrollPerformanceTrace.end("List.Snapshot", trace) }
+        let next = Input(
+            chats: scope.includesChats ? chats : [],
+            threads: scope.includesThreads(showThreadsInMessages: showThreadsInMessages)
+                ? threads : [],
+            scope: scope, archived: archived, showThreadsInMessages: showThreadsInMessages,
+            draftUpdatedAt: draftUpdatedAt)
+        // Compare complete payloads, not IDs: unread counts, edits, avatars and
+        // archive/mute changes must invalidate even when order stays unchanged.
+        guard input != next else {
+            ScrollPerformanceTrace.event("List.SnapshotHit")
+            return cached
+        }
+        let rebuild = ScrollPerformanceTrace.begin("List.ProjectionRebuild")
+        defer { ScrollPerformanceTrace.end("List.ProjectionRebuild", rebuild) }
+        ScrollPerformanceTrace.event(
+            "List.ProjectionInput", count: next.chats.count + next.threads.count)
+        let items = ConversationListItem.entries(
+            chats: next.chats, threads: next.threads, scope: scope, archived: archived,
+            showThreadsInMessages: showThreadsInMessages, draftUpdatedAt: draftUpdatedAt)
+        cached = Snapshot(
+            items: items,
+            conversationRefs: items.map {
+                let id = $0.id
+                return ConversationRef(
+                    chatId: id.chatID, threadId: id.threadID.flatMap(MessageID.init))
+            })
+        input = next
+        return cached
     }
 }
 
