@@ -1,6 +1,7 @@
 import ChahuaAPI
 import ChahuaMarkdown
 import Foundation
+import SwiftUI
 
 #if os(macOS)
     import AppKit
@@ -128,6 +129,8 @@ struct MessageTextContent {
         paragraph.maximumLineHeight = paragraph.minimumLineHeight
         paragraph.lineBreakMode = .byWordWrapping
         let foreground: BubbleNativeColor = isOutgoing ? .white : bubbleLabelColor
+        let interactiveForeground: BubbleNativeColor =
+            isOutgoing ? .white : BubbleNativeColor(ChahuaTheme.accent)
         let base: [NSAttributedString.Key: Any] = [
             .font: font, .bubbleBodyFont: font, .foregroundColor: foreground,
             .paragraphStyle: paragraph,
@@ -164,16 +167,19 @@ struct MessageTextContent {
                     #endif
                     inline(children, attributes)
                 case .code(let value):
-                    attributes[.font] = BubbleNativeFont.monospacedSystemFont(
-                        ofSize: font.pointSize * 0.92, weight: .regular)
-                    attributes[.backgroundColor] = MessageMarkdownStyle.codeBackground
-                    attributes[.foregroundColor] = MessageMarkdownStyle.codeForeground
+                    attributes[.font] = MessageMarkdownStyle.inlineCodeFont(
+                        attributes[.font] as? BubbleNativeFont ?? font,
+                        size: font.pointSize * 0.92)
+                    attributes[.backgroundColor] = MessageMarkdownStyle.inlineCodeBackground(
+                        foreground: attributes[.foregroundColor] as? BubbleNativeColor ?? foreground
+                    )
                     append(value, attributes)
                 case .link(let destination, let children):
                     if let url = URL(string: destination),
                         ["http", "https"].contains(url.scheme?.lowercased() ?? "")
                     {
                         attributes[.bubbleURL] = url
+                        attributes[.foregroundColor] = interactiveForeground
                         attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
                         if linksEnabled { attributes[.link] = url }
                     }
@@ -181,11 +187,13 @@ struct MessageTextContent {
                 case .mention(let uid):
                     attributes[.font] = BubbleNativeFont.systemFont(
                         ofSize: font.pointSize * 0.9, weight: .semibold)
-                    let tint: BubbleNativeColor = isOutgoing ? .white : .systemBlue
+                    let tint = interactiveForeground
                     attributes[.foregroundColor] = tint
                     attributes[.bubbleMentionID] = NSNumber(value: uid)
                     attributes[.bubbleMentionTint] = tint.withAlphaComponent(
-                        uid == currentUserID ? 0.28 : 0.14)
+                        isOutgoing
+                            ? (uid == currentUserID ? 0.28 : 0.18)
+                            : (uid == currentUserID ? 0.20 : 0.10))
                     if mentionsEnabled {
                         attributes[.link] = URL(string: "chahua-mention://\(uid)")
                     }
@@ -223,7 +231,8 @@ struct MessageTextContent {
                         style.firstLineHeadIndent = style.headIndent
                     }
                     let attachment = MessageCodeAttachment(
-                        code: code, language: language, fontSize: font.pointSize)
+                        code: code, language: language, fontSize: font.pointSize,
+                        foreground: foreground)
                     attributes[.attachment] = attachment
                     attributes[.bubbleCodeBlock] = attachment
                     // Attachment height is its own measured no-wrap TextKit height.

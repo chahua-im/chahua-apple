@@ -659,6 +659,139 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertGreaterThan(glyphBounds(nested.location).minX, glyphBounds(parent.location).minX)
     }
 
+    func testPlainFencesInheritBubbleContrastWhileKnownTokenlessCodeUsesSyntaxTheme() throws {
+        for outgoing in [false, true] {
+            for language in [nil, "not-a-real-language", "markdown"] as [String?] {
+                let rendered = try fencedCode(
+                    "plainidentifier", language: language, outgoing: outgoing)
+                let body = try XCTUnwrap(
+                    rendered.body.attribute(.foregroundColor, at: 0, effectiveRange: nil)
+                        as? BubbleNativeColor)
+                let code = try XCTUnwrap(
+                    rendered.attachment.attributedCode.attribute(
+                        .foregroundColor, at: 0, effectiveRange: nil) as? BubbleNativeColor)
+                for dark in [false, true] {
+                    XCTAssertEqual(try rgba(code, dark: dark), try rgba(body, dark: dark))
+                }
+            }
+        }
+        let incoming = try fencedCode("plainidentifier", language: "javascript", outgoing: false)
+        let outgoing = try fencedCode("plainidentifier", language: "JS", outgoing: true)
+        for dark in [false, true] {
+            let first = try XCTUnwrap(
+                incoming.attachment.attributedCode.attribute(
+                    .foregroundColor, at: 0, effectiveRange: nil) as? BubbleNativeColor)
+            let second = try XCTUnwrap(
+                outgoing.attachment.attributedCode.attribute(
+                    .foregroundColor, at: 0, effectiveRange: nil) as? BubbleNativeColor)
+            XCTAssertEqual(try rgba(first, dark: dark), try rgba(second, dark: dark))
+            XCTAssertNotEqual(try rgba(second, dark: dark), try rgba(.white, dark: dark))
+        }
+    }
+
+    func testCodeViewportReuseAndThemeChangesKeepBubbleDerivedSurface() throws {
+        let viewport = MessageCodeScrollView()
+        for outgoing in [false, true, false] {
+            let rendered = try fencedCode("plainidentifier", language: nil, outgoing: outgoing)
+            let foreground = try XCTUnwrap(
+                rendered.body.attribute(.foregroundColor, at: 0, effectiveRange: nil)
+                    as? BubbleNativeColor)
+            for dark in [false, true, false] {
+                #if os(macOS)
+                    viewport.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    viewport.apply(rendered.attachment)
+                #else
+                    viewport.overrideUserInterfaceStyle = dark ? .dark : .light
+                    viewport.apply(rendered.attachment, allowsSelection: true)
+                #endif
+                let background = try XCTUnwrap(viewport.backgroundColor)
+                let actual = try rgba(background, dark: dark)
+                var expected = try rgba(foreground, dark: dark)
+                expected[3] *= 0.08
+                for (actual, expected) in zip(actual, expected) {
+                    XCTAssertEqual(actual, expected, accuracy: 0.001)
+                }
+            }
+        }
+    }
+
+    func testIgnoredNestedSyntaxScopesInheritTokenColorAndDiffBackgroundIsTokenOnly() throws {
+        let rust = try fencedCode("b'\\n'", language: "rust", outgoing: true).attachment
+            .attributedCode
+        let source = rust.string as NSString
+        let escape = source.range(of: "\\n")
+        let outer = try XCTUnwrap(
+            rust.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? BubbleNativeColor)
+        let inner = try XCTUnwrap(
+            rust.attribute(.foregroundColor, at: escape.location, effectiveRange: nil)
+                as? BubbleNativeColor)
+        for dark in [false, true] {
+            XCTAssertEqual(try rgba(inner, dark: dark), try rgba(outer, dark: dark))
+        }
+        let diff = try fencedCode(
+            "+ added\n- removed\n unchanged", language: "diff", outgoing: false
+        ).attachment.attributedCode
+        let text = diff.string as NSString
+        XCTAssertNotNil(
+            diff.attribute(
+                .backgroundColor, at: text.range(of: "added").location, effectiveRange: nil))
+        XCTAssertNotNil(
+            diff.attribute(
+                .backgroundColor, at: text.range(of: "removed").location, effectiveRange: nil))
+        XCTAssertNil(
+            diff.attribute(
+                .backgroundColor, at: text.range(of: "unchanged").location, effectiveRange: nil))
+    }
+
+    func testInlineCodeInheritsNestedBodyStylesAndKeepsLinksAndSpoilers() throws {
+        for outgoing in [false, true] {
+            let value = MessageTextContent.attributedText(
+                text:
+                    "Plain **`bold`** __`italic`__ [link `linked`](https://example.com) ||`secret`||",
+                mentions: [], currentUserID: 1, isOutgoing: outgoing,
+                font: .systemFont(ofSize: 14), linksEnabled: true)
+            let text = value.string as NSString
+            func color(_ word: String, _ key: NSAttributedString.Key = .foregroundColor) throws
+                -> BubbleNativeColor
+            {
+                try XCTUnwrap(
+                    value.attribute(key, at: text.range(of: word).location, effectiveRange: nil)
+                        as? BubbleNativeColor)
+            }
+            for dark in [false, true] {
+                XCTAssertEqual(
+                    try rgba(color("bold"), dark: dark), try rgba(color("Plain"), dark: dark))
+                XCTAssertEqual(
+                    try rgba(color("linked"), dark: dark), try rgba(color("link "), dark: dark))
+                var expected = try rgba(color("linked"), dark: dark)
+                expected[3] *= 0.10
+                let background = try rgba(color("linked", .backgroundColor), dark: dark)
+                for (actual, expected) in zip(background, expected) {
+                    XCTAssertEqual(actual, expected, accuracy: 0.001)
+                }
+            }
+            let bold = try XCTUnwrap(
+                value.attribute(.font, at: text.range(of: "bold").location, effectiveRange: nil)
+                    as? BubbleNativeFont)
+            let italic = try XCTUnwrap(
+                value.attribute(.font, at: text.range(of: "italic").location, effectiveRange: nil)
+                    as? BubbleNativeFont)
+            #if os(macOS)
+                XCTAssertTrue(NSFontManager.shared.traits(of: bold).contains(.boldFontMask))
+                XCTAssertTrue(NSFontManager.shared.traits(of: italic).contains(.italicFontMask))
+            #else
+                XCTAssertTrue(bold.fontDescriptor.symbolicTraits.contains(.traitBold))
+                XCTAssertTrue(italic.fontDescriptor.symbolicTraits.contains(.traitItalic))
+            #endif
+            XCTAssertEqual(
+                value.attribute(.link, at: text.range(of: "linked").location, effectiveRange: nil)
+                    as? URL, URL(string: "https://example.com"))
+            let layout = MessageTextLayout(attributedText: value, metadata: nil)
+            XCTAssertTrue(layout.layoutManager.isConcealed(at: text.range(of: "secret").location))
+            XCTAssertFalse(layout.accessibilityText.contains("secret"))
+        }
+    }
+
     func testFencedCodeViewportDoesNotWrapOrExceedSharedGeometry() throws {
         let code = String(repeating: "let longValue = 123; ", count: 30)
         let source = "Before\n```swift\n\(code)\n```\nAfter"
@@ -730,6 +863,45 @@ final class MessageTextLayoutTests: XCTestCase {
                 try XCTUnwrap(code.documentView).frame.maxX + 0.5)
         }
     #endif
+
+    private func fencedCode(_ code: String, language: String?, outgoing: Bool) throws -> (
+        body: NSAttributedString, attachment: MessageCodeAttachment
+    ) {
+        let body = MessageTextContent.attributedText(
+            text: "Body\n```\(language ?? "")\n\(code)\n```",
+            mentions: [], currentUserID: 1, isOutgoing: outgoing, font: .systemFont(ofSize: 14))
+        var attachment: MessageCodeAttachment?
+        body.enumerateAttribute(.bubbleCodeBlock, in: NSRange(location: 0, length: body.length)) {
+            value, _, stop in
+            if let value = value as? MessageCodeAttachment {
+                attachment = value
+                stop.pointee = true
+            }
+        }
+        return (body, try XCTUnwrap(attachment))
+    }
+
+    private func rgba(_ color: BubbleNativeColor, dark: Bool) throws -> [CGFloat] {
+        #if os(macOS)
+            var resolved: NSColor?
+            NSAppearance(named: dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
+                resolved = color.usingColorSpace(.sRGB)
+            }
+            let value = try XCTUnwrap(resolved)
+            return [
+                value.redComponent, value.greenComponent, value.blueComponent, value.alphaComponent,
+            ]
+        #else
+            let resolved = color.resolvedColor(
+                with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            XCTAssertTrue(resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+            return [red, green, blue, alpha]
+        #endif
+    }
 
     private func preparedText(_ text: String, width: CGFloat) throws -> (
         geometry: MessageTextGeometry, metadata: MessageMetadata?

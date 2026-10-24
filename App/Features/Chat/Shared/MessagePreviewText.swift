@@ -155,10 +155,11 @@ enum MessageSummaryContent {
                 case .text(let text):
                     output.append(NSAttributedString(string: text, attributes: attributes))
                 case .code(let text):
-                    attributes[.font] = BubbleNativeFont.monospacedSystemFont(
-                        ofSize: font.pointSize, weight: .regular)
-                    attributes[.backgroundColor] = MessageMarkdownStyle.codeBackground
-                    attributes[.foregroundColor] = MessageMarkdownStyle.codeForeground
+                    attributes[.font] = MessageMarkdownStyle.inlineCodeFont(
+                        attributes[.font] as? BubbleNativeFont ?? font, size: font.pointSize)
+                    // Preview code follows the caller's color, including selected/dimmed quotes.
+                    attributes[.backgroundColor] = MessageMarkdownStyle.inlineCodeBackground(
+                        foreground: attributes[.foregroundColor] as? BubbleNativeColor ?? color)
                     output.append(NSAttributedString(string: text, attributes: attributes))
                 case .strong(let children):
                     attributes[.font] = MessageMarkdownStyle.font(

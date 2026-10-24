@@ -2008,22 +2008,31 @@ scope:"char.escape",relevance:0}]},s],g=[...r]
 ;return g.pop(),g.push(i),l.contains=g,{name:"YAML",case_insensitive:!0,
 aliases:["yml"],contains:r}}})();hljs.registerLanguage("yaml",e)})();
 
-function chahuaHighlight(code, language) {
+// First-party bridge; keep the pinned upstream build and grammars above unchanged.
+const chahuaSupportedGrammars = new Set(
+  ["bash", "c", "cpp", "csharp", "css", "dart", "diff", "go", "java", "javascript", "json", "kotlin", "python", "rust", "sql", "swift", "typescript", "xml", "yaml"].map(name => hljs.getLanguage(name))
+);
+function chahuaSupportsLanguage(language) {
   const grammar = hljs.getLanguage(language);
-  const supported = ["bash", "c", "cpp", "csharp", "css", "dart", "diff", "go", "java", "javascript", "json", "kotlin", "python", "rust", "sql", "swift", "typescript", "xml", "yaml"].some(name => hljs.getLanguage(name) === grammar);
-  if (!grammar || !supported) return [];
+  return !!grammar && chahuaSupportedGrammars.has(grammar);
+}
+function chahuaHighlight(code, language) {
+  if (!chahuaSupportsLanguage(language)) return [];
   const result = hljs.highlight(code, { language: language, ignoreIllegals: true });
   const spans = [];
   let offset = 0;
-  function visit(node, inherited) {
+  function visit(node) {
     if (typeof node === 'string') {
-      if (inherited && node.length) spans.push({location: offset, length: node.length, kind: inherited});
       offset += node.length;
       return;
     }
-    const scope = node.scope && !node.scope.startsWith('language:') ? node.scope : inherited;
-    (node.children || []).forEach(child => visit(child, scope));
+    // Ancestors precede descendants so unstyled scopes inherit CSS font/color/background.
+    const span = node.scope && !node.scope.startsWith('language:')
+      ? {location: offset, length: 0, kind: node.scope} : null;
+    if (span) spans.push(span);
+    (node.children || []).forEach(visit);
+    if (span) span.length = offset - span.location;
   }
-  visit(result._emitter.rootNode, null);
+  visit(result._emitter.rootNode);
   return spans;
 }

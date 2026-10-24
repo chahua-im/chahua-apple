@@ -1099,7 +1099,9 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.rows.firstIndex { $0.id == .unreadSeparator }, boundary)
     }
 
-    func testMissingUnreadTargetUsesAccessibleBeginningAndStillMarksVisibleMessages() async throws {
+    func testMissingUnreadTargetUsesAccessibleBeginningWithoutAcknowledgingKnownReadMessages()
+        async throws
+    {
         var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [
@@ -1114,11 +1116,10 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.rows[boundary + 1].messageID, MessageID(1))
         reportVisible([MessageID(1), MessageID(2)], to: model)
         await source.drain()
-        XCTAssertEqual(
-            marked, [MessageID(2)], "The monotonic server endpoint resolves an unknown baseline.")
+        XCTAssertTrue(marked.isEmpty, "A missing cursor is still authoritative read progress.")
         XCTAssertEqual(
             model.rows[boundary + 1].messageID, MessageID(1),
-            "A successful receipt does not move the entry boundary.")
+            "Read suppression does not move the entry boundary.")
         model.close()
     }
 
@@ -1178,6 +1179,221 @@ final class ConversationTimelineModelTests: XCTestCase {
         await model.open(position: .unread(after: nil))
         XCTAssertEqual(model.state.content, .initialLoadFailed)
         XCTAssertFalse(model.rows.contains { $0.id == .unreadSeparator })
+    }
+
+    func testKnownReadCursorOutsideWindowSuppressesEntryAndReentry() async throws {
+        var marked: [MessageID] = []
+        let (model, source, _) = try makeModel(
+            pages: [
+                .success(try historyPage(ids: 1...3, newerCursor: MessageID(3))),
+                .success(try historyPage(ids: 1...3, newerCursor: MessageID(3))),
+            ], markRead: { marked.append($0) })
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(99))
+        model.setReadTrackingActive(true)
+        await model.open(position: .message(MessageID(1)))
+        reportVisible([MessageID(1)], to: model)
+        await source.drain()
+        reportVisible([MessageID(2), MessageID(3)], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(marked.isEmpty, "Historical visible rows are already known to be read.")
+
+        model.close()
+        model.setReadTrackingActive(true)
+        await model.open(position: .message(MessageID(1)))
+        reportVisible([MessageID(2), MessageID(3)], to: model)
+        await source.drain()
+        XCTAssertTrue(marked.isEmpty, "Reentry must not bypass the authoritative cursor.")
+        model.close()
+    }
+
+    func testNewerRemoteReadCursorSuppressesQueuedDwellDespiteOlderMetadata() async throws {
+        var marked: [MessageID] = []
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3))],
+            markRead: { id in
+                marked.append(id)
+                if id == MessageID(1) { await withCheckedContinuation { releaseFirst = $0 } }
+            })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible([MessageID(1)], to: model)
+        await source.drain()
+        XCTAssertEqual(marked, [MessageID(1)])
+        reportVisible([MessageID(3)], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(99))
+        releaseFirst?.resume()
+        await source.drain()
+        XCTAssertEqual(marked, [MessageID(1)], "Remote progress invalidates mature queued work.")
+
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
+        reportVisible([MessageID(3)], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(
+            marked, [MessageID(1)],
+            "An older snapshot cannot erase authoritative progress outside the window.")
+        model.close()
+    }
+
+    func testNewerRemoteReadCursorCancelsEntryBeforeItsRequestStarts() async throws {
+        var marked: [MessageID] = []
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...2))], markRead: { marked.append($0) })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible([MessageID(1)], to: model)
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(99))
+        await source.drain()
+        XCTAssertTrue(marked.isEmpty, "A queued entry must revalidate newer authoritative state.")
+        model.close()
+    }
+
+    func testThreadRootDoesNotConsumeImmediateReadWithUnknownCursor() async throws {
+        var marked: [MessageID] = []
+        let root = try TimelineTestFixtures.message(id: 1, at: 1)
+        let reply = try TimelineTestFixtures.message(
+            id: 2, at: 2, fields: ["replyRootId": "1"])
+        let (model, source, _) = try makeModel(
+            pages: [.success(try TimelineTestFixtures.page([root, reply]))],
+            threadID: "1", markRead: { marked.append($0) })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible([MessageID(1)], to: model)
+        await source.drain()
+        XCTAssertTrue(marked.isEmpty, "The root belongs to the parent conversation's read scope.")
+        reportVisible([MessageID(2)], to: model)
+        await source.drain()
+        XCTAssertEqual(marked, [MessageID(2)], "The first actual topic reply remains immediate.")
+        model.close()
+    }
+
+    func testExplicitUnreadResetAllowsRereadingWithoutMovingEntrySeparator() async throws {
+        var marked: [MessageID] = []
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3))], markRead: { marked.append($0) })
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
+        model.setReadTrackingActive(true)
+        await model.open(position: .unread(after: MessageID(1)))
+        let boundary = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        XCTAssertEqual(model.rows[boundary + 1].messageID, MessageID(2))
+        reportVisible([MessageID(3)], to: model)
+        await source.drain()
+        XCTAssertEqual(marked, [MessageID(3)])
+        model.updateReadState(unreadCount: 0, lastReadMessageID: MessageID(3))
+
+        model.resetReadWatermark(to: MessageID(1))
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, [MessageID(3), MessageID(3)], "Explicit unread permits rereading.")
+        XCTAssertEqual(
+            model.rows[boundary + 1].messageID, MessageID(2),
+            "Read resets do not redefine the frozen entry separator.")
+
+        model.resetReadWatermark(to: nil)
+        reportVisible([MessageID(1)], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(
+            marked, [MessageID(3), MessageID(3), MessageID(1)],
+            "A nil unread cursor permits reading from the beginning again.")
+        model.close()
+    }
+
+    func testExplicitUnreadResetFencesLateInFlightReadCompletion() async throws {
+        var marked: [MessageID] = []
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3))],
+            markRead: { id in
+                marked.append(id)
+                if marked.count == 1 { await withCheckedContinuation { releaseFirst = $0 } }
+            })
+        model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible([MessageID(3)], to: model)
+        await source.drain()
+        XCTAssertEqual(marked, [MessageID(3)])
+
+        model.resetReadWatermark(to: MessageID(1))
+        reportVisible([MessageID(2)], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, [MessageID(3)], "The reset cannot overlap an in-flight callback.")
+        releaseFirst?.resume()
+        await source.drain()
+        XCTAssertEqual(
+            marked, [MessageID(3), MessageID(2)],
+            "A pre-reset completion must not restore its superseded watermark.")
+        reportVisible([MessageID(3)], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, [MessageID(3), MessageID(2), MessageID(3)])
+        model.close()
+    }
+
+    func testExplicitUnreadResetDuringEntryFetchSupersedesEntryCursor() async throws {
+        var marked: [MessageID] = []
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3))], markRead: { marked.append($0) })
+        source.holdNextRequest()
+        model.setReadTrackingActive(true)
+        let opening = Task { await model.open(position: .unread(after: MessageID(99))) }
+        await source.waitUntilHeld()
+        model.resetReadWatermark(to: MessageID(1))
+        source.release()
+        await opening.value
+        reportVisible([MessageID(3)], to: model)
+        await source.drain()
+        XCTAssertEqual(
+            marked, [MessageID(3)],
+            "A stale entry snapshot must not undo an intervening unread reset.")
+        model.close()
+    }
+
+    func testAccountResetPreventsOldModelFromStartingAnotherRead() async throws {
+        var marked: [MessageID] = []
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...2)), .success(try livePage(ids: 1...2))],
+            markRead: { id in
+                marked.append(id)
+                if marked.count == 1 { await withCheckedContinuation { releaseFirst = $0 } }
+            })
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible([MessageID(1)], to: model)
+        await source.drain()
+        XCTAssertEqual(marked, [MessageID(1)])
+        source.store.reset()
+        releaseFirst?.resume()
+        await source.drain()
+        model.setReadTrackingActive(true)
+        await model.open()
+        reportVisible([MessageID(2)], to: model)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertEqual(marked, [MessageID(1)], "An old account model cannot resume read tracking.")
+        model.close()
+    }
+
+    func testExplicitUnreadResetBeforeReentrySupersedesFrozenEntryCursor() async throws {
+        var marked: [MessageID] = []
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3)), .success(try livePage(ids: 1...3))],
+            markRead: { marked.append($0) })
+        model.setReadTrackingActive(true)
+        await model.open(position: .unread(after: MessageID(99)))
+        reportVisible([MessageID(3)], to: model)
+        await source.drain()
+        XCTAssertTrue(marked.isEmpty)
+        model.close()
+
+        model.resetReadWatermark(to: nil)
+        model.setReadTrackingActive(true)
+        await model.open(position: .unread(after: MessageID(99)))
+        reportVisible([MessageID(1)], to: model)
+        await source.drain()
+        XCTAssertEqual(
+            marked, [MessageID(1)], "A frozen entry cursor cannot undo explicit unread on reentry.")
+        model.close()
     }
 
     func testEntryReadIsImmediateThenDwellUsesStableFullyVisibleCandidate()
@@ -1460,7 +1676,9 @@ final class ConversationTimelineModelTests: XCTestCase {
             "Deferred live messages keep navigation available without inventing an unread badge.")
     }
 
-    func testHistoricalEntryRefreshesVisibleReadWithoutRegressingSubsequentProgress() async throws {
+    func testHistoricalEntrySuppressesKnownReadsWithoutConsumingImmediateAcknowledgement()
+        async throws
+    {
         var marked: [MessageID] = []
         let (model, source, _) = try makeModel(
             pages: [.success(try livePage(ids: 1...5))], markRead: { marked.append($0) })
@@ -1469,18 +1687,14 @@ final class ConversationTimelineModelTests: XCTestCase {
         await model.open(position: .message(MessageID(2)))
         reportVisible([MessageID(2)], to: model)
         await source.drain()
-        XCTAssertEqual(
-            marked, [MessageID(2)],
-            "Historical entry refreshes the server using only the actual visible candidate.")
+        XCTAssertTrue(marked.isEmpty, "Historical entry must not acknowledge already-read rows.")
         reportVisible([MessageID(3)], to: model)
         try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(
-            marked, [MessageID(2)], "The entry refresh cannot lower the known read watermark.")
+        XCTAssertTrue(marked.isEmpty, "Scrolling behind the known cursor needs no acknowledgement.")
         reportVisible([MessageID(5)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, [MessageID(2)])
-        try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, [MessageID(2), MessageID(5)])
+        XCTAssertEqual(
+            marked, [MessageID(5)], "The first genuinely unread visible candidate is immediate.")
         model.close()
     }
 
@@ -1585,15 +1799,11 @@ final class ConversationTimelineModelTests: XCTestCase {
         await model.open(position: .unread(after: MessageID(1)))
         reportVisible([MessageID(1)], to: model)
         await source.drain()
-        XCTAssertEqual(
-            marked, [MessageID(1)],
-            "The first visible thread cursor refreshes read state immediately, even when unchanged."
-        )
+        XCTAssertTrue(marked.isEmpty, "A visible topic root is not topic read progress.")
         reportVisible([MessageID(2)], to: model)
         await source.drain()
-        XCTAssertEqual(marked, [MessageID(1)], "Thread progress after entry still requires dwell.")
-        try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(marked, [MessageID(1), MessageID(2)])
+        XCTAssertEqual(
+            marked, [MessageID(2)], "The first unread topic reply is acknowledged immediately.")
         model.updateReadState(unreadCount: 1, lastReadMessageID: MessageID(2))
         reportVisible([MessageID(1)], to: model)
         await model.jumpTowardLatest()

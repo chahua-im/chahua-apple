@@ -5,6 +5,12 @@ import XCTest
 
 @testable import chahua_apple
 
+#if os(macOS)
+    import AppKit
+#else
+    import UIKit
+#endif
+
 @MainActor
 final class ConversationScopeTests: XCTestCase {
     func testMentionLifecycleCallsShareRequestsAndLateSnapshotsKeepDismissals() async throws {
@@ -615,6 +621,108 @@ final class ConversationScopeTests: XCTestCase {
         layout.update(attributed, lineLimit: 1)
         XCTAssertTrue(layout.hasSpoilers)
         XCTAssertTrue(layout.manager.revealedSpoilers.isEmpty)
+    }
+
+    func testSummaryCodeReusesCallerContrastWithoutEnablingConcealedLinks() throws {
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 1,
+            text:
+                "plain **__`code`__** **[label](https://example.com)** [book `linked`](https://example.com) ||__`secret`__|| @[uid:2]",
+            fields: ["mentions": [["uid": 2, "gender": 0, "username": "Ada"]]])
+        let preview = message.replyPreview
+        let nodes = MessageSummaryContent.summary(preview)
+        let layout = MessageSummaryLayout()
+
+        func components(_ color: BubbleNativeColor) throws -> [CGFloat] {
+            #if os(macOS)
+                let resolved = try XCTUnwrap(color.usingColorSpace(.sRGB))
+                return [
+                    resolved.redComponent, resolved.greenComponent, resolved.blueComponent,
+                    resolved.alphaComponent,
+                ]
+            #else
+                var red: CGFloat = 0
+                var green: CGFloat = 0
+                var blue: CGFloat = 0
+                var alpha: CGFloat = 0
+                XCTAssertTrue(color.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+                return [red, green, blue, alpha]
+            #endif
+        }
+        func assertContrast(_ caller: BubbleNativeColor) throws {
+            let expected = try components(caller)
+            let source = layout.storage.string as NSString
+            for value in ["plain", "code", "label", "linked", "secret", "@Ada"] {
+                let index = source.range(of: value).location
+                let foreground = try XCTUnwrap(
+                    layout.storage.attribute(.foregroundColor, at: index, effectiveRange: nil)
+                        as? BubbleNativeColor)
+                let actual = try components(foreground)
+                for channel in expected.indices {
+                    XCTAssertEqual(actual[channel], expected[channel], accuracy: 0.001, value)
+                }
+                if ["code", "linked", "secret"].contains(value) {
+                    let background = try XCTUnwrap(
+                        layout.storage.attribute(.backgroundColor, at: index, effectiveRange: nil)
+                            as? BubbleNativeColor)
+                    let surface = try components(background)
+                    for channel in 0..<3 {
+                        XCTAssertEqual(surface[channel], expected[channel], accuracy: 0.001, value)
+                    }
+                    XCTAssertEqual(surface[3], expected[3] * 0.1, accuracy: 0.001, value)
+                }
+            }
+            let secret = source.range(of: "secret").location
+            XCTAssertTrue(layout.manager.isConcealed(at: secret))
+            XCTAssertTrue(layout.manager.revealedSpoilers.isEmpty)
+        }
+
+        // Reusing the same preview graph must not retain selected-white code in a dimmed quote.
+        for caller in [BubbleNativeColor.white, bubbleLabelColor.withAlphaComponent(0.7)] {
+            layout.update(
+                MessageSummaryContent.attributedText(
+                    nodes, mentions: preview.mentions, font: .systemFont(ofSize: 15), color: caller),
+                lineLimit: 1)
+            XCTAssertEqual(layout.storage.string, "plain code label book linked secret @Ada")
+            let codeIndex = (layout.storage.string as NSString).range(of: "code").location
+            let codeFont = try XCTUnwrap(
+                layout.storage.attribute(.font, at: codeIndex, effectiveRange: nil)
+                    as? BubbleNativeFont)
+            #if os(macOS)
+                let traits = NSFontManager.shared.traits(of: codeFont)
+                XCTAssertTrue(traits.contains(.boldFontMask))
+                XCTAssertTrue(traits.contains(.italicFontMask))
+            #else
+                let traits = codeFont.fontDescriptor.symbolicTraits
+                XCTAssertTrue(traits.contains(.traitBold))
+                XCTAssertTrue(traits.contains(.traitItalic))
+            #endif
+            for dark in [false, true] {
+                #if os(macOS)
+                    var failure: Error?
+                    NSAppearance(named: dark ? .darkAqua : .aqua)!
+                        .performAsCurrentDrawingAppearance {
+                            do { try assertContrast(caller) } catch { failure = error }
+                        }
+                    if let failure { throw failure }
+                #else
+                    var failure: Error?
+                    UITraitCollection(userInterfaceStyle: dark ? .dark : .light).performAsCurrent {
+                        do { try assertContrast(caller) } catch { failure = error }
+                    }
+                    if let failure { throw failure }
+                #endif
+            }
+            layout.storage.enumerateAttributes(
+                in: NSRange(location: 0, length: layout.storage.length)
+            ) { attributes, _, _ in
+                for key in [
+                    NSAttributedString.Key.link, .bubbleURL, .bubbleMentionID, .bubbleMentionTint,
+                ] {
+                    XCTAssertNil(attributes[key])
+                }
+            }
+        }
     }
 
 }

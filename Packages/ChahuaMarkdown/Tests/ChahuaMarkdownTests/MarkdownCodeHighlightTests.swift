@@ -32,6 +32,27 @@ final class MarkdownCodeHighlightTests: XCTestCase {
         }
     }
 
+    func testSupportedLanguageDoesNotDependOnProducingTokens() {
+        XCTAssertTrue(MarkdownCodeHighlight.supports(language: "javascript"))
+        XCTAssertTrue(MarkdownCodeHighlight.supports(language: "JS"))
+        XCTAssertEqual(
+            MarkdownCodeHighlight.spans(code: "plainidentifier", language: "javascript"), [])
+        for language in [nil, "", "not-a-real-language", "markdown", "\"><script>"] as [String?] {
+            XCTAssertFalse(MarkdownCodeHighlight.supports(language: language))
+        }
+    }
+
+    func testNestedScopesKeepAncestorsBeforeDescendantsForStyleInheritance() throws {
+        let source = "b'\\n'"
+        let spans = MarkdownCodeHighlight.spans(code: source, language: "rust")
+        let string = try XCTUnwrap(spans.firstIndex { $0.kind == "string" })
+        let escape = try XCTUnwrap(spans.firstIndex { $0.kind == "char.escape" })
+        XCTAssertLessThan(string, escape)
+        XCTAssertEqual(
+            NSIntersectionRange(spans[string].range, spans[escape].range), spans[escape].range)
+        XCTAssertEqual((source as NSString).substring(with: spans[escape].range), "\\n")
+    }
+
     func testHTMLLikeSourceIsNeverSubstitutedWithMarkup() {
         let source = "const value = \"<img src=x onerror=alert(1)>&茶😀\";"
         let spans = MarkdownCodeHighlight.spans(code: source, language: "javascript")

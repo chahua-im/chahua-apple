@@ -19,21 +19,21 @@
             codeView = NSTextView(frame: .zero, textContainer: container)
             super.init(frame: .zero)
             drawsBackground = true
-            backgroundColor = MessageMarkdownStyle.codeBackground
             hasHorizontalScroller = true
             hasVerticalScroller = false
             autohidesScrollers = true
             scrollerStyle = .overlay
             borderType = .noBorder
             wantsLayer = true
-            layer?.cornerRadius = 6
+            layer?.cornerRadius = 8
             layer?.masksToBounds = true
             codeView.isEditable = false
             codeView.isSelectable = true
             codeView.isRichText = true
             codeView.drawsBackground = false
             codeView.textContainerInset = CGSize(
-                width: MessageCodeAttachment.padding, height: MessageCodeAttachment.padding)
+                width: MessageCodeAttachment.horizontalPadding,
+                height: MessageCodeAttachment.verticalPadding)
             codeView.isHorizontallyResizable = false
             codeView.isVerticallyResizable = false
             codeView.textContainer?.widthTracksTextView = false
@@ -46,6 +46,7 @@
         required init?(coder: NSCoder) { nil }
 
         func apply(_ attachment: MessageCodeAttachment) {
+            backgroundColor = attachment.backgroundColor
             if self.attachment !== attachment {
                 codeView.textStorage?.setAttributedString(attachment.attributedCode)
                 self.attachment = attachment

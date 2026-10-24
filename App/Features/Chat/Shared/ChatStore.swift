@@ -73,6 +73,24 @@ final class ChatStore: ObservableObject {
     private var readyConversations = Set<ConversationKey>()
     private var conversationReadStates: [ConversationKey: ReadStateResponse] = [:]
     private var localStateWrites: [ConversationKey: Int] = [:]
+    private struct ReadAcknowledgement {
+        let token: Int
+        let requestedCursor: MessageID
+        let resetVersion: Int
+        let task: Task<Void, Error>
+        var watchedThrough: MessageID?
+        var sawWatchedState = false
+    }
+    private struct ReadFence {
+        let cursor: MessageID
+        let version: Int
+        let watchRequestID: UInt32?
+    }
+    private var readAcknowledgements: [ConversationKey: ReadAcknowledgement] = [:]
+    private var readFences: [ConversationKey: ReadFence] = [:]
+    private var readStateVersion = 0
+    private var readStateVersions: [ConversationKey: Int] = [:]
+    private var readResetVersions: [ConversationKey: Int] = [:]
     private var membershipStates: [ConversationKey: ThreadSubscriptionStatus] = [:]
     private var membershipRevision = 0
     private var rowRevisions: [ConversationKey: Int] = [:]
@@ -81,6 +99,7 @@ final class ChatStore: ObservableObject {
     private var stateFallbackTask: Task<Void, Never>?
     private var stateFallbackGeneration = 0
     private var fallbackKeys = Set<ConversationKey>()
+    private var readFenceReconciliations = Set<ConversationKey>()
     @Published var currentUserProfile: MeResponse? {
         didSet {
             stickers.setAccount(currentUserProfile?.uid)
@@ -452,12 +471,13 @@ final class ChatStore: ObservableObject {
     ) async {
         let initiallyLoaded = state[keyPath: list.phase] == .loaded
         let listRevision = listStateRevision
+        let readVersion = readStateVersion
         let receiptVersion = listReadReceipts.snapshot()
         if !initiallyLoaded { state[keyPath: list.phase] = .loading }
         do {
             switch list {
             case .chats, .archivedChats:
-                let chats = try await fetchChatList(
+                var chats = try await fetchChatList(
                     archived: list.archived, generation: requestGeneration,
                     refreshGeneration: currentRefresh)
                 try Task.checkCancellation()
@@ -467,6 +487,12 @@ final class ChatStore: ObservableObject {
                 guard listStateRevision == listRevision else {
                     dirtyLists.insert(list)
                     return
+                }
+                for index in chats.indices {
+                    let key = ConversationKey(chatID: chats[index].id)
+                    let response = resolveReadSnapshot(
+                        chats[index].readState, key: key, version: readVersion)
+                    chats[index] = chats[index].withReadState(response)
                 }
                 let ids = Set(chats.lazy.map(\.id))
                 if list.archived {
@@ -482,12 +508,10 @@ final class ChatStore: ObservableObject {
                         muteOverride: chat.muteOverride, mutedUntil: chat.mutedUntil,
                         isMuted: chat.notificationMuted(defaults: state.notificationDefaults))
                     acceptListReadReceipt(.chat(chat), version: receiptVersion)
-                    conversationReadStates[.init(chatID: chat.id)] = .init(
-                        lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
-                        unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions)
+                    conversationReadStates[.init(chatID: chat.id)] = chat.readState
                 }
             case .threads, .archivedThreads:
-                let threads = try await fetchThreadList(
+                var threads = try await fetchThreadList(
                     archived: list.archived, generation: requestGeneration,
                     refreshGeneration: currentRefresh)
                 try Task.checkCancellation()
@@ -497,6 +521,12 @@ final class ChatStore: ObservableObject {
                 guard listStateRevision == listRevision else {
                     dirtyLists.insert(list)
                     return
+                }
+                for index in threads.indices {
+                    let response = resolveReadSnapshot(
+                        threads[index].readState, key: threads[index].conversationKey,
+                        version: readVersion)
+                    threads[index] = threads[index].withReadState(response)
                 }
                 let keys = Set(threads.lazy.map(\.conversationKey))
                 if list.archived {
@@ -508,11 +538,7 @@ final class ChatStore: ObservableObject {
                 }
                 for thread in threads {
                     acceptListReadReceipt(.thread(thread), version: receiptVersion)
-                    conversationReadStates[thread.conversationKey] = .init(
-                        lastReadMessageId: thread.lastReadMessageId,
-                        unreadCount: thread.unreadCount,
-                        unreadMentions: thread.unreadMentions,
-                        unreadReactions: thread.unreadReactions)
+                    conversationReadStates[thread.conversationKey] = thread.readState
                     cacheMembership(
                         .init(subscribed: true, archived: thread.archived),
                         key: thread.conversationKey)
@@ -633,8 +659,12 @@ final class ChatStore: ObservableObject {
         _ action: ConversationListAction, conversation: ConversationKey,
         generation requestGeneration: Int
     ) async {
-        beginLocalStateWrite(conversation)
-        defer { finishLocalStateWrite(conversation, generation: requestGeneration) }
+        if action != .markRead { beginLocalStateWrite(conversation) }
+        defer {
+            if action != .markRead {
+                finishLocalStateWrite(conversation, generation: requestGeneration)
+            }
+        }
         let item: ConversationListItem
         if let threadID = conversation.threadID {
             guard let thread = thread(chatID: conversation.chatID, threadID: threadID) else {
@@ -695,9 +725,10 @@ final class ChatStore: ObservableObject {
                 else { return }
                 let response = try await apiClient.markChatUnread(chatID: conversation.chatID)
                 guard generation == requestGeneration else { return }
-                applyReadState(response, chatID: conversation.chatID, threadID: nil)
+                applyReadState(
+                    response, chatID: conversation.chatID, threadID: nil, resetWatermark: true)
             }
-            listStateRevision += 1
+            if action != .markRead { listStateRevision += 1 }
             if conversation.threadID != nil, action == .archive || action == .unarchive {
                 applyMembership(
                     .init(subscribed: true, archived: action == .archive), key: conversation)
@@ -968,6 +999,7 @@ final class ChatStore: ObservableObject {
                 dirtyRows.remove(key)
                 let revision = rowRevisions[key, default: 0]
                 let receiptVersion = listReadReceipts.snapshot()
+                let readVersion = readStateVersion
                 do {
                     if let threadID = key.threadID, let rootID = MessageID(threadID) {
                         let preferred =
@@ -985,6 +1017,9 @@ final class ChatStore: ObservableObject {
                         else { return }
                         if rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil {
                             if let found {
+                                let response = resolveReadSnapshot(
+                                    found.readState, key: key, version: readVersion)
+                                let found = found.withReadState(response)
                                 install(found)
                                 acceptListReadReceipt(.thread(found), version: receiptVersion)
                             } else {
@@ -1008,6 +1043,9 @@ final class ChatStore: ObservableObject {
                         else { return }
                         if rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil {
                             if let found {
+                                let response = resolveReadSnapshot(
+                                    found.readState, key: key, version: readVersion)
+                                let found = found.withReadState(response)
                                 install(found)
                                 acceptListReadReceipt(.chat(found), version: receiptVersion)
                             } else {
@@ -1705,6 +1743,27 @@ final class ChatStore: ObservableObject {
             let key = ConversationKey(chatID: value.chatId, threadID: value.threadId?.description)
             guard watchedConversations.contains(key), localStateWrites[key] == nil else { continue }
             readyConversations.insert(key)
+            if let fence = readFences[key] {
+                if !value.accessible
+                    || (payload.full && fence.watchRequestID != payload.requestId)
+                {
+                    readFences.removeValue(forKey: key)
+                } else {
+                    guard let cursor = value.lastReadMessageId, cursor >= fence.cursor else {
+                        reconcileReadFence(key)
+                        continue
+                    }
+                    readFences.removeValue(forKey: key)
+                }
+            }
+            if var acknowledgement = readAcknowledgements[key] {
+                acknowledgement.sawWatchedState = true
+                if let cursor = value.lastReadMessageId {
+                    acknowledgement.watchedThrough =
+                        max(acknowledgement.watchedThrough ?? cursor, cursor)
+                }
+                readAcknowledgements[key] = acknowledgement
+            }
             rowRevisions[key, default: 0] += 1
             if !value.accessible {
                 conversationReadStates.removeValue(forKey: key)
@@ -1727,14 +1786,22 @@ final class ChatStore: ObservableObject {
 
     func conversationReadState(chatID: String, threadID: String?) async throws -> ReadStateResponse
     {
+        try await fetchConversationReadState(
+            chatID: chatID, threadID: threadID, ignoringWatch: false)
+    }
+
+    private func fetchConversationReadState(
+        chatID: String, threadID: String?, ignoringWatch: Bool
+    ) async throws -> ReadStateResponse {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
-        if conversationStateReady(chatID: chatID, threadID: threadID),
+        if !ignoringWatch, conversationStateReady(chatID: chatID, threadID: threadID),
             let cached = conversationReadStates[key]
         {
             return cached
         }
         let revision = rowRevisions[key, default: 0]
         rowRevisions[key] = revision
+        let readVersion = readStateVersion
         let response = try await performGroupRequest(generation: generation) {
             if let threadID {
                 return try await apiClient.threadReadState(chatID: chatID, threadID: threadID)
@@ -1745,8 +1812,17 @@ final class ChatStore: ObservableObject {
             if let cached = conversationReadStates[key] { return cached }
             throw CancellationError()
         }
-        applyReadState(response, chatID: chatID, threadID: threadID)
-        return response
+        let accepted = resolveReadSnapshot(response, key: key, version: readVersion)
+        applyReadState(accepted, chatID: chatID, threadID: threadID)
+        return accepted
+    }
+
+    private func reconcileReadFence(_ key: ConversationKey) {
+        guard foregroundActive, readFenceReconciliations.insert(key).inserted else { return }
+        // WS invalidations are coalesced, so a later mark-unread/deletion can
+        // replace the read acknowledgement. Only a fresh primary read can
+        // distinguish that rewind from an older queued state on this scope.
+        fallbackConversationStates(key)
     }
 
     private func fallbackConversationStates(_ key: ConversationKey? = nil) {
@@ -1780,7 +1856,20 @@ final class ChatStore: ObservableObject {
                     guard generation == requestGeneration, refreshGeneration == currentRefresh,
                         !Task.isCancelled
                     else { return }
-                    _ = try? await conversationReadState(chatID: key.chatID, threadID: key.threadID)
+                    let reconcileRead = readFenceReconciliations.contains(key)
+                    let fenceVersion = readFences[key]?.version
+                    _ = try? await fetchConversationReadState(
+                        chatID: key.chatID, threadID: key.threadID, ignoringWatch: reconcileRead)
+                    guard generation == requestGeneration, refreshGeneration == currentRefresh,
+                        stateFallbackGeneration == currentFallback
+                    else { return }
+                    if reconcileRead {
+                        readFenceReconciliations.remove(key)
+                        if let currentFence = readFences[key], currentFence.version != fenceVersion
+                        {
+                            reconcileReadFence(key)
+                        }
+                    }
                 }
             }
         }
@@ -2239,22 +2328,93 @@ final class ChatStore: ObservableObject {
 
     func markRead(chatID: String, threadID: String?, messageID: MessageID) async throws {
         try Task.checkCancellation()
+        if threadID == messageID.description { return }
         let requestGeneration = generation
         let key = ConversationKey(chatID: chatID, threadID: threadID)
-        beginLocalStateWrite(key)
-        defer { finishLocalStateWrite(key, generation: requestGeneration) }
-        do {
-            let response: ReadStateResponse
-            if let threadID {
-                response = try await apiClient.markThreadRead(
-                    chatID: chatID, threadID: threadID, messageID: messageID)
-            } else {
-                response = try await apiClient.markChatRead(chatID: chatID, messageID: messageID)
+        // Share an in-flight acknowledgement, then recheck authoritative progress.
+        // A failure remains a failure, never a speculative read watermark.
+        while let acknowledgement = readAcknowledgements[key] {
+            if let cursor = conversationReadStates[key]?.lastReadMessageId, cursor >= messageID {
+                return
             }
+            do {
+                try await acknowledgement.task.value
+            } catch {
+                guard generation == requestGeneration else { throw CancellationError() }
+                // A newer unread intent supersedes this operation, not a new
+                // caller waiting to reread from that reset baseline.
+                if acknowledgement.resetVersion == readResetVersions[key, default: 0] {
+                    throw error
+                }
+            }
+            try Task.checkCancellation()
             guard generation == requestGeneration else { throw CancellationError() }
-            applyReadState(response, chatID: chatID, threadID: threadID)
-            if let lastReadMessageID = response.lastReadMessageId {
-                onNotificationRead?(.init(chatID: chatID, threadID: threadID), lastReadMessageID)
+        }
+        if let cursor = conversationReadStates[key]?.lastReadMessageId, cursor >= messageID {
+            return
+        }
+        advanceReadStateVersion(for: key)
+        rowRevisions[key, default: 0] += 1
+        let token = readStateVersion
+        let resetVersion = readResetVersions[key, default: 0]
+        let task = Task {
+            try await self.performReadAcknowledgement(
+                key: key, messageID: messageID, token: token, resetVersion: resetVersion,
+                generation: requestGeneration)
+        }
+        readAcknowledgements[key] = .init(
+            token: token, requestedCursor: messageID, resetVersion: resetVersion, task: task)
+        try await task.value
+    }
+
+    private func performReadAcknowledgement(
+        key: ConversationKey, messageID: MessageID, token: Int, resetVersion: Int,
+        generation requestGeneration: Int
+    ) async throws {
+        defer {
+            if generation == requestGeneration, readAcknowledgements[key]?.token == token {
+                readAcknowledgements.removeValue(forKey: key)
+            }
+        }
+        do {
+            try Task.checkCancellation()
+            guard generation == requestGeneration,
+                readResetVersions[key, default: 0] == resetVersion
+            else { throw CancellationError() }
+            let response: ReadStateResponse
+            if let threadID = key.threadID {
+                response = try await apiClient.markThreadRead(
+                    chatID: key.chatID, threadID: threadID, messageID: messageID)
+            } else {
+                response = try await apiClient.markChatRead(
+                    chatID: key.chatID, messageID: messageID)
+            }
+            guard generation == requestGeneration,
+                readResetVersions[key, default: 0] == resetVersion
+            else { throw CancellationError() }
+            let watchedThrough = readAcknowledgements[key]?.watchedThrough
+            if let cursor = response.lastReadMessageId,
+                let watchedThrough, watchedThrough >= cursor
+            {
+                // The ordered stream already acknowledged this write. Its later
+                // counts (or a subsequent mark-unread) outrank this HTTP snapshot.
+                onNotificationRead?(key, cursor)
+                return
+            }
+            if let cursor = conversationReadStates[key]?.lastReadMessageId,
+                let returnedCursor = response.lastReadMessageId, cursor > returnedCursor
+            {
+                onNotificationRead?(key, cursor)
+                return
+            }
+            applyReadState(response, chatID: key.chatID, threadID: key.threadID)
+            if let cursor = response.lastReadMessageId {
+                readFences[key] = .init(
+                    cursor: cursor, version: readStateVersion, watchRequestID: statesRequestID)
+                onNotificationRead?(key, cursor)
+                if readAcknowledgements[key]?.sawWatchedState == true {
+                    reconcileReadFence(key)
+                }
             }
         } catch {
             guard generation == requestGeneration else { throw CancellationError() }
@@ -2263,39 +2423,68 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    private func applyReadState(_ response: ReadStateResponse, chatID: String, threadID: String?) {
-        listStateRevision += 1
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
+    private func advanceReadStateVersion(for key: ConversationKey) {
+        readStateVersion += 1
+        readStateVersions[key] = readStateVersion
+    }
+
+    /// Requests started before a read update retain that scope's current fields,
+    /// while the rest of a list snapshot remains usable. A fresh authoritative
+    /// request can end the temporary WS fence, including a remote mark-unread.
+    private func resolveReadSnapshot(
+        _ response: ReadStateResponse, key: ConversationKey, version: Int
+    ) -> ReadStateResponse {
+        if readStateVersions[key, default: 0] > version,
+            let cached = conversationReadStates[key]
+        {
+            return cached
+        }
+        if let fence = readFences[key], version >= fence.version {
+            readFences.removeValue(forKey: key)
+        }
+        cacheReadState(response, key: key)
+        return response
+    }
+
+    private func cacheReadState(
+        _ response: ReadStateResponse, key: ConversationKey, resetWatermark: Bool = false
+    ) {
+        guard response != conversationReadStates[key] || resetWatermark else { return }
+        let previousCursor = conversationReadStates[key]?.lastReadMessageId
+        let rewound =
+            previousCursor.map { previous in
+                response.lastReadMessageId.map { $0 < previous } ?? true
+            } ?? false
         conversationReadStates[key] = response
+        advanceReadStateVersion(for: key)
+        if resetWatermark || rewound {
+            readFences.removeValue(forKey: key)
+            if resetWatermark || readAcknowledgements[key] == nil
+                || readAcknowledgements[key].map({
+                    guard let watched = $0.watchedThrough else { return false }
+                    return watched >= $0.requestedCursor
+                }) == true
+            {
+                readResetVersions[key, default: 0] += 1
+            }
+            for model in visibleTimelines()
+            where model.chatID == key.chatID && model.threadID == key.threadID {
+                model.resetReadWatermark(to: response.lastReadMessageId)
+            }
+        }
+    }
+
+    private func applyReadState(
+        _ response: ReadStateResponse, chatID: String, threadID: String?,
+        resetWatermark: Bool = false
+    ) {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        cacheReadState(response, key: key, resetWatermark: resetWatermark)
         rowRevisions[key, default: 0] += 1
         if let threadID, let thread = thread(chatID: chatID, threadID: threadID) {
-            install(
-                ThreadListItem(
-                    chatId: thread.chatId, chatName: thread.chatName, chatAvatar: thread.chatAvatar,
-                    threadRootMessage: thread.threadRootMessage, participants: thread.participants,
-                    lastReply: thread.lastReply, replyCount: thread.replyCount,
-                    lastReplyAt: thread.lastReplyAt,
-                    unreadCount: response.unreadCount,
-                    unreadMentions: response.unreadMentions,
-                    unreadReactions: response.unreadReactions,
-                    lastReadMessageId: response.lastReadMessageId,
-                    peerLastReadMessageId: thread.peerLastReadMessageId,
-                    chatKind: thread.chatKind,
-                    subscribedAt: thread.subscribedAt, archived: thread.archived))
+            install(thread.withReadState(response))
         } else if threadID == nil, let chat = chat(id: chatID) {
-            install(
-                ChatListItem(
-                    id: chat.id, name: chat.name, avatar: chat.avatar,
-                    lastMessageAt: chat.lastMessageAt,
-                    unreadCount: response.unreadCount,
-                    unreadMentions: response.unreadMentions,
-                    unreadReactions: response.unreadReactions,
-                    lastReadMessageId: response.lastReadMessageId,
-                    peerLastReadMessageId: chat.peerLastReadMessageId,
-                    lastMessage: chat.lastMessage, mutedUntil: chat.mutedUntil,
-                    muteOverride: chat.muteOverride, isMuted: chat.isMuted,
-                    archived: chat.archived,
-                    kind: chat.kind, peer: chat.peer))
+            install(chat.withReadState(response))
         }
         // A notification or new thread can be open without an active-list row.
         for model in visibleTimelines() where model.chatID == chatID && model.threadID == threadID {
@@ -2311,6 +2500,7 @@ final class ChatStore: ObservableObject {
         stateFallbackTask?.cancel()
         stateFallbackTask = nil
         fallbackKeys.removeAll()
+        readFenceReconciliations.removeAll()
         for task in rowTasks.values { task.cancel() }
         rowTasks.removeAll()
         dirtyRows.removeAll()
@@ -2352,6 +2542,11 @@ final class ChatStore: ObservableObject {
         conversationStateScope = []
         conversationReadStates.removeAll()
         localStateWrites.removeAll()
+        for acknowledgement in readAcknowledgements.values { acknowledgement.task.cancel() }
+        readAcknowledgements.removeAll()
+        readFences.removeAll()
+        readStateVersions.removeAll()
+        readResetVersions.removeAll()
         membershipStates.removeAll()
         membershipRevision += 1
         rowRevisions.removeAll()
@@ -2374,6 +2569,24 @@ final class ChatStore: ObservableObject {
 }
 
 extension ChatListItem {
+    fileprivate var readState: ReadStateResponse {
+        .init(
+            lastReadMessageId: lastReadMessageId, unreadCount: unreadCount,
+            unreadMentions: unreadMentions, unreadReactions: unreadReactions)
+    }
+
+    fileprivate func withReadState(_ response: ReadStateResponse) -> ChatListItem {
+        guard response != readState else { return self }
+        return ChatListItem(
+            id: id, name: name, avatar: avatar, lastMessageAt: lastMessageAt,
+            unreadCount: response.unreadCount, unreadMentions: response.unreadMentions,
+            unreadReactions: response.unreadReactions,
+            lastReadMessageId: response.lastReadMessageId,
+            peerLastReadMessageId: peerLastReadMessageId,
+            lastMessage: lastMessage, mutedUntil: mutedUntil, muteOverride: muteOverride,
+            isMuted: isMuted, archived: archived, kind: kind, peer: peer)
+    }
+
     fileprivate func withPreview(_ preview: MessagePreview) -> ChatListItem {
         ChatListItem(
             id: id, name: name, avatar: avatar, lastMessageAt: preview.createdAt,
@@ -2387,6 +2600,25 @@ extension ChatListItem {
 }
 
 extension ThreadListItem {
+    fileprivate var readState: ReadStateResponse {
+        .init(
+            lastReadMessageId: lastReadMessageId, unreadCount: unreadCount,
+            unreadMentions: unreadMentions, unreadReactions: unreadReactions)
+    }
+
+    fileprivate func withReadState(_ response: ReadStateResponse) -> ThreadListItem {
+        guard response != readState else { return self }
+        return ThreadListItem(
+            chatId: chatId, chatName: chatName, chatAvatar: chatAvatar,
+            threadRootMessage: threadRootMessage, participants: participants,
+            lastReply: lastReply, replyCount: replyCount, lastReplyAt: lastReplyAt,
+            unreadCount: response.unreadCount, unreadMentions: response.unreadMentions,
+            unreadReactions: response.unreadReactions,
+            lastReadMessageId: response.lastReadMessageId,
+            peerLastReadMessageId: peerLastReadMessageId, chatKind: chatKind,
+            subscribedAt: subscribedAt, archived: archived)
+    }
+
     fileprivate func withActivity(
         root: MessagePreview? = nil, lastReply: MessagePreview? = nil,
         replyCount: Int64? = nil, lastReplyAt: Date? = nil

@@ -1,7 +1,7 @@
 import Foundation
 import JavaScriptCore
 
-/// A UTF-16 range in the unchanged code source, classified by highlight.js scope.
+/// A UTF-16 source range classified by highlight.js scope. Ancestors precede descendants.
 public struct MarkdownCodeSpan: Equatable, Sendable {
     public let range: NSRange
     public let kind: String
@@ -16,14 +16,22 @@ public struct MarkdownCodeSpan: Equatable, Sendable {
 public enum MarkdownCodeHighlight {
     private static let engine = HighlightEngine()
 
+    public static func supports(language: String?) -> Bool {
+        guard let language, isValid(language: language) else { return false }
+        return engine.supports(language: language)
+    }
+
     public static func spans(code: String, language: String?) -> [MarkdownCodeSpan] {
-        guard let language, !language.isEmpty,
-            language.utf8.allSatisfy({
+        guard let language, isValid(language: language) else { return [] }
+        return engine.spans(code: code, language: language)
+    }
+
+    private static func isValid(language: String) -> Bool {
+        !language.isEmpty
+            && language.utf8.allSatisfy {
                 (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
                     || $0 == 95 || $0 == 43 || $0 == 45
-            })
-        else { return [] }
-        return engine.spans(code: code, language: language)
+            }
     }
 }
 
@@ -40,6 +48,24 @@ private final class HighlightEngine: @unchecked Sendable {
     private var cacheCost = 0
     private let maximumCacheCost = 512 * 1024
     private var context: JSContext?
+    private var supportedLanguages: [String: Bool] = [:]
+
+    func supports(language: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let supported = supportedLanguages[language] { return supported }
+        let context = self.context ?? makeContext()
+        self.context = context
+        context.exception = nil
+        let result = context.objectForKeyedSubscript("chahuaSupportsLanguage")!
+            .call(withArguments: [language])
+        precondition(context.exception == nil, "Bundled Markdown language lookup failed")
+        let supported = result?.toBool() ?? false
+        // Bound user-provided aliases just as code token caching is bounded.
+        if supportedLanguages.count >= 128 { supportedLanguages.removeAll(keepingCapacity: true) }
+        supportedLanguages[language] = supported
+        return supported
+    }
 
     func spans(code: String, language: String) -> [MarkdownCodeSpan] {
         lock.lock()

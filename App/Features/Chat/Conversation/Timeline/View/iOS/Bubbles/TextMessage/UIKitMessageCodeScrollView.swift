@@ -18,8 +18,7 @@
             storage.addLayoutManager(manager)
             codeView = UITextView(frame: .zero, textContainer: container)
             super.init(frame: .zero)
-            backgroundColor = MessageMarkdownStyle.codeBackground
-            layer.cornerRadius = 6
+            layer.cornerRadius = 8
             clipsToBounds = true
             alwaysBounceVertical = false
             alwaysBounceHorizontal = false
@@ -43,17 +42,20 @@
         required init?(coder: NSCoder) { nil }
 
         func apply(_ attachment: MessageCodeAttachment, allowsSelection: Bool) {
+            backgroundColor = attachment.backgroundColor
             codeView.isSelectable = allowsSelection
             if self.attachment !== attachment {
                 codeView.textStorage.setAttributedString(attachment.attributedCode)
                 self.attachment = attachment
                 setContentOffset(.zero, animated: false)
             }
-            let padding = MessageCodeAttachment.padding
             codeView.frame = CGRect(
-                x: padding, y: padding,
-                width: max(1, attachment.naturalSize.width - padding * 2),
-                height: max(1, attachment.naturalSize.height - padding * 2))
+                x: MessageCodeAttachment.horizontalPadding,
+                y: MessageCodeAttachment.verticalPadding,
+                width: max(
+                    1, attachment.naturalSize.width - MessageCodeAttachment.horizontalPadding * 2),
+                height: max(
+                    1, attachment.naturalSize.height - MessageCodeAttachment.verticalPadding * 2))
             contentSize = attachment.naturalSize
         }
     }

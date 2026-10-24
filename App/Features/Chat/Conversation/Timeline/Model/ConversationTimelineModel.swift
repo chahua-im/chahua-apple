@@ -83,8 +83,10 @@ final class ConversationTimelineModel: ObservableObject {
     // The entry boundary is frozen until the next open, independent of read receipts.
     private var unreadBeforeMessageID: MessageID?
     private var lastReadMessageID: MessageID?
-    /// The newest message this session has marked read; message IDs are server order.
+    private var hasAuthoritativeReadState = false
+    /// The newest authoritative or successfully acknowledged read cursor, loaded or not.
     private var readWatermark: MessageID?
+    private var readWatermarkRevision = 0
     private var readTrackingActive = false
     private var hasSentEntryRead = false
     private var readCandidateID: MessageID?
@@ -347,6 +349,7 @@ final class ConversationTimelineModel: ObservableObject {
     private func loadUnreadEntry(after lastReadID: MessageID?, generation requestGeneration: Int)
         async throws
     {
+        if !hasAuthoritativeReadState, let lastReadID { advanceReadWatermark(to: lastReadID) }
         let query = lastReadID.map { aroundQuery(for: .message($0)) } ?? liveEdgeQuery
         var fetchedLatest = lastReadID == nil
         do {
@@ -376,7 +379,7 @@ final class ConversationTimelineModel: ObservableObject {
         }
 
         if let lastReadID, window.index(ofServerID: lastReadID) != nil {
-            advanceReadWatermark(to: lastReadID)
+            // Cursor presence affects seeking, not whether its read progress is known.
             var cursors: Set<MessageID> = []
             // An around page can end exactly at the read boundary.
             while window.messages.last?.id == lastReadID, let cursor = window.newerCursor {
@@ -413,12 +416,23 @@ final class ConversationTimelineModel: ObservableObject {
     /// Supply the current chat or thread's authoritative metadata, never the entry snapshot.
     /// Pending live arrivals affect availability, but are already included in this badge count.
     func updateReadState(unreadCount: Int64, lastReadMessageID: MessageID?) {
+        hasAuthoritativeReadState = true
         self.lastReadMessageID = lastReadMessageID
         let count = max(0, unreadCount)
         if state.live.unreadCount != count { state.live.unreadCount = count }
-        if let lastReadMessageID, window.index(ofServerID: lastReadMessageID) != nil {
-            advanceReadWatermark(to: lastReadMessageID)
-        }
+        if let lastReadMessageID { advanceReadWatermark(to: lastReadMessageID) }
+        updateReadCandidate()
+    }
+
+    /// Explicit unread state replaces suppression without moving the frozen entry separator.
+    func resetReadWatermark(to id: MessageID?) {
+        hasAuthoritativeReadState = true
+        readWatermarkRevision &+= 1
+        readWatermark = id
+        lastReadMessageID = id
+        cancelReadCandidate()
+        // Retain the task until completion to serialize callbacks that ignore cancellation.
+        readSendTask?.cancel()
         updateReadCandidate()
     }
 
@@ -661,29 +675,19 @@ final class ConversationTimelineModel: ObservableObject {
             state.content == .ready, pendingScroll == nil, viewportRevision == snapshotRevision,
             lastViewport.isValid(forRowCount: rows.count),
             let first = lastViewport.firstVisibleIndex, let last = lastViewport.lastVisibleIndex,
-            let candidateID = lastViewport.fullyVisibleMessageIDs.last
+            let candidateID = lastViewport.fullyVisibleMessageIDs.last,
+            candidateID != threadRootID
         else { return nil }
         for index in (first...last).reversed() {
             guard case .message(let row) = rows[index], let message = row.entry.remoteMessage,
                 message.id == candidateID
             else { continue }
-            // Every entry refreshes server read state from an actual visible row,
-            // including historical entries. The endpoint and local watermark never regress.
-            if !hasSentEntryRead { return message }
-            guard isBeyondCurrentReadState(message) else { return nil }
             return isLaterThanWatermark(message) ? message : nil
         }
         return nil
     }
 
-    private func isBeyondCurrentReadState(_ message: MessageResponse) -> Bool {
-        guard let lastReadMessageID else { return true }
-        return message.id > lastReadMessageID
-    }
-
     private func isLaterThanWatermark(_ message: MessageResponse) -> Bool {
-        // A missing/deleted entry cursor cannot establish a local baseline. The read
-        // endpoint advances monotonically, so visibility can still submit a candidate.
         guard let readWatermark else { return true }
         return message.id > readWatermark
     }
@@ -722,16 +726,20 @@ final class ConversationTimelineModel: ObservableObject {
             let candidate = visibleReadCandidate, candidate.id == readCandidateID
         else { return }
         let requestGeneration = generation
+        let watermarkRevision = readWatermarkRevision
         readSendTask = Task { [weak self] in
             do {
                 try Task.checkCancellation()
                 guard self?.generation == requestGeneration,
                     self?.readCandidateID == candidate.id,
+                    self?.readWatermarkRevision == watermarkRevision,
                     self?.visibleReadCandidate?.id == candidate.id
                 else { throw CancellationError() }
                 self?.hasSentEntryRead = true
                 try await markRead(candidate.id)
-                if self?.generation == requestGeneration {
+                if self?.generation == requestGeneration,
+                    self?.readWatermarkRevision == watermarkRevision
+                {
                     self?.advanceReadWatermark(to: candidate.id)
                 }
             } catch {
@@ -1134,9 +1142,6 @@ final class ConversationTimelineModel: ObservableObject {
         preHistoryAcknowledgementKeys.removeAll()
         for event in events { reduce(event, replay: true) }
         absorbDeferredCreates()
-        if let lastReadMessageID, window.index(ofServerID: lastReadMessageID) != nil {
-            advanceReadWatermark(to: lastReadMessageID)
-        }
         commit()
     }
 

@@ -409,7 +409,19 @@
 
         private func settleVisibleRows(preserving position: Position) {
             guard !unsettledRows.isEmpty || !heightChanges.isEmpty else { return }
+            let trace = ScrollPerformanceTrace.begin("Timeline.SettleVisible")
+            var passes = 0
+            var changedHeights = 0
+            defer {
+                if trace != nil {
+                    ScrollPerformanceTrace.event("Timeline.SettlePasses", count: passes)
+                    ScrollPerformanceTrace.event(
+                        "Timeline.SettleHeightChanges", count: changedHeights)
+                }
+                ScrollPerformanceTrace.end("Timeline.SettleVisible", trace)
+            }
             while true {
+                if trace != nil { passes += 1 }
                 for item in visibleItems() {
                     let row = rows[item.indexPath.item]
                     let needsBinding = unsettledRows.contains(row.id)
@@ -425,6 +437,7 @@
                     }
                 }
                 guard !heightChanges.isEmpty else { return }
+                if trace != nil { changedHeights += heightChanges.count }
                 UIView.performWithoutAnimation {
                     invalidateChangedHeights()
                     collectionView.layoutIfNeeded()
@@ -711,6 +724,9 @@
         private func installRows(
             _ snapshot: TimelineHostSnapshot, prepared: TimelineLayoutPreparation
         ) {
+            // Synchronous installation work only; UIKit's batch completion can arrive later.
+            let trace = ScrollPerformanceTrace.begin("Timeline.Install")
+            defer { ScrollPerformanceTrace.end("Timeline.Install", trace) }
             applying = true
             stopPhysicalAnimation()
             collectionView.layoutIfNeeded()
@@ -736,11 +752,17 @@
             UIView.performWithoutAnimation {
                 switch change {
                 case .reset:
+                    ScrollPerformanceTrace.event(
+                        "Timeline.InstallReset", count: snapshot.rows.count)
                     rows = snapshot.rows
                     collectionView.reloadData()
                     finishInstalling(snapshot, reloads: [], position: previousPosition)
                     completeInstallation()
                 case .incremental(let removals, let insertions, let reloads):
+                    ScrollPerformanceTrace.event("Timeline.InstallIncremental")
+                    ScrollPerformanceTrace.event("Timeline.RowsRemoved", count: removals.count)
+                    ScrollPerformanceTrace.event("Timeline.RowsInserted", count: insertions.count)
+                    ScrollPerformanceTrace.event("Timeline.RowsReloaded", count: reloads.count)
                     if removals.isEmpty && insertions.isEmpty {
                         rows = snapshot.rows
                         finishInstalling(snapshot, reloads: reloads, position: previousPosition)
