@@ -9,7 +9,7 @@
 
 ## Product planning
 
-- [PWA → Apple feature parity plan](flutter-parity-checklist.md) — source-reviewed iOS/macOS gaps, delivery order, and acceptance criteria.
+- [PWA → Apple feature parity plan](pwa-parity-checklist.md) — source-reviewed iOS/macOS gaps, delivery order, and acceptance criteria.
 
 ## Architecture
 
