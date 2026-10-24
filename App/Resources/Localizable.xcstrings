@@ -1,204 +1,220 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Chat history" : {
+    "Remove friend" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Chat history" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "聊天记录" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "聊天記錄" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove friend" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除好友" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "移除好友" } }
       }
     },
-    "until %@" : {
+    "Block" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "until %@" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "至 %@" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "至 %@" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Block" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "拉黑" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "封鎖" } }
       }
     },
-    "tomorrow" : {
+    "Unblock" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "tomorrow" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "明天" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "明天" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unblock" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消拉黑" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "解除封鎖" } }
       }
     },
-    "Mute for…" : {
+    "Block user" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Mute for…" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "静音时长…" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "靜音時間…" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Block user" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "拉黑用户" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "封鎖使用者" } }
       }
     },
-    "Customize" : {
+    "Unblock user" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Customize" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "自定义" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "自訂" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unblock user" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消拉黑用户" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "解除封鎖使用者" } }
       }
     },
-    "Always On" : {
+    "Couldn’t load friendship" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always On" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终开启" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律開啟" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t load friendship" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载好友关系" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入好友關係" } }
       }
     },
-    "Always Off" : {
+    "Couldn’t update friendship" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always Off" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终关闭" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律關閉" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t update friendship" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法更新好友关系" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法更新好友關係" } }
       }
     },
-    "Remove from exceptions" : {
+    "Remove %@ from your friends?" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove from exceptions" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "从例外中移除" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "從例外中移除" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove %@ from your friends?" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确定要删除好友 %@ 吗？" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "確定要移除好友 %@ 嗎？" } }
       }
     },
-    "Enable Push Notifications" : {
+    "Block %@?" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enable Push Notifications" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "启用推送通知" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "啟用推播通知" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Block %@?" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确定要拉黑 %@ 吗？" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "確定要封鎖 %@ 嗎？" } }
       }
     },
-    "Debug" : {
+    "Unblock %@?" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Debug" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "调试" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "偵錯" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unblock %@?" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确定要取消拉黑 %@ 吗？" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "確定要解除封鎖 %@ 嗎？" } }
       }
     },
-    "Allow notifications in System Settings to enable push notifications." : {
+    "Away" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Allow notifications in System Settings to enable push notifications." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请在系统设置中允许通知以启用推送通知。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "請在系統設定中允許通知以啟用推播通知。" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Away" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "离开" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "離開" } }
       }
     },
-    "Use account default" : {
+    "Last seen within a week" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Use account default" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用账号默认设置" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "使用帳號預設設定" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen within a week" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "1 周内上线" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "1 週內上線" } }
       }
     },
-    "Always notify" : {
+    "Last seen within a month" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always notify" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终通知" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律通知" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen within a month" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "1 个月内上线" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "1 個月內上線" } }
       }
     },
-    "Always mute" : {
+    "Last seen just now" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always mute" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终静音" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律靜音" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen just now" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "刚刚上线" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "剛剛上線" } }
       }
     },
-    "Temporary mute" : {
+    "Last seen 1 minute ago" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Temporary mute" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "临时静音" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暫時靜音" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen 1 minute ago" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 1 分钟前" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 1 分鐘前" } }
       }
     },
-    "Notifications muted" : {
+    "Last seen %lld minutes ago" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Notifications muted" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "通知已静音" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "通知已靜音" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen %lld minutes ago" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 %lld 分钟前" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 %lld 分鐘前" } }
       }
     },
-    "Notifications enabled" : {
+    "Last seen 1 hour ago" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Notifications enabled" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "通知已开启" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "通知已開啟" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen 1 hour ago" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 1 小时前" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 1 小時前" } }
       }
     },
-    "Selected" : {
+    "Last seen %lld hours ago" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Selected" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已选中" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已選取" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen %lld hours ago" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 %lld 小时前" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 %lld 小時前" } }
       }
     },
-    "Direct messages" : {
+    "Last seen today at %@" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Direct messages" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "私聊" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "私訊" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen today at %@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于今天 %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於今天 %@" } }
       }
     },
-    "Off" : {
+    "Last seen yesterday at %@" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Off" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "关闭" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "關閉" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen yesterday at %@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于昨天 %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於昨天 %@" } }
       }
     },
-    "On" : {
+    "Last seen %@ at %@" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "On" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "开启" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "開啟" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen %1$@ at %2$@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 %1$@ %2$@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 %1$@ %2$@" } }
       }
     },
-    "%lld exceptions" : {
+    "Loading last seen settings…" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "%lld exceptions" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "%lld 个例外" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "%lld 個例外" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading last seen settings…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载最后上线设置…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入最後上線設定…" } }
       }
     },
-    "Add exception" : {
+    "Failed to load this friend's last seen setting." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Add exception" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "添加例外" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "加入例外" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed to load this friend's last seen setting." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载这位好友的最后上线设置。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入這位好友的最後上線設定。" } }
       }
     },
-    "Delete all exceptions" : {
+    "Last seen and online status are mutual. If you hide yours from this friend, you won’t be able to see their exact last seen or online status." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Delete all exceptions" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除所有例外" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "刪除所有例外" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen and online status are mutual. If you hide yours from this friend, you won’t be able to see their exact last seen or online status." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最后上线和在线状态的分享是双向的。如果你向这位好友隐藏自己的状态，你也将无法查看对方的确切最后上线时间或在线状态。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最後上線和在線狀態的分享是雙向的。如果你向這位好友隱藏自己的狀態，你也將無法查看對方的確切最後上線時間或在線狀態。" } }
       }
     },
-    "Remove all notification exceptions?" : {
+    "Privacy Settings" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove all notification exceptions?" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除所有例外？" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "刪除所有例外？" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Privacy Settings" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "隐私设置" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "隱私設定" } }
+      }
+    },
+    "Privacy overrides are only available for friends." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Privacy overrides are only available for friends." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅可为好友单独设置隐私选项。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅可為好友個別設定隱私選項。" } }
+      }
+    },
+    "Read receipts are mutual. If you hide yours from this friend, you won’t be able to see theirs." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read receipts are mutual. If you hide yours from this friend, you won’t be able to see theirs." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执是双向的。如果你向这位好友隐藏已读回执，你也将无法查看对方的已读回执。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條是雙向的。如果你向這位好友隱藏已讀回條，你也將無法查看對方的已讀回條。" } }
       }
     },
     "" : {
@@ -578,6 +594,18 @@
         }
       }
     },
+    "%lld / %lld" : {
+      "comment" : "A label displaying the current page number and the total number of pages.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld / %2$lld"
+          }
+        }
+      }
+    },
     "%lld %@" : {
       "comment" : "A sublabel displaying the number of stickers in a sticker pack. The argument is the count of stickers in the pack.",
       "isCommentAutoGenerated" : true,
@@ -604,6 +632,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 個附件"
+          }
+        }
+      }
+    },
+    "%lld exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld exceptions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个例外"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 個例外"
           }
         }
       }
@@ -1005,6 +1056,10 @@
         }
       }
     },
+    "Activities" : {
+      "comment" : "Localized name for the \"Activities\" category in the reaction emoji keyboard.",
+      "isCommentAutoGenerated" : true
+    },
     "Add" : {
       "comment" : "The text of a button that adds a sticker.",
       "isCommentAutoGenerated" : true
@@ -1023,6 +1078,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "加入說明文字…"
+          }
+        }
+      }
+    },
+    "Add exception" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Add exception"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加例外"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入例外"
           }
         }
       }
@@ -1156,6 +1234,29 @@
         }
       }
     },
+    "Allow notifications in System Settings to enable push notifications." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow notifications in System Settings to enable push notifications."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在系统设置中允许通知以启用推送通知。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請在系統設定中允許通知以啟用推播通知。"
+          }
+        }
+      }
+    },
     "Allowed" : {
       "localizations" : {
         "en" : {
@@ -1177,6 +1278,102 @@
           }
         }
       }
+    },
+    "Always mute" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Always mute"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "始终静音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一律靜音"
+          }
+        }
+      }
+    },
+    "Always notify" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Always notify"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "始终通知"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一律通知"
+          }
+        }
+      }
+    },
+    "Always Off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Always Off"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "始终关闭"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一律關閉"
+          }
+        }
+      }
+    },
+    "Always On" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Always On"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "始终开启"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一律開啟"
+          }
+        }
+      }
+    },
+    "Animals & Nature" : {
+      "comment" : "Display name for the \"Animals & Nature\" category.",
+      "isCommentAutoGenerated" : true
     },
     "APNs environment" : {
       "extractionState" : "manual",
@@ -1874,19 +2071,25 @@
         }
       }
     },
-    "Forwarded messages unavailable" : {
+    "Chat history" : {
       "extractionState" : "manual",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chat history"
+          }
+        },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "转发的消息不可用"
+            "value" : "聊天记录"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "轉傳的訊息無法使用"
+            "value" : "聊天記錄"
           }
         }
       }
@@ -1910,23 +2113,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "聊天資訊"
-          }
-        }
-      }
-    },
-    "Forwarded Messages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "转发的消息"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "轉傳的訊息"
           }
         }
       }
@@ -1996,6 +2182,10 @@
           }
         }
       }
+    },
+    "Choose a reaction" : {
+      "comment" : "A label displayed above the emoji picker.",
+      "isCommentAutoGenerated" : true
     },
     "Choose one to four emoji. The name is optional." : {
       "comment" : "A description of the emoji and name fields in the sticker upload sheet.",
@@ -2114,6 +2304,10 @@
           }
         }
       }
+    },
+    "Close emoji picker" : {
+      "comment" : "A label for a button that closes the emoji picker.",
+      "isCommentAutoGenerated" : true
     },
     "Close image" : {
       "extractionState" : "stale",
@@ -2647,23 +2841,6 @@
         }
       }
     },
-    "Couldn’t load forwarded messages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法加载转发的消息"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "無法載入轉傳的訊息"
-          }
-        }
-      }
-    },
     "Couldn't load conversations. Retry" : {
       "comment" : "A button that displays a label and an image.",
       "isCommentAutoGenerated" : true,
@@ -2678,6 +2855,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法載入對話。重試"
+          }
+        }
+      }
+    },
+    "Couldn’t load forwarded messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载转发的消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入轉傳的訊息"
           }
         }
       }
@@ -3525,6 +3719,52 @@
       "comment" : "A button that displays a spinner while creating a new sticker pack.",
       "isCommentAutoGenerated" : true
     },
+    "Customize" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Customize"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自定义"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自訂"
+          }
+        }
+      }
+    },
+    "Debug" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Debug"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "调试"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偵錯"
+          }
+        }
+      }
+    },
     "Deeply nested forwarded messages will be replaced with placeholders. Continue forwarding?" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3600,6 +3840,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收回"
+          }
+        }
+      }
+    },
+    "Delete all exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Delete all exceptions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除所有例外"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除所有例外"
           }
         }
       }
@@ -3846,6 +4109,29 @@
         }
       }
     },
+    "Direct messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Direct messages"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "私聊"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "私訊"
+          }
+        }
+      }
+    },
     "Disable notifications" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3932,6 +4218,9 @@
           }
         }
       }
+    },
+    "Dismiss emoji picker" : {
+
     },
     "Dismiss message actions" : {
       "localizations" : {
@@ -4216,6 +4505,10 @@
       "comment" : "A label for the emoji field in the sticker upload sheet.",
       "isCommentAutoGenerated" : true
     },
+    "Emoji unavailable" : {
+      "comment" : "A title for a view that displays a message that emoji are unavailable.",
+      "isCommentAutoGenerated" : true
+    },
     "Enable notifications" : {
       "localizations" : {
         "en" : {
@@ -4234,6 +4527,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "啟用通知"
+          }
+        }
+      }
+    },
+    "Enable Push Notifications" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable Push Notifications"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用推送通知"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "啟用推播通知"
           }
         }
       }
@@ -4591,6 +4907,14 @@
         }
       }
     },
+    "Flags" : {
+      "comment" : "Localized string for the \"Flags\" category in the reaction emoji keyboard.",
+      "isCommentAutoGenerated" : true
+    },
+    "Food & Drink" : {
+      "comment" : "Localized category name for food and drink emojis.",
+      "isCommentAutoGenerated" : true
+    },
     "Forward" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4655,6 +4979,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "轉傳自 %@"
+          }
+        }
+      }
+    },
+    "Forwarded Messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发的消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳的訊息"
+          }
+        }
+      }
+    },
+    "Forwarded messages unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "转发的消息不可用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "轉傳的訊息無法使用"
           }
         }
       }
@@ -5222,190 +5580,6 @@
         }
       }
     },
-    "Last seen within 1 day" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 1 day"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 天内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 天內上線"
-          }
-        }
-      }
-    },
-    "Last seen within 1 hour" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 1 hour"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 小时内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 小時內上線"
-          }
-        }
-      }
-    },
-    "Last seen within 1 month" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 1 month"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 个月内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 個月內上線"
-          }
-        }
-      }
-    },
-    "Last seen within 1 week" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 1 week"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 周内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "1 週內上線"
-          }
-        }
-      }
-    },
-    "Last seen within 2 hours" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 2 hours"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "2 小时内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "2 小時內上線"
-          }
-        }
-      }
-    },
-    "Last seen within 6 hours" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 6 hours"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "6 小时内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "6 小時內上線"
-          }
-        }
-      }
-    },
-    "Last seen within 12 hours" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 12 hours"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "12 小时内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "12 小時內上線"
-          }
-        }
-      }
-    },
-    "Last seen within 30 minutes" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Last seen within 30 minutes"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "30 分钟内上线"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "30 分鐘內上線"
-          }
-        }
-      }
-    },
     "Leave" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5602,23 +5776,6 @@
         }
       }
     },
-    "Loading forwarded messages…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在加载转发的消息…"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在載入轉傳的訊息…"
-          }
-        }
-      }
-    },
     "Loading conversation" : {
       "localizations" : {
         "en" : {
@@ -5672,6 +5829,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在載入對話…"
+          }
+        }
+      }
+    },
+    "Loading forwarded messages…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载转发的消息…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入轉傳的訊息…"
           }
         }
       }
@@ -6642,6 +6816,29 @@
         }
       }
     },
+    "Mute for…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mute for…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "静音时长…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "靜音時間…"
+          }
+        }
+      }
+    },
     "Mute forever" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6978,6 +7175,10 @@
         }
       }
     },
+    "No recent emoji" : {
+      "comment" : "A message displayed when a user has no recent emojis.",
+      "isCommentAutoGenerated" : true
+    },
     "No signed APNs entitlement was found. Push delivery requires a signed app with the Push Notifications capability." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7224,6 +7425,79 @@
         }
       }
     },
+    "Notifications enabled" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications enabled"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知已开启"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知已開啟"
+          }
+        }
+      }
+    },
+    "Notifications muted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Notifications muted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知已静音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通知已靜音"
+          }
+        }
+      }
+    },
+    "Objects" : {
+      "comment" : "The name of the category for objects.",
+      "isCommentAutoGenerated" : true
+    },
+    "Off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Off"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "關閉"
+          }
+        }
+      }
+    },
     "OK" : {
       "localizations" : {
         "en" : {
@@ -7242,6 +7516,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "確定"
+          }
+        }
+      }
+    },
+    "On" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "On"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟"
           }
         }
       }
@@ -7440,6 +7737,18 @@
       "comment" : "A description of the sticker packs that are not auto-sorted.",
       "isCommentAutoGenerated" : true
     },
+    "Page %lld of %lld" : {
+      "comment" : "A description of a screen showing a page of emoji in a keyboard. The first argument is the page number. The second argument is the total number of pages.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Page %1$lld of %2$lld"
+          }
+        }
+      }
+    },
     "Password" : {
       "localizations" : {
         "en" : {
@@ -7484,6 +7793,10 @@
           }
         }
       }
+    },
+    "People & Body" : {
+      "comment" : "Display name for the category of people and body emojis.",
+      "isCommentAutoGenerated" : true
     },
     "Photos" : {
       "localizations" : {
@@ -8490,29 +8803,6 @@
         }
       }
     },
-    "Read receipt sharing" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Read receipt sharing"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已读回执分享"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已讀回條分享"
-          }
-        }
-      }
-    },
     "Read Receipts" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9030,6 +9320,29 @@
         }
       }
     },
+    "Remove all notification exceptions?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove all notification exceptions?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除所有例外？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刪除所有例外？"
+          }
+        }
+      }
+    },
     "Remove downloaded media?" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9049,6 +9362,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清除媒體快取？"
+          }
+        }
+      }
+    },
+    "Remove from exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove from exceptions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从例外中移除"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從例外中移除"
           }
         }
       }
@@ -9815,6 +10151,29 @@
         }
       }
     },
+    "Selected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Selected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选中"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已選取"
+          }
+        }
+      }
+    },
     "Send" : {
       "comment" : "A button that sends the composer's content.",
       "isCommentAutoGenerated" : true,
@@ -10147,6 +10506,10 @@
         }
       }
     },
+    "Skin tones" : {
+      "comment" : "A button that shows a list of skin tones when pressed.",
+      "isCommentAutoGenerated" : true
+    },
     "Smaller" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10180,6 +10543,10 @@
           }
         }
       }
+    },
+    "Smileys & Emotion" : {
+      "comment" : "Localized name for the \"Smileys & Emotion\" category.",
+      "isCommentAutoGenerated" : true
     },
     "Some selected messages are no longer available. Close this picker and select again." : {
       "extractionState" : "manual",
@@ -10567,6 +10934,10 @@
         }
       }
     },
+    "Symbols" : {
+      "comment" : "Category name for symbols.",
+      "isCommentAutoGenerated" : true
+    },
     "System Default" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10616,6 +10987,29 @@
         }
       }
     },
+    "Temporary mute" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Temporary mute"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "临时静音"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫時靜音"
+          }
+        }
+      }
+    },
     "That message isn’t available." : {
       "comment" : "A message displayed when a user tries to jump to a message that isn't available.",
       "isCommentAutoGenerated" : true,
@@ -10656,6 +11050,10 @@
           }
         }
       }
+    },
+    "The bundled emoji catalog could not be loaded." : {
+      "comment" : "A description of the error that occurred when loading the bundled emoji catalog.",
+      "isCommentAutoGenerated" : true
     },
     "The current directory is still shown. Try again to refresh it." : {
       "extractionState" : "manual",
@@ -11101,6 +11499,29 @@
         }
       }
     },
+    "tomorrow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "tomorrow"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "明天"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "明天"
+          }
+        }
+      }
+    },
     "Traditional Chinese" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11123,6 +11544,10 @@
           }
         }
       }
+    },
+    "Travel & Places" : {
+      "comment" : "Display name for the category of travel and places emojis.",
+      "isCommentAutoGenerated" : true
     },
     "Try a different name or submit a more specific search." : {
       "extractionState" : "manual",
@@ -11533,6 +11958,29 @@
         }
       }
     },
+    "until %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "until %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "至 %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "至 %@"
+          }
+        }
+      }
+    },
     "Updating %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11622,6 +12070,29 @@
     "Updating sticker pack…" : {
       "comment" : "A message displayed when a sticker pack is being updated.",
       "isCommentAutoGenerated" : true
+    },
+    "Use account default" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Use account default"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用账号默认设置"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用帳號預設設定"
+          }
+        }
+      }
     },
     "Use global setting" : {
       "extractionState" : "manual",

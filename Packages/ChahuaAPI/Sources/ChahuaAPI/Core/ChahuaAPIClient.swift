@@ -37,6 +37,11 @@ public protocol ChahuaAPIClient: Sendable {
     func updatePresenceSettings(visibility: PresenceVisibility) async throws
         -> PresenceSettingsResponse
 
+    /// Caller-owned GET/PUT /friends/{peerUID}/presence-settings override.
+    func friendPresenceSettings(peerUID: Int32) async throws -> FriendPresenceSettingsResponse
+    func updateFriendPresenceSettings(peerUID: Int32, override: FriendPresenceOverride)
+        async throws -> FriendPresenceSettingsResponse
+
     /// Reads a DM peer's visible cursor; thread scopes use the optional `threadId` query.
     func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse
 
@@ -127,6 +132,9 @@ public protocol ChahuaAPIClient: Sendable {
 
     /// Fetches the server's DM authorization decision with `GET /friends/{peerUID}`.
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse
+    func removeFriend(peerUID: Int32) async throws
+    func blockUser(uid: Int32) async throws
+    func unblockUser(uid: Int32) async throws
 
     /// Fetches a message page from `GET /chats/{chatID}/messages`.
     ///
@@ -280,6 +288,30 @@ extension ChahuaAPIClient {
     public func updatePresenceSettings(visibility: PresenceVisibility) async throws
         -> PresenceSettingsResponse
     {
+        throw APIError.unavailable
+    }
+
+    public func friendPresenceSettings(peerUID: Int32) async throws
+        -> FriendPresenceSettingsResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func updateFriendPresenceSettings(peerUID: Int32, override: FriendPresenceOverride)
+        async throws -> FriendPresenceSettingsResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func removeFriend(peerUID: Int32) async throws {
+        throw APIError.unavailable
+    }
+
+    public func blockUser(uid: Int32) async throws {
+        throw APIError.unavailable
+    }
+
+    public func unblockUser(uid: Int32) async throws {
         throw APIError.unavailable
     }
 

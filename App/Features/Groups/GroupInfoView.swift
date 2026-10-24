@@ -13,7 +13,10 @@ struct GroupInfoView: View {
     @State private var isUpdatingNotifications = false
     @State private var isLoadingInfo = false
     @State private var isLeaving = false
-    @State private var showsLeaveConfirmation = false
+    @State private var safetyConfirmation: GroupInfoSafetyAction?
+    @State private var relationship: FriendRelationshipResponse?
+    @State private var isLoadingRelationship = false
+    @State private var isChangingRelationship = false
     @State private var failure: GroupInfoFailure?
     @State private var infoRevision = 0
     @Environment(\.colorScheme) private var colorScheme
@@ -51,10 +54,38 @@ struct GroupInfoView: View {
                     }
                     .font(.footnote)
                 }
-                if isDM, let peer = groupInfo?.peer {
-                    ReadReceiptPrivacySettingsRows(store: store, peerUID: peer.uid)
-                        .id(peer.uid)
+                if isDM, let peer = groupInfo?.peer ?? chat.peer {
+                    NavigationLink {
+                        FriendPrivacySettingsView(store: store, peerUID: peer.uid)
+                            .id(peer.uid)
+                    } label: {
+                        HStack {
+                            Image(systemName: "hand.raised.fill")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(.white)
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    .blue, in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                )
+                            Text("Privacy Settings")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        .foregroundStyle(.primary)
                         .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(
+                            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+                            in: RoundedRectangle(cornerRadius: 18)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 18))
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
                 }
                 sectionTabs
                 if !isDM {
@@ -73,17 +104,25 @@ struct GroupInfoView: View {
             .navigationBarTitleDisplayMode(.inline)
         #endif
         .task(id: chat.id) { await loadInfo() }
+        .task(id: peerUID) { await loadRelationship() }
         .presenceScope(ChatPresenceDisplay.scope(for: chat), store: store)
         .confirmationDialog(
-            "Leave group",
-            isPresented: $showsLeaveConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Leave", role: .destructive) { Task { await leaveGroup() } }
-                .accessibilityIdentifier("group-leave-confirm-button")
+            safetyConfirmation?.title ?? "",
+            isPresented: Binding(
+                get: { safetyConfirmation != nil },
+                set: { if !$0 { safetyConfirmation = nil } }),
+            titleVisibility: .visible,
+            presenting: safetyConfirmation
+        ) { action in
+            Button(action.buttonTitle, role: .destructive) {
+                Task { await performSafetyAction(action) }
+            }
+            .accessibilityIdentifier(
+                action == .leaveGroup
+                    ? "group-leave-confirm-button" : "friend-action-confirm-button")
             Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Are you sure you want to leave this group?")
+        } message: { action in
+            Text(action.message(displayName))
         }
         .alert(
             Text(
@@ -180,22 +219,41 @@ struct GroupInfoView: View {
             .accessibilityLabel("Search messages")
             .disabled(isLeaving)
 
-            if !isDM {
-                Menu {
+            Menu {
+                if isDM {
+                    if relationship?.isFriend == true {
+                        Button(
+                            "Remove friend", systemImage: "person.badge.minus", role: .destructive
+                        ) {
+                            safetyConfirmation = .removeFriend
+                        }
+                    }
+                    Button(
+                        relationship?.blocking == true ? "Unblock" : "Block",
+                        systemImage: "hand.raised.slash", role: .destructive
+                    ) {
+                        safetyConfirmation = relationship?.blocking == true ? .unblock : .block
+                    }
+                    .disabled(relationship?.blocking == nil)
+                } else {
                     Button(role: .destructive) {
-                        showsLeaveConfirmation = true
+                        safetyConfirmation = .leaveGroup
                     } label: {
                         Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
                     }
                     .accessibilityIdentifier("leave-group-button")
-                } label: {
-                    GroupInfoActionLabel(
-                        systemImage: "ellipsis", title: "More", isProgressing: isLeaving
-                    )
                 }
-                .accessibilityIdentifier("group-more-menu")
-                .disabled(isLeaving || isUpdatingNotifications)
+            } label: {
+                GroupInfoActionLabel(
+                    systemImage: "ellipsis", title: "More",
+                    isProgressing: isLeaving || isChangingRelationship || isLoadingRelationship)
             }
+            .accessibilityIdentifier("group-more-menu")
+            .disabled(
+                isLeaving || isUpdatingNotifications || isChangingRelationship
+                    || (isDM
+                        && (isLoadingRelationship || peerUID == nil || peerUID == currentUserID))
+            )
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
@@ -204,6 +262,10 @@ struct GroupInfoView: View {
     }
 
     private var isDM: Bool { chat.kind == .dm }
+
+    private var peerUID: Int32? {
+        isDM ? (groupInfo?.peer?.uid ?? chat.peer?.uid) : nil
+    }
 
     private var displayName: String {
         isDM ? chat.chatDisplayName : nonEmpty(groupInfo?.name) ?? chat.chatDisplayName
@@ -233,6 +295,12 @@ struct GroupInfoView: View {
 
     private var isMuted: Bool {
         notificationChat.notificationMuted(defaults: store.state.notificationDefaults)
+    }
+
+    private var isMutedForever: Bool {
+        let current = notificationChat
+        return current.notificationPermanentlyMuted(defaults: store.state.notificationDefaults)
+            || NotificationMuteDeadline.isIndefinite(current.mutedUntil)
     }
 
     private var notificationButtonTitle: LocalizedStringKey {
@@ -272,9 +340,11 @@ struct GroupInfoView: View {
                     "Use account default", mode: .inherit,
                     selected: notificationChat.muteOverride == nil)
             }
-            Divider()
-            Button("Mute forever", systemImage: "bell.slash", role: .destructive) {
-                Task { await updateNotifications(.init(mode: .alwaysMuted)) }
+            if !isMutedForever {
+                Divider()
+                Button("Mute forever", systemImage: "bell.slash", role: .destructive) {
+                    Task { await updateNotifications(.init(mode: .alwaysMuted)) }
+                }
             }
         } label: {
             GroupInfoActionLabel(
@@ -284,7 +354,7 @@ struct GroupInfoView: View {
         }
         .accessibilityIdentifier("group-notification-settings")
         .accessibilityLabel("Notification settings")
-        .disabled(isLeaving || isUpdatingNotifications)
+        .disabled(isLeaving || isUpdatingNotifications || isChangingRelationship)
     }
 
     private func muteDuration(_ title: LocalizedStringKey, seconds: Int) -> some View {
@@ -310,7 +380,7 @@ struct GroupInfoView: View {
 
     /// A nil request is Unmute: remove an override only when the default already notifies.
     private func updateNotifications(_ request: UpdateNotificationSettingRequest?) async {
-        guard !isUpdatingNotifications, !isLeaving,
+        guard !isUpdatingNotifications, !isLeaving, !isChangingRelationship,
             store.currentUserProfile?.uid == currentUserID
         else { return }
         isUpdatingNotifications = true
@@ -354,6 +424,58 @@ struct GroupInfoView: View {
         }
     }
 
+    private func loadRelationship() async {
+        guard let peerUID, peerUID != currentUserID, !isLoadingRelationship,
+            store.currentUserProfile?.uid == currentUserID
+        else { return }
+        isLoadingRelationship = true
+        defer { isLoadingRelationship = false }
+        do {
+            let response = try await store.friendRelationship(peerUID: peerUID)
+            try Task.checkCancellation()
+            guard store.currentUserProfile?.uid == currentUserID, self.peerUID == peerUID else {
+                return
+            }
+            relationship = response
+        } catch is CancellationError {} catch {
+            failure = .init(operation: .relationship, message: error.localizedDescription)
+        }
+    }
+
+    private func performSafetyAction(_ action: GroupInfoSafetyAction) async {
+        if action == .leaveGroup {
+            await leaveGroup()
+            return
+        }
+        guard let peerUID, peerUID != currentUserID, !isChangingRelationship,
+            !isUpdatingNotifications, !isLeaving,
+            store.currentUserProfile?.uid == currentUserID
+        else { return }
+        isChangingRelationship = true
+        defer { isChangingRelationship = false }
+        do {
+            switch action {
+            case .removeFriend: try await store.removeFriend(peerUID: peerUID)
+            case .block: try await store.setUserBlocked(peerUID: peerUID, blocked: true)
+            case .unblock: try await store.setUserBlocked(peerUID: peerUID, blocked: false)
+            case .leaveGroup: return
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            failure = .init(operation: .safety(action), message: error.localizedDescription)
+            return
+        }
+        guard store.currentUserProfile?.uid == currentUserID else { return }
+        if action == .removeFriend {
+            onLeave()
+        } else {
+            // Retry a failed refresh without repeating a mutation that already committed.
+            relationship = nil
+            await loadRelationship()
+        }
+    }
+
     private func leaveGroup() async {
         guard !isLeaving else { return }
         isLeaving = true
@@ -380,6 +502,10 @@ struct GroupInfoView: View {
             Task { await leaveGroup() }
         case .notifications(let request):
             Task { await updateNotifications(request) }
+        case .relationship:
+            Task { await loadRelationship() }
+        case .safety(let action):
+            Task { await performSafetyAction(action) }
         }
     }
 
@@ -425,6 +551,8 @@ private enum GroupInfoOperation {
     case load
     case leave
     case notifications(UpdateNotificationSettingRequest?)
+    case relationship
+    case safety(GroupInfoSafetyAction)
 
     var isLoad: Bool {
         if case .load = self { return true }
@@ -436,6 +564,8 @@ private enum GroupInfoOperation {
         case .load: AppLanguage.localized("Couldn’t load group info")
         case .leave: AppLanguage.localized("Couldn’t leave group")
         case .notifications: AppLanguage.localized("Couldn’t update notifications")
+        case .relationship: AppLanguage.localized("Couldn’t load friendship")
+        case .safety: AppLanguage.localized("Couldn’t update friendship")
         }
     }
 }
@@ -449,6 +579,39 @@ private struct GroupInfoFailure: Identifiable {
         case .load: "load"
         case .leave: "leave"
         case .notifications: "notifications"
+        case .relationship: "relationship"
+        case .safety: "safety"
+        }
+    }
+}
+
+private enum GroupInfoSafetyAction {
+    case leaveGroup, removeFriend, block, unblock
+
+    var title: String {
+        switch self {
+        case .leaveGroup: AppLanguage.localized("Leave group")
+        case .removeFriend: AppLanguage.localized("Remove friend")
+        case .block: AppLanguage.localized("Block user")
+        case .unblock: AppLanguage.localized("Unblock user")
+        }
+    }
+
+    var buttonTitle: LocalizedStringKey {
+        switch self {
+        case .leaveGroup: "Leave"
+        case .removeFriend: "Remove"
+        case .block: "Block"
+        case .unblock: "Unblock"
+        }
+    }
+
+    func message(_ name: String) -> String {
+        switch self {
+        case .leaveGroup: AppLanguage.localized("Are you sure you want to leave this group?")
+        case .removeFriend: AppLanguage.localized("Remove \(name) from your friends?")
+        case .block: AppLanguage.localized("Block \(name)?")
+        case .unblock: AppLanguage.localized("Unblock \(name)?")
         }
     }
 }

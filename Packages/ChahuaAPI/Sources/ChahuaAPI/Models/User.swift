@@ -16,6 +16,21 @@ public struct PresenceSettingsResponse: Codable, Equatable, Sendable {
     }
 }
 
+/// Both friends' effective policies must allow exact online/last-seen sharing.
+public enum FriendPresenceOverride: String, Codable, CaseIterable, Sendable {
+    case inherit
+    case share
+    case hide
+}
+
+public struct FriendPresenceSettingsResponse: Codable, Equatable, Sendable {
+    public let override: FriendPresenceOverride
+
+    public init(override: FriendPresenceOverride) {
+        self.override = override
+    }
+}
+
 public struct User: Codable, Hashable, Sendable {
     public let uid: Int32
     public let gender: Int32

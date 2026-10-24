@@ -94,6 +94,24 @@ extension ChahuaClient {
         )
     }
 
+    public func friendPresenceSettings(peerUID: Int32) async throws
+        -> FriendPresenceSettingsResponse
+    {
+        try await send(
+            HTTPRequestSpec(method: .get, path: ["friends", String(peerUID), "presence-settings"]),
+            decoding: FriendPresenceSettingsResponse.self)
+    }
+
+    public func updateFriendPresenceSettings(peerUID: Int32, override: FriendPresenceOverride)
+        async throws -> FriendPresenceSettingsResponse
+    {
+        try await send(
+            HTTPRequestSpec.json(
+                .put, ["friends", String(peerUID), "presence-settings"],
+                body: FriendPresenceSettingsResponse(override: override)),
+            decoding: FriendPresenceSettingsResponse.self)
+    }
+
     public func markChatUnread(chatID: String) async throws -> ReadStateResponse {
         try await send(
             HTTPRequestSpec(method: .post, path: ["chats", chatID, "unread"]),

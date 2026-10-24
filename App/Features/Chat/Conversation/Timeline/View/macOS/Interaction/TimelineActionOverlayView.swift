@@ -7,7 +7,7 @@
     /// Desktop context menu: the original message stays in the timeline. Only the
     /// compact reaction/action surfaces use menu material, never the window backdrop.
     @MainActor
-    final class TimelineActionOverlayView: NSView {
+    final class TimelineActionOverlayView: NSView, NSPopoverDelegate {
         var onDismiss: (() -> Void)?
         var onReaction: ((String) -> Void)?
         var onAction: ((MessageMenuAction) -> Void)?
@@ -21,6 +21,12 @@
         private let actionSurface = TimelineMenuSurface(cornerRadius: 14)
         private let pendingSurface = TimelineMenuSurface(cornerRadius: 14)
         private let progress = NSProgressIndicator()
+        private let sourceHighlight = CAShapeLayer()
+        private var pickerHost: NSHostingView<ReactionEmojiKeyboard>?
+        private var pickerPlaceholderHost: NSHostingView<ReactionPickerPlaceholder>?
+        private var pickerPopover: NSPopover?
+        private var reactionEligibility: MessageReactionEligibility?
+        var isShowingReactionPicker: Bool { pickerPopover != nil }
         private let blockButton = TimelineMenuButton()
         private let revokeButton = TimelineMenuButton()
         private var reactionButtons: [TimelineMenuButton] = []
@@ -46,6 +52,9 @@
             wantsLayer = true
             layer?.masksToBounds = true
             setAccessibilityElement(false)
+            sourceHighlight.lineWidth = 2
+            layer?.addSublayer(sourceHighlight)
+            updateSourceHighlight()
             setAccessibilityRole(.group)
             setAccessibilityLabel(AppLanguage.localized("Message actions"))
 
@@ -111,6 +120,11 @@
             let eligibility = MessageReactionEligibility(
                 canReact: policy.canReact && actions.toggleReaction != nil,
                 isReacting: isReacting, reactions: row.entry.remoteMessage?.reactions ?? [])
+            reactionEligibility = eligibility
+            if isShowingReactionPicker && !eligibility.canReact {
+                onDismiss?()
+                return
+            }
             reactionSurface.isHidden = !policy.canReact
             let storage =
                 UserDefaults.standard.string(forKey: MessageReactionPreferences.recentStorageKey)
@@ -154,13 +168,21 @@
                     button.toolTip = emoji
                 } else {
                     button.configureSymbol("plus", pointSize: 21)
-                    button.isEnabled = false
-                    button.alphaValue = 0.4
+                    // Limits apply to individual emoji, not opening the keyboard:
+                    // selected reactions must remain removable at either limit.
+                    button.isEnabled = eligibility.canReact && !eligibility.isReacting
+                    button.alphaValue = button.isEnabled ? 1 : 0.4
                     button.setAccessibilityLabel(AppLanguage.localized("More reactions"))
                     button.setAccessibilityValue(nil)
                     button.setAccessibilitySelected(false)
-                    button.setAccessibilityHelp(AppLanguage.localized("Not implemented yet"))
-                    button.toolTip = AppLanguage.localized("Not implemented yet")
+                    button.setAccessibilityHelp(
+                        button.isEnabled
+                            ? nil
+                            : reactionHint(
+                                eligibility: eligibility, hasCallback: actions.toggleReaction != nil
+                            ))
+                    button.toolTip = AppLanguage.localized("More reactions")
+                    button.onPress = { [weak self] in self?.showReactionPicker() }
                 }
             }
             if isReacting && policy.canReact {
@@ -236,6 +258,12 @@
                 blockButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
             revokeButton.setAccessibilityHelp(
                 revokeButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
+            if let pickerHost {
+                reactionSurface.isHidden = true
+                scrollView.isHidden = true
+                progress.stopAnimation(nil)
+                pickerHost.rootView = pickerContent(eligibility: eligibility)
+            }
             needsLayout = true
             layoutSubtreeIfNeeded()
         }
@@ -283,6 +311,13 @@
             CATransaction.setDisableActions(true)
             defer { CATransaction.commit() }
             dismissButton.frame = bounds
+            sourceHighlight.path = CGPath(
+                roundedRect: source.insetBy(dx: -3, dy: -3),
+                cornerWidth: 14, cornerHeight: 14, transform: nil)
+            if let placeholder = pickerPlaceholderHost {
+                layoutReactionPlaceholder(placeholder)
+                return
+            }
             let rowCount = (activeActionCount + 4) / 5
             let gridHeight = CGFloat(rowCount) * actionRowHeight + CGFloat(max(0, rowCount - 1))
             contentHeight = gridHeight + (showsPending ? (gridHeight > 0 ? 8 : 0) + 88 : 0)
@@ -346,7 +381,11 @@
 
         /// Keeps keyboard traversal inside the native modal panel without installing
         /// an application-wide key equivalent handler or consuming Command shortcuts.
-        func focusNext(backward: Bool) {
+        @discardableResult
+        func focusNext(backward: Bool) -> Bool {
+            // Let AppKit/SwiftUI traverse the hosted category and emoji controls.
+            // The native menu's flat button list must not consume their Tab events.
+            guard !isShowingReactionPicker else { return false }
             var controls = reactionButtons.prefix(activeReactionCount).filter {
                 $0.isEnabled && !$0.isHidden
             }
@@ -358,7 +397,7 @@
                 if revokeButton.isEnabled { controls.append(revokeButton) }
             }
             controls.append(dismissButton)
-            guard let window else { return }
+            guard let window else { return false }
             let current = controls.firstIndex { $0 === window.firstResponder }
             let index =
                 current.map { ($0 + (backward ? controls.count - 1 : 1)) % controls.count }
@@ -368,6 +407,7 @@
                 documentView.scrollToVisible(control.convert(control.bounds, to: documentView))
             }
             window.makeFirstResponder(control)
+            return true
         }
 
         override func cancelOperation(_ sender: Any?) { onDismiss?() }
@@ -386,6 +426,7 @@
 
         override func viewDidChangeEffectiveAppearance() {
             super.viewDidChangeEffectiveAppearance()
+            updateSourceHighlight()
             for divider in dividers {
                 divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
             }
@@ -413,6 +454,133 @@
             blockButton.onPress = nil
             revokeButton.onPress = nil
             dismissButton.onPress = nil
+            // Programmatic dismissal must not enter the delegate's user-cancel
+            // path, which would otherwise re-enter the controller while closing.
+            pickerPopover?.delegate = nil
+            pickerPopover?.close()
+            pickerPopover?.contentViewController = nil
+            pickerPopover = nil
+            pickerHost = nil
+            pickerPlaceholderHost?.removeFromSuperview()
+            pickerPlaceholderHost = nil
+            reactionEligibility = nil
+            nextKeyView = nil
+            sourceHighlight.path = nil
+        }
+
+        private func updateSourceHighlight() {
+            sourceHighlight.fillColor =
+                NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
+            sourceHighlight.strokeColor =
+                NSColor.controlAccentColor.withAlphaComponent(0.5).cgColor
+        }
+
+        /// The popover's auxiliary window is part of this interaction, not a
+        /// switch to an unrelated chat window.
+        func ownsInteractionWindow(_ candidate: NSWindow?) -> Bool {
+            guard let candidate else { return false }
+            return candidate === window || candidate === pickerHost?.window
+        }
+
+        func popoverDidClose(_ notification: Notification) {
+            guard let popover = notification.object as? NSPopover,
+                popover === pickerPopover, !isCleared
+            else { return }
+            // Keep picker state until the controller deactivates the overlay.
+            // Closing the native window cancels the entire interaction; it must
+            // never reveal or rebuild the previous quick-reaction menu.
+            onDismiss?()
+        }
+
+        private func showReactionPicker() {
+            guard !isCleared, pickerPopover == nil, let reactionEligibility,
+                reactionEligibility.canReact, !reactionEligibility.isReacting,
+                window != nil
+            else { return }
+            // This frame-view overlay sits above SwiftUI and the native title bar.
+            // SwiftUI's popover presenter cannot attach to that native anchor.
+            // NSPopover supplies a real pointer, window chrome and transient focus
+            // while leaving the original timeline message readable and unmoved.
+            let placeholder = NSHostingView(
+                rootView: ReactionPickerPlaceholder(
+                    onClose: { [weak self] in self?.onDismiss?() }))
+            placeholder.sizingOptions = []
+            placeholder.setAccessibilityIdentifier("reaction-picker-anchor")
+            pickerPlaceholderHost = placeholder
+            addSubview(placeholder)
+
+            let host = NSHostingView(rootView: pickerContent(eligibility: reactionEligibility))
+            host.sizingOptions = []
+            host.autoresizingMask = [.width, .height]
+            let controller = NSViewController()
+            controller.view = host
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            popover.contentViewController = controller
+            popover.delegate = self
+            pickerHost = host
+            pickerPopover = popover
+            reactionSurface.isHidden = true
+            scrollView.isHidden = true
+            progress.stopAnimation(nil)
+            needsLayout = true
+            layoutSubtreeIfNeeded()
+            let above = placeholder.frame.midY < source.midY
+            popover.show(
+                relativeTo: placeholder.bounds, of: placeholder,
+                preferredEdge: above ? .minY : .maxY)
+            host.window?.recalculateKeyViewLoop()
+        }
+
+        private func layoutReactionPlaceholder(
+            _ placeholder: NSHostingView<ReactionPickerPlaceholder>
+        ) {
+            let usable = bounds.insetBy(dx: 16, dy: 16)
+            let size = min(76, max(1, min(usable.width, usable.height)))
+            let below = max(0, usable.maxY - source.maxY - 8)
+            let above = max(0, source.minY - usable.minY - 8)
+            guard let window, let screen = window.screen, let popover = pickerPopover else {
+                return
+            }
+            let visible = screen.visibleFrame.insetBy(dx: 16, dy: 16)
+            let message = window.convertToScreen(convert(source, to: nil))
+            let screenBelow = max(0, message.minY - visible.minY)
+            let screenAbove = max(0, visible.maxY - message.maxY)
+            let opensAbove =
+                above >= size
+                && (below < size || (screenBelow < size + 388 && screenAbove > screenBelow))
+            let proposedY = opensAbove ? source.minY - 8 - size : source.maxY + 8
+            placeholder.frame = CGRect(
+                x: min(
+                    max(usable.minX, outgoing ? source.maxX - size : source.minX),
+                    usable.maxX - size),
+                y: min(max(usable.minY, proposedY), usable.maxY - size),
+                width: size, height: size)
+            let anchor = window.convertToScreen(placeholder.convert(placeholder.bounds, to: nil))
+            let verticalSpace =
+                opensAbove ? visible.maxY - anchor.maxY : anchor.minY - visible.minY
+            // Native chrome/pointer lies outside contentSize. Constrain content to
+            // the space away from the message rather than covering its source.
+            popover.contentSize = NSSize(
+                width: min(360, max(1, visible.width)),
+                height: min(360, max(1, verticalSpace - 20)))
+            if popover.isShown {
+                popover.show(
+                    relativeTo: placeholder.bounds, of: placeholder,
+                    preferredEdge: opensAbove ? .minY : .maxY)
+            }
+        }
+
+        private func pickerContent(eligibility: MessageReactionEligibility)
+            -> ReactionEmojiKeyboard
+        {
+            ReactionEmojiKeyboard(
+                eligibility: eligibility,
+                onSelect: { [weak self] emoji in
+                    guard let self, !self.isCleared else { return }
+                    self.onReaction?(emoji)
+                })
         }
 
         private func reactionHint(eligibility: MessageReactionEligibility, hasCallback: Bool)

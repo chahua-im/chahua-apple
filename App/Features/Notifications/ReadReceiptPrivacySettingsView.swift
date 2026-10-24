@@ -101,43 +101,147 @@ struct ReadReceiptPrivacySettingsView: View {
     }
 }
 
-/// Automatic-save override card for a DM friend.
-struct ReadReceiptPrivacySettingsRows: View {
+/// Friend overrides live on their own grouped page and save automatically on selection.
+struct FriendPrivacySettingsView: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ReadReceiptPrivacySettingsModel
+    @StateObject private var presenceModel: FriendPresencePrivacySettingsModel
     @State private var loadRetryTask: Task<Void, Never>?
+    @State private var presenceLoadRetryTask: Task<Void, Never>?
 
     init(store: ChatStore, peerUID: Int32) {
         self.store = store
         _model = StateObject(
             wrappedValue: ReadReceiptPrivacySettingsModel(
                 store: store, scope: .friend(peerUID)))
+        _presenceModel = StateObject(
+            wrappedValue: FriendPresencePrivacySettingsModel(store: store, peerUID: peerUID))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if model.loadPhase != .notFriend {
-                Text("Read receipt sharing")
-                    .font(.headline)
-            }
-            ReadReceiptPrivacyOptions(model: model, onRetryLoad: retryLoad)
-            if model.loadPhase != .notFriend {
-                ReadReceiptPrivacyNote()
+        Form {
+            if model.loadPhase == .notFriend {
+                Section {
+                    Text("Privacy overrides are only available for friends.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section {
+                    ReadReceiptPrivacyOptions(model: model, onRetryLoad: retryLoad)
+                } header: {
+                    Text("Read Receipts")
+                } footer: {
+                    Text(
+                        "Read receipts are mutual. If you hide yours from this friend, you won’t be able to see theirs."
+                    )
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
+                }
+                Section {
+                    presenceOptions
+                } header: {
+                    Text("Last Seen & Online")
+                } footer: {
+                    Text(
+                        "Last seen and online status are mutual. If you hide yours from this friend, you won’t be able to see their exact last seen or online status."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .task(id: store.currentUserProfile?.uid) { await model.load() }
+        .formStyle(.grouped)
+        .navigationTitle("Privacy Settings")
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .task(id: store.currentUserProfile?.uid) {
+            async let receipts: Void = model.load()
+            async let presence: Void = presenceModel.load()
+            _ = await (receipts, presence)
+        }
         .onDisappear {
             loadRetryTask?.cancel()
             loadRetryTask = nil
             model.cancelLoading()
+            presenceLoadRetryTask?.cancel()
+            presenceLoadRetryTask = nil
+            presenceModel.cancelLoading()
         }
     }
 
     private func retryLoad() {
         loadRetryTask?.cancel()
         loadRetryTask = Task { await model.load() }
+    }
+
+    private func retryPresenceLoad() {
+        presenceLoadRetryTask?.cancel()
+        presenceLoadRetryTask = Task { await presenceModel.load() }
+    }
+
+    @ViewBuilder
+    private var presenceOptions: some View {
+        switch presenceModel.loadPhase {
+        case .idle:
+            Button("Retry", action: retryPresenceLoad)
+        case .loading:
+            ProgressView("Loading last seen settings…")
+        case .failed:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Failed to load this friend's last seen setting.")
+                    .foregroundStyle(.secondary)
+                Button("Retry", action: retryPresenceLoad)
+            }
+        case .loaded:
+            ForEach(FriendPresenceOverride.allCases, id: \.self) { value in
+                Button {
+                    Task { await presenceModel.choose(value) }
+                } label: {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            if presenceModel.selection == value {
+                                if presenceModel.isSaving {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .accessibilityLabel("Saving…")
+                                } else {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                        }
+                        .frame(width: 24)
+                        Text(presenceTitle(for: value))
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(presenceModel.isSaving)
+                .accessibilityAddTraits(presenceModel.selection == value ? .isSelected : [])
+            }
+            if presenceModel.saveError != nil {
+                HStack {
+                    Text("Save failed. Please try again.")
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button("Retry") { Task { await presenceModel.retrySave() } }
+                        .disabled(presenceModel.isSaving)
+                }
+                .font(.footnote)
+            }
+        }
+    }
+
+    private func presenceTitle(for value: FriendPresenceOverride) -> LocalizedStringKey {
+        switch value {
+        case .inherit: "Use global setting"
+        case .share: "Share with this friend"
+        case .hide: "Hide from this friend"
+        }
     }
 }
 

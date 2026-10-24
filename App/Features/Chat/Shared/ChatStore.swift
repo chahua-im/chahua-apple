@@ -1404,6 +1404,25 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    func friendPresenceSettings(peerUID: Int32) async throws -> FriendPresenceSettingsResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.friendPresenceSettings(peerUID: peerUID)
+        }
+    }
+
+    func updateFriendPresenceSettings(peerUID: Int32, override: FriendPresenceOverride)
+        async throws -> FriendPresenceSettingsResponse
+    {
+        let requestGeneration = generation
+        return try await performGroupRequest(generation: requestGeneration) {
+            let settings = try await apiClient.updateFriendPresenceSettings(
+                peerUID: peerUID, override: override)
+            guard generation == requestGeneration else { throw CancellationError() }
+            invalidateIndividualPresence()
+            return settings
+        }
+    }
+
     func readReceipt(chatID: String, threadID: MessageID?) async throws -> ReadReceiptResponse {
         let receiptVersion = listReadReceipts.snapshot()
         let response = try await performGroupRequest(generation: generation) {
@@ -1461,6 +1480,32 @@ final class ChatStore: ObservableObject {
         }
         guard response.peerUid == peerUID else { throw APIError.unexpectedResponse }
         return response
+    }
+
+    func removeFriend(peerUID: Int32) async throws {
+        let requestGeneration = generation
+        try await performGroupRequest(generation: requestGeneration) {
+            try await apiClient.removeFriend(peerUID: peerUID)
+            guard generation == requestGeneration else { throw CancellationError() }
+            invalidateReadReceipts(peerUID: peerUID)
+            invalidateIndividualPresence()
+            invalidateChatList()
+        }
+    }
+
+    func setUserBlocked(peerUID: Int32, blocked: Bool) async throws {
+        let requestGeneration = generation
+        try await performGroupRequest(generation: requestGeneration) {
+            if blocked {
+                try await apiClient.blockUser(uid: peerUID)
+            } else {
+                try await apiClient.unblockUser(uid: peerUID)
+            }
+            guard generation == requestGeneration else { throw CancellationError() }
+            invalidateReadReceipts(peerUID: peerUID)
+            invalidateIndividualPresence()
+            invalidateChatList()
+        }
     }
 
     let presencePrivacyInvalidations = PassthroughSubject<Void, Never>()

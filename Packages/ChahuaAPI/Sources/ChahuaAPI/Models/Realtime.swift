@@ -225,16 +225,31 @@ public struct PresenceUpdatePayload: Decodable, Sendable {
     }
 }
 
-/// A watched user's socket presence and optional last recorded HTTP activity.
+/// Server-authoritative approximation when exact presence is not shared.
+public enum LastSeenBucket: String, Codable, CaseIterable, Sendable {
+    case recently
+    case withinWeek
+    case withinMonth
+    case longAgo
+}
+
+/// Exact presence and privacy-filtered approximations are mutually exclusive server fields.
 public struct UserPresenceResponse: Decodable, Equatable, Sendable {
     public let uid: Int32
     public let online: Bool
+    public let away: Bool?
     public let lastSeenAt: Date?
+    public let lastSeenBucket: LastSeenBucket?
 
-    public init(uid: Int32, online: Bool, lastSeenAt: Date? = nil) {
+    public init(
+        uid: Int32, online: Bool, away: Bool? = nil, lastSeenAt: Date? = nil,
+        lastSeenBucket: LastSeenBucket? = nil
+    ) {
         self.uid = uid
         self.online = online
+        self.away = away
         self.lastSeenAt = lastSeenAt
+        self.lastSeenBucket = lastSeenBucket
     }
 }
 

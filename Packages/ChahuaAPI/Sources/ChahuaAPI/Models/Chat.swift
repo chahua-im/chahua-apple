@@ -203,4 +203,6 @@ public struct FriendRelationshipResponse: Codable, Hashable, Sendable {
     public let canDm: Bool
     /// Omitted only by older servers; never infer friendship from DM write permission.
     public let isFriend: Bool?
+    /// Unknown on older responses; callers must not assume the peer is unblocked.
+    public let blocking: Bool?
 }

@@ -11,6 +11,7 @@
         let onReaction: (String) -> Void
         let onAction: (MessageMenuAction) -> Void
         let onClose: () -> Void
+        let onMoreReactions: () -> Void
         var controlsWidth: CGFloat = 276
         let section: Section
 
@@ -54,6 +55,7 @@
                     }
                 }
                 Button {
+                    onMoreReactions()
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 21, weight: .medium))
@@ -62,11 +64,10 @@
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(true)
-                .opacity(0.4)
+                .disabled(isReacting)
+                .opacity(isReacting ? 0.4 : 1)
                 .accessibilityLabel("More reactions")
-                .accessibilityHint("Not implemented yet")
-                .help("Not implemented yet")
+                .accessibilityIdentifier("more-reactions")
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)

@@ -352,7 +352,7 @@ final class RealtimeModelTests: XCTestCase {
             case .presenceSnapshot(let snapshot) = try event(
                 "presenceSnapshot",
                 """
-                {"requestId":18446744073709551615,"users":[{"uid":7,"online":true,"lastSeenAt":"\(timestamp)"},{"uid":8,"online":false},{"uid":9,"online":false,"lastSeenAt":null}],"groups":[{"chatId":"\(largeID)","memberCount":4294967295,"onlineCount":2}]}
+                {"requestId":18446744073709551615,"users":[{"uid":7,"online":true,"lastSeenAt":"\(timestamp)"},{"uid":8,"online":false,"away":true},{"uid":9,"online":false,"lastSeenAt":null,"lastSeenBucket":"withinWeek"}],"groups":[{"chatId":"\(largeID)","memberCount":4294967295,"onlineCount":2}]}
                 """)
         else { return XCTFail("Expected presence snapshot") }
         XCTAssertEqual(snapshot.requestId, UInt64.max)
@@ -361,8 +361,9 @@ final class RealtimeModelTests: XCTestCase {
         XCTAssertEqual(
             snapshot.users[0].lastSeenAt,
             try JSONCoding.decoder.decode(Date.self, from: Data("\"\(timestamp)\"".utf8)))
-        XCTAssertEqual(snapshot.users[1], UserPresenceResponse(uid: 8, online: false))
+        XCTAssertEqual(snapshot.users[1], UserPresenceResponse(uid: 8, online: false, away: true))
         XCTAssertNil(snapshot.users[2].lastSeenAt)
+        XCTAssertEqual(snapshot.users[2].lastSeenBucket, .withinWeek)
         XCTAssertEqual(
             snapshot.groups,
             [GroupPresenceResponse(chatId: largeID, memberCount: UInt32.max, onlineCount: 2)])

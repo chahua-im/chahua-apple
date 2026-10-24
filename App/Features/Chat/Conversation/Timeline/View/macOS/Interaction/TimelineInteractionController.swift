@@ -2,8 +2,8 @@
     import AppKit
     import ChahuaAPI
 
-    /// Owns the popup independently of reused cells. Native rendering avoids the
-    /// measured per-row NSHostingView layout and AttributeGraph work in this timeline.
+    /// Owns the popup independently of reused cells. Menu rendering remains native;
+    /// the shared emoji keyboard is hosted only while this single overlay needs it.
     @MainActor
     final class TimelineInteractionController: NSObject {
         weak var timelineView: NSView?
@@ -43,6 +43,9 @@
                 notifications.addObserver(
                     self, selector: #selector(windowBecameUnavailable(_:)), name: name, object: nil)
             }
+            notifications.addObserver(
+                self, selector: #selector(windowBecameKey(_:)),
+                name: NSWindow.didBecomeKeyNotification, object: nil)
             notifications.addObserver(
                 self, selector: #selector(preferencesChanged),
                 name: UserDefaults.didChangeNotification, object: nil)
@@ -115,12 +118,12 @@
             ]) { [weak self] event in
                 let consumed = MainActor.assumeIsolated {
                     guard let self, self.target != nil, let window = self.overlayWindow,
-                        event.window === window
+                        self.overlay?.ownsInteractionWindow(event.window) == true
                     else { return false }
                     // AppKit routes native title-bar mouse events separately from
                     // frame-view children. Covered window controls must not receive
                     // the click, even when the menu opened in an inactive window.
-                    if event.type != .keyDown,
+                    if event.type != .keyDown, event.window === window,
                         !window.contentLayoutRect.contains(event.locationInWindow)
                     {
                         self.dismiss()
@@ -134,8 +137,8 @@
                         return true
                     }
                     if event.keyCode == 48 {
-                        self.overlay?.focusNext(backward: event.modifierFlags.contains(.shift))
-                        return true
+                        return self.overlay?.focusNext(
+                            backward: event.modifierFlags.contains(.shift)) ?? false
                     }
                     return false
                 }
@@ -183,8 +186,9 @@
             keyMonitor = nil
             finishDismissal()
             let dismissedOverlay = overlay
+            let restoresPickerFocus = dismissedOverlay?.isShowingReactionPicker == true
             dismissedOverlay?.deactivate()
-            restoreFirstResponder()
+            restoreFirstResponder(includingReactionPicker: restoresPickerFocus)
             overlay = nil
             previousFirstResponder = nil
             overlayWindow = nil
@@ -206,9 +210,9 @@
             dismissingOverlay = nil
         }
 
-        private func restoreFirstResponder() {
+        private func restoreFirstResponder(includingReactionPicker: Bool = false) {
             guard let window = overlayWindow, let overlay,
-                window.firstResponder === overlay
+                includingReactionPicker || window.firstResponder === overlay
                     || (window.firstResponder as? NSView)?.isDescendant(of: overlay) == true
             else { return }
             var restored = false
@@ -252,7 +256,9 @@
                 refresh()
                 return
             }
-            if !eligibility.isSelected(emoji) {
+            // The shared keyboard owns recents for its selections; quick native
+            // reactions still record here. Neither path records selected removals.
+            if overlay?.isShowingReactionPicker != true && !eligibility.isSelected(emoji) {
                 let defaults = UserDefaults.standard
                 let recent =
                     defaults.string(forKey: MessageReactionPreferences.recentStorageKey)
@@ -359,6 +365,31 @@
             guard let window = notification.object as? NSWindow else { return }
             if dismissingOverlay?.window === window { finishDismissal() }
             guard window === overlayWindow else { return }
+            if notification.name == NSWindow.didResignKeyNotification,
+                overlay?.isShowingReactionPicker == true
+            {
+                // NSPopover may become key during show(). AppKit sends the
+                // parent's resignation before publishing the new key window.
+                // Resolve that transition on the next turn, and also observe
+                // didBecomeKey so a later unrelated window still cancels.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.target != nil else { return }
+                    if !NSApp.isActive
+                        || (NSApp.keyWindow != nil
+                            && self.overlay?.ownsInteractionWindow(NSApp.keyWindow) != true)
+                    {
+                        self.dismiss(animated: false)
+                    }
+                }
+                return
+            }
+            dismiss(animated: false)
+        }
+
+        @objc private func windowBecameKey(_ notification: Notification) {
+            guard target != nil, let window = notification.object as? NSWindow,
+                overlay?.ownsInteractionWindow(window) != true
+            else { return }
             dismiss(animated: false)
         }
 

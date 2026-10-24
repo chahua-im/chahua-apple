@@ -28,7 +28,7 @@ enum ChatPresenceDisplay {
             guard let uid = chat.peer?.uid, let presence = state.userPresence[uid] else {
                 return nil
             }
-            return userSubtitle(presence, now: now)
+            return UserPresenceDisplay.subtitle(presence, now: now)
         case .group:
             guard let presence = state.groupPresence[chat.id] else { return nil }
             return AppLanguage.localized(
@@ -36,25 +36,6 @@ enum ChatPresenceDisplay {
         }
     }
 
-    /// Keep the same strict bucket boundaries as the PWA, clamping future timestamps.
-    /// Live 15-second snapshots republish observed state, so labels age without a global UI timer.
-    static func userSubtitle(_ presence: UserPresenceResponse, now: Date = Date()) -> String? {
-        if presence.online { return AppLanguage.localized("Online") }
-        guard let lastSeen = presence.lastSeenAt else { return nil }
-        let age = max(0, now.timeIntervalSince(lastSeen))
-        switch age {
-        case ..<300: return AppLanguage.localized("Last seen recently")
-        case ..<1800: return AppLanguage.localized("Last seen within 30 minutes")
-        case ..<3600: return AppLanguage.localized("Last seen within 1 hour")
-        case ..<7200: return AppLanguage.localized("Last seen within 2 hours")
-        case ..<21600: return AppLanguage.localized("Last seen within 6 hours")
-        case ..<43200: return AppLanguage.localized("Last seen within 12 hours")
-        case ..<86400: return AppLanguage.localized("Last seen within 1 day")
-        case ..<604800: return AppLanguage.localized("Last seen within 1 week")
-        case ..<2_592_000: return AppLanguage.localized("Last seen within 1 month")
-        default: return AppLanguage.localized("Last seen a long time ago")
-        }
-    }
 }
 
 private struct PresenceScopeModifier: ViewModifier {

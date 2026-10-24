@@ -5,6 +5,10 @@ enum NotificationMuteDeadline {
     // 9999-12-31 00:00:00 UTC is the server's maximum-date (indefinite mute) sentinel.
     private static let maximumMuteDate = Date(timeIntervalSince1970: 253_402_214_400)
 
+    static func isIndefinite(_ until: Date?) -> Bool {
+        until.map { $0 >= maximumMuteDate } ?? false
+    }
+
     static func finiteDeadline(
         _ until: Date?, now: Date = .now, calendar: Calendar = .current
     ) -> String? {
