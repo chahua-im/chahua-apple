@@ -1,7 +1,7 @@
 import ChahuaAPI
 import SwiftUI
 
-/// The same native choices are used by list, group/DM info, and account exceptions.
+/// Full notification chooser opened from chat-list actions.
 struct ChatNotificationSettingsView: View {
     @ObservedObject var store: ChatStore
     let chat: ChatListItem
@@ -25,7 +25,7 @@ struct ChatNotificationSettingsView: View {
     var body: some View {
         Group {
             Form {
-                Section("Notification settings") {
+                Section {
                     choice(
                         "Use account default", mode: .inherit, selected: current.muteOverride == nil
                     )
@@ -34,6 +34,8 @@ struct ChatNotificationSettingsView: View {
                         selected: current.muteOverride == false)
                     choice(
                         "Always mute", mode: .alwaysMuted, selected: current.muteOverride == true)
+                } header: {
+                    Text("Notification settings")
                 }
                 if !current.notificationPermanentlyMuted(defaults: store.state.notificationDefaults)
                 {
@@ -44,12 +46,8 @@ struct ChatNotificationSettingsView: View {
                         choice("Mute for 7 days", seconds: 604_800)
                     }
                 }
-                Section {
-                    if let until = current.mutedUntil, until > Date() {
-                        Text("Muted until \(until.formatted(date: .abbreviated, time: .shortened))")
-                        Text("After temporary mute, the saved preference applies.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    } else {
+                if current.mutedUntil.map({ $0 > Date() }) != true {
+                    Section {
                         Text(
                             LocalizedStringKey(
                                 current.notificationMuted(

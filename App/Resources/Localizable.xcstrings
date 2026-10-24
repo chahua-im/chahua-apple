@@ -1,6 +1,94 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "Chat history" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Chat history" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "聊天记录" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "聊天記錄" } }
+      }
+    },
+    "until %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "until %@" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "至 %@" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "至 %@" } }
+      }
+    },
+    "tomorrow" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "tomorrow" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "明天" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "明天" } }
+      }
+    },
+    "Mute for…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Mute for…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "静音时长…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "靜音時間…" } }
+      }
+    },
+    "Customize" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Customize" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "自定义" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "自訂" } }
+      }
+    },
+    "Always On" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always On" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终开启" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律開啟" } }
+      }
+    },
+    "Always Off" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Always Off" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "始终关闭" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "一律關閉" } }
+      }
+    },
+    "Remove from exceptions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove from exceptions" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "从例外中移除" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "從例外中移除" } }
+      }
+    },
+    "Enable Push Notifications" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Enable Push Notifications" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "启用推送通知" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "啟用推播通知" } }
+      }
+    },
+    "Debug" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Debug" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "调试" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "偵錯" } }
+      }
+    },
+    "Allow notifications in System Settings to enable push notifications." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Allow notifications in System Settings to enable push notifications." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请在系统设置中允许通知以启用推送通知。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "請在系統設定中允許通知以啟用推播通知。" } }
+      }
+    },
     "Use account default" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -31,14 +119,6 @@
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Temporary mute" } },
         "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "临时静音" } },
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暫時靜音" } }
-      }
-    },
-    "After temporary mute, the saved preference applies." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "After temporary mute, the saved preference applies." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "临时静音结束后恢复已保存的通知设置。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暫時靜音結束後恢復已儲存的通知設定。" } }
       }
     },
     "Notifications muted" : {
@@ -4920,29 +5000,6 @@
         }
       }
     },
-    "iOS does not expose its signed APNs entitlement to apps. The environment above comes from this build's configuration." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iOS does not expose its signed APNs entitlement to apps. The environment above comes from this build's configuration."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iOS 不允许应用读取已签名的 APNs 权限。上方环境来自此构建的配置。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "iOS 不允許 App 讀取已簽署的 APNs 權限。上方環境來自此建置的設定。"
-          }
-        }
-      }
-    },
     "Jump to latest messages" : {
       "comment" : "A button that jumps to the latest messages.",
       "isCommentAutoGenerated" : true,
@@ -6645,29 +6702,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "永久靜音"
-          }
-        }
-      }
-    },
-    "Muted until %@" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muted until %@"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "静音至 %@"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "靜音至 %@"
           }
         }
       }

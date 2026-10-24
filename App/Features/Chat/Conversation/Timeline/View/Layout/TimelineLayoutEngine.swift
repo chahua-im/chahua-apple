@@ -233,13 +233,21 @@ struct TimelineLayoutEngine {
                 x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: replyHeight)
             height += replyHeight + 6
         }
+        var forwardedCardLayout: TimelineForwardedCardLayout?
         if !p.forwardedCardLines.isEmpty {
-            if height == 0 { height += 8 }
-            let lineHeight = pixel(singleLineSize("Ag", size: e.captionSize).height + 5, e)
-            let cardHeight = CGFloat(p.forwardedCardLines.count) * lineHeight
+            if height == 0 { height += 10 }
+            let cardLayout = TimelineForwardedCardLayout(
+                width: innerWidth, lineCount: p.forwardedCardLines.count,
+                titleHeight: singleLineSize("Ag", size: e.bodySize, weight: .semibold).height,
+                previewHeight: singleLineSize("Ag", size: e.bodySize).height,
+                countHeight: singleLineSize("Ag", size: e.caption2Size).height,
+                metadataSize: metadata.map { scaled($0.size, width: innerWidth) } ?? .zero,
+                displayScale: scale)
+            forwardedCardLayout = cardLayout
             frames[.forwardedCard] = CGRect(
-                x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: cardHeight)
-            height += cardHeight + 4
+                x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
+                height: cardLayout.size.height)
+            height += cardLayout.size.height + 10
         }
         var mediaFrames: [CGRect] = []
         if sticker {
@@ -335,7 +343,9 @@ struct TimelineLayoutEngine {
             height += frames[.standalone]!.height + 8
         }
         if let metadata {
-            if audio, let audioFrame = frames[.audio] {
+            if let cardLayout = forwardedCardLayout, let card = frames[.forwardedCard] {
+                frames[.metadata] = cardLayout.metadataFrame.offsetBy(dx: card.minX, dy: card.minY)
+            } else if audio, let audioFrame = frames[.audio] {
                 // The SwiftUI duration reserves this trailing region. Both use
                 // the same metrics, including narrow-width metadata scaling.
                 let metrics = p.voiceMetrics
@@ -436,6 +446,7 @@ struct TimelineLayoutEngine {
             reactionContentFrames: reactionContentFrames, titleFrames: titleFrames,
             replyContentFrames: replyContentFrames,
             originalReplyContentFrames: originalReplyContentFrames,
+            forwardedCardLayout: forwardedCardLayout,
             standaloneSymbolSize: displayedSymbolSize,
             standaloneLabelGap: standaloneGap, threadContentFrames: threadContentFrames)
     }

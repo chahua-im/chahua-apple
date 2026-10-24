@@ -3,9 +3,7 @@ import SwiftUI
 
 struct AccountNotificationPreferencesView: View {
     @ObservedObject var store: ChatStore
-    @State private var totals: [ChatKind: Int] = [:]
     @State private var error: String?
-    @State private var revision = 0
 
     var body: some View {
         Group {
@@ -23,9 +21,6 @@ struct AccountNotificationPreferencesView: View {
                             )
                             .foregroundStyle(.secondary)
                         }
-                        if let count = totals[kind] {
-                            Text("\(count) exceptions").foregroundStyle(.secondary)
-                        }
                     }
                 }
             }
@@ -35,9 +30,6 @@ struct AccountNotificationPreferencesView: View {
             }
         }
         .task { await load() }
-        .onReceive(store.notificationPreferenceChanges) { _ in
-            Task { await loadCounts() }
-        }
     }
 
     private func load() async {
@@ -45,21 +37,6 @@ struct AccountNotificationPreferencesView: View {
             try await store.loadNotificationDefaults()
             error = nil
         } catch is CancellationError { return } catch { self.error = error.localizedDescription }
-        await loadCounts()
-    }
-
-    private func loadCounts() async {
-        revision += 1
-        let token = revision
-        do {
-            async let direct = store.notificationExceptions(kind: .dm, after: nil)
-            async let groups = store.notificationExceptions(kind: .group, after: nil)
-            let (dmPage, groupPage) = try await (direct, groups)
-            guard token == revision else { return }
-            totals = [.dm: dmPage.totalCount, .group: groupPage.totalCount]
-        } catch is CancellationError {} catch {
-            if token == revision { self.error = error.localizedDescription }
-        }
     }
 }
 
@@ -99,33 +76,32 @@ private struct NotificationCategoryView: View {
                 Button("Add exception") { showsPicker = true }
                 if let totalCount { Text("\(totalCount) exceptions").foregroundStyle(.secondary) }
                 ForEach(exceptions) { exception in
-                    HStack {
-                        Button {
-                            selectedChat = chat(for: exception)
-                        } label: {
-                            HStack {
-                                AvatarView(
-                                    url: (exception.peer?.avatarUrl ?? exception.avatar).flatMap(
-                                        URL.init(string:)),
-                                    displayName: exception.peer?.username ?? exception.name,
-                                    diameter: 40)
-                                VStack(alignment: .leading) {
-                                    Text(exception.peer?.username ?? exception.name)
-                                    Text(
-                                        LocalizedStringKey(
-                                            exception.muteOverride == true
-                                                ? "Always mute" : "Always notify")
-                                    )
-                                    .font(.caption).foregroundStyle(.secondary)
-                                }
+                    Button {
+                        selectedChat = chat(for: exception)
+                    } label: {
+                        HStack {
+                            AvatarView(
+                                url: (exception.peer?.avatarUrl ?? exception.avatar).flatMap(
+                                    URL.init(string:)),
+                                displayName: exception.peer?.username ?? exception.name,
+                                diameter: 40)
+                            VStack(alignment: .leading) {
+                                Text(exception.peer?.username ?? exception.name)
+                                Text(
+                                    LocalizedStringKey(
+                                        exception.muteOverride == true ? "Always Off" : "Always On")
+                                )
+                                .font(.caption).foregroundStyle(.secondary)
                             }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
                         }
-                        .buttonStyle(.plain)
-                        Spacer()
-                        Button("Remove", role: .destructive) {
-                            Task { await restore(exception.chatId) }
-                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
                 if nextCursor != nil {
                     Button("Load More") { Task { await load(more: true) } }
@@ -156,7 +132,7 @@ private struct NotificationCategoryView: View {
         .onReceive(store.notificationPreferenceChanges) { _ in Task { await load() } }
         .refreshable { await load() }
         .sheet(item: $selectedChat) { chat in
-            NavigationStack { ChatNotificationSettingsView(store: store, chat: chat) }
+            NavigationStack { NotificationExceptionDetailView(store: store, chat: chat) }
                 .frame(minWidth: 320, minHeight: 420)
         }
         .sheet(isPresented: $showsPicker) {
@@ -232,12 +208,105 @@ private struct NotificationCategoryView: View {
         } catch is CancellationError {} catch { self.error = error.localizedDescription }
     }
 
-    private func restore(_ chatID: String) async {
+}
+
+/// Exception edits are staged locally; only Save or removal writes to the server.
+private struct NotificationExceptionDetailView: View {
+    @ObservedObject var store: ChatStore
+    let chat: ChatListItem
+    private let accountUID: Int32?
+    @State private var muted: Bool
+    @State private var saving = false
+    @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
+
+    init(store: ChatStore, chat: ChatListItem) {
+        self.store = store
+        self.chat = chat
+        self.accountUID = store.currentUserProfile?.uid
+        _muted = State(
+            initialValue: chat.notificationPermanentlyMuted(
+                defaults: store.state.notificationDefaults))
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Button("Remove from exceptions", role: .destructive) {
+                    save(.inherit)
+                }
+            }
+            Section {
+                choice("Always On", muted: false)
+                choice("Always Off", muted: true)
+            } header: {
+                Text("Notifications")
+            }
+            if let error {
+                Section {
+                    Text(verbatim: error).foregroundStyle(.red)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .disabled(saving)
+        .navigationTitle(chat.chatDisplayName)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel", systemImage: "xmark") { dismiss() }
+                    .labelStyle(.iconOnly)
+                    .disabled(saving)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save", systemImage: "checkmark") {
+                    save(muted ? .alwaysMuted : .alwaysUnmuted)
+                }
+                .labelStyle(.iconOnly)
+                .disabled(saving)
+            }
+        }
+        .interactiveDismissDisabled(saving)
+    }
+
+    private func choice(_ title: LocalizedStringKey, muted value: Bool) -> some View {
+        Button {
+            muted = value
+        } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                if muted == value {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(muted == value ? .isSelected : [])
+    }
+
+    private func save(_ mode: NotificationSettingMode) {
+        guard !saving else { return }
+        guard store.currentUserProfile?.uid == accountUID else {
+            dismiss()
+            return
+        }
         saving = true
-        defer { saving = false }
-        do {
-            try await store.setNotificationSetting(chatID: chatID, request: .init(mode: .inherit))
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
+        error = nil
+        Task {
+            defer { saving = false }
+            do {
+                try await store.setNotificationSetting(chatID: chat.id, request: .init(mode: mode))
+                dismiss()
+            } catch is CancellationError {} catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 }
 
@@ -260,7 +329,7 @@ private struct NotificationExceptionPicker: View {
                                     query.trimmingCharacters(in: .whitespacesAndNewlines)))
                 }
             ) { chat in
-                Button(chat.chatDisplayName) {
+                Button {
                     guard !saving, let defaults = store.state.notificationDefaults else { return }
                     saving = true
                     Task {
@@ -276,7 +345,20 @@ private struct NotificationExceptionPicker: View {
                             self.error = error.localizedDescription
                         }
                     }
+                } label: {
+                    HStack(spacing: 12) {
+                        AvatarView(
+                            url: (chat.peer?.avatarUrl ?? chat.avatar).flatMap(URL.init(string:)),
+                            displayName: chat.chatDisplayName,
+                            diameter: 40)
+                        Text(chat.chatDisplayName)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
             if store.state.isRefreshingChats || store.state.isRefreshingArchivedChats {
                 ProgressView()

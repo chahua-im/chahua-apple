@@ -149,7 +149,7 @@ struct TimelineRowPresentation {
                     if let originLabel { sections.append(.standalone(originLabel, author: nil)) }
                     if let originalReply { sections.append(.reply(originalReply)) }
                     if card {
-                        forwardedCardLines = [AppLanguage.localized("Forwarded Messages")]
+                        forwardedCardLines = [AppLanguage.localized("Chat history")]
                         if let preview = remote?.forwardedPreview {
                             forwardedCardLines += preview.messages.prefix(3).map {
                                 "\($0.sender.name ?? "User \($0.sender.uid)"): \(MessageSummaryContent.forwardedSummary($0))"

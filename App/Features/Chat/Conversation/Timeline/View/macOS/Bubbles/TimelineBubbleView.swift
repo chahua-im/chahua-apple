@@ -121,7 +121,9 @@
                 originalReplyView?.clear()
                 originalReplyView?.isHidden = true
             }
-            if localFrames[.forwardedCard] != nil {
+            if localFrames[.forwardedCard] != nil,
+                let cardLayout = binding.layout.forwardedCardLayout
+            {
                 let view = forwardedCardView ?? TimelineForwardedCardView(frame: .zero)
                 if forwardedCardView == nil {
                     forwardedCardView = view
@@ -129,7 +131,8 @@
                 }
                 view.isHidden = false
                 view.configure(
-                    lines: p.forwardedCardLines, fontSize: e.captionSize,
+                    lines: p.forwardedCardLines, fontSize: e.bodySize,
+                    footerFontSize: e.caption2Size, layout: cardLayout,
                     outgoing: row.isOutgoing,
                     enabled: !binding.context.isInteractionPreview
                         && !binding.actions.isSelectingMessages && row.entry.remoteMessage != nil

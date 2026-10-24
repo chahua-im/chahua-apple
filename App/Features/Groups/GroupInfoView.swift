@@ -10,7 +10,7 @@ struct GroupInfoView: View {
     let onSearch: () -> Void
 
     @State private var groupInfo: GroupInfoResponse?
-    @State private var showsNotificationSettings = false
+    @State private var isUpdatingNotifications = false
     @State private var isLoadingInfo = false
     @State private var isLeaving = false
     @State private var showsLeaveConfirmation = false
@@ -74,12 +74,6 @@ struct GroupInfoView: View {
         #endif
         .task(id: chat.id) { await loadInfo() }
         .presenceScope(ChatPresenceDisplay.scope(for: chat), store: store)
-        .sheet(isPresented: $showsNotificationSettings) {
-            NavigationStack {
-                ChatNotificationSettingsView(store: store, chat: notificationChat)
-            }
-            .frame(minWidth: 320, minHeight: 420)
-        }
         .confirmationDialog(
             "Leave group",
             isPresented: $showsLeaveConfirmation,
@@ -176,51 +170,36 @@ struct GroupInfoView: View {
     }
 
     private var actions: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 12) {
-                Button {
-                    showsNotificationSettings = true
+        HStack(spacing: 12) {
+            notificationMenu
+
+            Button(action: onSearch) {
+                GroupInfoActionLabel(systemImage: "magnifyingglass", title: "Search")
+            }
+            .accessibilityIdentifier("group-search-button")
+            .accessibilityLabel("Search messages")
+            .disabled(isLeaving)
+
+            if !isDM {
+                Menu {
+                    Button(role: .destructive) {
+                        showsLeaveConfirmation = true
+                    } label: {
+                        Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                    .accessibilityIdentifier("leave-group-button")
                 } label: {
                     GroupInfoActionLabel(
-                        systemImage: isMuted ? "bell.slash" : "bell",
-                        title: "Notifications")
+                        systemImage: "ellipsis", title: "More", isProgressing: isLeaving
+                    )
                 }
-                .accessibilityIdentifier("group-notification-settings")
-                .accessibilityLabel("Notification settings")
-                .disabled(isLeaving)
-
-                Button(action: onSearch) {
-                    GroupInfoActionLabel(systemImage: "magnifyingglass", title: "Search")
-                }
-                .accessibilityIdentifier("group-search-button")
-                .accessibilityLabel("Search messages")
-                .disabled(isLeaving)
-
-                if !isDM {
-                    Menu {
-                        Button(role: .destructive) {
-                            showsLeaveConfirmation = true
-                        } label: {
-                            Label("Leave group", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                        .accessibilityIdentifier("leave-group-button")
-                    } label: {
-                        GroupInfoActionLabel(
-                            systemImage: "ellipsis", title: "More", isProgressing: isLeaving
-                        )
-                    }
-                    .accessibilityIdentifier("group-more-menu")
-                    .disabled(isLeaving)
-                }
+                .accessibilityIdentifier("group-more-menu")
+                .disabled(isLeaving || isUpdatingNotifications)
             }
-            .menuIndicator(.hidden)
-            .buttonStyle(.plain)
-            .frame(maxWidth: 560)
-
-            Text(LocalizedStringKey(isMuted ? "Notifications muted" : "Notifications enabled"))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .frame(maxWidth: 560)
         .frame(maxWidth: .infinity)
     }
 
@@ -245,7 +224,7 @@ struct GroupInfoView: View {
 
     private var notificationChat: ChatListItem {
         if let listedChat { return listedChat }
-        guard let groupInfo else { return chat }
+        guard let groupInfo else { return store.notificationChatSnapshot(chat) }
         return store.notificationChatSnapshot(
             chat.withNotificationState(
                 mutedUntil: groupInfo.mutedUntil, muteOverride: groupInfo.muteOverride,
@@ -254,6 +233,105 @@ struct GroupInfoView: View {
 
     private var isMuted: Bool {
         notificationChat.notificationMuted(defaults: store.state.notificationDefaults)
+    }
+
+    private var notificationButtonTitle: LocalizedStringKey {
+        let current = notificationChat
+        let defaults = store.state.notificationDefaults
+        guard current.notificationMuted(defaults: defaults) else { return "Mute" }
+        if !current.notificationPermanentlyMuted(defaults: defaults),
+            let deadline = NotificationMuteDeadline.finiteDeadline(current.mutedUntil)
+        {
+            return "until \(deadline)"
+        }
+        return "Unmute"
+    }
+
+    private var notificationMenu: some View {
+        Menu {
+            if isMuted {
+                Button("Unmute", systemImage: "bell") {
+                    Task { await updateNotifications(nil) }
+                }
+            } else {
+                Menu("Mute for…", systemImage: "bell.badge") {
+                    muteDuration("Mute for 1 hour", seconds: 3_600)
+                    muteDuration("Mute for 8 hours", seconds: 28_800)
+                    muteDuration("Mute for 1 day", seconds: 86_400)
+                    muteDuration("Mute for 7 days", seconds: 604_800)
+                }
+            }
+            Menu("Customize", systemImage: "slider.horizontal.3") {
+                notificationChoice(
+                    "Always notify", mode: .alwaysUnmuted,
+                    selected: notificationChat.muteOverride == false)
+                notificationChoice(
+                    "Always mute", mode: .alwaysMuted,
+                    selected: notificationChat.muteOverride == true)
+                notificationChoice(
+                    "Use account default", mode: .inherit,
+                    selected: notificationChat.muteOverride == nil)
+            }
+            Divider()
+            Button("Mute forever", systemImage: "bell.slash", role: .destructive) {
+                Task { await updateNotifications(.init(mode: .alwaysMuted)) }
+            }
+        } label: {
+            GroupInfoActionLabel(
+                systemImage: isMuted ? "bell.slash" : "bell",
+                title: notificationButtonTitle,
+                isProgressing: isUpdatingNotifications)
+        }
+        .accessibilityIdentifier("group-notification-settings")
+        .accessibilityLabel("Notification settings")
+        .disabled(isLeaving || isUpdatingNotifications)
+    }
+
+    private func muteDuration(_ title: LocalizedStringKey, seconds: Int) -> some View {
+        Button(title) {
+            Task {
+                await updateNotifications(.init(mode: .temporarilyMuted, durationSeconds: seconds))
+            }
+        }
+    }
+
+    private func notificationChoice(
+        _ title: LocalizedStringKey, mode: NotificationSettingMode, selected: Bool
+    ) -> some View {
+        Button {
+            Task { await updateNotifications(.init(mode: mode)) }
+        } label: {
+            HStack {
+                Text(title)
+                if selected { Image(systemName: "checkmark") }
+            }
+        }
+    }
+
+    /// A nil request is Unmute: remove an override only when the default already notifies.
+    private func updateNotifications(_ request: UpdateNotificationSettingRequest?) async {
+        guard !isUpdatingNotifications, !isLeaving,
+            store.currentUserProfile?.uid == currentUserID
+        else { return }
+        isUpdatingNotifications = true
+        defer { isUpdatingNotifications = false }
+        do {
+            let resolved: UpdateNotificationSettingRequest
+            if let request {
+                resolved = request
+            } else {
+                try await store.loadNotificationDefaults()
+                guard let defaults = store.state.notificationDefaults else {
+                    throw APIError.unavailable
+                }
+                resolved = .init(
+                    mode: defaults.mutedByDefault(kind: chat.kind) ? .alwaysUnmuted : .inherit)
+            }
+            guard store.currentUserProfile?.uid == currentUserID else { return }
+            try await store.setNotificationSetting(chatID: chat.id, request: resolved)
+        } catch is CancellationError {} catch {
+            failure = .init(operation: .notifications(request), message: error.localizedDescription)
+        }
     }
 
     private func loadInfo() async {
@@ -266,6 +344,7 @@ struct GroupInfoView: View {
             let response = try await store.groupInfo(chatID: chat.id)
             try Task.checkCancellation()
             groupInfo = response
+            store.trackNotificationExpiry(for: notificationChat)
             if failure?.operation.isLoad == true { failure = nil }
         } catch is CancellationError {
             // The navigation container cancelled this screen's task.
@@ -299,6 +378,8 @@ struct GroupInfoView: View {
             Task { await loadInfo() }
         case .leave:
             Task { await leaveGroup() }
+        case .notifications(let request):
+            Task { await updateNotifications(request) }
         }
     }
 
@@ -343,6 +424,7 @@ private struct GroupInfoActionLabel: View {
 private enum GroupInfoOperation {
     case load
     case leave
+    case notifications(UpdateNotificationSettingRequest?)
 
     var isLoad: Bool {
         if case .load = self { return true }
@@ -353,6 +435,7 @@ private enum GroupInfoOperation {
         switch self {
         case .load: AppLanguage.localized("Couldn’t load group info")
         case .leave: AppLanguage.localized("Couldn’t leave group")
+        case .notifications: AppLanguage.localized("Couldn’t update notifications")
         }
     }
 }
@@ -365,6 +448,7 @@ private struct GroupInfoFailure: Identifiable {
         switch operation {
         case .load: "load"
         case .leave: "leave"
+        case .notifications: "notifications"
         }
     }
 }

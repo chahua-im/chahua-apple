@@ -127,6 +127,13 @@ struct NotificationSettingsView: View {
         } else if page == .readReceiptPrivacy {
             ReadReceiptPrivacySettingsView(store: chatStore, grouped: grouped)
                 .id(ObjectIdentifier(chatStore))
+        } else if page == .notifications {
+            PushNotificationSettingsPage(
+                notifications: notifications, store: chatStore,
+                isSigningOut: isSigningOut, grouped: grouped
+            ) {
+                notificationDiagnostics
+            }
         } else if page == .reactions {
             ReactionManagementView(library: chatStore.stickers, currentUserID: me.uid)
         } else if page == .stickerPacks {
@@ -174,7 +181,7 @@ struct NotificationSettingsView: View {
     @ViewBuilder
     private func pageRows(_ page: SettingsPage, showsDividers: Bool) -> some View {
         switch page {
-        case .reactions, .stickerPacks, .presencePrivacy, .readReceiptPrivacy:
+        case .reactions, .stickerPacks, .presencePrivacy, .readReceiptPrivacy, .notifications:
             EmptyView()
         case .language:
             LabeledContent("App language") {
@@ -276,85 +283,67 @@ struct NotificationSettingsView: View {
                 MediaCacheSettingsSection(context: mediaContext)
                     .id(ObjectIdentifier(mediaContext))
             }
-        case .notifications:
-            AccountNotificationPreferencesView(store: chatStore)
-            Divider()
-            LabeledContent("Authorization", value: authorizationDescription)
+        }
+    }
+
+    @ViewBuilder
+    private var notificationDiagnostics: some View {
+        LabeledContent("Authorization", value: authorizationDescription)
+        LabeledContent(
+            "APNs environment", value: environmentDescription(notifications.apnsEnvironment))
+        #if os(macOS)
             LabeledContent(
-                "APNs environment", value: environmentDescription(notifications.apnsEnvironment))
-            #if os(macOS)
-                LabeledContent(
-                    "Signed entitlement",
-                    value: environmentDescription(notifications.signedEnvironment))
-                if let configured = notifications.configuredEnvironment,
-                    let signed = notifications.signedEnvironment, configured != signed
-                {
-                    Text(
-                        "The build configuration differs from its signed APNs entitlement. The signed environment is used for registration."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                } else if notifications.signedEnvironment == nil {
-                    Text(
-                        "No signed APNs entitlement was found. Push delivery requires a signed app with the Push Notifications capability."
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                }
-            #else
+                "Signed entitlement",
+                value: environmentDescription(notifications.signedEnvironment))
+            if let configured = notifications.configuredEnvironment,
+                let signed = notifications.signedEnvironment, configured != signed
+            {
                 Text(
-                    "iOS does not expose its signed APNs entitlement to apps. The environment above comes from this build's configuration."
+                    "The build configuration differs from its signed APNs entitlement. The signed environment is used for registration."
+                )
+                .font(.footnote)
+                .foregroundStyle(.orange)
+            } else if notifications.signedEnvironment == nil {
+                Text(
+                    "No signed APNs entitlement was found. Push delivery requires a signed app with the Push Notifications capability."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            #endif
-            LabeledContent("Device token") {
-                if let suffix = notifications.deviceTokenSuffix {
-                    Text(verbatim: "…\(suffix)")
-                        .monospaced()
-                        .textSelection(.enabled)
-                } else {
-                    Text("Not received")
-                }
             }
-            LabeledContent("Backend registration") {
-                HStack {
-                    if notifications.isRegistering {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(registrationDescription)
-                }
-            }
-            if let registered = notifications.backendEnvironment {
-                LabeledContent(
-                    "Registered environment", value: environmentDescription(registered))
-            }
-            if let error = notifications.registrationError {
-                Text(verbatim: error).foregroundStyle(.red)
-            }
-            if showsDividers { Divider() }
-            if notifications.canDisableNotifications {
-                Button("Disable notifications", role: .destructive) {
-                    Task { await notifications.disableNotifications() }
-                }
-                .disabled(notifications.isUnregistering || isSigningOut)
-                if !notifications.isRegistered {
-                    Button("Retry registration") {
-                        Task { await notifications.refreshAuthorization() }
-                    }
-                    .disabled(
-                        notifications.isRegistering || notifications.isUnregistering || isSigningOut
-                    )
-                }
+        #endif
+        LabeledContent("Device token") {
+            if let suffix = notifications.deviceTokenSuffix {
+                Text(verbatim: "…\(suffix)")
+                    .monospaced()
+                    .textSelection(.enabled)
             } else {
-                Button("Enable notifications") {
-                    Task { await notifications.requestAuthorization() }
-                }
-                .disabled(
-                    notifications.isRegistering || notifications.isUnregistering || isSigningOut)
+                Text("Not received")
             }
-            Button("Open System Settings") { notifications.openSystemSettings() }
         }
+        LabeledContent("Backend registration") {
+            HStack {
+                if notifications.isRegistering {
+                    ProgressView().controlSize(.small)
+                }
+                Text(registrationDescription)
+            }
+        }
+        if let registered = notifications.backendEnvironment {
+            LabeledContent(
+                "Registered environment", value: environmentDescription(registered))
+        }
+        if let error = notifications.registrationError {
+            Text(verbatim: error).foregroundStyle(.red)
+        }
+        if notifications.canDisableNotifications && !notifications.isRegistered {
+            Button("Retry registration") {
+                Task { await notifications.refreshAuthorization() }
+            }
+            .disabled(
+                notifications.isRegistering || notifications.isUnregistering || isSigningOut
+            )
+        }
+        Button("Open System Settings") { notifications.openSystemSettings() }
     }
 
     private func environmentDescription(_ environment: APNsEnvironment?) -> String {

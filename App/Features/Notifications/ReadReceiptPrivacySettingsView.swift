@@ -3,20 +3,34 @@ import SwiftUI
 
 struct ReadReceiptPrivacySettingsView: View {
     @ObservedObject private var store: ChatStore
+    @StateObject private var model: ReadReceiptPrivacySettingsModel
+    @State private var loadRetryTask: Task<Void, Never>?
     let grouped: Bool
     @Environment(\.colorScheme) private var colorScheme
 
     init(store: ChatStore, grouped: Bool) {
         self.store = store
         self.grouped = grouped
+        _model = StateObject(wrappedValue: ReadReceiptPrivacySettingsModel(store: store))
     }
 
     var body: some View {
         Group {
             if grouped {
                 Form {
-                    Section("Who can see my read receipts") {
-                        ReadReceiptPrivacySettingsRows(store: store)
+                    Section {
+                        ReadReceiptPrivacyOptions(model: model, onRetryLoad: retryLoad)
+                    } header: {
+                        Text("Who can see my read receipts")
+                    } footer: {
+                        ReadReceiptPrivacyNote()
+                    }
+                    Section {
+                        exceptionsPlaceholder
+                    } header: {
+                        Text("Exceptions")
+                    } footer: {
+                        exceptionsNote
                     }
                 }
                 .formStyle(.grouped)
@@ -28,11 +42,27 @@ struct ReadReceiptPrivacySettingsView: View {
                         Text("Who can see my read receipts")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                        ReadReceiptPrivacySettingsRows(store: store)
+                        VStack(alignment: .leading, spacing: 16) {
+                            ReadReceiptPrivacyOptions(model: model, onRetryLoad: retryLoad)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(20)
+                        .background(
+                            colorScheme == .dark ? Color.white.opacity(0.07) : Color.white,
+                            in: RoundedRectangle(cornerRadius: 18))
+                        ReadReceiptPrivacyNote()
+                            .foregroundStyle(.secondary)
+                        Text("Exceptions")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        exceptionsPlaceholder
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(20)
                             .background(
                                 colorScheme == .dark ? Color.white.opacity(0.07) : Color.white,
                                 in: RoundedRectangle(cornerRadius: 18))
+                        exceptionsNote
+                            .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: 620)
                     .padding(32)
@@ -45,35 +75,55 @@ struct ReadReceiptPrivacySettingsView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+        .task(id: store.currentUserProfile?.uid) { await model.load() }
+        .onDisappear {
+            loadRetryTask?.cancel()
+            loadRetryTask = nil
+            model.cancelLoading()
+        }
+    }
+
+    private var exceptionsPlaceholder: some View {
+        LabeledContent("Never Share With") {
+            Text("Coming soon")
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    private var exceptionsNote: some View {
+        Text("Exceptions are not available yet.")
+            .font(.footnote)
+    }
+
+    private func retryLoad() {
+        loadRetryTask?.cancel()
+        loadRetryTask = Task { await model.load() }
     }
 }
 
-/// Shared automatic-save controls for account settings and the DM friend's override card.
+/// Automatic-save override card for a DM friend.
 struct ReadReceiptPrivacySettingsRows: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ReadReceiptPrivacySettingsModel
     @State private var loadRetryTask: Task<Void, Never>?
 
-    init(store: ChatStore, peerUID: Int32? = nil) {
+    init(store: ChatStore, peerUID: Int32) {
         self.store = store
         _model = StateObject(
             wrappedValue: ReadReceiptPrivacySettingsModel(
-                store: store, scope: peerUID.map { .friend($0) } ?? .account))
+                store: store, scope: .friend(peerUID)))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if model.scope != .account, model.loadPhase != .notFriend {
+            if model.loadPhase != .notFriend {
                 Text("Read receipt sharing")
                     .font(.headline)
             }
-            settingsRows
+            ReadReceiptPrivacyOptions(model: model, onRetryLoad: retryLoad)
             if model.loadPhase != .notFriend {
-                Text(
-                    "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts."
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                ReadReceiptPrivacyNote()
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -85,23 +135,36 @@ struct ReadReceiptPrivacySettingsRows: View {
         }
     }
 
+    private func retryLoad() {
+        loadRetryTask?.cancel()
+        loadRetryTask = Task { await model.load() }
+    }
+}
+
+/// Render-only choices let the account form own each row without attaching load tasks to rows.
+private struct ReadReceiptPrivacyOptions: View {
+    @ObservedObject var model: ReadReceiptPrivacySettingsModel
+    let onRetryLoad: () -> Void
+
     @ViewBuilder
-    private var settingsRows: some View {
+    var body: some View {
         switch model.loadPhase {
         case .notFriend:
             EmptyView()
         case .idle:
-            Button("Retry") { retryLoad() }
+            Button("Retry", action: onRetryLoad)
         case .loading:
             ProgressView("Loading read receipt settings…")
         case .failed:
-            Text(
-                model.scope == .account
-                    ? LocalizedStringKey("Failed to load read receipt settings.")
-                    : LocalizedStringKey("Failed to load this friend's read receipt setting.")
-            )
-            .foregroundStyle(.secondary)
-            Button("Retry") { retryLoad() }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(
+                    model.scope == .account
+                        ? LocalizedStringKey("Failed to load read receipt settings.")
+                        : LocalizedStringKey("Failed to load this friend's read receipt setting.")
+                )
+                .foregroundStyle(.secondary)
+                Button("Retry", action: onRetryLoad)
+            }
         case .loaded:
             ForEach(model.choices, id: \.self) { choice in
                 Button {
@@ -145,11 +208,6 @@ struct ReadReceiptPrivacySettingsRows: View {
         }
     }
 
-    private func retryLoad() {
-        loadRetryTask?.cancel()
-        loadRetryTask = Task { await model.load() }
-    }
-
     private func title(for choice: ReadReceiptPrivacySettingsModel.Choice) -> LocalizedStringKey {
         switch choice {
         case .visibility(.friends): "Friends"
@@ -158,5 +216,14 @@ struct ReadReceiptPrivacySettingsRows: View {
         case .friendOverride(.share): "Share with this friend"
         case .friendOverride(.hide): "Hide from this friend"
         }
+    }
+}
+
+private struct ReadReceiptPrivacyNote: View {
+    var body: some View {
+        Text(
+            "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts."
+        )
+        .font(.footnote)
     }
 }

@@ -9,6 +9,7 @@
         private var lineCount = 0
         private let divider = UIView()
         private let marker = MessageRowGestureMarker(frame: .zero)
+        private var cardLayout: TimelineForwardedCardLayout?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -19,7 +20,11 @@
         }
         required init?(coder: NSCoder) { nil }
 
-        func configure(lines: [String], fontSize: CGFloat, outgoing: Bool, enabled: Bool) {
+        func configure(
+            lines: [String], fontSize: CGFloat, footerFontSize: CGFloat,
+            layout: TimelineForwardedCardLayout, outgoing: Bool, enabled: Bool
+        ) {
+            cardLayout = layout
             lineCount = lines.count
             while labels.count < lines.count {
                 let label = UILabel()
@@ -33,7 +38,8 @@
                 guard index < lines.count else { continue }
                 label.text = lines[index]
                 label.font = .systemFont(
-                    ofSize: fontSize, weight: index == 0 ? .semibold : .regular)
+                    ofSize: index == lines.count - 1 && lines.count > 1 ? footerFontSize : fontSize,
+                    weight: index == 0 ? .semibold : .regular)
                 label.textColor =
                     outgoing
                     ? UIColor.white.withAlphaComponent(index == 0 ? 1 : 0.7)
@@ -52,14 +58,12 @@
         }
         override func layoutSubviews() {
             super.layoutSubviews()
-            let height = bounds.height / CGFloat(max(1, lineCount))
+            guard let cardLayout else { return }
             marker.frame = bounds
-            for (index, label) in labels.prefix(lineCount).enumerated() {
-                label.frame = CGRect(
-                    x: 0, y: CGFloat(index) * height, width: bounds.width, height: height)
+            for (label, frame) in zip(labels.prefix(lineCount), cardLayout.labelFrames) {
+                label.frame = frame
             }
-            divider.frame = CGRect(
-                x: 0, y: bounds.height - height, width: bounds.width, height: 0.5)
+            divider.frame = cardLayout.dividerFrame
         }
         @objc private func activate() { if isEnabled { onActivate?() } }
         override func accessibilityActivate() -> Bool {
