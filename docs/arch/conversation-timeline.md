@@ -12,7 +12,19 @@ Outgoing published messages show a single checkmark when sent and double checkma
 
 Manual verification: with two friend accounts allowing receipt sharing, send a DM from Apple and open it in the PWA; the sent checkmark should become double. Repeat with a thread reply and confirm reading the parent conversation alone does not mark the reply read. Hide sharing on either account and confirm double checkmarks disappear; restore sharing, reconnect/foreground the Apple client, and confirm authorized receipts return. Group messages should remain single-checkmarked.
 
-Privacy UI verification: open a friend's DM information page and confirm it shows a Privacy Settings row rather than inline read-receipt choices. Open it and check both groups, selected checkmarks, and gray reciprocity footers on iOS and macOS. Change each group, leave and reopen, and confirm the overrides persist independently; Use global setting restores inheritance.
+Privacy UI verification: open a friend's DM information page and confirm it shows a Privacy Settings row with a white hand on a blue rounded-square icon rather than inline read-receipt choices. Open it and check both groups, selected checkmarks, and gray reciprocity footers on iOS and macOS. Change each group, leave and reopen, and confirm the overrides persist independently; Use global setting restores inheritance.
+
+## Presence display
+
+Individual presence follows PWA precedence: **Online**, **Away**, a server-provided coarse `lastSeenBucket`, then an exact `lastSeenAt` timestamp. Coarse buckets are **recently**, **within a week**, **within a month**, and **a long time ago**; the client never derives an exact timestamp from a privacy-filtered bucket. A known presence record without any status uses the long-ago label; an unknown/pending snapshot stays undisplayed.
+
+Exact last seen clamps future timestamps to just now. Under one minute shows **just now**, under one hour shows whole minutes, and under twelve hours shows whole hours. Older activity uses **today** or **yesterday** with 24-hour time, then a localized abbreviated month/day and time; the year is included only for activity in a different calendar year. Calendar-day comparisons use the local time zone, including daylight-saving transitions. The same presentation feeds the DM header and information/profile page.
+
+## Friend safety actions
+
+DM information/profile pages keep **Remove friend** and **Block/Unblock** inside **More**, alongside the group page's existing **Leave group** pattern. The actions are destructive/red and require an explicit confirmation naming the target; Cancel makes no request. Remove friend is offered only for an authoritative current friendship and closes the conversation on success. Block/Unblock reloads the relationship in place so its label and DM authorization reflect the server response. Self-targeted actions are disabled.
+
+Committed mutations invalidate cached receipts, individual presence, and conversation lists. A failed post-mutation relationship refresh retries only the refresh, not the mutation that already succeeded. Manual verification: cancel each confirmation without a state change, then block/unblock a friend and confirm the menu and DM send permission update; remove a friend and confirm the conversation closes and can no longer be sent to.
 
 ## Delivery indicators and timestamps
 

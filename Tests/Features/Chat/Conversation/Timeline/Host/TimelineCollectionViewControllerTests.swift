@@ -680,6 +680,9 @@
                 accuracy: 1,
                 "A second jump must reach the actual bottom.")
 
+            // The viewport checks below simulate rereading after an explicit mark-unread.
+            model.resetReadWatermark(to: messages[3].id)
+
             func frame(_ messageIndex: Int) throws -> CGRect {
                 let index = try XCTUnwrap(
                     model.rows.firstIndex { $0.messageID == messages[messageIndex].id })

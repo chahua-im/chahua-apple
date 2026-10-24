@@ -7,6 +7,10 @@
 - [Environment setup and signing](setup.md)
 - [Local checks, profiling builds, and Jenkins](development.md)
 
+## Product planning
+
+- [PWA → Apple feature parity plan](flutter-parity-checklist.md) — source-reviewed iOS/macOS gaps, delivery order, and acceptance criteria.
+
 ## Architecture
 
 - [Conversation timeline](arch/conversation-timeline.md) — grouping, receipts, delivery indicators, forwarding, unread activity, and image viewing.
