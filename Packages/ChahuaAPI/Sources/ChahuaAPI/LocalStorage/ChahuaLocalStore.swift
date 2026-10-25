@@ -123,10 +123,19 @@ public final class ChahuaLocalStore: Sendable {
                     sql:
                         "UPDATE outgoing_message SET sender_id = ?, text = ?, reply_to_message = ?, is_blocked = 0, edit_revision = ?, enqueued_at = ?, updated_at = ? WHERE client_generated_id = ?",
                     arguments: [
-                        senderID, trimmed, replyData, clearedDraftRevision,
+                        senderID, item.attachments.contains(where: \.isFile) ? "" : trimmed,
+                        replyData, clearedDraftRevision,
                         enqueuedAt.timeIntervalSince1970, enqueuedAt.timeIntervalSince1970,
                         item.clientGeneratedID,
                     ])
+                // File messages cannot carry text on the wire. Keep the entered caption as
+                // an adjacent durable text message rather than silently dropping the draft.
+                if item.attachments.contains(where: \.isFile), !trimmed.isEmpty {
+                    try Self.insert(
+                        db, key, id: UUID().uuidString, senderID: senderID, text: trimmed,
+                        replyData: nil, date: enqueuedAt, revision: clearedDraftRevision,
+                        blocked: false)
+                }
             } else {
                 try Self.insert(
                     db, key, id: clientGeneratedID, senderID: senderID, text: trimmed,
@@ -313,7 +322,8 @@ public final class ChahuaLocalStore: Sendable {
             let item = try Self.editableTail(
                 before, itemID: itemID, expectedRevision: expectedRevision)
             guard item.isBlocked else { throw LocalStorageError.notTail }
-            guard item.forwardRequest == nil, item.messageType == .text,
+            guard item.forwardRequest == nil,
+                item.messageType == .text || item.messageType == .file,
                 !attachments.contains(where: \.isAudio)
             else {
                 throw LocalStorageError.unsupportedMessageType
@@ -334,11 +344,11 @@ public final class ChahuaLocalStore: Sendable {
                     if !sourceChanged { slot = old }
                 }
                 // Position is composition state, not part of the uploaded content generation.
-                if sourceChanged || optionsChanged {
+                if sourceChanged || (optionsChanged && !slot.isFile) {
                     slot.generation = UUID().uuidString
                     slot.attachmentID = nil
                     slot.error = nil
-                    slot.preparedPath = nil
+                    slot.preparedPath = slot.isFile ? slot.sourcePath : nil
                 }
                 slot.position = position
                 return slot
@@ -381,10 +391,10 @@ public final class ChahuaLocalStore: Sendable {
             let old = item.attachments[index]
             guard old.sourcePath == attachment.sourcePath, old.previewPath == attachment.previewPath
             else { return before }
-            guard old.isAudio == attachment.isAudio else {
+            guard old.isAudio == attachment.isAudio, old.isFile == attachment.isFile else {
                 throw LocalStorageError.invalidAttachments
             }
-            if old.isAudio {
+            if old.isAudio || old.isFile {
                 guard attachment.preparedPath == old.preparedPath,
                     attachment.mimeType == old.mimeType,
                     attachment.fileName == old.fileName, attachment.byteCount == old.byteCount,
@@ -405,10 +415,11 @@ public final class ChahuaLocalStore: Sendable {
             var slots = item.attachments
             slots[index] = updated
             try Self.validateAttachments(slots, directory: self.directory, requireSource: false)
-            // Voice has no editable attachment strip. Its failed-message retry
-            // action must survive interruption atomically with the upload error.
+            // Sent voice/files use the message retry sheet. Persist failure with the upload
+            // checkpoint; blocked drafts retain per-attachment retry without stopping workers.
             let state =
-                item.messageType == .audio && updated.error != nil
+                !item.isBlocked && (item.messageType == .audio || item.messageType == .file)
+                    && updated.error != nil
                 ? LocalOutgoingMessage.State.failed : item.state
             try db.execute(
                 sql:
@@ -431,7 +442,9 @@ public final class ChahuaLocalStore: Sendable {
             let before = try Self.snapshot(db, key, directory: self.directory)
             let item = try Self.editableTail(
                 before, itemID: itemID, expectedRevision: expectedRevision)
-            guard item.forwardRequest == nil, item.messageType == .text else {
+            guard item.forwardRequest == nil,
+                item.messageType == .text || item.messageType == .file
+            else {
                 throw LocalStorageError.unsupportedMessageType
             }
             guard !item.isBlocked else { return before }
@@ -487,16 +500,20 @@ public final class ChahuaLocalStore: Sendable {
         }
     }
 
-    public func fail(chatID: String, threadID: String? = nil, clientGeneratedID: String)
-        async throws -> LocalConversationSnapshot
-    {
+    public func fail(
+        chatID: String, threadID: String? = nil, clientGeneratedID: String,
+        speakingRestriction: SpeakingMode? = nil
+    ) async throws -> LocalConversationSnapshot {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         return try await database.write { db in
             try Self.ensure(db, key)
             try db.execute(
                 sql:
-                    "UPDATE outgoing_message SET state = 'failed' WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND is_blocked = 0 AND state != 'failed'",
-                arguments: [chatID, threadID ?? "", clientGeneratedID])
+                    "UPDATE outgoing_message SET state = 'failed', speaking_restriction = ? WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND is_blocked = 0 AND (state != 'failed' OR speaking_restriction IS NOT ?)",
+                arguments: [
+                    speakingRestriction?.rawValue, chatID, threadID ?? "", clientGeneratedID,
+                    speakingRestriction?.rawValue,
+                ])
             if db.changesCount > 0 { try Self.bump(db, key) }
             return try Self.snapshot(db, key, directory: self.directory)
         }
@@ -523,7 +540,7 @@ public final class ChahuaLocalStore: Sendable {
                 guard item.state == .failed || slots != item.attachments else { continue }
                 try db.execute(
                     sql:
-                        "UPDATE outgoing_message SET state = 'queued', attachments = ? WHERE client_generated_id = ?",
+                        "UPDATE outgoing_message SET state = 'queued', attachments = ?, speaking_restriction = NULL WHERE client_generated_id = ?",
                     arguments: [
                         try Self.encodeAttachments(slots, directory: self.directory),
                         item.clientGeneratedID,
@@ -623,12 +640,17 @@ public final class ChahuaLocalStore: Sendable {
         let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
         for (position, slot) in attachments.enumerated() {
             let validDimensions =
-                slot.isAudio
+                slot.isAudio || slot.isFile
                 ? slot.width == 0 && slot.height == 0 : slot.width > 0 && slot.height > 0
             guard slot.position == position, !slot.id.isEmpty, !slot.generation.isEmpty,
                 validDimensions, slot.byteCount > 0,
                 slot.attachmentID?.isEmpty != true
             else { throw LocalStorageError.invalidAttachments }
+            if slot.isFile {
+                guard slot.preparedPath == slot.sourcePath, slot.previewPath == slot.sourcePath,
+                    !slot.fileName.isEmpty, !slot.mimeType.isEmpty
+                else { throw LocalStorageError.invalidAttachments }
+            }
             if slot.isAudio {
                 guard attachments.count == 1, slot.mimeType == "audio/mp4",
                     slot.preparedPath == slot.sourcePath, slot.previewPath == slot.sourcePath,
@@ -734,6 +756,12 @@ public final class ChahuaLocalStore: Sendable {
             let forward = try (row["forward_request"] as Data?).map {
                 try JSONDecoder().decode(LocalForwardRequest.self, from: $0)
             }
+            let speakingRestriction = try (row["speaking_restriction"] as String?).map {
+                guard let mode = SpeakingMode(rawValue: $0) else {
+                    throw LocalStorageError.corruptRecord
+                }
+                return mode
+            }
             if let forward {
                 guard !forward.sources.isEmpty, forward.sources.count <= 100,
                     Set(forward.messageIDs).count == forward.sources.count,
@@ -763,7 +791,8 @@ public final class ChahuaLocalStore: Sendable {
                 enqueueSequence: row["enqueue_sequence"], dispatchOrder: row["enqueue_sequence"],
                 state: state, attachments: attachments, isBlocked: row["is_blocked"],
                 editRevision: row["edit_revision"], compressionEnabled: row["compression_enabled"],
-                dispatchClaimed: row["dispatch_claimed"], sticker: sticker, forwardRequest: forward)
+                dispatchClaimed: row["dispatch_claimed"], sticker: sticker, forwardRequest: forward,
+                speakingRestriction: speakingRestriction)
         }
         let composing = items.last?.isBlocked == true ? items.last : nil
         guard items.filter(\.isBlocked).count == (composing == nil ? 0 : 1) else {

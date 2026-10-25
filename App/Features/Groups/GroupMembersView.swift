@@ -8,6 +8,7 @@ struct GroupMembersView: View {
     @State private var pendingAction: PendingMemberAction?
     @State private var failedAction: FailedMemberAction?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openUserProfile) private var openUserProfile
 
     init(chatID: String, currentUserID: Int32, store: ChatStore) {
         _model = StateObject(
@@ -112,7 +113,10 @@ struct GroupMembersView: View {
                 set: { if !$0 { failedAction = nil } }
             )
         ) {
-            if let failedAction, model.canManage(failedAction.action.member) {
+            if let failedAction, model.canManage(failedAction.action.member),
+                failedAction.action.speakingMode == nil
+                    || model.canEditSpeakingMode(failedAction.action.member)
+            {
                 Button("Retry") { perform(failedAction.action) }
             }
             Button("OK", role: .cancel) { failedAction = nil }
@@ -205,6 +209,24 @@ struct GroupMembersView: View {
     private func memberRow(_ member: MemberResponse) -> some View {
         if model.canManage(member) {
             Menu {
+                Button("View Profile") { openUserProfile(member.uid) }
+                if model.canEditSpeakingMode(member) {
+                    Menu("Speaking permissions") {
+                        ForEach(SpeakingMode.allCases, id: \.self) { mode in
+                            Button {
+                                perform(.init(member: member, kind: .speakingMode(mode)))
+                            } label: {
+                                if member.speakingMode == mode {
+                                    Label(mode.localizedTitle, systemImage: "checkmark")
+                                } else {
+                                    Text(mode.localizedTitle)
+                                }
+                            }
+                            .accessibilityIdentifier(
+                                "group-member-\(member.uid)-speaking-\(mode.rawValue)")
+                        }
+                    }
+                }
                 Button(member.role == .admin ? "Demote to member" : "Promote to admin") {
                     pendingAction = .init(
                         member: member, kind: member.role == .admin ? .demote : .promote)
@@ -225,11 +247,15 @@ struct GroupMembersView: View {
             .accessibilityValue(Text(memberRoleLabel(member.role)))
             .accessibilityHint("Show member actions")
         } else {
-            memberRowLabel(member, isActionable: false)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("group-member-\(member.uid)")
-                .accessibilityLabel(memberName(member))
-                .accessibilityValue(Text(memberRoleLabel(member.role)))
+            Button {
+                openUserProfile(member.uid)
+            } label: {
+                memberRowLabel(member, isActionable: false)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("group-member-\(member.uid)")
+            .accessibilityLabel(memberName(member))
+            .accessibilityValue(Text(memberRoleLabel(member.role)))
         }
     }
 
@@ -242,10 +268,17 @@ struct GroupMembersView: View {
             )
             .accessibilityHidden(true)
 
-            Text(memberName(member))
-                .font(.body.weight(.medium))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(memberName(member))
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                if member.role == .member, let mode = member.speakingMode {
+                    Text(mode.localizedTitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if member.role == .admin {
                 Text("Admin")
@@ -272,7 +305,9 @@ struct GroupMembersView: View {
 
     private func perform(_ action: PendingMemberAction) {
         pendingAction = nil
-        guard model.canManage(action.member) else {
+        guard model.canManage(action.member),
+            action.speakingMode == nil || model.canEditSpeakingMode(action.member)
+        else {
             failedAction = .init(
                 action: action,
                 message: AppLanguage.localized(
@@ -289,11 +324,13 @@ struct GroupMembersView: View {
                     try await model.updateRole(of: action.member, to: .member)
                 case .remove:
                     try await model.remove(action.member)
+                case .speakingMode(let mode):
+                    try await model.updateSpeakingMode(of: action.member, to: mode)
                 }
             } catch is CancellationError {
                 // A disappearing screen should not surface a cancelled request.
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, model.isCurrentSession else { return }
                 failedAction = .init(action: action, message: error.localizedDescription)
             }
         }
@@ -310,20 +347,27 @@ struct GroupMembersView: View {
 }
 
 private struct PendingMemberAction: Identifiable {
-    enum Kind {
+    enum Kind: Equatable {
         case promote
         case demote
         case remove
+        case speakingMode(SpeakingMode)
     }
 
     let member: MemberResponse
     let kind: Kind
+
+    var speakingMode: SpeakingMode? {
+        if case .speakingMode(let mode) = kind { return mode }
+        return nil
+    }
 
     var id: String {
         switch kind {
         case .promote: "promote-\(member.uid)"
         case .demote: "demote-\(member.uid)"
         case .remove: "remove-\(member.uid)"
+        case .speakingMode(let mode): "speaking-\(member.uid)-\(mode.rawValue)"
         }
     }
 
@@ -336,6 +380,7 @@ private struct PendingMemberAction: Identifiable {
         case .promote: AppLanguage.localized("Promote member")
         case .demote: AppLanguage.localized("Demote member")
         case .remove: AppLanguage.localized("Remove member")
+        case .speakingMode: AppLanguage.localized("Speaking permissions")
         }
     }
 
@@ -345,6 +390,7 @@ private struct PendingMemberAction: Identifiable {
         case .promote: AppLanguage.localized("Promote \(name) to admin?")
         case .demote: AppLanguage.localized("Demote \(name) to member?")
         case .remove: AppLanguage.localized("Remove \(name) from this group?")
+        case .speakingMode(let mode): mode.localizedTitle
         }
     }
 

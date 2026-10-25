@@ -29,11 +29,31 @@ final class GroupMembersModel: ObservableObject {
     private var firstPageTask: Task<Void, Never>?
     private var nextPageTask: Task<Void, Never>?
     private var loadMoreRequested = false
+    private let sessionRevision: Int
+    private var observations = Set<AnyCancellable>()
+    private var ownRole: GroupRole?
+    private var permissionRevision = 0
 
     init(chatID: String, currentUserID: Int32, store: ChatStore) {
         self.chatID = chatID
         self.currentUserID = currentUserID
         self.store = store
+        sessionRevision = store.sessionRevision
+        store.$memberSpeakingModesByChatID
+            .sink { [weak self] changes in
+                self?.applySpeakingChanges(changes[chatID] ?? [:])
+            }
+            .store(in: &observations)
+        store.$sessionRevision
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.cancelPendingRequests()
+                self.members = []
+                self.canManageMembers = false
+                self.nextCursor = nil
+            }
+            .store(in: &observations)
     }
 
     deinit {
@@ -46,17 +66,38 @@ final class GroupMembersModel: ObservableObject {
     }
 
     func canManage(_ member: MemberResponse) -> Bool {
-        canManageMembers && member.uid != currentUserID && !mutatingMemberIDs.contains(member.uid)
+        isCurrentSession && canManageMembers && member.uid != currentUserID
+            && members.contains(where: { $0.uid == member.uid })
+            && !mutatingMemberIDs.contains(member.uid)
+    }
+
+    var isCurrentSession: Bool {
+        store.sessionRevision == sessionRevision && store.currentUserProfile?.uid == currentUserID
+    }
+
+    func canEditSpeakingMode(_ member: MemberResponse) -> Bool {
+        canManage(member) && members.first(where: { $0.uid == member.uid })?.role == .member
+    }
+
+    func updateSpeakingMode(of member: MemberResponse, to mode: SpeakingMode) async throws {
+        guard canEditSpeakingMode(member) else { throw GroupMembersActionError.notAuthorized }
+        try await performMutation(for: member) {
+            try await store.updateMemberSpeakingMode(
+                chatID: chatID, uid: member.uid, speakingMode: mode)
+        } apply: { [weak self] response in
+            self?.applySpeakingChanges([response.uid: response])
+        }
     }
 
     func loadIfNeeded() async {
-        guard loadPhase == .idle else { return }
+        guard isCurrentSession, loadPhase == .idle else { return }
         await startFirstPage(
             query: query, mode: searchMode, preservingMembers: false, debounce: false
         ).value
     }
 
     func refresh() async {
+        guard isCurrentSession else { return }
         await startFirstPage(
             query: query, mode: searchMode, preservingMembers: !members.isEmpty, debounce: false
         ).value
@@ -76,7 +117,9 @@ final class GroupMembersModel: ObservableObject {
     }
 
     func loadMore() {
-        guard loadPhase == .loaded, nextCursor != nil, mutatingMemberIDs.isEmpty else { return }
+        guard isCurrentSession, loadPhase == .loaded, nextCursor != nil,
+            mutatingMemberIDs.isEmpty
+        else { return }
         if isLoadingMore || nextPageTask != nil {
             loadMoreRequested = true
             return
@@ -113,15 +156,17 @@ final class GroupMembersModel: ObservableObject {
                 )
                 try Task.checkCancellation()
                 guard response.nextCursor != after else { throw APIError.unexpectedResponse }
-                guard self.queryRevision == revision else { return }
+                guard self.isCurrentSession, self.queryRevision == revision else { return }
                 self.members = self.merging(self.members, with: response.members)
                 self.nextCursor = response.nextCursor
                 self.canManageMembers = response.canManageMembers
+                self.applySpeakingChanges(
+                    self.store.memberSpeakingModesByChatID[self.chatID] ?? [:])
                 didLoadPage = true
             } catch is CancellationError {
                 // A changed search term or a disappeared screen owns cancellation.
             } catch {
-                guard self.queryRevision == revision else { return }
+                guard self.isCurrentSession, self.queryRevision == revision else { return }
                 self.loadMoreRequested = false
                 self.loadMoreError = error.localizedDescription
             }
@@ -166,6 +211,7 @@ final class GroupMembersModel: ObservableObject {
         preservingMembers: Bool,
         debounce: Bool
     ) -> Task<Void, Never> {
+        guard isCurrentSession else { return Task {} }
         firstPageTask?.cancel()
         nextPageTask?.cancel()
         firstPageTask = nil
@@ -205,15 +251,17 @@ final class GroupMembersModel: ObservableObject {
                     )
                 )
                 try Task.checkCancellation()
-                guard self.queryRevision == revision else { return }
+                guard self.isCurrentSession, self.queryRevision == revision else { return }
                 self.members = self.deduplicated(response.members)
                 self.nextCursor = response.nextCursor
                 self.canManageMembers = response.canManageMembers
                 self.loadPhase = .loaded
+                self.applySpeakingChanges(
+                    self.store.memberSpeakingModesByChatID[self.chatID] ?? [:])
             } catch is CancellationError {
                 // The next request will own state after a new search or dismissal.
             } catch {
-                guard self.queryRevision == revision else { return }
+                guard self.isCurrentSession, self.queryRevision == revision else { return }
                 self.loadError = error.localizedDescription
                 self.loadPhase = self.members.isEmpty ? .failed : .loaded
             }
@@ -237,29 +285,78 @@ final class GroupMembersModel: ObservableObject {
         do {
             let result = try await request()
             try Task.checkCancellation()
-            guard queryRevision == revisionAtStart else {
-                await refresh()
-                return
-            }
-            cancelPendingRequests()
+            guard isCurrentSession else { throw CancellationError() }
+            if queryRevision == revisionAtStart { cancelPendingRequests() }
             apply(result)
+            applySpeakingChanges(store.memberSpeakingModesByChatID[chatID] ?? [:])
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            guard isCurrentSession else { throw CancellationError() }
             await refreshPermissionsAfterMutationFailure(for: revisionAtStart)
             throw error
         }
     }
 
     private func refreshPermissionsAfterMutationFailure(for revision: Int) async {
-        guard queryRevision == revision else { return }
+        guard isCurrentSession, queryRevision == revision else { return }
+        // A rejected mutation must not discard later pages or the current search.
         canManageMembers = false
-        await refresh()
+        let requestPermissionRevision = permissionRevision
+        do {
+            let response = try await store.groupMembers(
+                chatID: chatID,
+                query: .init(q: query.isEmpty ? nil : query, mode: searchMode, limit: 50))
+            try Task.checkCancellation()
+            guard isCurrentSession, queryRevision == revision,
+                self.permissionRevision == requestPermissionRevision
+            else { return }
+            canManageMembers = response.canManageMembers
+            for member in response.members { replace(member) }
+            applySpeakingChanges(store.memberSpeakingModesByChatID[chatID] ?? [:])
+        } catch {
+            // Keep the visible directory and cursor; explicit Refresh can recover permission.
+        }
     }
 
     private func replace(_ member: MemberResponse) {
         guard let index = members.firstIndex(where: { $0.uid == member.uid }) else { return }
         members[index] = member
+    }
+
+    private func applySpeakingChanges(_ changes: [Int32: MemberSpeakingModeResponse]) {
+        guard isCurrentSession, !changes.isEmpty else { return }
+        let nextOwnRole = changes[currentUserID]?.role
+        let ownRoleChanged = nextOwnRole != nil && nextOwnRole != ownRole
+        if ownRoleChanged {
+            ownRole = nextOwnRole
+            permissionRevision &+= 1
+        }
+        if let ownChange = changes[currentUserID], ownChange.role != .admin {
+            canManageMembers = false
+        }
+        var changed = false
+        for index in members.indices {
+            guard let update = changes[members[index].uid],
+                members[index].role != update.role
+                    || members[index].speakingMode != update.speakingMode
+            else { continue }
+            let member = members[index]
+            members[index] = .init(
+                uid: member.uid, username: member.username, avatarUrl: member.avatarUrl,
+                role: update.role, speakingMode: update.speakingMode)
+            changed = true
+        }
+        if changed {
+            // Do not let an older page response restore an obsolete role or restriction.
+            cancelPendingRequests()
+        }
+        if ownRoleChanged, nextOwnRole == .admin, loadPhase != .idle {
+            let revision = queryRevision
+            Task { [weak self] in
+                await self?.refreshPermissionsAfterMutationFailure(for: revision)
+            }
+        }
     }
 
     private func normalizedQuery(_ value: String) -> String {

@@ -23,6 +23,7 @@ enum RowSectionKey: Hashable {
     case reaction(emoji: String, count: Int64, reactors: Int)
     case thread(String)
     case standalone(String, author: String?)
+    case system(TimelineSystemMessageContent)
 }
 
 struct RowLayoutKey: Hashable {
@@ -42,6 +43,7 @@ struct TimelineRowPresentation {
     let metadataIsOverlay: Bool
     let threadLabel: String?
     let standaloneText: String?
+    let systemContent: TimelineSystemMessageContent?
     let layoutKey: RowLayoutKey
 
     /// Native metadata and the hosted duration label share the audio footer.
@@ -93,6 +95,7 @@ struct TimelineRowPresentation {
         var overlay = false
         var threadLabel: String?
         var standaloneText: String?
+        var systemContent: TimelineSystemMessageContent?
         var sections: [RowSectionKey] = []
         switch row {
         case .message(let message):
@@ -101,7 +104,8 @@ struct TimelineRowPresentation {
             let system = message.entry.messageType == .system
             let sticker = message.entry.messageType == .sticker
             let audio = message.entry.messageType == .audio
-            let card = message.entry.messageType == .forwarded
+            let invite = message.entry.messageType == .invite
+            let card = message.entry.messageType == .forwarded || invite
             let placeholder = message.entry.messageType == .placeholder
             let supported =
                 message.entry.messageType == .text || message.entry.messageType == .file || sticker
@@ -117,17 +121,19 @@ struct TimelineRowPresentation {
             if system {
                 standaloneText =
                     deleted ? AppLanguage.localized("[Deleted]") : message.entry.text ?? ""
-                sections.append(
-                    .standalone(
-                        standaloneText!,
-                        author: remote?.sender.name.flatMap { $0.isEmpty ? nil : $0 }))
+                if let remote {
+                    systemContent = .init(message: remote, body: standaloneText!)
+                    sections.append(.system(systemContent!))
+                } else {
+                    sections.append(.standalone(standaloneText!, author: nil))
+                }
             } else {
                 let sender = message.entry.sender
                 let name =
                     sender?.name.flatMap { $0.isEmpty ? nil : $0 }
                     ?? "User \(message.entry.senderID)"
                 title =
-                    message.showsSenderName && !sticker && !card
+                    environment.showsMessageDetails && message.showsSenderName && !sticker && !card
                     ? .init(
                         name: name, userGroup: sender?.userGroup,
                         genderGlyph: sender?.gender == 2 ? "♀" : "♂") : nil
@@ -135,7 +141,10 @@ struct TimelineRowPresentation {
                     .grouping(
                         outgoing: message.isOutgoing, position: message.groupPosition,
                         title: title != nil,
-                        avatar: message.groupPosition == .single || message.groupPosition == .last))
+                        avatar: environment.showsMessageDetails
+                            && (environment.showAllAvatars || message.groupPosition == .single
+                                || message.groupPosition == .last)
+                    ))
                 sections.append(.title(title))
                 if !deleted && supported {
                     if !sticker && !card, let origin = remote?.forwardedFrom {
@@ -149,13 +158,21 @@ struct TimelineRowPresentation {
                     if let originLabel { sections.append(.standalone(originLabel, author: nil)) }
                     if let originalReply { sections.append(.reply(originalReply)) }
                     if card {
-                        forwardedCardLines = [AppLanguage.localized("Chat history")]
-                        if let preview = remote?.forwardedPreview {
-                            forwardedCardLines += preview.messages.prefix(3).map {
-                                "\($0.sender.name ?? "User \($0.sender.uid)"): \(MessageSummaryContent.forwardedSummary($0))"
+                        if invite {
+                            forwardedCardLines = [
+                                AppLanguage.localized("Group invitation"),
+                                message.entry.text ?? "",
+                                AppLanguage.localized("Tap to preview"),
+                            ]
+                        } else {
+                            forwardedCardLines = [AppLanguage.localized("Chat history")]
+                            if let preview = remote?.forwardedPreview {
+                                forwardedCardLines += preview.messages.prefix(3).map {
+                                    "\($0.sender.name ?? "User \($0.sender.uid)"): \(MessageSummaryContent.forwardedSummary($0))"
+                                }
+                                forwardedCardLines.append(
+                                    AppLanguage.localized("\(preview.total) messages"))
                             }
-                            forwardedCardLines.append(
-                                AppLanguage.localized("\(preview.total) messages"))
                         }
                         sections.append(
                             .standalone(forwardedCardLines.joined(separator: "\n"), author: nil))
@@ -258,6 +275,7 @@ struct TimelineRowPresentation {
             forwardedCardLines: forwardedCardLines, markdown: markdown,
             metadata: metadata,
             metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText,
+            systemContent: systemContent,
             layoutKey: .init(sections: sections))
     }
 

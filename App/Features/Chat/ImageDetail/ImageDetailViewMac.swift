@@ -798,7 +798,8 @@
             self.mediaContext = mediaContext
             videoView =
                 item.isVideo
-                ? ImageDetailMacVideoView(url: item.url, pixelSize: item.pixelSize) : nil
+                ? ImageDetailMacVideoView(
+                    url: item.url, pixelSize: item.pixelSize, mediaContext: mediaContext) : nil
             super.init(frame: .zero)
             setAccessibilityElement(false)
             wantsLayer = true
@@ -891,12 +892,10 @@
         }
 
         private func renderVideo(_ state: ImageDetailMacVideoView.State) {
-            if state == .loading {
-                progress.startAnimation(nil)
-            } else {
-                progress.stopAnimation(nil)
-            }
-            progress.isHidden = state != .loading
+            // Full-video byte progress belongs to the native video view; this spinner is
+            // exclusively for the image loader and must not imply poster/file progress.
+            progress.stopAnimation(nil)
+            progress.isHidden = true
             statusLabel.stringValue = AppLanguage.localized("This video can’t be played")
             statusLabel.isHidden = state != .failed
             retryButton.isHidden = state != .failed

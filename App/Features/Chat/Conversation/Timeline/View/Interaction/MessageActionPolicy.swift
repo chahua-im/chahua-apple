@@ -8,7 +8,47 @@ struct MessageInteractionContext: Equatable {
     var isThreadView = false
     var isPinned = false
     var isUpdatingPin = false
+    var isSaved = false
+    var canSave = false
     var isReadOnly = false
+    var speakingMode: SpeakingMode?
+    var hasExistingThread = false
+
+    var canSend: Bool {
+        canSend(isThreadReply: isThreadView)
+    }
+
+    func canSend(isThreadReply: Bool) -> Bool {
+        guard canWrite, !isReadOnly else { return false }
+        if isDM || isAdmin { return true }
+        guard let speakingMode else { return false }
+        if !isThreadReply { return speakingMode.allowsMainMessages }
+        return hasExistingThread
+            ? speakingMode.allowsThreadReplies : speakingMode.allowsThreadCreation
+    }
+
+    var canCreateThread: Bool {
+        canWrite && !isReadOnly
+            && (isDM || isAdmin || speakingMode?.allowsThreadCreation == true)
+    }
+}
+
+enum SpeakingWriteError: LocalizedError {
+    case restricted(SpeakingMode)
+    case unavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .restricted(let mode): mode.restrictionExplanation
+        case .unavailable:
+            AppLanguage.localized("Couldn’t verify permission to send. Please try again.")
+        }
+    }
+
+    var speakingRestriction: SpeakingMode? {
+        if case .restricted(let mode) = self { return mode }
+        return nil
+    }
 }
 
 enum MessageMenuAction: String, CaseIterable, Identifiable {
@@ -32,6 +72,7 @@ struct MessageActionPolicy {
     let isOwn: Bool
     let hasReactions: Bool
     let isForwarded: Bool
+    let isThreadReply: Bool
     let context: MessageInteractionContext
 
     init(
@@ -43,6 +84,7 @@ struct MessageActionPolicy {
         isOwn: Bool = false,
         hasReactions: Bool = false,
         isForwarded: Bool = false,
+        isThreadReply: Bool = false,
         context: MessageInteractionContext = .init()
     ) {
         self.messageType = messageType
@@ -54,6 +96,7 @@ struct MessageActionPolicy {
         self.hasReactions = hasReactions
         self.context = context
         self.isForwarded = isForwarded
+        self.isThreadReply = isThreadReply
     }
 
     init(row: TimelineMessageRow, context: MessageInteractionContext) {
@@ -66,6 +109,7 @@ struct MessageActionPolicy {
             isOwn: row.isOutgoing,
             hasReactions: row.entry.remoteMessage?.reactions.contains { $0.count > 0 } == true,
             isForwarded: row.entry.presentationMessage?.forwardedFrom != nil,
+            isThreadReply: row.entry.remoteMessage?.replyRootId != nil,
             context: context
         )
     }
@@ -99,8 +143,8 @@ struct MessageActionPolicy {
         if isDeleted {
             // Preserve the PWA's history affordances, never a stale redacted body.
             switch action {
-            case .reply: return context.canWrite && !isPending ? .enabled : .hidden
-            case .copyLink: return context.isDM ? .hidden : .unimplemented
+            case .reply: return context.canSend && !isPending ? .enabled : .hidden
+            case .copyLink: return !context.isDM && !isPending ? .enabled : .hidden
             case .reactionDetails: return hasReactions && !isPending ? .enabled : .hidden
             default: return .hidden
             }
@@ -113,21 +157,24 @@ struct MessageActionPolicy {
         case .copy:
             return hasCopyableText ? .enabled : .hidden
         case .copyLink:
-            applicable = !context.isDM
+            return context.isDM ? .hidden : .enabled
         case .reply:
-            return context.canWrite ? .enabled : .hidden
+            return context.canSend ? .enabled : .hidden
         case .thread:
-            return context.canWrite && messageType == .text && !context.isThreadView
+            return context.canCreateThread && messageType == .text && !context.isThreadView
                 && !hasThreadInfo
                 ? .enabled : .hidden
         case .pin:
-            return context.canWrite && context.isAdmin && !context.isThreadView && !context.isPinned
+            return context.canWrite && (context.isDM || context.isAdmin)
+                && !context.isThreadView && !context.isPinned
                 && !context.isUpdatingPin ? .enabled : .hidden
         case .unpin:
-            return context.canWrite && context.isAdmin && !context.isThreadView && context.isPinned
+            return context.canWrite && (context.isDM || context.isAdmin)
+                && !context.isThreadView && context.isPinned
                 && !context.isUpdatingPin ? .enabled : .hidden
         case .edit:
-            return context.canWrite && isOwn && messageType == .text && hasCopyableText
+            return context.canSend(isThreadReply: isThreadReply) && isOwn
+                && messageType == .text && hasCopyableText
                 && !isForwarded
                 ? .enabled : .hidden
         case .delete:
@@ -139,7 +186,7 @@ struct MessageActionPolicy {
         case .favorite:
             applicable = messageType == .sticker
         case .save:
-            applicable = messageType != .sticker
+            return messageType != .sticker && context.canSave ? .enabled : .hidden
         case .reactionDetails:
             return hasReactions ? .enabled : .hidden
         }

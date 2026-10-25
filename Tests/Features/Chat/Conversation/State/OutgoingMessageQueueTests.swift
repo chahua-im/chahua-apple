@@ -957,7 +957,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
             let pending = chatStore.conversationMessages.pending(chatID: "chat").filter {
                 !confirmedIDs.contains($0.clientGeneratedID)
             }
-            let rows = TimelineRowsBuilder(currentUserID: 1, isGroupChat: true, calendar: .current)
+            let rows = TimelineRowsBuilder(currentUserID: 1, calendar: .current)
                 .build(remote.map(ConversationTimelineEntry.remote) + pending.map { .pending($0) })
             let row = try XCTUnwrap(
                 rows.compactMap { row -> TimelineMessageRow? in
@@ -1308,7 +1308,8 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(
-        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+        fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
+        size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
     func listSubscribedStickerPacks() async throws -> [StickerPackSummary] {

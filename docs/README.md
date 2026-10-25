@@ -19,6 +19,7 @@
 - [Scrolling performance](arch/scrolling-performance.md) — list/timeline optimizations and Instruments trace collection.
 - [Markdown rendering](arch/markdown-rendering.md) — supported syntax, native text layout, and spoiler behavior.
 - [Notifications and sharing](arch/notifications-and-sharing.md) — notification preferences, camera capture, and incoming shares.
+- [Explicit-save settings pages](arch/settings-editing.md) — staged edits, blue Save, native Back/swipe interception, discard confirmation, and save/error lifecycle.
 - [Why SwiftUI is not ready for this complex chat scroll host](arch/swiftui-scroll-host-evaluation.md) — the native timeline-host decision.
 
 ## Backend API

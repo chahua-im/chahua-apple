@@ -1,220 +1,277 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Remove friend" : {
+    "Your changes haven’t been saved." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove friend" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "删除好友" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "移除好友" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你的更改尚未保存。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你的變更尚未儲存。" } }
       }
     },
-    "Block" : {
+    "1 message" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Block" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "拉黑" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "封鎖" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "1 条消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "1 則訊息" } }
       }
     },
-    "Unblock" : {
+    "Unrestricted" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unblock" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消拉黑" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "解除封鎖" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "不限制" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "不限制" } }
       }
     },
-    "Block user" : {
+    "Threads Only" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Block user" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "拉黑用户" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "封鎖使用者" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅话题" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅話題" } }
       }
     },
-    "Unblock user" : {
+    "Replies Only" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unblock user" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消拉黑用户" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "解除封鎖使用者" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅回复" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅回覆" } }
       }
     },
-    "Couldn’t load friendship" : {
+    "Read Only" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t load friendship" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载好友关系" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入好友關係" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "只读" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "唯讀" } }
       }
     },
-    "Couldn’t update friendship" : {
+    "You can send messages and replies." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t update friendship" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法更新好友关系" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法更新好友關係" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你可以发送消息和回复。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你可以傳送訊息和回覆。" } }
       }
     },
-    "Remove %@ from your friends?" : {
+    "You can only send messages in threads." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove %@ from your friends?" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确定要删除好友 %@ 吗？" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "確定要移除好友 %@ 嗎？" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你只能在话题中发送消息。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你只能在話題中傳送訊息。" } }
       }
     },
-    "Block %@?" : {
+    "You can only reply in existing threads." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Block %@?" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确定要拉黑 %@ 吗？" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "確定要封鎖 %@ 嗎？" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你只能回复已有话题。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你只能回覆現有話題。" } }
       }
     },
-    "Unblock %@?" : {
+    "You cannot send or edit messages in this group." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unblock %@?" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "确定要取消拉黑 %@ 吗？" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "確定要解除封鎖 %@ 嗎？" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你不能在此群组中发送或编辑消息。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你不能在此群組中傳送或編輯訊息。" } }
       }
     },
-    "Away" : {
+    "All Members" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Away" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "离开" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "離開" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "所有成员" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "所有成員" } }
       }
     },
-    "Last seen within a week" : {
+    "Admins Only" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen within a week" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "1 周内上线" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "1 週內上線" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅管理员" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅管理員" } }
       }
     },
-    "Last seen within a month" : {
+    "Speaking permissions" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen within a month" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "1 个月内上线" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "1 個月內上線" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发言权限" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "發言權限" } }
       }
     },
-    "Last seen just now" : {
+    "Save speaking permissions" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen just now" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "刚刚上线" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "剛剛上線" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存发言权限" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "儲存發言權限" } }
       }
     },
-    "Last seen 1 minute ago" : {
+    "Group and personal restrictions use the stricter setting. Admins are exempt." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen 1 minute ago" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 1 分钟前" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 1 分鐘前" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "群组与个人限制以更严格的设置为准。管理员不受限制。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "群組與個人限制以更嚴格的設定為準。管理員不受限制。" } }
       }
     },
-    "Last seen %lld minutes ago" : {
+    "Speaking permissions are unavailable." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen %lld minutes ago" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 %lld 分钟前" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 %lld 分鐘前" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法获取发言权限。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法取得發言權限。" } }
       }
     },
-    "Last seen 1 hour ago" : {
+    "Membership messages" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen 1 hour ago" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 1 小时前" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 1 小時前" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "成员变动消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "成員變動訊息" } }
       }
     },
-    "Last seen %lld hours ago" : {
+    "Who can see membership messages" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen %lld hours ago" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 %lld 小时前" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 %lld 小時前" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "谁可以查看成员变动消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "誰可以查看成員變動訊息" } }
       }
     },
-    "Last seen today at %@" : {
+    "Save membership message policy" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen today at %@" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于今天 %@" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於今天 %@" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存成员消息策略" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "儲存成員訊息策略" } }
       }
     },
-    "Last seen yesterday at %@" : {
+    "Applies to past and new membership messages. Account preferences may hide them further." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen yesterday at %@" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于昨天 %@" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於昨天 %@" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "适用于历史和新的成员变动消息。账号偏好仍可隐藏这些消息。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "適用於過去和新的成員變動訊息。帳號偏好仍可隱藏這些訊息。" } }
       }
     },
-    "Last seen %@ at %@" : {
+    "Membership message policy is unavailable." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen %1$@ at %2$@" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最近上线于 %1$@ %2$@" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最近上線於 %1$@ %2$@" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法获取成员消息策略。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法取得成員訊息策略。" } }
       }
     },
-    "Loading last seen settings…" : {
+    "Your permissions" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading last seen settings…" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载最后上线设置…" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入最後上線設定…" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你的权限" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你的權限" } }
       }
     },
-    "Failed to load this friend's last seen setting." : {
+    "Show group membership messages" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Failed to load this friend's last seen setting." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载这位好友的最后上线设置。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入這位好友的最後上線設定。" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "显示群组成员变动消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "顯示群組成員變動訊息" } }
       }
     },
-    "Last seen and online status are mutual. If you hide yours from this friend, you won’t be able to see their exact last seen or online status." : {
+    "Show join and leave messages when the group policy allows them." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Last seen and online status are mutual. If you hide yours from this friend, you won’t be able to see their exact last seen or online status." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "最后上线和在线状态的分享是双向的。如果你向这位好友隐藏自己的状态，你也将无法查看对方的确切最后上线时间或在线状态。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "最後上線和在線狀態的分享是雙向的。如果你向這位好友隱藏自己的狀態，你也將無法查看對方的確切最後上線時間或在線狀態。" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "在群组策略允许时显示加入和退出消息。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "在群組策略允許時顯示加入和退出訊息。" } }
       }
     },
-    "Privacy Settings" : {
+    "Membership message preference is unavailable." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Privacy Settings" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "隐私设置" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "隱私設定" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法获取成员消息偏好。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法取得成員訊息偏好。" } }
       }
     },
-    "Privacy overrides are only available for friends." : {
+    "Couldn’t verify permission to send. Please try again." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Privacy overrides are only available for friends." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅可为好友单独设置隐私选项。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅可為好友個別設定隱私選項。" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法验证发送权限，请重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法驗證傳送權限，請重試。" } }
       }
     },
-    "Read receipts are mutual. If you hide yours from this friend, you won’t be able to see theirs." : {
+    "Could not open this destination. Choose a destination to retry." : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Read receipts are mutual. If you hide yours from this friend, you won’t be able to see theirs." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已读回执是双向的。如果你向这位好友隐藏已读回执，你也将无法查看对方的已读回执。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已讀回條是雙向的。如果你向這位好友隱藏已讀回條，你也將無法查看對方的已讀回條。" } }
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法打开此目标，请重新选择目标以重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法開啟此目標，請重新選擇目標以重試。" } }
+      }
+    },
+    "Change Destination" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "更改目标" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "更改目標" } }
+      }
+    },
+    "Send Forward" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发送转发" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "傳送轉傳" } }
+      }
+    },
+    "Couldn’t open message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法打开消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法開啟訊息" } }
+      }
+    },
+    "View Message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "查看消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "查看訊息" } }
+      }
+    },
+    "Connection is taking longer than usual" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接时间比平时更长" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "連線時間比平時更長" } }
+      }
+    },
+    "Retry to start a new connection attempt." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "点击重试以重新连接。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "點擊重試以重新連線。" } }
+      }
+    },
+    "Chahua is temporarily unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "茶话暂时不可用" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "茶話暫時無法使用" } }
+      }
+    },
+    "Couldn’t restore your session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法恢复登录状态" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法恢復登入狀態" } }
+      }
+    },
+    "The service is temporarily unavailable. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "服务暂时不可用，请重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "服務暫時無法使用，請重試。" } }
+      }
+    },
+    "An unexpected error occurred. Your saved sign-in has been kept; try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发生未知错误。已保留登录信息，请重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "發生未知錯誤。已保留登入資訊，請重試。" } }
+      }
+    },
+    "Your session has expired. Sign in again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录状态已失效，请重新登录。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "登入狀態已失效，請重新登入。" } }
+      }
+    },
+    "Sign-in timed out. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录超时，请重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "登入逾時，請重試。" } }
       }
     },
     "" : {
@@ -466,6 +523,30 @@
       "comment" : "A character used to represent mentions and replies in a conversation.",
       "isCommentAutoGenerated" : true
     },
+    "%@ · %@" : {
+      "comment" : "A line of text that shows the sender’s name, the size of the attachment, and the time the attachment was sent. The first argument is the sender’s name. The second argument is the size of the attachment. The third argument is the time the attachment was sent.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$@"
+          }
+        }
+      }
+    },
+    "%@ / %@" : {
+      "comment" : "A label showing the current playback time and total duration of a voice message. The first argument is the string “%1$d:%2$02d”. The second argument is the string “%1$d:%2$02d”.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ / %2$@"
+          }
+        }
+      }
+    },
     "%@ %@" : {
       "comment" : "A message that includes the name of the sender. The first argument is the sender's name. The second argument is the message content.",
       "isCommentAutoGenerated" : true,
@@ -576,6 +657,10 @@
         }
       }
     },
+    "%@×" : {
+      "comment" : "A checkmark icon.",
+      "isCommentAutoGenerated" : true
+    },
     "%lld" : {
       "comment" : "A badge that shows the current conversation's unread message count.",
       "isCommentAutoGenerated" : true,
@@ -636,6 +721,10 @@
         }
       }
     },
+    "%lld Attachments" : {
+      "comment" : "A label at the top of the composer that shows the number of attachments. The argument is the number of attachments.",
+      "isCommentAutoGenerated" : true
+    },
     "%lld exceptions" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -661,6 +750,7 @@
     },
     "%lld Media" : {
       "comment" : "A label showing the number of media items in the composer.",
+      "extractionState" : "stale",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "zh-Hans" : {
@@ -1034,6 +1124,26 @@
         }
       }
     },
+    "Accept" : {
+      "comment" : "The text on a button that accepts a friend request.",
+      "isCommentAutoGenerated" : true
+    },
+    "Accepted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已接受"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已接受"
+          }
+        }
+      }
+    },
     "Account" : {
       "localizations" : {
         "en" : {
@@ -1082,6 +1192,9 @@
         }
       }
     },
+    "Add attachments" : {
+
+    },
     "Add exception" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1105,7 +1218,12 @@
         }
       }
     },
+    "Add Friend" : {
+      "comment" : "A screen for adding a friend.",
+      "isCommentAutoGenerated" : true
+    },
     "Add media" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -1172,6 +1290,10 @@
         }
       }
     },
+    "All attachments loaded" : {
+      "comment" : "A message displayed when all the user's attachments have been loaded.",
+      "isCommentAutoGenerated" : true
+    },
     "All, %lld people" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1210,6 +1332,9 @@
           }
         }
       }
+    },
+    "Allow direct requests" : {
+
     },
     "Allow microphone access in Settings to record voice messages." : {
       "extractionState" : "manual",
@@ -1371,8 +1496,16 @@
         }
       }
     },
+    "An empty description clears the existing description." : {
+      "comment" : "A description of the effect of clicking the \"Save description\" button.",
+      "isCommentAutoGenerated" : true
+    },
     "Animals & Nature" : {
       "comment" : "Display name for the \"Animals & Nature\" category.",
+      "isCommentAutoGenerated" : true
+    },
+    "Anyone with the link" : {
+      "comment" : "A description of the \"Anyone with the link\" invitation type.",
       "isCommentAutoGenerated" : true
     },
     "APNs environment" : {
@@ -1463,6 +1596,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "封存"
+          }
+        }
+      }
+    },
+    "Archive conversation?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archive conversation?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档会话？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封存對話？"
           }
         }
       }
@@ -1608,6 +1764,10 @@
           }
         }
       }
+    },
+    "Attachments from the whole chat, including its threads." : {
+      "comment" : "A description of the list of attachments.",
+      "isCommentAutoGenerated" : true
     },
     "Audio still processing and deeply nested forwarded messages will be replaced with placeholders. Continue forwarding?" : {
       "extractionState" : "manual",
@@ -1756,6 +1916,10 @@
         }
       }
     },
+    "Avatar" : {
+      "comment" : "A section that allows the user to choose and upload an avatar for a group.",
+      "isCommentAutoGenerated" : true
+    },
     "Avatar for %@" : {
       "comment" : "A label for the avatar, describing who it belongs to. The argument is the user's name.",
       "isCommentAutoGenerated" : true,
@@ -1770,6 +1934,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%@ 的頭像"
+          }
+        }
+      }
+    },
+    "Away" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Away"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离开"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "離開"
           }
         }
       }
@@ -1876,6 +2063,79 @@
           }
         }
       }
+    },
+    "Block" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Block"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉黑"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封鎖"
+          }
+        }
+      }
+    },
+    "Block %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Block %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确定要拉黑 %@ 吗？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確定要封鎖 %@ 嗎？"
+          }
+        }
+      }
+    },
+    "Block user" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Block user"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "拉黑用户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "封鎖使用者"
+          }
+        }
+      }
+    },
+    "Blocked Users" : {
+      "comment" : "A section in the settings page that displays a list of blocked users.",
+      "isCommentAutoGenerated" : true
     },
     "Blue" : {
       "extractionState" : "manual",
@@ -2049,6 +2309,10 @@
         }
       }
     },
+    "Change your relationship with this user?" : {
+      "comment" : "A confirmation dialog message for the user's profile.",
+      "isCommentAutoGenerated" : true
+    },
     "Chat %@" : {
       "localizations" : {
         "en" : {
@@ -2185,6 +2449,10 @@
     },
     "Choose a reaction" : {
       "comment" : "A label displayed above the emoji picker.",
+      "isCommentAutoGenerated" : true
+    },
+    "Choose image…" : {
+      "comment" : "A button that lets the user choose an image to use as the group's avatar.",
       "isCommentAutoGenerated" : true
     },
     "Choose one to four emoji. The name is optional." : {
@@ -2341,6 +2609,14 @@
           }
         }
       }
+    },
+    "Close voice player" : {
+      "comment" : "A button that dismisses the voice playback interface.",
+      "isCommentAutoGenerated" : true
+    },
+    "Color scheme" : {
+      "comment" : "A label for the color scheme picker in the settings.",
+      "isCommentAutoGenerated" : true
     },
     "Coming soon" : {
       "extractionState" : "manual",
@@ -2617,6 +2893,10 @@
         }
       }
     },
+    "Copy URL" : {
+      "comment" : "A button that copies a group invitation URL to the clipboard.",
+      "isCommentAutoGenerated" : true
+    },
     "Could not load chats" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2841,6 +3121,10 @@
         }
       }
     },
+    "Couldn’t load attachments. Retry" : {
+      "comment" : "A button that reloads the list of attachments.",
+      "isCommentAutoGenerated" : true
+    },
     "Couldn't load conversations. Retry" : {
       "comment" : "A button that displays a label and an image.",
       "isCommentAutoGenerated" : true,
@@ -2872,6 +3156,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法載入轉傳的訊息"
+          }
+        }
+      }
+    },
+    "Couldn’t load friendship" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t load friendship"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载好友关系"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入好友關係"
           }
         }
       }
@@ -2920,6 +3227,13 @@
             "value" : "無法載入群組成員"
           }
         }
+      }
+    },
+    "Couldn’t load threads. Retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载话题，重试" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入話題，重試" } }
       }
     },
     "Couldn’t load members." : {
@@ -3114,6 +3428,14 @@
         }
       }
     },
+    "Couldn’t load saved messages. Try again." : {
+      "comment" : "Error message displayed when an error occurs while loading saved messages.",
+      "isCommentAutoGenerated" : true
+    },
+    "Couldn’t load saved-message status." : {
+      "comment" : "Error message displayed when the saved-message status cannot be loaded.",
+      "isCommentAutoGenerated" : true
+    },
     "Couldn’t load sticker pack. Please try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -3162,6 +3484,10 @@
         }
       }
     },
+    "Couldn’t load thread root. Retry" : {
+      "comment" : "The text of a button that reloads the thread root.",
+      "isCommentAutoGenerated" : true
+    },
     "Couldn’t open notification" : {
       "localizations" : {
         "en" : {
@@ -3183,6 +3509,14 @@
           }
         }
       }
+    },
+    "Couldn’t open source message" : {
+      "comment" : "A title for an alert that appears when the user tries to open a message that is no longer available.",
+      "isCommentAutoGenerated" : true
+    },
+    "Couldn’t open the source. It may be unavailable or you may no longer have access. Your saved snapshot is unchanged; try again later." : {
+      "comment" : "An error message displayed when the user can't open the source of a saved message.",
+      "isCommentAutoGenerated" : true
     },
     "Couldn’t open thread" : {
       "comment" : "Title of an error view when a thread can’t be opened.",
@@ -3506,6 +3840,29 @@
         }
       }
     },
+    "Couldn’t update friendship" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t update friendship"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法更新好友关系"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法更新好友關係"
+          }
+        }
+      }
+    },
     "Couldn’t update member" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3634,6 +3991,10 @@
         }
       }
     },
+    "Couldn’t update saved messages. Try again." : {
+      "comment" : "Error message displayed when an error occurs while updating saved messages.",
+      "isCommentAutoGenerated" : true
+    },
     "Couldn’t update sticker pack order. Please try again." : {
       "comment" : "Error message displayed when an error occurs while updating the order of sticker packs.",
       "isCommentAutoGenerated" : true
@@ -3712,6 +4073,14 @@
       "comment" : "A description of the sticker packs section.",
       "isCommentAutoGenerated" : true
     },
+    "Create Group" : {
+      "comment" : "A button that creates a group.",
+      "isCommentAutoGenerated" : true
+    },
+    "Create invitation" : {
+      "comment" : "A section for creating invitations and viewing existing ones.",
+      "isCommentAutoGenerated" : true
+    },
     "Create New Pack" : {
 
     },
@@ -3741,6 +4110,10 @@
           }
         }
       }
+    },
+    "Dark" : {
+      "comment" : "Dark mode setting for the app.",
+      "isCommentAutoGenerated" : true
     },
     "Debug" : {
       "extractionState" : "manual",
@@ -4132,6 +4505,14 @@
         }
       }
     },
+    "Directory" : {
+      "comment" : "A button that displays a list of users in the app.",
+      "isCommentAutoGenerated" : true
+    },
+    "Directory search" : {
+      "comment" : "The label for the search bar in the social directory view.",
+      "isCommentAutoGenerated" : true
+    },
     "Disable notifications" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4174,6 +4555,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已在此裝置上關閉"
+          }
+        }
+      }
+    },
+    "Discard Changes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放弃更改"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放棄變更"
+          }
+        }
+      }
+    },
+    "Discard unsaved changes?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放弃更改？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "放棄變更？"
           }
         }
       }
@@ -4261,6 +4676,10 @@
           }
         }
       }
+    },
+    "Do not allow friend requests" : {
+      "comment" : "Title for the \"Do not allow friend requests\" option in the friend verification settings view.",
+      "isCommentAutoGenerated" : true
     },
     "Done" : {
       "localizations" : {
@@ -4416,6 +4835,10 @@
         }
       }
     },
+    "Downloading…" : {
+      "comment" : "A label displayed when a file is being downloaded.",
+      "isCommentAutoGenerated" : true
+    },
     "Draft" : {
       "comment" : "Text prefix for the draft message in the conversation list subtitle.",
       "isCommentAutoGenerated" : true
@@ -4439,8 +4862,13 @@
         }
       }
     },
+    "Drop attachments here or close to choose more. Your caption will be kept." : {
+      "comment" : "A description of the composer's attachment dialog.",
+      "isCommentAutoGenerated" : true
+    },
     "Drop media here or close to choose more. Your caption will be kept." : {
       "comment" : "A description of the content of a composer attachment dialog.",
+      "extractionState" : "stale",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "zh-Hans" : {
@@ -4482,6 +4910,10 @@
           }
         }
       }
+    },
+    "Edit Group" : {
+      "comment" : "A view for editing a group's details.",
+      "isCommentAutoGenerated" : true
     },
     "Edit message" : {
       "comment" : "A label displayed above the message composer.",
@@ -4573,6 +5005,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "英文"
+          }
+        }
+      }
+    },
+    "Enter a non-empty question, up to 100 characters. Changes are saved only when you choose Save." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入非空问题，最多 100 个字符。只有选择“保存”后才会保存更改。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入非空問題，最多 100 個字元。只有選擇「儲存」後才會儲存變更。"
           }
         }
       }
@@ -4687,6 +5136,14 @@
         }
       }
     },
+    "Expires" : {
+      "comment" : "A label for the expiry date of a group invitation.",
+      "isCommentAutoGenerated" : true
+    },
+    "Expires %@" : {
+      "comment" : "A label displaying the expiry date of an invitation. The argument is the expiry date.",
+      "isCommentAutoGenerated" : true
+    },
     "Failed" : {
       "comment" : "A label displayed when an image upload fails.",
       "isCommentAutoGenerated" : true,
@@ -4769,6 +5226,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已讀回條設定載入失敗。"
+          }
+        }
+      }
+    },
+    "Failed to load this friend's last seen setting." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to load this friend's last seen setting."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载这位好友的最后上线设置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入這位好友的最後上線設定。"
           }
         }
       }
@@ -4884,6 +5364,14 @@
         }
       }
     },
+    "Files and videos are sent in original quality." : {
+      "comment" : "A description of the quality of files and videos sent in a composer.",
+      "isCommentAutoGenerated" : true
+    },
+    "Find a user to inspect their profile and add as a friend." : {
+      "comment" : "A description of the social directory.",
+      "isCommentAutoGenerated" : true
+    },
     "Finish recording before playing a voice message." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -4913,6 +5401,27 @@
     },
     "Food & Drink" : {
       "comment" : "Localized category name for food and drink emojis.",
+      "isCommentAutoGenerated" : true
+    },
+    "Forum" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forum"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "论坛"
+          }
+        }
+      }
+    },
+    "Forum / Personal Space" : {
+      "comment" : "A link to the forum or personal space of a user.",
       "isCommentAutoGenerated" : true
     },
     "Forward" : {
@@ -5034,6 +5543,85 @@
         }
       }
     },
+    "Friend Privacy" : {
+      "comment" : "A button that opens a view for configuring a user's privacy regarding their friends.",
+      "isCommentAutoGenerated" : true
+    },
+    "Friend request" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友請求"
+          }
+        }
+      }
+    },
+    "Friend Request" : {
+      "comment" : "A section for configuring friend requests.",
+      "isCommentAutoGenerated" : true
+    },
+    "Friend Request Permission" : {
+      "comment" : "Direct Settings destination for choosing who can send friend requests.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友申请权限"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友申請權限"
+          }
+        }
+      }
+    },
+    "Friend request sent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友请求已发送"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友請求已傳送"
+          }
+        }
+      }
+    },
+    "Friend request sent — awaiting response" : {
+      "comment" : "A message displayed when a user has sent a friend request to another user.",
+      "isCommentAutoGenerated" : true
+    },
+    "Friend Requests" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "好友請求"
+          }
+        }
+      }
+    },
     "Friends" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5125,6 +5713,13 @@
         }
       }
     },
+    "Group invitation" : {
+
+    },
+    "Group Invitations" : {
+      "comment" : "The title of the group invitations screen.",
+      "isCommentAutoGenerated" : true
+    },
     "Group Members" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5147,6 +5742,14 @@
           }
         }
       }
+    },
+    "Group name" : {
+      "comment" : "A section for editing the name of a group.",
+      "isCommentAutoGenerated" : true
+    },
+    "Group preview" : {
+      "comment" : "A section that displays information about a group.",
+      "isCommentAutoGenerated" : true
     },
     "Groups" : {
       "comment" : "A label for a group.",
@@ -5230,6 +5833,10 @@
         }
       }
     },
+    "ID: %d" : {
+      "comment" : "A label displaying the user's unique identifier.",
+      "isCommentAutoGenerated" : true
+    },
     "Image" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5294,6 +5901,9 @@
         }
       }
     },
+    "Images" : {
+
+    },
     "In thread" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5315,6 +5925,13 @@
             "value" : "位於話題中"
           }
         }
+      }
+    },
+    "All participants loaded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已加载全部参与者" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已載入全部參與者" } }
       }
     },
     "Indigo" : {
@@ -5357,6 +5974,26 @@
           }
         }
       }
+    },
+    "Invitation" : {
+      "comment" : "A section for entering a group invitation code or URL.",
+      "isCommentAutoGenerated" : true
+    },
+    "Invitations" : {
+      "comment" : "A section header for the user's invitations.",
+      "isCommentAutoGenerated" : true
+    },
+    "Invite code or URL" : {
+      "comment" : "A label for the invitation code or URL field in the Join Group view.",
+      "isCommentAutoGenerated" : true
+    },
+    "Join Group" : {
+      "comment" : "A button that lets the user join a group.",
+      "isCommentAutoGenerated" : true
+    },
+    "Joined Groups" : {
+      "comment" : "A section header for the list of groups the user has joined.",
+      "isCommentAutoGenerated" : true
     },
     "Jump to latest messages" : {
       "comment" : "A button that jumps to the latest messages.",
@@ -5434,6 +6071,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "跳轉到已釘選的訊息"
+          }
+        }
+      }
+    },
+    "Jump to source message" : {
+      "comment" : "A hint for the user to jump to the source message.",
+      "isCommentAutoGenerated" : true
+    },
+    "Keep Editing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续编辑"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "繼續編輯"
           }
         }
       }
@@ -5534,6 +6192,121 @@
         }
       }
     },
+    "Last seen %@ at %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen %1$@ at %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线于 %1$@ %2$@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線於 %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "Last seen %lld hours ago" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen %lld hours ago"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线于 %lld 小时前"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線於 %lld 小時前"
+          }
+        }
+      }
+    },
+    "Last seen %lld minutes ago" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen %lld minutes ago"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线于 %lld 分钟前"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線於 %lld 分鐘前"
+          }
+        }
+      }
+    },
+    "Last seen 1 hour ago" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen 1 hour ago"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线于 1 小时前"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線於 1 小時前"
+          }
+        }
+      }
+    },
+    "Last seen 1 minute ago" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen 1 minute ago"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线于 1 分钟前"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線於 1 分鐘前"
+          }
+        }
+      }
+    },
     "Last seen a long time ago" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5557,6 +6330,52 @@
         }
       }
     },
+    "Last seen and online status are mutual. If you hide yours from this friend, you won’t be able to see their exact last seen or online status." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen and online status are mutual. If you hide yours from this friend, you won’t be able to see their exact last seen or online status."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最后上线和在线状态的分享是双向的。如果你向这位好友隐藏自己的状态，你也将无法查看对方的确切最后上线时间或在线状态。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最後上線和在線狀態的分享是雙向的。如果你向這位好友隱藏自己的狀態，你也將無法查看對方的確切最後上線時間或在線狀態。"
+          }
+        }
+      }
+    },
+    "Last seen just now" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen just now"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚刚上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "剛剛上線"
+          }
+        }
+      }
+    },
     "Last seen recently" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5576,6 +6395,98 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最近上線"
+          }
+        }
+      }
+    },
+    "Last seen today at %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen today at %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线于今天 %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線於今天 %@"
+          }
+        }
+      }
+    },
+    "Last seen within a month" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within a month"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个月内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 個月內上線"
+          }
+        }
+      }
+    },
+    "Last seen within a week" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen within a week"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 周内上线"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 週內上線"
+          }
+        }
+      }
+    },
+    "Last seen yesterday at %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last seen yesterday at %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上线于昨天 %@"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近上線於昨天 %@"
           }
         }
       }
@@ -5672,6 +6583,10 @@
         }
       }
     },
+    "Light" : {
+      "comment" : "Text for the light appearance.",
+      "isCommentAutoGenerated" : true
+    },
     "Links" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5695,6 +6610,10 @@
         }
       }
     },
+    "Load more" : {
+      "comment" : "A button that loads more items when pressed.",
+      "isCommentAutoGenerated" : true
+    },
     "Load More" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5711,6 +6630,10 @@
           }
         }
       }
+    },
+    "Load more groups" : {
+      "comment" : "A button that loads more groups when pressed.",
+      "isCommentAutoGenerated" : true
     },
     "Load more members" : {
       "extractionState" : "manual",
@@ -5735,6 +6658,10 @@
         }
       }
     },
+    "Load Older Attachments" : {
+      "comment" : "A button that loads older attachments.",
+      "isCommentAutoGenerated" : true
+    },
     "Loading" : {
       "comment" : "Loading indicator with the title \"Loading\".",
       "isCommentAutoGenerated" : true,
@@ -5752,6 +6679,10 @@
           }
         }
       }
+    },
+    "Loading attachments…" : {
+      "comment" : "A loading indicator for loading more attachments.",
+      "isCommentAutoGenerated" : true
     },
     "Loading audio…" : {
       "extractionState" : "manual",
@@ -5775,6 +6706,10 @@
           }
         }
       }
+    },
+    "Loading blocked users…" : {
+      "comment" : "A placeholder text that appears while loading blocked users.",
+      "isCommentAutoGenerated" : true
     },
     "Loading conversation" : {
       "localizations" : {
@@ -5850,6 +6785,10 @@
         }
       }
     },
+    "Loading friend verification…" : {
+      "comment" : "A loading indicator for loading friend verification settings.",
+      "isCommentAutoGenerated" : true
+    },
     "Loading group info…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5924,6 +6863,33 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在載入圖片…"
+          }
+        }
+      }
+    },
+    "Loading invitations…" : {
+      "comment" : "A placeholder text shown while loading group invitations.",
+      "isCommentAutoGenerated" : true
+    },
+    "Loading last seen settings…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading last seen settings…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载最后上线设置…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入最後上線設定…"
           }
         }
       }
@@ -6054,6 +7020,10 @@
         }
       }
     },
+    "Loading profile…" : {
+      "comment" : "A placeholder text that appears while loading a user's profile.",
+      "isCommentAutoGenerated" : true
+    },
     "Loading reactions…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -6092,6 +7062,10 @@
           }
         }
       }
+    },
+    "Loading requests…" : {
+      "comment" : "A loading indicator that appears when the app is loading friend requests.",
+      "isCommentAutoGenerated" : true
     },
     "Loading saved messages…" : {
       "comment" : "A message that appears when the app is loading messages that were saved to a device.",
@@ -6206,6 +7180,10 @@
         }
       }
     },
+    "Loading thread…" : {
+      "comment" : "A placeholder text that appears while loading a thread.",
+      "isCommentAutoGenerated" : true
+    },
     "Loading video" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -6228,6 +7206,40 @@
           }
         }
       }
+    },
+    "Locate Message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Locate Message"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定位消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定位訊息"
+          }
+        }
+      }
+    },
+    "Loading threads…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载话题…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入話題…" } }
+      }
+    },
+    "Manage Invitations" : {
+      "comment" : "A button that displays a sheet for managing invitations to a group.",
+      "isCommentAutoGenerated" : true
     },
     "Manage Sticker Packs" : {
       "localizations" : {
@@ -6400,6 +7412,10 @@
           }
         }
       }
+    },
+    "Members of another group" : {
+      "comment" : "A group invitation type that requires the user to be a member of another group.",
+      "isCommentAutoGenerated" : true
     },
     "Members will appear here when they are available." : {
       "extractionState" : "manual",
@@ -6903,8 +7919,16 @@
         }
       }
     },
+    "Name" : {
+      "comment" : "A label for the group's name.",
+      "isCommentAutoGenerated" : true
+    },
     "Name (optional)" : {
       "comment" : "A label for the user to enter a name for the sticker.",
+      "isCommentAutoGenerated" : true
+    },
+    "Name or user ID" : {
+      "comment" : "A placeholder text for a search field in the Social Directory.",
       "isCommentAutoGenerated" : true
     },
     "Never Share With" : {
@@ -7003,6 +8027,14 @@
         }
       }
     },
+    "No attachments in this section" : {
+      "comment" : "A message displayed when a user has no attachments in a section.",
+      "isCommentAutoGenerated" : true
+    },
+    "No blocked users" : {
+      "comment" : "A message displayed when the user has no blocked users.",
+      "isCommentAutoGenerated" : true
+    },
     "No content" : {
       "comment" : "Title of a view that indicates that there is no content to display.",
       "isCommentAutoGenerated" : true,
@@ -7070,6 +8102,23 @@
         }
       }
     },
+    "No friend requests" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无好友请求"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫無好友請求"
+          }
+        }
+      }
+    },
     "No group description yet." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7116,6 +8165,37 @@
         }
       }
     },
+    "No invitations" : {
+      "comment" : "A message displayed when a user has no invitations.",
+      "isCommentAutoGenerated" : true
+    },
+    "No matching emoji" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No matching emoji"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有匹配的表情"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "沒有符合的表情"
+          }
+        }
+      }
+    },
+    "No matching joined groups" : {
+      "comment" : "A message displayed when a user has no joined groups.",
+      "isCommentAutoGenerated" : true
+    },
     "No matching members" : {
       "comment" : "A message displayed when there are no matching members.",
       "isCommentAutoGenerated" : true
@@ -7141,6 +8221,13 @@
             "value" : "找不到訊息"
           }
         }
+      }
+    },
+    "No participants" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "暂无参与者" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暫無參與者" } }
       }
     },
     "No pinned messages" : {
@@ -7176,7 +8263,34 @@
       }
     },
     "No recent emoji" : {
-      "comment" : "A message displayed when a user has no recent emojis.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No recent emoji"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近没有使用的表情"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近沒有使用的表情"
+          }
+        }
+      }
+    },
+    "No results" : {
+      "comment" : "A message displayed when a search query returns no results.",
+      "isCommentAutoGenerated" : true
+    },
+    "No Saved Messages" : {
+      "comment" : "A label displayed when the user has no saved messages.",
       "isCommentAutoGenerated" : true
     },
     "No signed APNs entitlement was found. Push delivery requires a signed app with the Push Notifications capability." : {
@@ -7221,6 +8335,17 @@
           }
         }
       }
+    },
+    "All threads loaded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已加载全部话题" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已載入全部話題" } }
+      }
+    },
+    "No threads in this chat" : {
+      "comment" : "A message displayed when a user has no threads in a chat.",
+      "isCommentAutoGenerated" : true
     },
     "Nobody" : {
       "extractionState" : "manual",
@@ -7589,6 +8714,14 @@
         }
       }
     },
+    "Only group administrators can manage invitations." : {
+      "comment" : "A message displayed when a user is not a group administrator.",
+      "isCommentAutoGenerated" : true
+    },
+    "Open" : {
+      "comment" : "A button that opens a file.",
+      "isCommentAutoGenerated" : true
+    },
     "Open chat information" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7612,6 +8745,10 @@
         }
       }
     },
+    "Open Group" : {
+      "comment" : "A button that opens a group.",
+      "isCommentAutoGenerated" : true
+    },
     "Open image" : {
       "comment" : "A label for an action that opens an image.",
       "isCommentAutoGenerated" : true,
@@ -7629,6 +8766,10 @@
           }
         }
       }
+    },
+    "Open Source" : {
+      "comment" : "A button that opens the original message in a chat.",
+      "isCommentAutoGenerated" : true
     },
     "Open System Settings" : {
       "localizations" : {
@@ -7749,6 +8890,20 @@
         }
       }
     },
+    "Parent Chat Attachments" : {
+
+    },
+    "Loading participants…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载参与者…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入參與者…" } }
+      }
+    },
+    "Participants" : {
+      "comment" : "A section header for a list of participants in a thread.",
+      "isCommentAutoGenerated" : true
+    },
     "Password" : {
       "localizations" : {
         "en" : {
@@ -7793,6 +8948,26 @@
           }
         }
       }
+    },
+    "Pending" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待通过"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待通過"
+          }
+        }
+      }
+    },
+    "People" : {
+      "comment" : "A section header for a list of people.",
+      "isCommentAutoGenerated" : true
     },
     "People & Body" : {
       "comment" : "Display name for the category of people and body emojis.",
@@ -8004,6 +9179,10 @@
         }
       }
     },
+    "Playback speed" : {
+      "comment" : "A label that displays the playback speed of a voice message.",
+      "isCommentAutoGenerated" : true
+    },
     "Preparing forward…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8023,6 +9202,10 @@
     },
     "Preview" : {
       "comment" : "The section of the sticker upload sheet that displays the sticker preview.",
+      "isCommentAutoGenerated" : true
+    },
+    "Preview invitation" : {
+      "comment" : "The label of a button that previews a group invitation.",
       "isCommentAutoGenerated" : true
     },
     "Preview unavailable" : {
@@ -8068,6 +9251,52 @@
         }
       }
     },
+    "Privacy overrides are only available for friends." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacy overrides are only available for friends."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅可为好友单独设置隐私选项。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅可為好友個別設定隱私選項。"
+          }
+        }
+      }
+    },
+    "Privacy Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacy Settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐私设置"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隱私設定"
+          }
+        }
+      }
+    },
     "Processing" : {
       "comment" : "A label displayed when a file is being processed.",
       "isCommentAutoGenerated" : true,
@@ -8108,6 +9337,10 @@
           }
         }
       }
+    },
+    "Profile" : {
+      "comment" : "The title of the user's profile screen.",
+      "isCommentAutoGenerated" : true
     },
     "Promote %@ to admin?" : {
       "extractionState" : "manual",
@@ -8632,6 +9865,10 @@
         }
       }
     },
+    "Question" : {
+      "comment" : "A label for the question field in the friend verification settings view.",
+      "isCommentAutoGenerated" : true
+    },
     "Queued" : {
       "comment" : "A label for a message that is currently being sent.",
       "isCommentAutoGenerated" : true,
@@ -8686,6 +9923,13 @@
             "value" : "靜音通知"
           }
         }
+      }
+    },
+    "Load More Participants" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加载更多参与者" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "載入更多參與者" } }
       }
     },
     "React with: %@" : {
@@ -8826,6 +10070,29 @@
         }
       }
     },
+    "Read receipts are mutual. If you hide yours from this friend, you won’t be able to see theirs." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read receipts are mutual. If you hide yours from this friend, you won’t be able to see theirs."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已读回执是双向的。如果你向这位好友隐藏已读回执，你也将无法查看对方的已读回执。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已讀回條是雙向的。如果你向這位好友隱藏已讀回條，你也將無法查看對方的已讀回條。"
+          }
+        }
+      }
+    },
     "Read receipts are visible only when both people allow sharing. Group conversations never show read receipts." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8889,6 +10156,14 @@
           }
         }
       }
+    },
+    "Recipient" : {
+      "comment" : "The title of the user picker sheet.",
+      "isCommentAutoGenerated" : true
+    },
+    "Recipient: %d" : {
+      "comment" : "A line of text that shows the recipient of a group invitation.",
+      "isCommentAutoGenerated" : true
     },
     "Reconnecting…" : {
       "extractionState" : "manual",
@@ -9206,6 +10481,30 @@
         }
       }
     },
+    "Reject" : {
+      "comment" : "The text of a button that rejects a friend request.",
+      "isCommentAutoGenerated" : true
+    },
+    "Rejected" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拒绝"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已拒絕"
+          }
+        }
+      }
+    },
+    "Relationship" : {
+      "comment" : "A section for the user's relationship.",
+      "isCommentAutoGenerated" : true
+    },
     "Release to lock" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9275,6 +10574,10 @@
         }
       }
     },
+    "Reload profile" : {
+      "comment" : "A button that reloads a user's profile.",
+      "isCommentAutoGenerated" : true
+    },
     "Remove" : {
       "comment" : "A button that removes an attachment from a composer.",
       "isCommentAutoGenerated" : true,
@@ -9316,6 +10619,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "將 %@ 移出此群組？"
+          }
+        }
+      }
+    },
+    "Remove %@ from your friends?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove %@ from your friends?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确定要删除好友 %@ 吗？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確定要移除好友 %@ 嗎？"
           }
         }
       }
@@ -9362,6 +10688,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "清除媒體快取？"
+          }
+        }
+      }
+    },
+    "Remove friend" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remove friend"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除好友"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "移除好友"
           }
         }
       }
@@ -9457,6 +10806,10 @@
         }
       }
     },
+    "Remove Saved Message" : {
+      "comment" : "Text for the \"Remove Saved Message\" action.",
+      "isCommentAutoGenerated" : true
+    },
     "Remove Sticker" : {
       "comment" : "A button that removes a sticker from a sticker pack.",
       "isCommentAutoGenerated" : true
@@ -9531,6 +10884,17 @@
           }
         }
       }
+    },
+    "Require a verification message" : {
+
+    },
+    "Require an answer to a question" : {
+      "comment" : "Text displayed in a button that saves the user's friend verification settings.",
+      "isCommentAutoGenerated" : true
+    },
+    "Required group: %@" : {
+      "comment" : "A label displaying the name of a group that is required to accept an invitation. The argument is the name of the group.",
+      "isCommentAutoGenerated" : true
     },
     "Resend this message" : {
       "comment" : "A button that retries sending a message.",
@@ -9632,6 +10996,10 @@
         }
       }
     },
+    "Retry blocked-user count" : {
+      "comment" : "A button that retries loading the blocked-user count.",
+      "isCommentAutoGenerated" : true
+    },
     "Retry loading image" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9717,6 +11085,10 @@
         }
       }
     },
+    "Retry Save" : {
+      "comment" : "A button that retries saving changes to friend verification settings.",
+      "isCommentAutoGenerated" : true
+    },
     "Retry this and subsequent messages" : {
       "comment" : "A button that retries sending all messages, including the one that failed.",
       "isCommentAutoGenerated" : true,
@@ -9734,6 +11106,37 @@
           }
         }
       }
+    },
+    "Retry Thumbnail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry Thumbnail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试缩略图"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重試縮圖"
+          }
+        }
+      }
+    },
+    "Revoke" : {
+      "comment" : "The text of a button that revokes an invitation.",
+      "isCommentAutoGenerated" : true
+    },
+    "Revoke invitation?" : {
+      "comment" : "A confirmation dialog that lets the user revoke a group invitation.",
+      "isCommentAutoGenerated" : true
     },
     "Revoke unsent message" : {
       "comment" : "A button that revokes an unsent message.",
@@ -9798,6 +11201,14 @@
         }
       }
     },
+    "Save a message from its menu to keep a snapshot here." : {
+      "comment" : "A description of how to save a message.",
+      "isCommentAutoGenerated" : true
+    },
+    "Save description" : {
+      "comment" : "A button that saves the description of a group.",
+      "isCommentAutoGenerated" : true
+    },
     "Save failed. Please try again." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9821,6 +11232,10 @@
         }
       }
     },
+    "Save File" : {
+      "comment" : "A button that saves a file to the user's documents.",
+      "isCommentAutoGenerated" : true
+    },
     "Save Image" : {
       "localizations" : {
         "zh-Hans" : {
@@ -9836,6 +11251,10 @@
           }
         }
       }
+    },
+    "Save name" : {
+      "comment" : "A button that saves the group's name.",
+      "isCommentAutoGenerated" : true
     },
     "Save Video" : {
       "extractionState" : "manual",
@@ -9899,6 +11318,14 @@
         }
       }
     },
+    "Saved Message" : {
+      "comment" : "A default label for a saved message.",
+      "isCommentAutoGenerated" : true
+    },
+    "Saved Messages" : {
+      "comment" : "A button that shows a list of saved messages.",
+      "isCommentAutoGenerated" : true
+    },
     "Saving…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9961,6 +11388,33 @@
           }
         }
       }
+    },
+    "Search emoji" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search emoji"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索表情"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋表情"
+          }
+        }
+      }
+    },
+    "Search joined groups" : {
+      "comment" : "A placeholder text for a search bar in a group invite group picker.",
+      "isCommentAutoGenerated" : true
     },
     "Search members" : {
       "extractionState" : "manual",
@@ -10031,8 +11485,50 @@
         }
       }
     },
+    "Couldn’t load participants." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载参与者。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入參與者。" } }
+      }
+    },
+    "Search people and groups you have joined. This does not search message history." : {
+      "comment" : "A description of the directory view.",
+      "isCommentAutoGenerated" : true
+    },
+    "Search results" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Search results"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索结果"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋結果"
+          }
+        }
+      }
+    },
+    "Search users" : {
+      "comment" : "A search bar for finding users.",
+      "isCommentAutoGenerated" : true
+    },
     "Searching members…" : {
       "comment" : "A placeholder text that appears when a member search is in progress.",
+      "isCommentAutoGenerated" : true
+    },
+    "Searching…" : {
+      "comment" : "A placeholder text that appears when a search is in progress.",
       "isCommentAutoGenerated" : true
     },
     "See everyone in this group." : {
@@ -10208,6 +11704,18 @@
         }
       }
     },
+    "Send a direct friend request?" : {
+      "comment" : "A button that sends a direct friend request.",
+      "isCommentAutoGenerated" : true
+    },
+    "Send card" : {
+      "comment" : "A button that sends an invitation card to a group.",
+      "isCommentAutoGenerated" : true
+    },
+    "Send invite card" : {
+      "comment" : "A button that sends an invitation card to a group.",
+      "isCommentAutoGenerated" : true
+    },
     "Send message" : {
       "comment" : "A label for a button that sends a message.",
       "isCommentAutoGenerated" : true,
@@ -10225,6 +11733,10 @@
           }
         }
       }
+    },
+    "Send Request" : {
+      "comment" : "A button that sends a friend request to a user.",
+      "isCommentAutoGenerated" : true
     },
     "Send voice message" : {
       "extractionState" : "manual",
@@ -10290,6 +11802,10 @@
         }
       }
     },
+    "Sends an invitation card, not a forwarded message." : {
+      "comment" : "A description of the purpose of the invitation card.",
+      "isCommentAutoGenerated" : true
+    },
     "Sent" : {
       "comment" : "A label displayed in a message bubble when a message is successfully sent.",
       "isCommentAutoGenerated" : true,
@@ -10307,6 +11823,10 @@
           }
         }
       }
+    },
+    "Set expiry" : {
+      "comment" : "A toggle that allows the user to set an expiry date for the invitation.",
+      "isCommentAutoGenerated" : true
     },
     "Settings" : {
       "localizations" : {
@@ -10375,6 +11895,14 @@
         }
       }
     },
+    "Show all message avatars" : {
+      "comment" : "A toggle that lets the user choose whether to show all message avatars.",
+      "isCommentAutoGenerated" : true
+    },
+    "Show avatars and names in DMs" : {
+      "comment" : "A toggle that lets the user choose whether to show avatars and names in direct messages.",
+      "isCommentAutoGenerated" : true
+    },
     "Show member actions" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10397,6 +11925,18 @@
           }
         }
       }
+    },
+    "Show Message" : {
+      "comment" : "A button that shows a message.",
+      "isCommentAutoGenerated" : true
+    },
+    "Showing all joined groups. Submit Search to apply your changes." : {
+      "comment" : "A description of the list of joined groups.",
+      "isCommentAutoGenerated" : true
+    },
+    "Showing results for “%@”. Submit Search to apply your changes." : {
+      "comment" : "A footnote in the list of joined groups, indicating the number of results that match the search query. The argument is the search query.",
+      "isCommentAutoGenerated" : true
     },
     "Sign in" : {
       "localizations" : {
@@ -10507,8 +12047,27 @@
       }
     },
     "Skin tones" : {
-      "comment" : "A button that shows a list of skin tones when pressed.",
-      "isCommentAutoGenerated" : true
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skin tones"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "肤色"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "膚色"
+          }
+        }
+      }
     },
     "Smaller" : {
       "extractionState" : "manual",
@@ -10622,6 +12181,14 @@
           }
         }
       }
+    },
+    "Source unavailable. This is your saved snapshot." : {
+      "comment" : "A message displayed when a saved message is not available.",
+      "isCommentAutoGenerated" : true
+    },
+    "Specific user" : {
+      "comment" : "A description of a group invitation type.",
+      "isCommentAutoGenerated" : true
     },
     "Spoiler" : {
       "comment" : "Accessibility text for a spoiler.",
@@ -10938,6 +12505,10 @@
       "comment" : "Category name for symbols.",
       "isCommentAutoGenerated" : true
     },
+    "System" : {
+      "comment" : "Display name for the system-selected appearance mode.",
+      "isCommentAutoGenerated" : true
+    },
     "System Default" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10964,6 +12535,9 @@
     "Take Photo" : {
       "comment" : "The label of a menu item that takes a photo.",
       "isCommentAutoGenerated" : true
+    },
+    "Tap to preview" : {
+
     },
     "Temporary access" : {
       "localizations" : {
@@ -11110,8 +12684,19 @@
         }
       }
     },
+    "The message may no longer be accessible. Your attachment list has been kept." : {
+      "comment" : "A message displayed when the source message can't be opened.",
+      "isCommentAutoGenerated" : true
+    },
     "The pack and its contents list will be removed." : {
       "comment" : "The body of a confirmation dialog that deletes a sticker pack.",
+      "isCommentAutoGenerated" : true
+    },
+    "The source is no longer accessible. Your saved snapshot is still available." : {
+
+    },
+    "The source message was removed. Your saved snapshot is still available." : {
+      "comment" : "A message that appears when the source message is deleted.",
       "isCommentAutoGenerated" : true
     },
     "The video couldn’t be downloaded. Please try again." : {
@@ -11218,6 +12803,10 @@
         }
       }
     },
+    "These sections include the whole parent chat, not only this thread." : {
+      "comment" : "A description of the content of the \"Parent Chat Attachments\" section.",
+      "isCommentAutoGenerated" : true
+    },
     "This device cannot decode this sticker’s video format." : {
       "localizations" : {
         "zh-Hans" : {
@@ -11250,6 +12839,18 @@
         }
       }
     },
+    "This invitation link will no longer allow anyone to join." : {
+      "comment" : "A message displayed when the user revokes a group invitation.",
+      "isCommentAutoGenerated" : true
+    },
+    "This link belongs to a different server." : {
+      "comment" : "A message displayed when a link from a different server is opened.",
+      "isCommentAutoGenerated" : true
+    },
+    "This link is not supported." : {
+      "comment" : "A message displayed when a user tries to open a link that is not supported.",
+      "isCommentAutoGenerated" : true
+    },
     "This message has been deleted." : {
       "localizations" : {
         "en" : {
@@ -11271,6 +12872,10 @@
           }
         }
       }
+    },
+    "This message is unavailable or you do not have access." : {
+      "comment" : "A description of a message that is unavailable or",
+      "isCommentAutoGenerated" : true
     },
     "This message type isn’t supported yet" : {
       "comment" : "A message that indicates that a message type isn’t yet supported.",
@@ -11390,6 +12995,10 @@
         }
       }
     },
+    "This user is not accepting requests." : {
+      "comment" : "A message that a user is blocked by another user.",
+      "isCommentAutoGenerated" : true
+    },
     "This video can’t be played" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11458,6 +13067,10 @@
         }
       }
     },
+    "Thread Info" : {
+      "comment" : "The title of a screen that displays information about a thread.",
+      "isCommentAutoGenerated" : true
+    },
     "Thread subscription" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11495,6 +13108,43 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "話題"
+          }
+        }
+      }
+    },
+    "This thread is no longer available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此话题已不可用。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此話題已無法使用。" } }
+      }
+    },
+    "You don’t have access to this thread." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你无权访问此话题。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你無權存取此話題。" } }
+      }
+    },
+    "Thumbnail unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thumbnail unavailable"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "缩略图不可用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入縮圖"
           }
         }
       }
@@ -11662,6 +13312,14 @@
       "comment" : "A description of the error that occurs when trying to load a sticker pack.",
       "isCommentAutoGenerated" : true
     },
+    "Type" : {
+      "comment" : "A label for the type of invitation.",
+      "isCommentAutoGenerated" : true
+    },
+    "UID: %d" : {
+      "comment" : "A caption showing the user's unique identifier.",
+      "isCommentAutoGenerated" : true
+    },
     "Unable to load image" : {
       "localizations" : {
         "zh-Hans" : {
@@ -11677,6 +13335,10 @@
           }
         }
       }
+    },
+    "Unable to open" : {
+      "comment" : "A title for an alert that appears when a URL can't be opened.",
+      "isCommentAutoGenerated" : true
     },
     "Unable to play audio" : {
       "extractionState" : "manual",
@@ -11719,6 +13381,29 @@
         }
       }
     },
+    "Unarchive conversation?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unarchive conversation?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消归档会话？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消封存對話？"
+          }
+        }
+      }
+    },
     "Unavailable" : {
       "localizations" : {
         "zh-Hans" : {
@@ -11731,6 +13416,79 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法使用"
+          }
+        }
+      }
+    },
+    "Unblock" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unblock"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消拉黑"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除封鎖"
+          }
+        }
+      }
+    },
+    "Unblock %@?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unblock %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确定要取消拉黑 %@ 吗？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確定要解除封鎖 %@ 嗎？"
+          }
+        }
+      }
+    },
+    "Unblock this user before sending a friend request." : {
+      "comment" : "A description of the action of unblocking a user.",
+      "isCommentAutoGenerated" : true
+    },
+    "Unblock user" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unblock user"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消拉黑用户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "解除封鎖使用者"
           }
         }
       }
@@ -11981,6 +13739,10 @@
         }
       }
     },
+    "Up to 200 characters" : {
+      "comment" : "A description of the maximum number of characters allowed in a message.",
+      "isCommentAutoGenerated" : true
+    },
     "Updating %@" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12069,6 +13831,10 @@
     },
     "Updating sticker pack…" : {
       "comment" : "A message displayed when a sticker pack is being updated.",
+      "isCommentAutoGenerated" : true
+    },
+    "Upload avatar" : {
+      "comment" : "A button that uploads the selected avatar to the server.",
       "isCommentAutoGenerated" : true
     },
     "Use account default" : {
@@ -12180,6 +13946,10 @@
         }
       }
     },
+    "Verification message" : {
+      "comment" : "A label for the user's verification message.",
+      "isCommentAutoGenerated" : true
+    },
     "Video" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12226,8 +13996,12 @@
         }
       }
     },
+    "Videos" : {
+
+    },
     "Videos are sent in original quality." : {
       "comment" : "A description of how videos are sent.",
+      "extractionState" : "stale",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "zh-Hans" : {
@@ -12277,6 +14051,27 @@
           }
         }
       }
+    },
+    "View friend request records" : {
+      "comment" : "Subtitle for the Friend Requests history and sent requests destination.",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看好友申请记录"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看好友申請記錄"
+          }
+        }
+      }
+    },
+    "View Profile" : {
+      "comment" : "A button that opens a user's profile.",
+      "isCommentAutoGenerated" : true
     },
     "Voice" : {
       "extractionState" : "manual",
@@ -12370,6 +14165,10 @@
         }
       }
     },
+    "Voice playback position" : {
+      "comment" : "A slider that lets the user navigate through a voice message.",
+      "isCommentAutoGenerated" : true
+    },
     "Waiting for microphone access…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -12428,6 +14227,10 @@
           }
         }
       }
+    },
+    "Who can add me" : {
+      "comment" : "A section header for the user's friend verification settings.",
+      "isCommentAutoGenerated" : true
     },
     "Who can see my last seen" : {
       "extractionState" : "manual",
@@ -12568,6 +14371,10 @@
           }
         }
       }
+    },
+    "Your answer" : {
+      "comment" : "A label for the user's answer to a friend request question.",
+      "isCommentAutoGenerated" : true
     },
     "Your caption and attachments are still here. %@" : {
       "comment" : "A message in a dialog that lets the user cancel a caption edit.",

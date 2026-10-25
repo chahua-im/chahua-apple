@@ -33,7 +33,9 @@ struct TimelineViewport: Equatable {
     var distanceToTop: CGFloat
     var distanceToBottom: CGFloat
     var height: CGFloat
-    var fullyVisibleMessageIDs: [MessageID] = []
+    /// Confirmed rows intersecting the unobscured viewport, in timeline order.
+    /// Partial/tall rows count; rows wholly behind floating chrome do not.
+    var visibleMessageIDs: [MessageID] = []
 
     static let empty = TimelineViewport(
         firstVisibleIndex: nil,

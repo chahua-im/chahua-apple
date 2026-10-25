@@ -201,7 +201,7 @@
                 standaloneView = view
             }
             view.isHidden = binding.layout.frames[.standalone] == nil
-            view.bind(binding.presentation)
+            view.bind(binding)
         }
 
         private func bindMessage(
@@ -245,6 +245,10 @@
                     diameter: binding.presentation.environment.avatarSize,
                     displayScale: binding.presentation.environment.displayScale,
                     mediaContext: binding.mediaContext)
+                view.onActivate =
+                    !binding.actions.isSelectingMessages
+                        && binding.actions.openMention != nil
+                    ? { binding.actions.openMention?(row.entry.senderID) } : nil
                 view.setVisible(visible)
             } else {
                 avatarView?.clear()
@@ -458,7 +462,9 @@
 
     @MainActor
     private final class TimelineStandaloneView: NSView {
-        private var presentation: TimelineRowPresentation?
+        private var binding: TimelineRowBinding?
+        private lazy var systemLayout = MessageSummaryLayout()
+        private var pressedTarget: TimelineSystemMessageContent.Target?
         private var attributed = NSAttributedString(string: "")
         private var isDate = false
         override var isFlipped: Bool { true }
@@ -469,14 +475,17 @@
             setAccessibilityRole(.staticText)
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-        func bind(_ presentation: TimelineRowPresentation) {
-            self.presentation = presentation
+        func bind(_ binding: TimelineRowBinding) {
+            self.binding = binding
+            pressedTarget = nil
             updatePaint()
         }
         func clear() {
-            presentation = nil
+            binding = nil
+            pressedTarget = nil
             attributed = NSAttributedString(string: "")
             setAccessibilityLabel(nil)
+            window?.invalidateCursorRects(for: self)
             needsDisplay = true
         }
         override func layout() {
@@ -488,7 +497,8 @@
             updatePaint()
         }
         private func updatePaint() {
-            guard let p = presentation else { return }
+            guard let binding else { return }
+            let p = binding.presentation
             effectiveAppearance.performAsCurrentDrawingAppearance {
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.alignment = .center
@@ -515,45 +525,78 @@
                             .foregroundColor: NSColor(ChahuaTheme.ChatBubble.outgoingBackground),
                             .paragraphStyle: paragraph,
                         ])
-                case .message(let row):
-                    paragraph.lineSpacing = 3
+                case .message:
                     let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                     let color =
                         dark
                         ? NSColor(srgbRed: 152 / 255, green: 154 / 255, blue: 162 / 255, alpha: 1)
                         : NSColor(srgbRed: 99 / 255, green: 100 / 255, blue: 105 / 255, alpha: 1)
-                    let result = NSMutableAttributedString(string: "")
-                    if let name = row.entry.remoteMessage?.sender.name, !name.isEmpty {
-                        result.append(
-                            NSAttributedString(
-                                string: name + " ",
-                                attributes: [
-                                    .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-                                    .foregroundColor: color, .paragraphStyle: paragraph,
-                                ]))
-                    }
-                    result.append(
-                        NSAttributedString(
-                            string: text,
-                            attributes: [
-                                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: color,
-                                .paragraphStyle: paragraph,
-                            ]))
-                    attributed = result
+                    attributed =
+                        p.systemContent?.attributedText(
+                            color: color,
+                            linksEnabled: binding.actions.canOpenSystemTargets(in: binding.context))
+                        ?? NSAttributedString(string: text)
+                    systemLayout.container.lineBreakMode = .byWordWrapping
+                    systemLayout.update(attributed, lineLimit: 0)
                 }
                 setAccessibilityLabel(attributed.string)
             }
             needsLayout = true
+            window?.invalidateCursorRects(for: self)
             needsDisplay = true
         }
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
+            if binding?.presentation.systemContent != nil {
+                systemLayout.draw(in: bounds)
+                return
+            }
             let rect =
                 isDate
                 ? bounds.insetBy(
                     dx: min(ChahuaTheme.Spacing.medium, bounds.width / 2),
                     dy: min(ChahuaTheme.Spacing.xSmall, bounds.height / 2)) : bounds
             attributed.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+        }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            target(at: convert(point, from: superview)) == nil ? nil : self
+        }
+
+        private func target(at point: CGPoint) -> TimelineSystemMessageContent.Target? {
+            guard let binding, binding.actions.canOpenSystemTargets(in: binding.context),
+                let content = binding.presentation.systemContent
+            else { return nil }
+            return systemLayout.systemTarget(at: point, width: bounds.width, content: content)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            pressedTarget = target(at: convert(event.locationInWindow, from: nil))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            defer { pressedTarget = nil }
+            guard let pressedTarget,
+                target(at: convert(event.locationInWindow, from: nil)) == pressedTarget
+            else { return }
+            binding?.actions.openSystemTarget(pressedTarget)
+        }
+
+        override func resetCursorRects() {
+            guard let binding, binding.actions.canOpenSystemTargets(in: binding.context),
+                let content = binding.presentation.systemContent
+            else { return }
+            _ = systemLayout.size(width: bounds.width)
+            for link in content.links {
+                let glyphs = systemLayout.manager.glyphRange(
+                    forCharacterRange: link.range, actualCharacterRange: nil)
+                systemLayout.manager.enumerateEnclosingRects(
+                    forGlyphRange: glyphs,
+                    withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                    in: systemLayout.container
+                ) { rect, _ in
+                    self.addCursorRect(rect, cursor: .pointingHand)
+                }
+            }
         }
     }
 #endif

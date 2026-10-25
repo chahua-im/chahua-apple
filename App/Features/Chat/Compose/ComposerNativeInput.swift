@@ -23,6 +23,7 @@ protocol ComposerNativeInput: AnyObject {
     func installMentionText(_ text: NSAttributedString)
     func replaceMention(in range: NSRange, with text: NSAttributedString) -> Bool
     func commitMarkedText() -> ComposerInputSnapshot
+    func formatSelection(_ format: ComposerInlineFormat) -> Bool
 }
 
 // Native exception: SwiftUI's String binding has no mention identity, marked
@@ -211,6 +212,7 @@ protocol ComposerNativeInput: AnyObject {
             if item.action == #selector(paste(_:)), isEditable, onPasteMedia != nil,
                 NSPasteboard.general.canReadItem(withDataConformingToTypes: [
                     UTType.fileURL.identifier, UTType.image.identifier, UTType.movie.identifier,
+                    UTType.pdf.identifier, UTType.archive.identifier,
                 ])
             {
                 return true
@@ -254,10 +256,14 @@ protocol ComposerNativeInput: AnyObject {
                 guard
                     let type = item.types.first(where: {
                         guard let type = UTType($0.rawValue) else { return false }
-                        return type.conforms(to: .image) || type.conforms(to: .movie)
+                        return type.conforms(to: .data) && !type.conforms(to: .text)
+                            && !type.conforms(to: .url)
                     }), let data = item.data(forType: type)
                 else { return nil }
                 let provider = NSItemProvider()
+                provider.suggestedName =
+                    "attachment."
+                    + (UTType(type.rawValue)?.preferredFilenameExtension ?? "bin")
                 provider.registerDataRepresentation(
                     forTypeIdentifier: type.rawValue, visibility: .all
                 ) { completion in
@@ -680,6 +686,41 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         input?.receiveEditorText(storage.string)
         return true
     }
+    func formatSelection(_ format: ComposerInlineFormat) -> Bool {
+        guard isComposerEnabled, input?.isComposing != true, case .committed = snapshot(),
+            let selection, selection.length > 0, let editor = resolveEditor(),
+            let storage = mentionStorage,
+            let formatted = format.wrapping(mentionSnapshot(storage.string), selection: selection)
+        else { return false }
+        let before = MentionUndoState(text: trackedText, spans: trackedSpans)
+        let added = formatted.length - storage.length
+        let replacement = (formatted.string as NSString).substring(
+            with: NSRange(location: selection.location, length: selection.length + added))
+        changingMentionStorage = true
+        #if os(macOS)
+            editor.breakUndoCoalescing()
+            editor.insertText(replacement, replacementRange: selection)
+        #else
+            guard let textView = editor as? UITextView else {
+                changingMentionStorage = false
+                return false
+            }
+            textView.insertText(replacement)
+        #endif
+        trackedSpans = ComposerMentionText.spans(in: formatted)
+        trackedText = storage.string
+        let after = MentionUndoState(text: trackedText, spans: trackedSpans)
+        editor.undoManager?.registerUndo(withTarget: self) { marker in
+            marker.restoreMentionUndo(before, inverse: after)
+        }
+        setSelection(NSRange(location: NSMaxRange(selection) + added, length: 0))
+        #if os(macOS)
+            editor.breakUndoCoalescing()
+        #endif
+        changingMentionStorage = false
+        input?.receiveEditorText(storage.string)
+        return true
+    }
 
     func commitMarkedText() -> ComposerInputSnapshot {
         guard let editor = resolveEditor() else { return .unavailable }
@@ -824,7 +865,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 if event.window === self.window { self.entryFocusPending = false }
                 guard event.type == .keyDown, self.isComposerFocused, self.isComposerEnabled,
                     event.window === self.window,
-                    [36, 76, 125, 126, 53].contains(event.keyCode),
+                    [11, 34, 36, 76, 125, 126, 53].contains(event.keyCode),
                     let editor = self.resolveEditor(), self.window?.firstResponder === editor
                 else { return event }
                 // Inspect before native dispatch: candidate confirmation can
@@ -838,7 +879,15 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 let modifiers = event.modifierFlags.intersection([
                     .shift, .control, .option, .command,
                 ])
-                if modifiers.isEmpty {
+                if !modifiers.contains(.option),
+                    !modifiers.intersection([.command, .control]).isEmpty,
+                    let key = event.charactersIgnoringModifiers?.lowercased(),
+                    key == "b" || key == "i"
+                {
+                    _ = self.formatSelection(key == "b" ? .bold : .italic)
+                    return nil
+                }
+                if modifiers.isEmpty, [36, 76, 125, 126, 53].contains(event.keyCode) {
                     let key: ComposerMentionKey
                     switch event.keyCode {
                     case 125: key = .down
@@ -1041,7 +1090,10 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             let types =
                 target.pasteConfiguration?.acceptableTypeIdentifiers ?? [UTType.text.identifier]
             target.pasteConfiguration = UIPasteConfiguration(
-                acceptableTypeIdentifiers: types + [UTType.image.identifier])
+                acceptableTypeIdentifiers: types + [
+                    UTType.image.identifier, UTType.movie.identifier, UTType.fileURL.identifier,
+                    UTType.pdf.identifier, UTType.archive.identifier, UTType.data.identifier,
+                ])
             target.pasteDelegate = self
         }
 
@@ -1098,7 +1150,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             _ textPasteConfigurationSupporting: any UITextPasteConfigurationSupporting,
             transform item: any UITextPasteItem
         ) {
-            guard item.itemProvider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+            guard ComposerImageAcquisition.supports(item.itemProvider)
             else {
                 if previousPasteDelegate?.textPasteConfigurationSupporting?(
                     textPasteConfigurationSupporting, transform: item) == nil

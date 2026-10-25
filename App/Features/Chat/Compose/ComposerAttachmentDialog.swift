@@ -67,7 +67,7 @@ struct ComposerAttachmentDialog: View {
                         ContentUnavailableView(
                             "No attachments", systemImage: "photo.on.rectangle",
                             description: Text(
-                                "Drop media here or close to choose more. Your caption will be kept."
+                                "Drop attachments here or close to choose more. Your caption will be kept."
                             ))
                     } else {
                         ComposerMediaGallery(
@@ -128,10 +128,10 @@ struct ComposerAttachmentDialog: View {
         #endif
         .contentShape(Rectangle())
         .onDrop(
-            of: [.image, .movie, .fileURL], isTargeted: $isMediaDropTargeted, perform: importDrop
+            of: [.item, .fileURL], isTargeted: $isMediaDropTargeted, perform: importDrop
         )
         #if os(macOS)
-            .onPasteCommand(of: [.image, .movie, .fileURL]) { _ = importDrop($0) }
+            .onPasteCommand(of: [.data, .fileURL]) { _ = importDrop($0) }
         #endif
         .overlay {
             if isMediaDropTargeted && canInteract {
@@ -173,7 +173,7 @@ struct ComposerAttachmentDialog: View {
             .accessibilityLabel("Cancel")
             .disabled(isAcquiring || isSubmitting || isCancelling)
             Spacer()
-            Text("\(attachments.count) Media")
+            Text("\(attachments.count) Attachments")
                 .font(.headline)
                 .accessibilityLabel("\(attachments.count) attachments")
                 #if os(macOS)
@@ -202,7 +202,7 @@ struct ComposerAttachmentDialog: View {
                         onTakePhoto()
                     }
                 #endif
-                if attachments.contains(where: { $0.mimeType.hasPrefix("image/") }) {
+                if attachments.contains(where: { !$0.isFile && $0.mimeType.hasPrefix("image/") }) {
                     Toggle(
                         "Compress images",
                         isOn: Binding(
@@ -210,8 +210,8 @@ struct ComposerAttachmentDialog: View {
                             set: { enabled in changeAttachments { onCompressionChanged(enabled) } }
                         ))
                 }
-                if attachments.contains(where: { $0.mimeType.hasPrefix("video/") }) {
-                    Text("Videos are sent in original quality.")
+                if attachments.contains(where: { $0.isFile || $0.mimeType.hasPrefix("video/") }) {
+                    Text("Files and videos are sent in original quality.")
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -272,6 +272,7 @@ struct ComposerAttachmentDialog: View {
                 .disabled(!canEditCaption)
                 .focused($isCaptionFocused)
                 .onSubmit(keyboardSubmit)
+                .modifier(ComposerFormattingShortcuts(input: input))
                 .onKeyPress(keys: [.return]) { press in
                     guard press.modifiers.isEmpty, !input.isComposing,
                         case .committed = input.nativeInput?.snapshot()
@@ -307,9 +308,7 @@ struct ComposerAttachmentDialog: View {
         let mediaProviders = providers.filter { provider in
             !provider.hasItemConformingToTypeIdentifier(
                 ComposerMediaGallery.slotDragType.identifier)
-                && [UTType.image, .movie, .fileURL].contains {
-                    provider.hasItemConformingToTypeIdentifier($0.identifier)
-                }
+                && ComposerImageAcquisition.supports(provider)
         }
         guard !mediaProviders.isEmpty else { return false }
         input.settleNativeInput()

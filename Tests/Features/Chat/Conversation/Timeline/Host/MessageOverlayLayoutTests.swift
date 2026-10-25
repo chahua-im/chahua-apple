@@ -27,6 +27,8 @@
                     mediaContext: nil, colorScheme: dark ? .dark : .light,
                     messageTextSize: MessageTextSizePreference.defaultValue,
                     appLanguage: AppLanguage.selected.rawValue,
+                    showAllAvatars: ConversationTimelinePreferences.defaultShowAllAvatars,
+                    showDmDetails: ConversationTimelinePreferences.defaultShowDmDetails,
                     unreadBadgeColor: .default,
                     headerInset: 0, composerInset: 0, isSplitResizing: false)
                 let size = CGSize(width: width, height: 650)

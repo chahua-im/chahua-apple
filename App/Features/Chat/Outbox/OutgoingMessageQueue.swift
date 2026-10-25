@@ -30,6 +30,9 @@ final class OutgoingMessageQueue: ObservableObject {
     @Published private(set) var snapshots: [ConversationKey: LocalConversationSnapshot] = [:]
     @Published private(set) var attachmentProgress: [String: Double] = [:]
     let events = PassthroughSubject<OutgoingQueueEvent, Never>()
+    /// ChatStore supplies account-fenced membership and speaking authorization.
+    /// Authorization failures are durable failed sends, never storage failures.
+    var authorizeWrite: (@MainActor (String, String?) async throws -> Void)?
 
     private let apiClient: any ChahuaAPIClient
     private let localStoreFactory: @Sendable (Int32) async throws -> ChahuaLocalStore
@@ -47,6 +50,7 @@ final class OutgoingMessageQueue: ObservableObject {
     private var workers: [ConversationKey: (id: UUID, task: Task<Void, Never>)] = [:]
     private var acknowledgements: [String: MessageResponse] = [:]
     private var uncommittedFailures: [String: LocalOutgoingMessage] = [:]
+    private var uncommittedRestrictions: [String: SpeakingMode] = [:]
     private var pendingAudioAcknowledgements: [MessageID: MessageResponse] = [:]
     /// Publication can beat the HTTP acknowledgement; retain that fact only for active sends.
     private var inflightAudioPublications: [String: Bool] = [:]
@@ -84,6 +88,7 @@ final class OutgoingMessageQueue: ObservableObject {
         snapshots = [:]
         acknowledgements = [:]
         uncommittedFailures = [:]
+        uncommittedRestrictions = [:]
         pendingAudioAcknowledgements = [:]
         inflightAudioPublications = [:]
         attachmentProgress = [:]
@@ -386,6 +391,8 @@ final class OutgoingMessageQueue: ObservableObject {
             throw QueueError.storageUnavailable
         }
         let current = generation
+        try await authorizeWrite?(chatID, threadID)
+        try checkGeneration(current)
         do {
             try await checkpoint(.retry, generation: current)
             let snapshot = try await store.retry(
@@ -456,10 +463,12 @@ final class OutgoingMessageQueue: ObservableObject {
                 try await checkpoint(.fail, generation: current)
                 let snapshot = try await local.fail(
                     chatID: pending.chatID, threadID: pending.threadID,
-                    clientGeneratedID: pending.clientGeneratedID)
+                    clientGeneratedID: pending.clientGeneratedID,
+                    speakingRestriction: uncommittedRestrictions[pending.clientGeneratedID])
                 try checkGeneration(current)
                 publish(snapshot)
                 uncommittedFailures[pending.clientGeneratedID] = nil
+                uncommittedRestrictions[pending.clientGeneratedID] = nil
             }
             operation = "restore"
             try await checkpoint(.restore, generation: current)
@@ -549,6 +558,9 @@ final class OutgoingMessageQueue: ObservableObject {
                 }
             }
             do {
+                try await authorizeWrite?(pending.chatID, pending.threadID)
+                try checkGeneration(current)
+                guard canDispatch(generation: current, transport: transport) else { return }
                 let response: MessageResponse
                 if let forward = pending.forwardRequest {
                     if forward.messageIDs.count == 1, let sourceID = forward.messageIDs.first {
@@ -613,14 +625,20 @@ final class OutgoingMessageQueue: ObservableObject {
                     }) == true
                 {
                     uncommittedFailures[pending.clientGeneratedID] = pending
+                    let restriction =
+                        (error as? APIError)?.speakingRestriction
+                        ?? (error as? SpeakingWriteError)?.speakingRestriction
+                    uncommittedRestrictions[pending.clientGeneratedID] = restriction
                     do {
                         try await checkpoint(.fail, generation: current)
                         let snapshot = try await store.fail(
                             chatID: key.chatID, threadID: key.threadID,
-                            clientGeneratedID: pending.clientGeneratedID)
+                            clientGeneratedID: pending.clientGeneratedID,
+                            speakingRestriction: restriction)
                         try checkGeneration(current)
                         publish(snapshot)
                         uncommittedFailures[pending.clientGeneratedID] = nil
+                        uncommittedRestrictions[pending.clientGeneratedID] = nil
                     } catch {
                         storageFailed(error, operation: "persist send failure", generation: current)
                     }
@@ -645,6 +663,7 @@ final class OutgoingMessageQueue: ObservableObject {
     ) async {
         acknowledgements[message.clientGeneratedId] = message
         uncommittedFailures[message.clientGeneratedId] = nil
+        uncommittedRestrictions[message.clientGeneratedId] = nil
         do {
             // Once validated, delivery belongs to this captured account store.
             // Finish its durable deletion even if scene teardown cancels the sender.
@@ -694,6 +713,16 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     func importImages(urls: [URL], chatID: String, threadID: String? = nil) async throws {
+        try await importAttachments(urls: urls, chatID: chatID, threadID: threadID, asFiles: false)
+    }
+
+    func importFiles(urls: [URL], chatID: String, threadID: String? = nil) async throws {
+        try await importAttachments(urls: urls, chatID: chatID, threadID: threadID, asFiles: true)
+    }
+
+    private func importAttachments(
+        urls: [URL], chatID: String, threadID: String?, asFiles: Bool
+    ) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard storageState == .ready, let store, let uid = requestedUID,
             !attachmentMutationConversations.contains(key)
@@ -711,8 +740,14 @@ final class OutgoingMessageQueue: ObservableObject {
         guard let item = snapshot.composingItem else { throw LocalStorageError.staleDraft }
         let processor = OutgoingImageProcessor(directory: store.directory)
         for url in urls {
-            let imported = try await processor.importImage(
-                from: url, directory: store.directory, position: 0)
+            let imported: LocalOutgoingAttachment
+            if asFiles {
+                imported = try await OutgoingFileImporter(directory: store.directory)
+                    .importFile(from: url, position: 0)
+            } else {
+                imported = try await processor.importImage(
+                    from: url, directory: store.directory, position: 0)
+            }
             try checkGeneration(current)
             guard let latest = snapshots[key]?.composingItem,
                 latest.clientGeneratedID == item.clientGeneratedID
@@ -955,6 +990,7 @@ final class OutgoingMessageQueue: ObservableObject {
             // sequence is authoritative, so a reorder must not restart this PUT.
             let allocation = try await apiClient.requestAttachmentUpload(
                 fileName: attachment.fileName, contentType: attachment.mimeType,
+                purpose: attachment.isFile ? .file : attachment.isAudio ? .voice : .media,
                 size: attachment.byteCount,
                 width: attachment.width, height: attachment.height, order: attachment.position)
             guard canDispatch(generation: current, transport: transport),

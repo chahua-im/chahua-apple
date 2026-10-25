@@ -6,6 +6,17 @@
 
     @MainActor
     final class ComposerInputStateTests: XCTestCase {
+        func testInlineFormattingPreservesEmojiEdgesWhitespaceAndParagraphs() {
+            let source = NSAttributedString(string: "outside  😀 \n\n  你好😀  after")
+            let selected = (source.string as NSString).range(of: "  😀 \n\n  你好😀  ")
+            XCTAssertEqual(
+                ComposerInlineFormat.bold.wrapping(source, selection: selected)?.string,
+                "outside  **😀** \n\n  **你好😀**  after")
+            XCTAssertNil(
+                ComposerInlineFormat.italic.wrapping(
+                    source, selection: NSRange(location: 0, length: 0)))
+        }
+
         func testBindingBeforeMarkedRangeNeverPublishesIntermediateText() {
             let harness = NativeComposerHarness(text: "draft ")
             defer { harness.input.detach() }
@@ -271,6 +282,19 @@
 
         func replaceMention(in range: NSRange, with text: NSAttributedString) -> Bool {
             editor.insertText(text, replacementRange: range)
+            return true
+        }
+
+        func formatSelection(_ format: ComposerInlineFormat) -> Bool {
+            guard !editor.hasMarkedText(),
+                let formatted = format.wrapping(
+                    editor.attributedString(), selection: editor.selectedRange())
+            else { return false }
+            let selection = editor.selectedRange()
+            let added = formatted.length - (editor.string as NSString).length
+            let replacement = formatted.attributedSubstring(
+                from: NSRange(location: selection.location, length: selection.length + added))
+            editor.insertText(replacement, replacementRange: selection)
             return true
         }
 

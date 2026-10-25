@@ -11,6 +11,7 @@ extension ChatListItem {
             unreadReactions: unreadReactions,
             lastReadMessageId: lastReadMessageId, peerLastReadMessageId: peerLastReadMessageId,
             lastMessage: lastMessage, mutedUntil: mutedUntil, muteOverride: muteOverride,
-            isMuted: isMuted, archived: archived, kind: kind, peer: peer)
+            isMuted: isMuted, archived: archived, kind: kind, peer: peer,
+            membershipMessagePolicy: membershipMessagePolicy)
     }
 }

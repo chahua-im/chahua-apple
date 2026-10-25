@@ -3,6 +3,7 @@ import SwiftUI
 
 struct AuthLoginView: View {
     @ObservedObject var model: AuthSessionModel
+    var reason: SignedOutReason = .initial
     @State private var username = ""
     @State private var password = ""
     #if DEBUG
@@ -27,6 +28,10 @@ struct AuthLoginView: View {
         VStack(alignment: .leading, spacing: ChahuaTheme.Spacing.large) {
             Text("Sign in").font(.largeTitle.bold())
             Text("Use your Chahua account to continue.").foregroundStyle(ChahuaTheme.secondaryText)
+            if case .invalidOrRevoked = reason {
+                Text("Your session has expired. Sign in again.")
+                    .foregroundStyle(ChahuaTheme.secondaryText)
+            }
             ChahuaTextField(
                 title: "Username",
                 prompt: "Username",
@@ -37,6 +42,10 @@ struct AuthLoginView: View {
             ChahuaSecureField(title: "Password", prompt: "Password", text: $password)
             if let validation = model.validationMessage {
                 Text(validation).foregroundStyle(ChahuaTheme.destructive)
+            }
+            if model.isSubmitting && model.isSlow {
+                Text("Connection is taking longer than usual")
+                    .foregroundStyle(ChahuaTheme.secondaryText)
             }
             ChahuaPrimaryButton(title: "Sign in", isWorking: model.isSubmitting) {
                 Task {

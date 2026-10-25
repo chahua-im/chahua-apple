@@ -6,6 +6,13 @@
     /// AttributeGraph overhead this native timeline is intended to remove.
     @MainActor
     final class TimelineAvatarView: UIView {
+        var onActivate: (() -> Void)? {
+            didSet {
+                tapMarker.configure(.tap(onActivate))
+                accessibilityTraits = onActivate == nil ? .image : .button
+            }
+        }
+        private let tapMarker = MessageRowGestureMarker(frame: .zero)
         private let imageView = TimelineImageView(frame: .zero)
         private let initialsLabel = UILabel(frame: .zero)
         private var name: String?
@@ -27,6 +34,8 @@
             addSubview(initialsLabel)
             imageView.showsPlaceholderChrome = false
             addSubview(imageView)
+            tapMarker.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(tapMarker)
         }
 
         required init?(coder: NSCoder) { nil }
@@ -68,6 +77,7 @@
         }
 
         func clear() {
+            onActivate = nil
             imageView.clear()
             name = nil
             diameter = 0
@@ -90,7 +100,14 @@
             layer.cornerRadius = min(bounds.width, bounds.height) / 2
             initialsLabel.frame = bounds
             imageView.frame = bounds
+            tapMarker.frame = bounds
             imageView.setVisible(visible)
+        }
+
+        override func accessibilityActivate() -> Bool {
+            guard let onActivate else { return false }
+            onActivate()
+            return true
         }
     }
 #endif

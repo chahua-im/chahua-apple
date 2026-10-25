@@ -304,6 +304,20 @@ final class ChahuaAPITests: XCTestCase {
             configuration: .init(baseURL: URL(string: "https://api.example")!),
             token: "candidate", session: testSession())
 
+        XCTAssertNil(
+            APIError.http(status: 403, body: Data(#"{"error":"forbidden"}"#.utf8))
+                .speakingRestriction)
+        let restrictionBody = Data(
+            #"{"code":"speakingRestricted","effectiveSpeakingMode":"repliesOnly"}"#.utf8)
+        XCTAssertEqual(
+            APIError.http(status: 403, body: restrictionBody).speakingRestriction, .repliesOnly)
+        XCTAssertNil(APIError.http(status: 400, body: restrictionBody).speakingRestriction)
+        XCTAssertNil(
+            APIError.http(
+                status: 403,
+                body: Data(#"{"code":"forbidden","effectiveSpeakingMode":"readOnly"}"#.utf8)
+            )
+            .speakingRestriction)
         StubURLProtocol.handler = { _ in (403, #"{"error":"forbidden"}"#) }
         do {
             _ = try await client.updatePresenceSettings(visibility: .nobody)
@@ -965,7 +979,7 @@ final class ChahuaAPITests: XCTestCase {
     func testGroupMetadataAndMemberMutationsUseDocumentedWireContract() async throws {
         let requests = RequestRecorder()
         let member = #"""
-            {"uid":17,"username":"Ada","avatarUrl":null,"role":"admin",
+            {"uid":17,"username":"Ada","avatarUrl":null,"role":"admin","speakingMode":"unrestricted",
              "joinedAt":"2026-09-01T01:02:03Z","gender":0,"userGroup":null}
             """#
         StubURLProtocol.handler = { request in
@@ -979,7 +993,9 @@ final class ChahuaAPITests: XCTestCase {
                     #"""
                     {"id":"chat/one","name":"Engineering","description":"Release work",
                      "avatar":null,"mutedUntil":"2026-09-01T02:02:03.250Z",
-                     "myRole":"admin","kind":"group","peer":null}
+                     "myRole":"admin","kind":"group","peer":null,"speakingMode":"threadsOnly",
+                     "mySpeakingMode":"unrestricted","effectiveSpeakingMode":"unrestricted",
+                     "membershipMessagePolicy":{"visibility":"admins","canView":true}}
                     """#
                 )
             case ("GET", "/group/chat%2Fone/members"):
@@ -993,6 +1009,15 @@ final class ChahuaAPITests: XCTestCase {
                     200,
                     #"{"chatId":"chat/one","kind":"group","archived":true,"isMuted":true,"mutedUntil":"2026-09-01T03:02:03Z"}"#
                 )
+            case ("PUT", "/group/chat%2Fone/speaking-mode"):
+                return (200, #"{"chatId":"chat/one","speakingMode":"readOnly"}"#)
+            case ("PUT", "/group/chat%2Fone/members/17/speaking-mode"):
+                return (
+                    200,
+                    #"{"chatId":"chat/one","uid":17,"role":"member","speakingMode":"repliesOnly","groupSpeakingMode":"threadsOnly","effectiveSpeakingMode":"repliesOnly"}"#
+                )
+            case ("PUT", "/users/me/chat-settings"):
+                return (200, #"{"showMembershipMessages":false}"#)
             default:
                 return (404, "")
             }
@@ -1011,20 +1036,36 @@ final class ChahuaAPITests: XCTestCase {
             chatID: "chat/one", request: .init(mode: .temporarilyMuted, durationSeconds: 3_600))
         let indefiniteMute = try await client.updateChatNotificationSetting(
             chatID: "chat/one", request: .init(mode: .alwaysMuted))
+        let groupMode = try await client.updateGroupSpeakingMode(
+            chatID: "chat/one", speakingMode: .readOnly)
+        let memberMode = try await client.updateMemberSpeakingMode(
+            chatID: "chat/one", uid: 17, speakingMode: .repliesOnly)
+        let chatSettings = try await client.updateChatSettings(.init(showMembershipMessages: false))
+        XCTAssertEqual(groupMode, .init(chatId: "chat/one", speakingMode: .readOnly))
+        XCTAssertEqual(memberMode.effectiveSpeakingMode, .repliesOnly)
+        XCTAssertFalse(chatSettings.showMembershipMessages)
 
         XCTAssertEqual(group.description, "Release work")
         XCTAssertEqual(group.myRole, .admin)
+        XCTAssertEqual(group.speakingMode, .threadsOnly)
+        XCTAssertEqual(group.mySpeakingMode, .unrestricted)
+        XCTAssertEqual(group.effectiveSpeakingMode, .unrestricted)
+        XCTAssertEqual(group.membershipMessagePolicy, .init(visibility: .admins, canView: true))
         XCTAssertEqual(
             try XCTUnwrap(group.mutedUntil).timeIntervalSince1970, 1_788_228_123.25,
             accuracy: 0.0001)
-        XCTAssertEqual(page.members, [.init(uid: 17, username: "Ada", role: .admin)])
+        XCTAssertEqual(
+            page.members,
+            [.init(uid: 17, username: "Ada", role: .admin, speakingMode: .unrestricted)])
         XCTAssertEqual(page.nextCursor, 17)
         XCTAssertTrue(page.canManageMembers)
         XCTAssertEqual(updated.role, .admin)
         XCTAssertEqual(timedMute, indefiniteMute)
 
         let recorded = requests.values
-        XCTAssertEqual(recorded.map(\.httpMethod), ["GET", "GET", "PATCH", "DELETE", "PUT", "PUT"])
+        XCTAssertEqual(
+            recorded.map(\.httpMethod),
+            ["GET", "GET", "PATCH", "DELETE", "PUT", "PUT", "PUT", "PUT", "PUT"])
         let components = try recorded.map {
             try XCTUnwrap(URLComponents(url: try XCTUnwrap($0.url), resolvingAgainstBaseURL: false))
         }
@@ -1034,6 +1075,8 @@ final class ChahuaAPITests: XCTestCase {
                 "/group/chat%2Fone", "/group/chat%2Fone/members", "/group/chat%2Fone/members/17",
                 "/group/chat%2Fone/members/17", "/group/chat%2Fone/notification-setting",
                 "/group/chat%2Fone/notification-setting",
+                "/group/chat%2Fone/speaking-mode",
+                "/group/chat%2Fone/members/17/speaking-mode", "/users/me/chat-settings",
             ])
         XCTAssertEqual(
             components[1].queryItems,

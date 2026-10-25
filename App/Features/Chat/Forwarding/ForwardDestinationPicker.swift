@@ -2,6 +2,19 @@ import ChahuaAPI
 import Combine
 import SwiftUI
 
+private struct OpenForwardDestinationKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable (ConversationListItem) async throws -> Bool)? =
+        nil
+}
+
+extension EnvironmentValues {
+    var openForwardDestination: (@MainActor @Sendable (ConversationListItem) async throws -> Bool)?
+    {
+        get { self[OpenForwardDestinationKey.self] }
+        set { self[OpenForwardDestinationKey.self] = newValue }
+    }
+}
+
 /// Present directly as a sheet; this view owns its shared iOS/macOS navigation stack.
 struct ForwardDestinationPicker: View {
     enum SourceError: Error {
@@ -11,19 +24,22 @@ struct ForwardDestinationPicker: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ForwardDestinationPickerModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openForwardDestination) private var openForwardDestination
     @State private var query = ""
-    private let onEnqueued: () -> Void
+    private let onPrepared: () -> Void
 
     init(
         store: ChatStore, sources: [MessageResponse],
         loadSources: (@MainActor () async throws -> [MessageResponse])? = nil,
-        onEnqueued: @escaping () -> Void
+        moveFrom: ConversationKey? = nil, expectedForwardID: UUID? = nil,
+        onPrepared: @escaping () -> Void
     ) {
         self.store = store
-        self.onEnqueued = onEnqueued
+        self.onPrepared = onPrepared
         _model = StateObject(
             wrappedValue: ForwardDestinationPickerModel(
-                store: store, sources: sources, loadSources: loadSources))
+                store: store, sources: sources, loadSources: loadSources,
+                moveFrom: moveFrom, expectedForwardID: expectedForwardID))
     }
 
     var body: some View {
@@ -40,8 +56,13 @@ struct ForwardDestinationPicker: View {
                 let targets = model.targets(matching: query)
                 ForEach(targets) { target in
                     Button {
-                        model.select(target) {
-                            onEnqueued()
+                        model.select(
+                            target,
+                            navigate: { destination in
+                                try await openForwardDestination?(destination) ?? false
+                            }
+                        ) {
+                            onPrepared()
                             dismiss()
                         }
                     } label: {
@@ -92,7 +113,7 @@ struct ForwardDestinationPicker: View {
                 Button("Cancel", role: .cancel) { model.cancelConfirmation() }
                 Button("Continue") {
                     model.confirm(confirmation) {
-                        onEnqueued()
+                        onPrepared()
                         dismiss()
                     }
                 }
@@ -143,7 +164,8 @@ struct ForwardDestinationPicker: View {
 @MainActor
 private final class ForwardDestinationPickerModel: ObservableObject {
     enum Failure: Error, LocalizedError, Equatable {
-        case unavailable, stale, tooMany, topicUnavailable, loadFailed, enqueueFailed
+        case unavailable, stale, tooMany, topicUnavailable, loadFailed, navigationFailed
+        case restricted(SpeakingMode)
 
         var errorDescription: String? {
             switch self {
@@ -162,8 +184,11 @@ private final class ForwardDestinationPickerModel: ObservableObject {
             case .loadFailed:
                 AppLanguage.localized(
                     "Could not reload the messages. Choose a destination to retry.")
-            case .enqueueFailed:
-                AppLanguage.localized("Could not start forwarding. Choose a destination to retry.")
+            case .navigationFailed:
+                AppLanguage.localized(
+                    "Could not open this destination. Choose a destination to retry.")
+            case .restricted(let mode):
+                mode.restrictionExplanation
             }
         }
     }
@@ -207,6 +232,9 @@ private final class ForwardDestinationPickerModel: ObservableObject {
     private let store: ChatStore
     private let sources: [MessageResponse]
     private let loadSources: (@MainActor () async throws -> [MessageResponse])?
+    private let moveFrom: ConversationKey?
+    private let expectedForwardID: UUID?
+    private var navigateDestination: (@MainActor (ConversationListItem) async throws -> Bool)?
     private let accountID: Int32?
     private var chatCursor: String?
     private var threadCursor: String?
@@ -220,15 +248,18 @@ private final class ForwardDestinationPickerModel: ObservableObject {
     private var resolvedSources: [MessageResponse] = []
     private var generation = 0
     private var isOpen = false
-    private var didEnqueue = false
+    private var didPrepare = false
 
     init(
         store: ChatStore, sources: [MessageResponse],
-        loadSources: (@MainActor () async throws -> [MessageResponse])?
+        loadSources: (@MainActor () async throws -> [MessageResponse])?,
+        moveFrom: ConversationKey?, expectedForwardID: UUID?
     ) {
         self.store = store
         self.sources = sources
         self.loadSources = loadSources
+        self.moveFrom = moveFrom
+        self.expectedForwardID = expectedForwardID
         accountID = store.currentUserProfile?.uid
     }
 
@@ -237,7 +268,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
         (chatsHaveMore && !chatsFailed) || (threadsHaveMore && !threadsFailed)
     }
     var selectionBlocked: Bool {
-        !isOpen || didEnqueue || isResolving || isSubmitting || confirmation != nil
+        !isOpen || didPrepare || isResolving || isSubmitting || confirmation != nil
             || failure == .stale || failure == .unavailable
             || (loadSources == nil && failure == .tooMany)
     }
@@ -263,7 +294,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
     }
 
     func start() {
-        guard !isOpen, !didEnqueue else { return }
+        guard !isOpen, !didPrepare else { return }
         isOpen = true
         generation += 1
         guard accountID != nil, store.currentUserProfile?.uid == accountID else {
@@ -378,8 +409,13 @@ private final class ForwardDestinationPickerModel: ObservableObject {
         }
     }
 
-    func select(_ target: ConversationListItem, onEnqueued: @escaping () -> Void) {
+    func select(
+        _ target: ConversationListItem,
+        navigate: (@MainActor @Sendable (ConversationListItem) async throws -> Bool)?,
+        onPrepared: @escaping () -> Void
+    ) {
         guard !selectionBlocked else { return }
+        navigateDestination = navigate
         isResolving = true
         let token = generation
         selectionTask = Task { [weak self] in
@@ -410,7 +446,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
                 } else {
                     await self.submit(
                         target, sources: selection, allowPlaceholders: false,
-                        token: token, onEnqueued: onEnqueued)
+                        token: token, onPrepared: onPrepared)
                 }
             } catch {
                 guard self.current(token), self.failure != .stale else { return }
@@ -421,15 +457,15 @@ private final class ForwardDestinationPickerModel: ObservableObject {
 
     func cancelConfirmation() { confirmation = nil }
 
-    func confirm(_ value: Confirmation, onEnqueued: @escaping () -> Void) {
-        guard isOpen, !isSubmitting, !didEnqueue, failure != .stale else { return }
+    func confirm(_ value: Confirmation, onPrepared: @escaping () -> Void) {
+        guard isOpen, !isSubmitting, !didPrepare, failure != .stale else { return }
         confirmation = nil
         let token = generation
         selectionTask = Task { [weak self] in
             guard let self else { return }
             await self.submit(
                 value.target, sources: value.sources, allowPlaceholders: true,
-                token: token, onEnqueued: onEnqueued)
+                token: token, onPrepared: onPrepared)
             if self.current(token) { self.selectionTask = nil }
         }
     }
@@ -477,22 +513,31 @@ private final class ForwardDestinationPickerModel: ObservableObject {
 
     private func submit(
         _ target: ConversationListItem, sources selection: [MessageResponse],
-        allowPlaceholders: Bool, token: Int, onEnqueued: @escaping () -> Void
+        allowPlaceholders: Bool, token: Int, onPrepared: @escaping () -> Void
     ) async {
-        guard current(token), !didEnqueue, failure != .stale else { return }
+        guard current(token), !didPrepare, failure != .stale else { return }
         do {
             try validate(selection)
             isSubmitting = true
             defer { if current(token) { isSubmitting = false } }
-            try await store.outgoingQueue.enqueueForward(
-                chatID: target.id.chatID, threadID: target.id.threadID,
-                sources: selection, allowPlaceholders: allowPlaceholders)
-            guard current(token) else { return }
-            didEnqueue = true
-            onEnqueued()
+            try await store.requireSpeakingPermission(
+                chatID: target.id.chatID, threadID: target.id.threadID)
+            guard current(token), let navigateDestination else { throw Failure.navigationFailed }
+            let opened = try await store.drafts.prepareForward(
+                sources: selection, allowPlaceholders: allowPlaceholders, destination: target,
+                moveFrom: moveFrom, expectedID: expectedForwardID, navigate: navigateDestination)
+            guard opened else { throw Failure.navigationFailed }
+            didPrepare = true
+            onPrepared()
         } catch {
             guard current(token), failure != .stale else { return }
-            failure = error as? Failure ?? .enqueueFailed
+            if let mode = (error as? APIError)?.speakingRestriction
+                ?? (error as? SpeakingWriteError)?.speakingRestriction
+            {
+                failure = .restricted(mode)
+            } else {
+                failure = error as? Failure ?? .navigationFailed
+            }
         }
     }
 

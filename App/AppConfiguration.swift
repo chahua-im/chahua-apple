@@ -2,6 +2,9 @@ import ChahuaAPI
 import Foundation
 
 enum AppConfiguration {
+    /// Public links belong to the application, not its API or asset-serving origin.
+    static let applicationURL = URL(string: "https://chahua.app")!
+
     static let apiConfiguration: ChahuaConfiguration = {
         guard
             let rawValue = Bundle.main.object(forInfoDictionaryKey: "APIBaseURL") as? String,

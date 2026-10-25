@@ -301,7 +301,8 @@ final class ShareExtensionModel: ObservableObject {
                     throw ShareExtensionError.fileTooLarge(maximumFileSize)
                 }
                 let allocation = try await api.requestAttachmentUpload(
-                    fileName: item.fileName, contentType: item.contentType, size: item.byteCount,
+                    fileName: item.fileName, contentType: item.contentType, purpose: .media,
+                    size: item.byteCount,
                     width: item.width, height: item.height, order: index)
                 try Task.checkCancellation()
                 guard self.uploadID == uploadID else { return }

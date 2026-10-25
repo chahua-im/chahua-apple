@@ -10,14 +10,15 @@ enum NotificationMuteDeadline {
     }
 
     static func finiteDeadline(
-        _ until: Date?, now: Date = .now, calendar: Calendar = .current
+        _ until: Date?, now: Date = .now, calendar: Calendar = .current,
+        language: AppLanguage = .selected
     ) -> String? {
         guard let until, until > now, until < maximumMuteDate else { return nil }
-        return formattedDeadline(until, now: now, calendar: calendar)
+        return formattedDeadline(until, now: now, calendar: calendar, language: language)
     }
 
     private static func formattedDeadline(
-        _ until: Date, now: Date = .now, calendar: Calendar = .current
+        _ until: Date, now: Date, calendar: Calendar, language: AppLanguage
     ) -> String {
         if calendar.isDate(until, inSameDayAs: now) {
             return until.formatted(
@@ -28,7 +29,7 @@ enum NotificationMuteDeadline {
         if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
             calendar.isDate(until, inSameDayAs: tomorrow)
         {
-            return AppLanguage.localized("tomorrow")
+            return AppLanguage.localized("tomorrow", language: language)
         }
         return until.formatted(
             .verbatim(

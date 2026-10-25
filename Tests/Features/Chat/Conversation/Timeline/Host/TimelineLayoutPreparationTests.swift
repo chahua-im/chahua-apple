@@ -43,7 +43,7 @@ final class TimelineLayoutPreparationTests: XCTestCase {
 
     private func rows(_ messages: [MessageResponse]) -> [TimelineRow] {
         TimelineRowsBuilder(
-            currentUserID: 1, isGroupChat: true, calendar: Calendar(identifier: .gregorian)
+            currentUserID: 1, calendar: Calendar(identifier: .gregorian)
         ).build(messages)
     }
 

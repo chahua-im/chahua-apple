@@ -12,12 +12,18 @@ struct TimelineLayoutEnvironment: Hashable {
     let layoutDirection: LayoutDirection
     /// In-app language selection: presentation strings localize through it, not the locale.
     let language: String
+    let showAllAvatars: Bool
+    let showsMessageDetails: Bool
+
+    /// Hidden DM identities reclaim both avatar lanes, including their gaps.
+    var identityLaneWidth: CGFloat {
+        showsMessageDetails ? avatarSize + TimelineRowMetrics.laneGap : 0
+    }
 
     var centralWidth: CGFloat {
         max(
             0,
-            timelineWidth - 2 * TimelineRowMetrics.rowHorizontalInset - 2
-                * (avatarSize + TimelineRowMetrics.laneGap))
+            timelineWidth - 2 * TimelineRowMetrics.rowHorizontalInset - 2 * identityLaneWidth)
     }
 
     static func current(
@@ -25,12 +31,15 @@ struct TimelineLayoutEnvironment: Hashable {
         captionSize: CGFloat = 12, caption2Size: CGFloat = 11, avatarSize: CGFloat = 36,
         locale: Locale = .current, timeZone: TimeZone = .current,
         layoutDirection: LayoutDirection = .leftToRight,
-        language: String = AppLanguage.selected.rawValue
+        language: String = AppLanguage.selected.rawValue,
+        showAllAvatars: Bool = ConversationTimelinePreferences.defaultShowAllAvatars,
+        showsMessageDetails: Bool = true
     ) -> Self {
         .init(
             timelineWidth: timelineWidth, displayScale: displayScale, bodySize: bodySize,
             captionSize: captionSize, caption2Size: caption2Size, avatarSize: avatarSize,
             localeIdentifier: locale.identifier, timeZoneIdentifier: timeZone.identifier,
-            layoutDirection: layoutDirection, language: language)
+            layoutDirection: layoutDirection, language: language,
+            showAllAvatars: showAllAvatars, showsMessageDetails: showsMessageDetails)
     }
 }

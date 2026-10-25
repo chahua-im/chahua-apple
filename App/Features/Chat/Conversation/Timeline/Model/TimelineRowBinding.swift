@@ -24,12 +24,16 @@ struct TimelineBubbleActions {
     var openMedia: ((MessageImageGallery) -> Void)?
     var openSticker: ((String) -> Void)?
     var openReply: ((MessageID) -> Void)?
+    var openSystemMessage: ((MessageID) -> Void)?
     var openReactionDetails: ((MessageResponse) -> Void)?
     var replyToMessage: ((MessageResponse) -> Void)?
     var editMessage: ((MessageResponse) -> Void)?
     var togglePin: ((MessageResponse) -> Void)?
     var pinnedMessageIDs: Set<MessageID> = []
     var pendingPinMessageIDs: Set<MessageID> = []
+    var toggleSavedMessage: ((MessageResponse) -> Void)?
+    var savedMessageIDs: Set<MessageID> = []
+    var pendingSavedMessageIDs: Set<MessageID> = []
     var deleteMessage: ((MessageResponse) -> Void)?
     var openThread: ((MessageID) -> Void)?
     var openLink: ((URL) -> Void)?
@@ -76,12 +80,16 @@ extension TimelineBubbleActions {
         (openMedia == nil) == (other.openMedia == nil)
             && (openSticker == nil) == (other.openSticker == nil)
             && (openReply == nil) == (other.openReply == nil)
+            && (openSystemMessage == nil) == (other.openSystemMessage == nil)
             && (openReactionDetails == nil) == (other.openReactionDetails == nil)
             && (replyToMessage == nil) == (other.replyToMessage == nil)
             && (editMessage == nil) == (other.editMessage == nil)
             && (togglePin == nil) == (other.togglePin == nil)
             && pinnedMessageIDs == other.pinnedMessageIDs
             && pendingPinMessageIDs == other.pendingPinMessageIDs
+            && (toggleSavedMessage == nil) == (other.toggleSavedMessage == nil)
+            && savedMessageIDs == other.savedMessageIDs
+            && pendingSavedMessageIDs == other.pendingSavedMessageIDs
             && (deleteMessage == nil) == (other.deleteMessage == nil)
             && (openThread == nil) == (other.openThread == nil)
             && (openLink == nil) == (other.openLink == nil)
@@ -112,6 +120,10 @@ extension TimelineBubbleActions {
         let id = row.entry.serverID
         result.isPinned = id.map(pinnedMessageIDs.contains) ?? false
         result.isUpdatingPin = togglePin == nil || (id.map(pendingPinMessageIDs.contains) ?? false)
+        result.isSaved = id.map(savedMessageIDs.contains) ?? false
+        result.canSave =
+            toggleSavedMessage != nil
+            && !(id.map(pendingSavedMessageIDs.contains) ?? false)
         return result
     }
 

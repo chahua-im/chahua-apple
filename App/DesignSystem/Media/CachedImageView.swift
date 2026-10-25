@@ -4,6 +4,7 @@ import SwiftUI
 struct CachedImageView<Content: View>: View {
     let url: URL?
     var thumbnailPixelSize: CGSize? = nil
+    var cancelOnDisappear = false
     @ViewBuilder var content: (RemoteImagePhase) -> Content
     @Environment(\.mediaContext) private var mediaContext
 
@@ -18,6 +19,7 @@ struct CachedImageView<Content: View>: View {
                     .targetCache(mediaContext?.cache ?? .default)
                     .downloader(mediaContext?.downloader ?? .default)
                     .cacheOriginalImage()
+                    .cancelOnDisappear(cancelOnDisappear)
                     .placeholder { content(.empty) }
                     .onFailureView { content(.failure) }
                     .contentConfigure { image, isLoaded in

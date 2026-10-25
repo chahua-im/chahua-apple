@@ -76,16 +76,19 @@ public struct MemberResponse: Codable, Hashable, Sendable, Identifiable {
     public let username: String?
     public let avatarUrl: String?
     public let role: GroupRole
+    public let speakingMode: SpeakingMode?
 
     public var id: Int32 { uid }
 
     public init(
-        uid: Int32, username: String? = nil, avatarUrl: String? = nil, role: GroupRole = .member
+        uid: Int32, username: String? = nil, avatarUrl: String? = nil, role: GroupRole = .member,
+        speakingMode: SpeakingMode? = nil
     ) {
         self.uid = uid
         self.username = username
         self.avatarUrl = avatarUrl
         self.role = role
+        self.speakingMode = speakingMode
     }
 }
 
@@ -111,6 +114,13 @@ public struct MeResponse: Codable, Hashable, Sendable {
     public let userGroup: UserGroupTagInfo?
     public let muteGroupChatsByDefault: Bool?
     public let muteDirectChatsByDefault: Bool?
+    public private(set) var showMembershipMessages: Bool?
+
+    public func withChatSettings(_ settings: ChatSettings) -> Self {
+        var copy = self
+        copy.showMembershipMessages = settings.showMembershipMessages
+        return copy
+    }
 }
 
 public struct StickerPackOrderItem: Codable, Hashable, Sendable {

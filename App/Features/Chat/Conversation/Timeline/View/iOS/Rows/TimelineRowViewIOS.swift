@@ -203,7 +203,7 @@
                 standalone = view
             }
             standalone?.isHidden = false
-            standalone?.bind(binding.presentation)
+            standalone?.bind(binding)
         }
         private func bindMessage(
             _ binding: TimelineRowBinding, row: TimelineMessageRow, resetSelection: Bool
@@ -235,6 +235,10 @@
                     diameter: binding.presentation.environment.avatarSize,
                     displayScale: binding.presentation.environment.displayScale,
                     mediaContext: binding.mediaContext)
+                avatar?.onActivate =
+                    !binding.actions.isSelectingMessages
+                        && binding.actions.openMention != nil
+                    ? { binding.actions.openMention?(row.entry.senderID) } : nil
                 avatar?.setVisible(visible)
             } else {
                 avatar?.clear()
@@ -540,7 +544,8 @@
     }
 
     private final class TimelineStandaloneView: UIView {
-        private var presentation: TimelineRowPresentation?
+        private var binding: TimelineRowBinding?
+        private lazy var systemLayout = MessageSummaryLayout()
         private var attributed = NSAttributedString(string: "")
         private var isDate = false
         init() {
@@ -548,6 +553,8 @@
             isOpaque = false
             isAccessibilityElement = true
             accessibilityTraits = .staticText
+            addGestureRecognizer(
+                UITapGestureRecognizer(target: self, action: #selector(activateTarget(_:))))
             registerForTraitChanges([
                 UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self,
                 UITraitUserInterfaceLevel.self,
@@ -557,12 +564,12 @@
             }
         }
         required init?(coder: NSCoder) { nil }
-        func bind(_ presentation: TimelineRowPresentation) {
-            self.presentation = presentation
+        func bind(_ binding: TimelineRowBinding) {
+            self.binding = binding
             updatePaint()
         }
         func clear() {
-            presentation = nil
+            binding = nil
             attributed = NSAttributedString(string: "")
             accessibilityLabel = nil
             setNeedsDisplay()
@@ -572,7 +579,8 @@
             layer.cornerRadius = isDate ? bounds.height / 2 : 0
         }
         private func updatePaint() {
-            guard let p = presentation else { return }
+            guard let binding else { return }
+            let p = binding.presentation
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = .center
             paragraph.lineBreakMode = .byWordWrapping
@@ -598,36 +606,28 @@
                         .foregroundColor: UIColor(ChahuaTheme.ChatBubble.outgoingBackground),
                         .paragraphStyle: paragraph,
                     ])
-            case .message(let row):
-                paragraph.lineSpacing = 3
+            case .message:
                 let color =
                     traitCollection.userInterfaceStyle == .dark
                     ? UIColor(red: 152 / 255, green: 154 / 255, blue: 162 / 255, alpha: 1)
                     : UIColor(red: 99 / 255, green: 100 / 255, blue: 105 / 255, alpha: 1)
-                let result = NSMutableAttributedString(string: "")
-                if let name = row.entry.remoteMessage?.sender.name, !name.isEmpty {
-                    result.append(
-                        NSAttributedString(
-                            string: name + " ",
-                            attributes: [
-                                .font: UIFont.systemFont(ofSize: 13, weight: .semibold),
-                                .foregroundColor: color, .paragraphStyle: paragraph,
-                            ]))
-                }
-                result.append(
-                    NSAttributedString(
-                        string: text,
-                        attributes: [
-                            .font: UIFont.systemFont(ofSize: 13), .foregroundColor: color,
-                            .paragraphStyle: paragraph,
-                        ]))
-                attributed = result
+                attributed =
+                    p.systemContent?.attributedText(
+                        color: color,
+                        linksEnabled: binding.actions.canOpenSystemTargets(in: binding.context))
+                    ?? NSAttributedString(string: text)
+                systemLayout.container.lineBreakMode = .byWordWrapping
+                systemLayout.update(attributed, lineLimit: 0)
             }
             accessibilityLabel = attributed.string
             setNeedsDisplay()
             setNeedsLayout()
         }
         override func draw(_ rect: CGRect) {
+            if binding?.presentation.systemContent != nil {
+                systemLayout.draw(in: bounds)
+                return
+            }
             let rect =
                 isDate
                 ? bounds.insetBy(
@@ -635,6 +635,21 @@
                     dy: min(ChahuaTheme.Spacing.xSmall, bounds.height / 2)) : bounds
             attributed.draw(
                 with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+        }
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            target(at: point) != nil
+        }
+
+        private func target(at point: CGPoint) -> TimelineSystemMessageContent.Target? {
+            guard let binding, binding.actions.canOpenSystemTargets(in: binding.context),
+                let content = binding.presentation.systemContent
+            else { return nil }
+            return systemLayout.systemTarget(at: point, width: bounds.width, content: content)
+        }
+
+        @objc private func activateTarget(_ recognizer: UITapGestureRecognizer) {
+            guard let target = target(at: recognizer.location(in: self)) else { return }
+            binding?.actions.openSystemTarget(target)
         }
     }
 

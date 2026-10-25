@@ -127,16 +127,75 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertEqual(messageRow(rows[1])?.entry.displayState, .sending)
     }
 
-    func testDirectMessageSenderMetadataMatchesPlatformContract() throws {
-        let rows = builder(isGroupChat: false).build([
+    func testSenderMetadataRemainsAvailableForIdentityPreferences() throws {
+        let rows = builder().build([
             try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0)
         ])
 
-        #if os(macOS)
-            XCTAssertFalse(rows.compactMap(messageRow)[0].showsSenderName)
-        #else
-            XCTAssertTrue(rows.compactMap(messageRow)[0].showsSenderName)
-        #endif
+        XCTAssertTrue(rows.compactMap(messageRow)[0].showsSenderName)
+    }
+
+    func testAllAvatarDensityKeepsGroupingAndSenderHeaders() throws {
+        let rows = builder().build(
+            try (1...3).map {
+                try TimelineTestFixtures.message(id: UInt64($0), senderID: 2, at: $0)
+            }
+        ).compactMap(messageRow)
+        XCTAssertEqual(rows.map(\.groupPosition), [.first, .middle, .last])
+        let engine = TimelineLayoutEngine()
+        for showAllAvatars in [false, true] {
+            let environment = TimelineLayoutEnvironment.current(
+                timelineWidth: 320, showAllAvatars: showAllAvatars)
+            let presentations = rows.map {
+                TimelineRowPresentation.make(
+                    row: .message($0), currentUserID: 1, isThreadTimeline: false,
+                    environment: environment)
+            }
+            let layouts = presentations.map { engine.layout($0, environment: environment) }
+            XCTAssertEqual(
+                layouts.map { $0.frames[.avatar] != nil },
+                showAllAvatars ? [true, true, true] : [false, false, true])
+            XCTAssertEqual(presentations.map { $0.title != nil }, [true, false, false])
+        }
+    }
+
+    func testHiddenIdentityReclaimsLanesInConversationsAndThreads() throws {
+        let visibleEnvironment = TimelineLayoutEnvironment.current(timelineWidth: 320)
+        let hiddenEnvironment = TimelineLayoutEnvironment.current(
+            timelineWidth: 320, showAllAvatars: true, showsMessageDetails: false)
+        XCTAssertEqual(
+            hiddenEnvironment.centralWidth - visibleEnvironment.centralWidth,
+            2 * (visibleEnvironment.avatarSize + TimelineRowMetrics.laneGap))
+        let engine = TimelineLayoutEngine()
+        for outgoing in [false, true] {
+            let message = try TimelineTestFixtures.message(
+                id: 1, senderID: outgoing ? 1 : 2, at: 0,
+                text: String(repeating: "A longer message for identity geometry. ", count: 8))
+            let row = try XCTUnwrap(builder().build([message]).first { $0.messageID != nil })
+            for isThread in [false, true] {
+                let visible = TimelineRowPresentation.make(
+                    row: row, currentUserID: 1, isThreadTimeline: isThread,
+                    environment: visibleEnvironment)
+                let hidden = TimelineRowPresentation.make(
+                    row: row, currentUserID: 1, isThreadTimeline: isThread,
+                    environment: hiddenEnvironment)
+                let visibleLayout = engine.layout(visible, environment: visibleEnvironment)
+                let hiddenLayout = engine.layout(hidden, environment: hiddenEnvironment)
+                XCTAssertNotNil(visible.title)
+                XCTAssertNil(hidden.title)
+                XCTAssertNil(hiddenLayout.frames[.avatar])
+                XCTAssertNil(hiddenLayout.frames[.title])
+                XCTAssertEqual(visible.row, hidden.row)
+                XCTAssertNotEqual(visible.layoutKey, hidden.layoutKey)
+                let bubble = try XCTUnwrap(hiddenLayout.frames[.bubble])
+                XCTAssertGreaterThan(
+                    bubble.width, try XCTUnwrap(visibleLayout.frames[.bubble]).width)
+                XCTAssertGreaterThanOrEqual(bubble.minX, TimelineRowMetrics.rowHorizontalInset)
+                XCTAssertLessThanOrEqual(
+                    bubble.maxX,
+                    hiddenEnvironment.timelineWidth - TimelineRowMetrics.rowHorizontalInset)
+            }
+        }
     }
 
     func testUnreadBoundaryBreaksSenderGroupingWithoutChangingMessageIdentity() throws {
@@ -158,8 +217,8 @@ final class TimelineRowsBuilderTests: XCTestCase {
             builder().build(messages).compactMap(\.stableMessageKey))
     }
 
-    private func builder(isGroupChat: Bool = true) -> TimelineRowsBuilder {
-        TimelineRowsBuilder(currentUserID: 1, isGroupChat: isGroupChat, calendar: calendar)
+    private func builder() -> TimelineRowsBuilder {
+        TimelineRowsBuilder(currentUserID: 1, calendar: calendar)
     }
 
     private func messageRow(_ row: TimelineRow) -> TimelineMessageRow? {

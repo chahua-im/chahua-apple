@@ -15,6 +15,10 @@
         @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
         private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
             .rawValue
+        @AppStorage(ConversationTimelinePreferences.showAllAvatarsStorageKey)
+        private var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars
+        @AppStorage(ConversationTimelinePreferences.showDmDetailsStorageKey)
+        private var showDmDetails = ConversationTimelinePreferences.defaultShowDmDetails
         let model: ConversationTimelineModel
         var initialPosition: TimelineInitialPosition = .liveEdge
         var loadsInitialAutomatically = true
@@ -44,6 +48,8 @@
                 colorScheme: colorScheme,
                 messageTextSize: messageTextSize,
                 appLanguage: appLanguage,
+                showAllAvatars: showAllAvatars,
+                showDmDetails: showDmDetails,
                 unreadBadgeColor: unreadBadgeColor,
                 headerInset: chatHeaderInset,
                 composerInset: chatComposerInset,

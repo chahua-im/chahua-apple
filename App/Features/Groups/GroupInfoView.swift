@@ -8,6 +8,8 @@ struct GroupInfoView: View {
     @ObservedObject private var store: ChatStore
     let onLeave: () -> Void
     let onSearch: () -> Void
+    let onOpenMessage: (MessageResponse) -> Void
+    let onOpenThread: (MessageResponse) -> Void
 
     @State private var groupInfo: GroupInfoResponse?
     @State private var isUpdatingNotifications = false
@@ -19,20 +21,30 @@ struct GroupInfoView: View {
     @State private var isChangingRelationship = false
     @State private var failure: GroupInfoFailure?
     @State private var infoRevision = 0
+    @State private var selectedSection: GroupInfoSection = .members
+    @State private var selectedMediaKind: ChatAttachmentKind = .image
+    @State private var showsInvitations = false
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(AppLanguage.storageKey) private var languageRawValue = AppLanguage.system.rawValue
+    private let sessionRevision: Int
 
     init(
         chat: ChatListItem,
         currentUserID: Int32,
         store: ChatStore,
         onLeave: @escaping () -> Void,
-        onSearch: @escaping () -> Void
+        onSearch: @escaping () -> Void,
+        onOpenMessage: @escaping (MessageResponse) -> Void = { _ in },
+        onOpenThread: @escaping (MessageResponse) -> Void = { _ in }
     ) {
         self.chat = chat
         self.currentUserID = currentUserID
         self.store = store
         self.onLeave = onLeave
         self.onSearch = onSearch
+        self.onOpenMessage = onOpenMessage
+        self.onOpenThread = onOpenThread
+        sessionRevision = store.sessionRevision
     }
 
     var body: some View {
@@ -88,9 +100,7 @@ struct GroupInfoView: View {
                     .frame(maxWidth: .infinity)
                 }
                 sectionTabs
-                if !isDM {
-                    GroupMembersView(chatID: chat.id, currentUserID: currentUserID, store: store)
-                }
+                sectionContent
             }
             .frame(maxWidth: 760)
             .padding(.horizontal, 20)
@@ -103,7 +113,35 @@ struct GroupInfoView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if isCurrentSession, !isDM, let info = groupInfo, info.myRole == .admin {
+                    NavigationLink("Edit") {
+                        GroupEditingView(store: store, info: info) { updated in
+                            groupInfo = updated
+                            infoRevision += 1
+                        }
+                    }
+                    .accessibilityIdentifier("group-edit-button")
+                    .disabled(isLeaving)
+                }
+            }
+        }
+        .navigationDestination(isPresented: $showsInvitations) {
+            GroupInvitesView(store: store, chatID: chat.id)
+        }
         .task(id: chat.id) { await loadInfo() }
+        .onReceive(store.$groupInfoByChatID) { infos in
+            guard isCurrentSession else {
+                groupInfo = nil
+                return
+            }
+            if let updated = infos[chat.id] {
+                groupInfo = updated
+                infoRevision &+= 1
+            }
+        }
+        .onChange(of: store.sessionRevision) { _, _ in groupInfo = nil }
         .task(id: peerUID) { await loadRelationship() }
         .presenceScope(ChatPresenceDisplay.scope(for: chat), store: store)
         .confirmationDialog(
@@ -157,6 +195,30 @@ struct GroupInfoView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
+            if isCurrentSession, !isDM, let groupInfo {
+                VStack(spacing: 4) {
+                    if groupInfo.myRole == .admin {
+                        if let mode = groupInfo.speakingMode {
+                            LabeledContent("Speaking permissions", value: mode.localizedTitle)
+                        }
+                        if let mode = groupInfo.effectiveSpeakingMode,
+                            mode != .unrestricted
+                        {
+                            LabeledContent("Your permissions", value: mode.localizedTitle)
+                            Text(mode.restrictionExplanation)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    if let policy = groupInfo.membershipMessagePolicy {
+                        LabeledContent(
+                            "Membership messages", value: policy.visibility.localizedTitle)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 420)
+                .padding(.top, 6)
+            }
         }
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity)
@@ -182,34 +244,83 @@ struct GroupInfoView: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// Placeholder section bar: only group Members exists; media sections are not implemented yet.
     private var sectionTabs: some View {
-        let sections = GroupInfoSection.allCases.filter { !isDM || $0 != .members }
-        let selected = sections.first
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                ForEach(sections, id: \.self) { section in
-                    Text(section.title)
-                        .font(.body.weight(section == selected ? .semibold : .regular))
-                        .foregroundStyle(section == selected ? .primary : .secondary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background {
-                            if section == selected {
-                                Capsule().fill(ChahuaTheme.secondaryBackground)
-                            }
-                        }
-                        .accessibilityAddTraits(section == selected ? .isSelected : [])
-                }
+        Picker(
+            "Chat Info",
+            selection: Binding(
+                get: { activeSection },
+                set: { selectedSection = $0 }
+            )
+        ) {
+            ForEach(GroupInfoSection.allCases.filter { !isDM || $0 != .members }, id: \.self) {
+                section in
+                Text(section.title).tag(section)
             }
-            .padding(4)
         }
-        .background(
-            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme), in: Capsule())
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .accessibilityIdentifier("group-info-sections")
+    }
+
+    private var activeSection: GroupInfoSection {
+        isDM && selectedSection == .members ? .media : selectedSection
+    }
+
+    private var sectionContent: some View {
+        VStack(spacing: 16) {
+            if activeSection == .media {
+                Picker("Media", selection: $selectedMediaKind) {
+                    Text("Images").tag(ChatAttachmentKind.image)
+                    Text("Videos").tag(ChatAttachmentKind.video)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+
+            // Keep browsers mounted so changing sections preserves each cursor, loaded
+            // page, retry, and source-navigation state. Media/threads load only when selected.
+            ZStack(alignment: .top) {
+                if !isDM {
+                    GroupMembersView(chatID: chat.id, currentUserID: currentUserID, store: store)
+                        .modifier(GroupInfoSectionVisibility(isSelected: activeSection == .members))
+                }
+                attachmentSection(
+                    .image, isSelected: activeSection == .media && selectedMediaKind == .image)
+                attachmentSection(
+                    .video, isSelected: activeSection == .media && selectedMediaKind == .video)
+                attachmentSection(.other, isSelected: activeSection == .files)
+                ChatThreadsView(
+                    store: store, chatID: chat.id, onOpenThread: onOpenThread,
+                    embedded: true, isActive: activeSection == .threads
+                )
+                .modifier(GroupInfoSectionVisibility(isSelected: activeSection == .threads))
+            }
+        }
+    }
+
+    private func attachmentSection(_ kind: ChatAttachmentKind, isSelected: Bool) -> some View {
+        ChatAttachmentsView(
+            store: store, chatID: chat.id, kind: kind, onOpenMessage: onOpenMessage,
+            embedded: true, isActive: isSelected
+        )
+        .modifier(GroupInfoSectionVisibility(isSelected: isSelected))
     }
 
     private var actions: some View {
         HStack(spacing: 12) {
+            if let peerUID {
+                Link(
+                    destination: URL(
+                        string:
+                            "https://www.shireyishunjian.com/main/home.php?mod=space&uid=\(peerUID)"
+                    )!
+                ) {
+                    GroupInfoActionLabel(systemImage: "globe", title: "Forum")
+                }
+                .accessibilityLabel("Forum / Personal Space")
+                .accessibilityIdentifier("chat-forum-button")
+            }
+
             notificationMenu
 
             Button(action: onSearch) {
@@ -236,6 +347,12 @@ struct GroupInfoView: View {
                     }
                     .disabled(relationship?.blocking == nil)
                 } else {
+                    if groupInfo?.myRole == .admin {
+                        Button("Manage Invitations", systemImage: "link.badge.plus") {
+                            showsInvitations = true
+                        }
+                        Divider()
+                    }
                     Button(role: .destructive) {
                         safetyConfirmation = .leaveGroup
                     } label: {
@@ -308,7 +425,8 @@ struct GroupInfoView: View {
         let defaults = store.state.notificationDefaults
         guard current.notificationMuted(defaults: defaults) else { return "Mute" }
         if !current.notificationPermanentlyMuted(defaults: defaults),
-            let deadline = NotificationMuteDeadline.finiteDeadline(current.mutedUntil)
+            let deadline = NotificationMuteDeadline.finiteDeadline(
+                current.mutedUntil, language: AppLanguage(rawValue: languageRawValue) ?? .system)
         {
             return "until \(deadline)"
         }
@@ -404,8 +522,12 @@ struct GroupInfoView: View {
         }
     }
 
+    private var isCurrentSession: Bool {
+        store.sessionRevision == sessionRevision && store.currentUserProfile?.uid == currentUserID
+    }
+
     private func loadInfo() async {
-        guard !isLoadingInfo else { return }
+        guard isCurrentSession, !isLoadingInfo else { return }
         isLoadingInfo = true
         let revision = infoRevision
         defer { isLoadingInfo = false }
@@ -413,13 +535,14 @@ struct GroupInfoView: View {
         do {
             let response = try await store.groupInfo(chatID: chat.id)
             try Task.checkCancellation()
-            groupInfo = response
+            guard isCurrentSession else { return }
+            groupInfo = store.groupInfoByChatID[chat.id] ?? response
             store.trackNotificationExpiry(for: notificationChat)
             if failure?.operation.isLoad == true { failure = nil }
         } catch is CancellationError {
             // The navigation container cancelled this screen's task.
         } catch {
-            guard infoRevision == revision else { return }
+            guard isCurrentSession, infoRevision == revision else { return }
             failure = .init(operation: .load, message: error.localizedDescription)
         }
     }
@@ -513,6 +636,32 @@ struct GroupInfoView: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private enum GroupInfoSection: CaseIterable {
+    case members, media, files, threads
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .members: "Members"
+        case .media: "Media"
+        case .files: "Files"
+        case .threads: "Threads"
+        }
+    }
+}
+
+private struct GroupInfoSectionVisibility: ViewModifier {
+    let isSelected: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .frame(height: isSelected ? nil : 0, alignment: .top)
+            .clipped()
+            .opacity(isSelected ? 1 : 0)
+            .allowsHitTesting(isSelected)
+            .accessibilityHidden(!isSelected)
     }
 }
 
@@ -612,20 +761,6 @@ private enum GroupInfoSafetyAction {
         case .removeFriend: AppLanguage.localized("Remove \(name) from your friends?")
         case .block: AppLanguage.localized("Block \(name)?")
         case .unblock: AppLanguage.localized("Unblock \(name)?")
-        }
-    }
-}
-
-private enum GroupInfoSection: CaseIterable {
-    case members, media, files, links, voice
-
-    var title: LocalizedStringKey {
-        switch self {
-        case .members: "Members"
-        case .media: "Media"
-        case .files: "Files"
-        case .links: "Links"
-        case .voice: "Voice"
         }
     }
 }

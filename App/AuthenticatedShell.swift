@@ -11,6 +11,7 @@ struct AuthenticatedShell: View {
     let me: MeResponse
     let isSigningOut: Bool
     let onSignOut: () -> Void
+    var pendingURL: Binding<URL?> = .constant(nil)
 
     @State private var selectedScope: ConversationListScope = .messages
     @State private var archivedScope: ConversationListScope = .messages
@@ -27,6 +28,18 @@ struct AuthenticatedShell: View {
     @State private var messageSearch: MessageSearchSession?
     @State private var groupPath: [GroupRoute] = []
     @State private var forwardThreadAction: ForwardThreadAction?
+    @State private var threadInfoAction: ThreadInfoAction?
+    @State private var feature: FeatureDestination?
+    @State private var profilePath: [Int32] = []
+    @State private var navigationError: String?
+
+    private enum FeatureDestination: Hashable, Identifiable {
+        case directory, createGroup
+        case joinGroup(String)
+        case saved
+        case profile(Int32)
+        var id: Self { self }
+    }
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -36,14 +49,46 @@ struct AuthenticatedShell: View {
         case archive
         case conversation(ConversationKey)
         case group(GroupRoute)
+        case friendRequests(FriendRequestRoute)
+    }
+
+    private enum FriendRequestRoute: Hashable {
+        case list
+        case profile(Int32)
     }
 
     private enum GroupRoute: Hashable {
         case info(ChatListItem)
         case search(ChatListItem)
+        case source(ChatListItem, MessageResponse)
+        case thread(ChatListItem, MessageResponse)
     }
 
-    private var isBrowsingArchived: Bool { listPath.last == .archive }
+    private var isBrowsingArchived: Bool { listPath.first == .archive }
+
+    private var isBrowsingFriendRequests: Bool {
+        listPath.contains {
+            if case .friendRequests = $0 { return true }
+            return false
+        }
+    }
+
+    // macOS archive navigation retains its existing immediate list switch.
+    // Only request/profile destinations push above that list, never into chat detail.
+    private var friendRequestPath: Binding<[FriendRequestRoute]> {
+        Binding(
+            get: {
+                listPath.compactMap {
+                    guard case .friendRequests(let route) = $0 else { return nil }
+                    return route
+                }
+            },
+            set: { routes in
+                listPath =
+                    (isBrowsingArchived ? [.archive] : [])
+                    + routes.map(NavigationRoute.friendRequests)
+            })
+    }
 
     private var unreadBadgeColor: ConversationUnreadBadgeColor {
         ConversationUnreadBadgeColor(rawValue: unreadBadgeColorRawValue)
@@ -130,6 +175,49 @@ struct AuthenticatedShell: View {
             #endif
         }
         .onPreferenceChange(ForwardThreadActionKey.self) { forwardThreadAction = $0 }
+        .onPreferenceChange(ThreadInfoActionKey.self) { threadInfoAction = $0 }
+        .environment(\.openUserProfile, openProfile)
+        .environment(\.openGroupInvite) { feature = .joinGroup($0) }
+        .environment(\.openForwardDestination, openForwardDestination)
+        .sheet(item: $feature, onDismiss: { profilePath.removeAll() }) { destination in
+            NavigationStack(path: $profilePath) {
+                featureDestination(destination)
+                    .navigationDestination(for: Int32.self) { uid in
+                        UserProfileView(
+                            uid: uid, currentUserID: me.uid, store: chatStore,
+                            onOpenChat: openChat)
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { feature = nil }
+                        }
+                    }
+            }
+            .environment(\.openUserProfile, openProfile)
+            .environment(\.openGroupInvite) { feature = .joinGroup($0) }
+            .environment(\.openForwardDestination, openForwardDestination)
+            .frame(minWidth: 320, minHeight: 420)
+        }
+        .task(id: pendingURL.wrappedValue) {
+            guard let url = pendingURL.wrappedValue else { return }
+            await openIncomingURL(url)
+            if pendingURL.wrappedValue == url { pendingURL.wrappedValue = nil }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VoicePlaybackBar { message in
+                Task { await openVoiceSource(message) }
+            }
+        }
+        .alert(
+            "Unable to open",
+            isPresented: Binding(
+                get: { navigationError != nil },
+                set: { if !$0 { navigationError = nil } })
+        ) {
+            Button("OK", role: .cancel) { navigationError = nil }
+        } message: {
+            Text(navigationError ?? "")
+        }
         .onChange(of: chatStore.state) { _, state in
             guard let selectedConversationID, messageNavigation == nil else { return }
             let loaded =
@@ -149,12 +237,19 @@ struct AuthenticatedShell: View {
             selectConversation(nil)
             showsSettings = false
             listPath.removeAll()
+            feature = nil
+            profilePath.removeAll()
+            VoicePlaybackSession.shared.stop()
+            VoicePlaybackController.stopAll()
             archivedScope = .messages
         }
         .onChange(of: isSigningOut) { _, signingOut in
             if signingOut {
                 selectConversation(nil)
                 listPath.removeAll()
+                feature = nil
+                VoicePlaybackSession.shared.stop()
+                VoicePlaybackController.stopAll()
             }
         }
         .onAppear {
@@ -206,8 +301,12 @@ struct AuthenticatedShell: View {
                 // Archive pushes within the sidebar without changing the split detail selection.
                 listNavigation(includesDetail: false)
             #else
-                // macOS switches list content immediately; only iOS uses a native push.
-                chatList(archived: isBrowsingArchived)
+                NavigationStack(path: friendRequestPath) {
+                    chatList(archived: isBrowsingArchived)
+                        .navigationDestination(for: FriendRequestRoute.self) { route in
+                            friendRequestDestination(route)
+                        }
+                }
             #endif
         } detail: { isSplit in
             NavigationStack(path: $groupPath) {
@@ -269,6 +368,8 @@ struct AuthenticatedShell: View {
                         case .archive:
                             chatList(archived: true)
                                 .background(ArchiveEdgeBackGesture())
+                        case .friendRequests(let route):
+                            friendRequestDestination(route)
                         case .conversation(let key):
                             Group {
                                 if openedThread?.key == key {
@@ -292,7 +393,7 @@ struct AuthenticatedShell: View {
                                         subtitle: key.threadID == nil ? headerSubtitle : nil,
                                         isMuted: key.threadID == nil && headerChatIsMuted,
                                         onBack: { popPhoneConversation(key) },
-                                        onOpenInfo: key.threadID == nil ? infoAction : nil,
+                                        onOpenInfo: infoAction,
                                         onSearch: searchAction,
                                         onForward: forwardThreadAction?.conversation == key
                                             ? forwardThreadAction?.perform : nil,
@@ -334,7 +435,7 @@ struct AuthenticatedShell: View {
             Binding(
                 get: {
                     var path = listPath
-                    if let selectedConversationID {
+                    if let selectedConversationID, !isBrowsingFriendRequests {
                         path.append(.conversation(selectedConversationID))
                         path.append(contentsOf: threadPath.map(NavigationRoute.conversation))
                         path.append(contentsOf: groupPath.map(NavigationRoute.group))
@@ -342,7 +443,14 @@ struct AuthenticatedShell: View {
                     return path
                 },
                 set: { path in
-                    listPath = path.first == .archive ? [.archive] : []
+                    listPath = Array(
+                        path.prefix {
+                            switch $0 {
+                            case .archive, .friendRequests: true
+                            case .conversation, .group: false
+                            }
+                        })
+                    if isBrowsingFriendRequests { return }
                     let conversations = path.dropFirst(listPath.count).compactMap {
                         route -> ConversationKey? in
                         guard case .conversation(let key) = route else { return nil }
@@ -374,6 +482,7 @@ struct AuthenticatedShell: View {
             archivedMode: archived,
             showThreadsInMessages: showThreadsInMessages,
             onOpenArchived: openArchived,
+            onOpenFriendRequestHistory: openFriendRequests,
             badgeColor: unreadBadgeColor,
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectConversation($0.id) }
@@ -439,6 +548,35 @@ struct AuthenticatedShell: View {
 
     private func closeArchived() {
         listPath.removeAll()
+    }
+
+    private func openFriendRequests() {
+        guard !isBrowsingFriendRequests else { return }
+        listPath.append(.friendRequests(.list))
+    }
+
+    @ViewBuilder
+    private func friendRequestDestination(_ route: FriendRequestRoute) -> some View {
+        Group {
+            switch route {
+            case .list:
+                FriendRequestsView(
+                    currentUserID: me.uid, store: chatStore,
+                    onOpenProfile: { listPath.append(.friendRequests(.profile($0))) })
+            case .profile(let uid):
+                UserProfileView(
+                    uid: uid, currentUserID: me.uid, store: chatStore,
+                    onOpenChat: { chat in
+                        listPath.removeAll()
+                        openChat(chat)
+                    })
+            }
+        }
+        .environment(\.chatHeaderInset, 0)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+        #endif
     }
 
     @ViewBuilder private var detailContent: some View {
@@ -529,6 +667,9 @@ struct AuthenticatedShell: View {
     }
 
     private var infoAction: (() -> Void)? {
+        if let key = headerThreadKey, threadInfoAction?.conversation == key {
+            return threadInfoAction?.perform
+        }
         guard threadPath.isEmpty, let chat = selectedInfoChat else { return nil }
         return {
             guard groupPath.isEmpty, !isSigningOut else { return }
@@ -586,9 +727,12 @@ struct AuthenticatedShell: View {
 
     /// Leaves the retained search page and opens the result in its chat or thread.
     private func openSearchResult(_ message: MessageResponse) {
-        guard !isSigningOut, let chat = messageSearch?.chat, message.chatId == chat.id else {
-            return
-        }
+        guard let chat = messageSearch?.chat else { return }
+        openMessageTarget(message, in: chat)
+    }
+
+    private func openMessageTarget(_ message: MessageResponse, in chat: ChatListItem) {
+        guard !isSigningOut, message.chatId == chat.id else { return }
         groupPath.removeAll()
         let chatKey = ConversationKey(chatID: chat.id, threadID: nil)
         guard let rootID = message.replyRootId else {
@@ -624,13 +768,26 @@ struct AuthenticatedShell: View {
                     onLeave: {
                         if selectedConversationID?.chatID == chat.id { selectConversation(nil) }
                     },
-                    onSearch: { openMessageSearch(in: chat) }
+                    onSearch: { openMessageSearch(in: chat) },
+                    onOpenMessage: { groupPath.append(.source(chat, $0)) },
+                    onOpenThread: { groupPath.append(.thread(chat, $0)) }
                 )
                 .id(chat.id)
             case .search(let chat):
                 if let session = messageSearch, session.chat.id == chat.id {
                     MessageSearchView(model: session.model, onSelect: openSearchResult)
                 }
+            case .source(let chat, let message):
+                ChatDetailView(
+                    chat: chat, currentUserID: me.uid, store: chatStore,
+                    threadID: message.replyRootId, initialPosition: .message(message.id),
+                    onOpenThread: { groupPath.append(.thread(chat, $0)) })
+            case .thread(let chat, let root):
+                ChatDetailView(
+                    chat: chat, currentUserID: me.uid, store: chatStore,
+                    navigationTitle: AppLanguage.localized("Thread"),
+                    threadID: root.id.description, initialPosition: .liveEdge,
+                    onOpenThread: { groupPath.append(.thread(chat, $0)) })
             }
         }
         // Native destinations must not inherit the timeline's floating-header inset.
@@ -642,8 +799,12 @@ struct AuthenticatedShell: View {
     }
 
     private var accountButton: some View {
-        Button {
-            showsSettings = true
+        Menu {
+            Button("Settings", systemImage: "gearshape") { showsSettings = true }
+            Button("Directory", systemImage: "magnifyingglass") { feature = .directory }
+            Button("Create Group", systemImage: "person.3") { feature = .createGroup }
+            Button("Join Group", systemImage: "link") { feature = .joinGroup("") }
+            Button("Saved Messages", systemImage: "bookmark") { feature = .saved }
         } label: {
             AvatarView(
                 url: me.avatarUrl.flatMap(URL.init(string:)),
@@ -654,11 +815,117 @@ struct AuthenticatedShell: View {
         }
     }
 
+    @ViewBuilder
+    private func featureDestination(_ destination: FeatureDestination) -> some View {
+        switch destination {
+        case .directory:
+            SocialDirectoryView(
+                currentUserID: me.uid, store: chatStore, usersOnly: false,
+                onOpenChat: openChat, onOpenProfile: openProfile)
+        case .createGroup:
+            CreateGroupView(store: chatStore, onOpenChat: openChat)
+        case .joinGroup(let code):
+            JoinGroupView(store: chatStore, initialCode: code, onOpenChat: openChat)
+        case .saved:
+            SavedMessagesView(store: chatStore, onOpenSource: openSourceMessage)
+        case .profile(let uid):
+            UserProfileView(
+                uid: uid, currentUserID: me.uid, store: chatStore, onOpenChat: openChat)
+        }
+    }
+
+    private func openProfile(_ uid: Int32) {
+        if feature == nil {
+            feature = .profile(uid)
+        } else {
+            profilePath.append(uid)
+        }
+    }
+
+    private func openChat(_ chat: ChatListItem) {
+        chatStore.retainChatForNavigation(chat)
+        feature = nil
+        showsSettings = false
+        selectConversation(.init(chatID: chat.id, threadID: nil))
+    }
+
+    /// The picker prepares a draft, not a send. Resolve access before mutating
+    /// navigation so a failed destination leaves both conversations' drafts intact.
+    private func openForwardDestination(_ target: ConversationListItem) async throws -> Bool {
+        guard !isSigningOut else { return false }
+        let accountID = me.uid
+        let info = try await chatStore.groupInfo(chatID: target.id.chatID)
+        let parent = chatStore.groupChatSnapshot(info)
+        let root: MessageResponse?
+        if target.id.threadID != nil {
+            root = try await chatStore.threadRoot(for: target.id)
+            guard root?.isDeleted == false else { return false }
+        } else {
+            root = nil
+        }
+        try Task.checkCancellation()
+        guard !isSigningOut, me.uid == accountID,
+            chatStore.currentUserProfile?.uid == accountID
+        else { return false }
+        if visibleConversation == target.id, groupPath.isEmpty, feature == nil {
+            return true
+        }
+        listPath.removeAll()
+        openChat(parent)
+        if let root { openThread(root, in: parent) }
+        return selectedConversationID?.chatID == target.id.chatID
+            && (root == nil || threadPath.last == target.id)
+    }
+
+    private func openSourceMessage(_ message: MessageResponse, in chat: ChatListItem) {
+        feature = nil
+        openMessageTarget(message, in: chat)
+    }
+
+    private func openIncomingURL(_ url: URL) async {
+        let origin = AppConfiguration.applicationURL
+        guard url.scheme == origin.scheme, url.host == origin.host, url.port == origin.port else {
+            navigationError = String(localized: "This link belongs to a different server.")
+            return
+        }
+        if let link = MessagePermalink(url: url) {
+            do {
+                let (message, chat) = try await chatStore.resolveMessageLink(
+                    chatID: link.chatID, messageID: link.messageID)
+                try Task.checkCancellation()
+                openSourceMessage(message, in: chat)
+            } catch is CancellationError {
+            } catch {
+                navigationError = String(
+                    localized: "This message is unavailable or you do not have access.")
+            }
+        } else if url.path.hasPrefix("/chats/join/"),
+            let code = GroupInviteLink.code(from: url.absoluteString)
+        {
+            feature = .joinGroup(code)
+        } else {
+            navigationError = String(localized: "This link is not supported.")
+        }
+    }
+
+    private func openVoiceSource(_ source: MessageResponse) async {
+        do {
+            let (message, chat) = try await chatStore.resolveMessageLink(
+                chatID: source.chatId, messageID: source.id)
+            try Task.checkCancellation()
+            openSourceMessage(message, in: chat)
+        } catch is CancellationError {
+        } catch {
+            navigationError = String(
+                localized: "This message is unavailable or you do not have access.")
+        }
+    }
+
     private var settings: some View {
         NotificationSettingsView(
             notifications: notifications, chatStore: chatStore,
             me: me, isSigningOut: isSigningOut,
-            onSignOut: onSignOut)
+            onSignOut: onSignOut, onOpenChat: openChat)
     }
 
     private var usesFullScreenSettings: Bool {

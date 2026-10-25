@@ -2,6 +2,12 @@ import ChahuaAPI
 import Combine
 import Foundation
 
+struct PendingForwardDraft: Identifiable, Equatable {
+    let id = UUID()
+    let sources: [MessageResponse]
+    let allowPlaceholders: Bool
+}
+
 @MainActor
 final class ChatDraftStore: ObservableObject {
     @Published private(set) var drafts: [ConversationKey: String] = [:]
@@ -9,6 +15,8 @@ final class ChatDraftStore: ObservableObject {
     @Published private(set) var draftUpdatedAt: [ConversationKey: Date] = [:]
     @Published private(set) var committingDrafts = Set<ConversationKey>()
     @Published private(set) var draftSaveFailed = false
+    @Published private(set) var pendingForwards: [ConversationKey: PendingForwardDraft] = [:]
+    @Published private(set) var submissionError: String?
     private var draftRevisions: [ConversationKey: Int64] = [:]
     private var unsavedDrafts = Set<ConversationKey>()
     private var composingDrafts = Set<ConversationKey>()
@@ -49,6 +57,60 @@ final class ChatDraftStore: ObservableObject {
 
     func draftReply(chatID: String, threadID: String? = nil) -> MessagePreview? {
         draftReplies[ConversationKey(chatID: chatID, threadID: threadID)]
+    }
+
+    func cancelForward(at key: ConversationKey, expectedID: UUID) {
+        guard pendingForwards[key]?.id == expectedID else { return }
+        pendingForwards[key] = nil
+    }
+
+    /// Only the selection moves. Text, replies, attachments and their save revisions
+    /// remain owned by each conversation, including when destination entry fails.
+    func prepareForward(
+        sources: [MessageResponse], allowPlaceholders: Bool, destination: ConversationListItem,
+        moveFrom: ConversationKey?, expectedID: UUID?,
+        navigate: @MainActor (ConversationListItem) async throws -> Bool
+    ) async throws -> Bool {
+        if let moveFrom, pendingForwards[moveFrom]?.id != expectedID { return false }
+        let key = destination.id
+        let previous = pendingForwards[key]
+        let selection = PendingForwardDraft(sources: sources, allowPlaceholders: allowPlaceholders)
+        let requestGeneration = generation
+        pendingForwards[key] = selection
+        var committed = false
+        defer {
+            if generation == requestGeneration, !committed,
+                pendingForwards[key]?.id == selection.id
+            {
+                pendingForwards[key] = previous
+            }
+        }
+        let opened = try await navigate(destination)
+        try Task.checkCancellation()
+        guard generation == requestGeneration, opened,
+            pendingForwards[key]?.id == selection.id
+        else { return false }
+        if let moveFrom, moveFrom != key {
+            guard pendingForwards[moveFrom]?.id == expectedID else { return false }
+            pendingForwards[moveFrom] = nil
+        }
+        committed = true
+        return true
+    }
+
+    func submitForward(at key: ConversationKey, expectedID: UUID) async throws -> Bool {
+        guard let selection = pendingForwards[key], selection.id == expectedID,
+            !committingDrafts.contains(key)
+        else { return false }
+        let requestGeneration = generation
+        committingDrafts.insert(key)
+        defer { if generation == requestGeneration { committingDrafts.remove(key) } }
+        try await outgoingQueue.enqueueForward(
+            chatID: key.chatID, threadID: key.threadID, sources: selection.sources,
+            allowPlaceholders: selection.allowPlaceholders)
+        guard generation == requestGeneration else { return false }
+        cancelForward(at: key, expectedID: expectedID)
+        return true
     }
 
     func setDraftReply(_ reply: MessagePreview?, chatID: String, threadID: String? = nil) {
@@ -183,6 +245,7 @@ final class ChatDraftStore: ObservableObject {
             !composingDrafts.contains(key),
             !committingDrafts.contains(key), outgoingQueue.storageState == .ready
         else { return false }
+        submissionError = nil
         pendingDraftSaves.removeValue(forKey: key)?.cancel()
         committingDrafts.insert(key)
         let requestGeneration = generation
@@ -212,6 +275,9 @@ final class ChatDraftStore: ObservableObject {
             guard generation == requestGeneration else { return false }
             unsavedDrafts.insert(key)
             draftSaveFailed = true
+            submissionError =
+                (error as? APIError)?.speakingRestriction?.restrictionExplanation
+                ?? error.localizedDescription
             return false
         }
     }
@@ -291,6 +357,8 @@ final class ChatDraftStore: ObservableObject {
         for task in pendingDraftSaves.values { task.cancel() }
         pendingDraftSaves.removeAll()
         drafts.removeAll()
+        pendingForwards.removeAll()
+        submissionError = nil
         draftReplies.removeAll()
         deletedReplyIDs.removeAll()
         draftRevisions.removeAll()

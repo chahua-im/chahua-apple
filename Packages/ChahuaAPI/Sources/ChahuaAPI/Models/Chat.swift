@@ -43,6 +43,13 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
     public let kind: ChatKind
     /// Other participant for a direct message; absent for a group.
     public let peer: MemberSummary?
+    public private(set) var membershipMessagePolicy: MembershipMessagePolicy?
+
+    public func withMembershipMessagePolicy(_ policy: MembershipMessagePolicy?) -> Self {
+        var copy = self
+        copy.membershipMessagePolicy = policy
+        return copy
+    }
 
     public init(
         id: String,
@@ -60,7 +67,8 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         isMuted: Bool? = nil,
         archived: Bool,
         kind: ChatKind,
-        peer: MemberSummary? = nil
+        peer: MemberSummary? = nil,
+        membershipMessagePolicy: MembershipMessagePolicy? = nil
     ) {
         self.id = id
         self.name = name
@@ -78,6 +86,7 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         self.archived = archived
         self.kind = kind
         self.peer = peer
+        self.membershipMessagePolicy = membershipMessagePolicy
     }
 
     public init(from decoder: any Decoder) throws {
@@ -100,6 +109,8 @@ public struct ChatListItem: Codable, Hashable, Identifiable, Sendable {
         archived = try container.decode(Bool.self, forKey: .archived)
         kind = try container.decode(ChatKind.self, forKey: .kind)
         peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)
+        membershipMessagePolicy = try container.decodeIfPresent(
+            MembershipMessagePolicy.self, forKey: .membershipMessagePolicy)
     }
 }
 
@@ -139,10 +150,14 @@ public struct ListChatsResponse: Codable, Hashable, Sendable {
     public let chats: [ChatListItem]
     /// Opaque cursor for the next page, or `nil` when no next page exists.
     public let nextCursor: String?
+    public let chatSettings: ChatSettings?
 
-    public init(chats: [ChatListItem], nextCursor: String? = nil) {
+    public init(
+        chats: [ChatListItem], nextCursor: String? = nil, chatSettings: ChatSettings? = nil
+    ) {
         self.chats = chats
         self.nextCursor = nextCursor
+        self.chatSettings = chatSettings
     }
 }
 
@@ -160,15 +175,40 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
     public let mutedUntil: Date?
     public let muteOverride: Bool?
     public let isMuted: Bool?
-    public let myRole: GroupRole?
+    public private(set) var myRole: GroupRole?
     public let kind: ChatKind
     public let peer: MemberSummary?
+    /// Nil means the server/cache supplied no speaking decision, not unrestricted access.
+    public private(set) var speakingMode: SpeakingMode?
+    public private(set) var mySpeakingMode: SpeakingMode?
+    public private(set) var effectiveSpeakingMode: SpeakingMode?
+    public private(set) var membershipMessagePolicy: MembershipMessagePolicy?
+
+    public func withSpeakingState(
+        speakingMode: SpeakingMode?, mySpeakingMode: SpeakingMode?,
+        effectiveSpeakingMode: SpeakingMode?, myRole: GroupRole?
+    ) -> Self {
+        var copy = self
+        copy.speakingMode = speakingMode
+        copy.mySpeakingMode = mySpeakingMode
+        copy.effectiveSpeakingMode = effectiveSpeakingMode
+        copy.myRole = myRole
+        return copy
+    }
+
+    public func withMembershipMessagePolicy(_ policy: MembershipMessagePolicy?) -> Self {
+        var copy = self
+        copy.membershipMessagePolicy = policy
+        return copy
+    }
 
     public init(
         id: String, name: String? = nil, description: String? = nil, avatar: String? = nil,
         mutedUntil: Date? = nil, muteOverride: Bool? = nil, isMuted: Bool? = nil,
         myRole: GroupRole? = nil, kind: ChatKind,
-        peer: MemberSummary? = nil
+        peer: MemberSummary? = nil, speakingMode: SpeakingMode? = nil,
+        mySpeakingMode: SpeakingMode? = nil, effectiveSpeakingMode: SpeakingMode? = nil,
+        membershipMessagePolicy: MembershipMessagePolicy? = nil
     ) {
         self.id = id
         self.name = name
@@ -180,6 +220,10 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
         self.myRole = myRole
         self.kind = kind
         self.peer = peer
+        self.speakingMode = speakingMode
+        self.mySpeakingMode = mySpeakingMode
+        self.effectiveSpeakingMode = effectiveSpeakingMode
+        self.membershipMessagePolicy = membershipMessagePolicy
     }
 
     public init(from decoder: any Decoder) throws {
@@ -194,6 +238,12 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
         myRole = try container.decodeIfPresent(GroupRole.self, forKey: .myRole)
         kind = try container.decodeIfPresent(ChatKind.self, forKey: .kind) ?? .group
         peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)
+        speakingMode = try container.decodeIfPresent(SpeakingMode.self, forKey: .speakingMode)
+        mySpeakingMode = try container.decodeIfPresent(SpeakingMode.self, forKey: .mySpeakingMode)
+        effectiveSpeakingMode = try container.decodeIfPresent(
+            SpeakingMode.self, forKey: .effectiveSpeakingMode)
+        membershipMessagePolicy = try container.decodeIfPresent(
+            MembershipMessagePolicy.self, forKey: .membershipMessagePolicy)
     }
 }
 
@@ -205,4 +255,7 @@ public struct FriendRelationshipResponse: Codable, Hashable, Sendable {
     public let isFriend: Bool?
     /// Unknown on older responses; callers must not assume the peer is unblocked.
     public let blocking: Bool?
+    public let blockedBy: Bool?
+    public let dmChatId: String?
+    public let hasPendingOutgoingRequest: Bool?
 }

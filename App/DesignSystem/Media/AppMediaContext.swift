@@ -15,6 +15,7 @@ import WebKit
 final class AppMediaContext {
     let cache: ImageCache
     let downloader: ImageDownloader
+    let videoCache: VideoFileCache
     lazy var stickerVideoDataStore = WKWebsiteDataStore.nonPersistent()
 
     convenience init(namespace: String) {
@@ -27,6 +28,11 @@ final class AppMediaContext {
     init(cache: ImageCache, downloader: ImageDownloader) {
         self.cache = cache
         self.downloader = downloader
+        // A sibling of Kingfisher's directory retains its exact injected/account namespace
+        // without letting Kingfisher's cleanup remove a movie currently owned by AVPlayer.
+        videoCache = VideoFileCache(
+            directory: cache.diskStorage.directoryURL.appendingPathExtension("videos"),
+            configuration: downloader.sessionConfiguration)
         cache.memoryStorage.config.totalCostLimit = 64 * 1_024 * 1_024
         cache.memoryStorage.config.countLimit = 256
         cache.diskStorage.config.sizeLimit = 512 * 1_024 * 1_024

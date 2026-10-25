@@ -2,7 +2,7 @@ import ChahuaAPI
 import Combine
 import Foundation
 
-/// Server-backed choices save on selection; no policy is assumed before a successful read.
+/// Account choices remain local until Save; no policy is assumed before a successful read.
 @MainActor
 final class PresencePrivacySettingsModel: ObservableObject {
     enum LoadPhase: Equatable {
@@ -17,6 +17,8 @@ final class PresencePrivacySettingsModel: ObservableObject {
 
     private let store: ChatStore
     private var revision = 0
+    private var baseline: PresenceVisibility?
+    private var sessionObservation: AnyCancellable?
     private var accountObservation: AnyCancellable?
 
     init(store: ChatStore) {
@@ -26,6 +28,16 @@ final class PresencePrivacySettingsModel: ObservableObject {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] _ in self?.resetForAccountChange() }
+        sessionObservation = store.$sessionRevision.dropFirst()
+            .sink { [weak self] _ in self?.resetForAccountChange() }
+    }
+
+    var isDirty: Bool {
+        loadPhase == .loaded && visibility != baseline
+    }
+
+    var canSave: Bool {
+        loadPhase == .loaded && baseline != nil && visibility != nil && !isSaving
     }
 
     /// Reopening during a save keeps its selection visible until the write completes.
@@ -34,6 +46,7 @@ final class PresencePrivacySettingsModel: ObservableObject {
         revision &+= 1
         let requestRevision = revision
         visibility = nil
+        baseline = nil
         loadPhase = .loading
         loadError = nil
         saveError = nil
@@ -43,6 +56,7 @@ final class PresencePrivacySettingsModel: ObservableObject {
             try Task.checkCancellation()
             guard revision == requestRevision else { return }
             visibility = response.visibility
+            baseline = response.visibility
             loadPhase = .loaded
         } catch {
             guard revision == requestRevision else { return }
@@ -55,21 +69,16 @@ final class PresencePrivacySettingsModel: ObservableObject {
         }
     }
 
-    func chooseVisibility(_ value: PresenceVisibility) async {
+    func chooseVisibility(_ value: PresenceVisibility) {
         guard loadPhase == .loaded, !isSaving, visibility != value || saveError != nil else {
             return
         }
         visibility = value
-        await persistSelection()
+        saveError = nil
     }
 
-    func retrySave() async {
-        guard saveError != nil else { return }
-        await persistSelection()
-    }
-
-    private func persistSelection() async {
-        guard loadPhase == .loaded, !isSaving, let visibility else { return }
+    func save() async -> Bool {
+        guard canSave, !Task.isCancelled, let visibility else { return false }
         revision &+= 1
         let requestRevision = revision
         isSaving = true
@@ -82,18 +91,21 @@ final class PresencePrivacySettingsModel: ObservableObject {
             // ChatStore owns auth fencing and presence invalidation on committed writes.
             let response = try await store.updatePresenceSettings(visibility: visibility)
             try Task.checkCancellation()
-            guard revision == requestRevision else { return }
+            guard revision == requestRevision else { return false }
             self.visibility = response.visibility
+            baseline = response.visibility
+            return true
         } catch {
-            guard revision == requestRevision else { return }
+            guard revision == requestRevision else { return false }
             if !(error is CancellationError) && !Task.isCancelled {
                 // Keep the selected draft so retry sends exactly what the user chose.
                 saveError = error.localizedDescription
             }
         }
+        return false
     }
 
-    /// Dismissing a page cancels reads, not an automatic save already in progress.
+    /// The view separately cancels its save task when its lifetime ends.
     func cancelLoading() {
         guard loadPhase == .loading else { return }
         revision &+= 1
@@ -104,6 +116,7 @@ final class PresencePrivacySettingsModel: ObservableObject {
         revision &+= 1
         isSaving = false
         visibility = nil
+        baseline = nil
         loadPhase = .idle
         loadError = nil
         saveError = nil

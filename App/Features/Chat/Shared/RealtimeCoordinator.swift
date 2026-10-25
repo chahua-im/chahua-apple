@@ -336,6 +336,9 @@ final class RealtimeCoordinator: ObservableObject {
             guard let self, !Task.isCancelled, self.generation == currentGeneration,
                 !self.activeScenes.isEmpty
             else { return }
+            // Request/profile/block resources are not replayed by the websocket. Refresh
+            // mounted social destinations alongside conversation recovery after an outage.
+            self.store.socialInvalidations.send(())
             async let chats: Void = self.store.refreshActiveConversations()
             async let archived: Void = self.store.refreshArchivedConversations()
             async let messages: Void = self.store.reconcileVisibleTimelines()

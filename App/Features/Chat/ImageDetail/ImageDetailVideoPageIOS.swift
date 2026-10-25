@@ -20,10 +20,16 @@
         AVPlayerViewControllerDelegate
     {
         private let item: MessageImageItem
+        private let videoCache: VideoFileCache
         private let playerController = AVPlayerViewController()
         private let errorLabel = UILabel()
         private let retryButton = UIButton(type: .system)
+        private let progressView = VideoDownloadProgressView()
+        private var downloadTask: Task<Void, Never>?
+        private var loadID = UUID()
+        private var fileLease: VideoFileLease?
         private var player: AVPlayer?
+        private let audioSessionOwner = UUID()
         private var statusObservation: AnyCancellable?
         private var playbackObservation: AnyCancellable?
         private var playableCheck: Task<Void, Never>?
@@ -41,8 +47,9 @@
         var isAtFit: Bool { true }
         var childViewController: UIViewController? { playerController }
 
-        init(item: MessageImageItem) {
+        init(item: MessageImageItem, mediaContext: AppMediaContext?) {
             self.item = item
+            videoCache = mediaContext?.videoCache ?? .unscoped
             super.init(frame: .zero)
             clipsToBounds = true
             playerController.delegate = self
@@ -55,6 +62,11 @@
             playerController.view.accessibilityLabel =
                 item.fileName.isEmpty ? AppLanguage.localized("Video") : item.fileName
             addSubview(playerController.view)
+            progressView.isHidden = true
+            addSubview(progressView)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(applicationResignedActive),
+                name: UIApplication.willResignActiveNotification, object: nil)
 
             errorLabel.text = AppLanguage.localized("This video can’t be played")
             errorLabel.font = .preferredFont(forTextStyle: .body)
@@ -80,6 +92,9 @@
         func setPresentation(visible: Bool, selected: Bool, interactive: Bool, animating _: Bool) {
             guard !tornDown else { return }
             if selected, !self.selected { autoplayPending = true }
+            if !selected || (self.visible && !visible && !presentingFullScreen) {
+                autoplayPending = false
+            }
             self.visible = visible
             self.selected = selected
             self.interactive = interactive
@@ -104,6 +119,8 @@
         func tearDown() {
             guard !tornDown else { return }
             tornDown = true
+            NotificationCenter.default.removeObserver(self)
+            cancelDownload()
             statusObservation?.cancel()
             statusObservation = nil
             playbackObservation?.cancel()
@@ -115,6 +132,8 @@
             playerController.player = nil
             playerController.delegate = nil
             player = nil
+            fileLease = nil
+            ImageDetailVideoAudioSession.release(owner: audioSessionOwner)
             mayInteract = nil
         }
 
@@ -122,6 +141,8 @@
             super.layoutSubviews()
             // AVKit's full-screen presentation temporarily reparents the controller's view.
             if playerController.view.superview === self { playerController.view.frame = bounds }
+            progressView.frame = CGRect(
+                x: bounds.midX - 32, y: bounds.midY - 32, width: 64, height: 64)
             let labelWidth = max(0, min(360, bounds.width - 48))
             let labelSize = errorLabel.sizeThatFits(
                 CGSize(width: labelWidth, height: .greatestFiniteMagnitude))
@@ -136,50 +157,91 @@
             // While AVKit presents full screen the viewer reports itself hidden; playback
             // belongs to that presentation until it ends.
             guard !tornDown, !presentingFullScreen else { return }
-            if visible, player == nil, !failed { load() }
+            if visible, selected, player == nil, downloadTask == nil, !failed { load() }
             guard visible, selected else {
+                cancelDownload()
                 player?.pause()
                 return
             }
             guard autoplayPending, !failed, let player else { return }
             autoplayPending = false
-            ImageDetailVideoAudioSession.activate()
+            ImageDetailVideoAudioSession.activate(owner: audioSessionOwner)
             player.play()
         }
 
         private func load() {
+            guard !tornDown, visible, selected, downloadTask == nil else { return }
             guard let url = item.url else {
                 showFailure()
                 return
             }
+            let previousLease = fileLease
+            releasePlayer()
+            setFailed(false)
+            progressView.update(.indeterminate)
+            progressView.isHidden = false
+            let id = UUID()
+            loadID = id
+            let cache = videoCache
+            downloadTask = Task { [weak self] in
+                if let previousLease { await cache.invalidate(previousLease) }
+                do {
+                    let lease = try await cache.file(for: url) { [weak self] progress in
+                        guard let self, !self.tornDown, self.loadID == id,
+                            self.visible, self.selected
+                        else { return }
+                        self.progressView.update(progress)
+                    }
+                    guard !Task.isCancelled, let self, !self.tornDown,
+                        self.loadID == id, self.visible, self.selected
+                    else { return }
+                    self.downloadTask = nil
+                    self.fileLease = lease
+                    self.installPlayer(url: lease.url)
+                    self.applyPlayback()
+                } catch {
+                    guard !Task.isCancelled, let self, !self.tornDown,
+                        self.loadID == id, self.visible, self.selected
+                    else { return }
+                    self.downloadTask = nil
+                    self.showFailure()
+                }
+            }
+        }
+
+        private func installPlayer(url: URL) {
             let asset = AVURLAsset(url: url)
             let playerItem = AVPlayerItem(asset: asset)
-            let player: AVPlayer
-            if let existing = self.player {
-                player = existing
-                player.replaceCurrentItem(with: playerItem)
-            } else {
-                player = AVPlayer(playerItem: playerItem)
-                self.player = player
-                playerController.player = player
-                // AVKit's own play button may start playback the viewer did not start.
-                playbackObservation = player.publisher(for: \.timeControlStatus)
-                    .receive(on: DispatchQueue.main)
-                    .sink { status in
-                        guard status != .paused else { return }
-                        ImageDetailVideoAudioSession.activate()
+            let player = AVPlayer(playerItem: playerItem)
+            self.player = player
+            playerController.player = player
+            // AVKit's own play button may start playback the viewer did not start.
+            playbackObservation = player.publisher(for: \.timeControlStatus)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self, weak player] status in
+                    guard status != .paused, let self, !self.tornDown,
+                        let player, self.player === player
+                    else { return }
+                    guard UIApplication.shared.applicationState == .active,
+                        self.presentingFullScreen || (self.visible && self.selected)
+                    else {
+                        self.player?.pause()
+                        return
                     }
-            }
-            setFailed(false)
+                    ImageDetailVideoAudioSession.activate(owner: self.audioSessionOwner)
+                }
             statusObservation = playerItem.publisher(for: \.status)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self, weak playerItem] status in
-                    guard status == .failed, let self, let playerItem,
-                        self.player?.currentItem === playerItem
+                    guard let self, let playerItem, self.player?.currentItem === playerItem
                     else { return }
-                    self.showFailure()
+                    if status == .failed {
+                        self.showFailure()
+                    } else if status == .readyToPlay {
+                        self.progressView.isHidden = true
+                    }
                 }
-            playableCheck?.cancel()
+            progressView.update(.indeterminate)
             playableCheck = Task { [weak self, weak playerItem] in
                 let playable = (try? await asset.load(.isPlayable)) ?? false
                 guard !Task.isCancelled, !playable, let self, let playerItem,
@@ -189,9 +251,42 @@
             }
         }
 
+        private func cancelDownload() {
+            loadID = UUID()
+            downloadTask?.cancel()
+            downloadTask = nil
+            if player == nil { progressView.isHidden = true }
+        }
+
+        private func releasePlayer() {
+            statusObservation?.cancel()
+            statusObservation = nil
+            playbackObservation?.cancel()
+            playbackObservation = nil
+            playableCheck?.cancel()
+            playableCheck = nil
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+            playerController.player = nil
+            player = nil
+            fileLease = nil
+            ImageDetailVideoAudioSession.release(owner: audioSessionOwner)
+        }
+
+        @objc private func applicationResignedActive() {
+            autoplayPending = false
+            cancelDownload()
+            player?.pause()
+        }
+
         private func showFailure() {
             guard !tornDown, !failed else { return }
             player?.pause()
+            progressView.isHidden = true
+            if let fileLease {
+                let cache = videoCache
+                Task { await cache.invalidate(fileLease) }
+            }
             setFailed(true)
         }
 
@@ -204,8 +299,8 @@
 
         @objc private func retry() {
             guard !tornDown, failed, mayInteract?() == true else { return }
-            // Recreate the item (and asset) so a transient network failure is retried.
-            failed = false
+            // Discard a failed cached asset before requesting a fresh completed file.
+            setFailed(false)
             autoplayPending = selected
             load()
             applyPlayback()
@@ -238,31 +333,63 @@
         }
     }
 
-    /// Movie playback audio for the viewer, mirroring `VoicePlaybackController`'s session use:
-    /// `.playback` while the viewer plays video, deactivated with
-    /// `.notifyOthersOnDeactivation` when the viewer tears down.
+    /// Each page retains movie audio until it releases its player. One viewer tearing down
+    /// must not deactivate the session while a page in another viewer still owns it.
     @MainActor
-    enum ImageDetailVideoAudioSession {
-        private static var active = false
+    private enum ImageDetailVideoAudioSession {
+        private static var owners: Set<UUID> = []
+        private static let worker = ImageDetailVideoAudioSessionWorker()
 
-        static func activate() {
-            guard !active else { return }
-            VoicePlaybackController.stopAll()
-            let session = AVAudioSession.sharedInstance()
-            do {
-                try session.setCategory(.playback, mode: .moviePlayback)
-                try session.setActive(true)
-                active = true
-            } catch {
-                // Playback continues under the default session (silenced by the ring switch).
-            }
+        static func activate(owner: UUID) {
+            if owners.isEmpty { VoicePlaybackController.stopAll() }
+            owners.insert(owner)
+            // Repeat requests after activation failure still retry on the next play attempt.
+            worker.setDesiredActive(true)
         }
 
-        static func deactivate() {
-            guard active else { return }
-            active = false
-            try? AVAudioSession.sharedInstance().setActive(
-                false, options: .notifyOthersOnDeactivation)
+        static func release(owner: UUID) {
+            guard owners.remove(owner) != nil, owners.isEmpty else { return }
+            worker.setDesiredActive(false)
+        }
+    }
+
+    /// The SDK's asynchronous activate/deactivate APIs require iOS 27, while this app
+    /// supports iOS 17. Use one non-main serial queue for both blocking operations and their
+    /// bookkeeping; no completion can race a later operation on a different executor.
+    nonisolated private final class ImageDetailVideoAudioSessionWorker: @unchecked Sendable {
+        private let queue = DispatchQueue(
+            label: "app.chahua.chat.video-audio-session", qos: .userInitiated)
+        private let ownershipLock = NSLock()
+        // Protected by ownershipLock; sessionActive is confined to queue.
+        private var desiredActive = false
+        private var sessionActive = false
+
+        func setDesiredActive(_ active: Bool) {
+            ownershipLock.withLock { desiredActive = active }
+            queue.async { [self] in
+                // Read current ownership, not the state captured by an old release. A reopen
+                // can supersede queued cleanup; a release during a blocking activation queues
+                // cleanup after it, so its late completion cannot leave the session active.
+                let desired = ownershipLock.withLock { desiredActive }
+                guard desired != sessionActive else { return }
+                let session = AVAudioSession.sharedInstance()
+                if desired {
+                    do {
+                        try session.setCategory(.playback, mode: .moviePlayback)
+                        try session.setActive(true)
+                        sessionActive = true
+                    } catch {
+                        // Playback continues under the default session (silenced by the ring switch).
+                    }
+                } else {
+                    do {
+                        try session.setActive(false, options: .notifyOthersOnDeactivation)
+                        sessionActive = false
+                    } catch {
+                        // Retain active bookkeeping so a later ownership transition retries cleanup.
+                    }
+                }
+            }
         }
     }
 #endif

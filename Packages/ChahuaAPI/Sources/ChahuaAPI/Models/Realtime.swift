@@ -3,6 +3,10 @@ import Foundation
 /// Every known server frame is typed; unknown future names do not decode their payload.
 public enum RealtimeServerEvent: Decodable, Sendable {
     case pong
+    case groupSpeakingModeChanged(GroupSpeakingModeResponse)
+    case memberSpeakingModeChanged(MemberSpeakingModeResponse)
+    case chatMembershipChanged(ChatMembershipChangedPayload)
+    case membershipMessagePolicyChanged(MembershipMessagePolicyChangedPayload)
     case message(MessageResponse)
     case messageUpdated(MessageResponse)
     case messageDeleted(MessageResponse)
@@ -39,6 +43,18 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         let type = try container.decode(String.self, forKey: .type)
         switch type {
         case "pong": self = .pong
+        case "groupSpeakingModeChanged":
+            self = .groupSpeakingModeChanged(
+                try container.decode(GroupSpeakingModeResponse.self, forKey: .payload))
+        case "memberSpeakingModeChanged":
+            self = .memberSpeakingModeChanged(
+                try container.decode(MemberSpeakingModeResponse.self, forKey: .payload))
+        case "chatMembershipChanged":
+            self = .chatMembershipChanged(
+                try container.decode(ChatMembershipChangedPayload.self, forKey: .payload))
+        case "membershipMessagePolicyChanged":
+            self = .membershipMessagePolicyChanged(
+                try container.decode(MembershipMessagePolicyChangedPayload.self, forKey: .payload))
         case "message":
             self = .message(try container.decode(MessageResponse.self, forKey: .payload))
         case "messageUpdated":
@@ -372,6 +388,6 @@ public struct FriendshipRemovedPayload: Decodable, Sendable {
     }
 }
 
-public enum FriendRequestStatus: String, Decodable, Sendable {
+public enum FriendRequestStatus: String, Codable, Sendable {
     case pending, archived, accepted, rejected
 }

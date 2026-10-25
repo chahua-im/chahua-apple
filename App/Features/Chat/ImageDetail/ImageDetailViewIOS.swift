@@ -335,8 +335,6 @@
             dismissPan.isEnabled = false
             for page in pages.values { removePage(page) }
             pages.removeAll()
-            // Pages have released their players; hand audio back to other apps.
-            ImageDetailVideoAudioSession.deactivate()
         }
 
         private func removePage(_ page: any ImageDetailPageContentIOS) {
@@ -494,7 +492,7 @@
                 let item = gallery.items[index]
                 let page: any ImageDetailPageContentIOS
                 if item.isVideo {
-                    page = ImageDetailVideoPageIOS(item: item)
+                    page = ImageDetailVideoPageIOS(item: item, mediaContext: mediaContext)
                 } else {
                     let imagePage = ImageDetailImagePageIOS(item: item, mediaContext: mediaContext)
                     imagePage.onZoomChanged = { [weak self] in self?.updatePageStates() }

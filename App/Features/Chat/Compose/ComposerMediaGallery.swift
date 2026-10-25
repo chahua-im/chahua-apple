@@ -231,49 +231,68 @@ struct ComposerMediaGallery: View {
     }
 
     private func tileContent(_ attachment: LocalOutgoingAttachment, index: Int) -> some View {
-        LocalOutgoingImagePreview(path: attachment.previewPath, contentMode: .fit)
-            .overlay {
-                if attachment.mimeType.hasPrefix("video/") {
-                    Image(systemName: "play.fill")
-                        .font(.title2)
-                        .foregroundStyle(.white)
-                        .padding(14)
-                        .background(.black.opacity(0.35), in: Circle())
-                        .accessibilityHidden(true)
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if attachment.error != nil || progress[attachment.id] != nil {
+        Group {
+            if attachment.isFile {
+                VStack(spacing: 10) {
+                    Image(systemName: "doc.fill").font(.largeTitle).foregroundStyle(.secondary)
+                    Text(attachment.fileName).font(.headline).lineLimit(3)
+                    Text(attachment.mimeType).font(.caption).foregroundStyle(.secondary)
+                    Text(
+                        ByteCountFormatter.string(
+                            fromByteCount: attachment.byteCount, countStyle: .file)
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
                     OutgoingImageStatus(attachment: attachment, progress: progress[attachment.id])
-                        .padding(8)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(8)
                 }
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.quaternary)
+            } else {
+                LocalOutgoingImagePreview(path: attachment.previewPath, contentMode: .fit)
             }
-            .overlay(alignment: .bottomTrailing) {
-                Menu {
-                    if let error = attachment.error {
-                        Text(error)
-                        Button("Retry") { onRetry(attachment.id) }
-                    }
-                    Button("Move earlier") { move(index, by: -1) }.disabled(index == 0)
-                    Button("Move later") { move(index, by: 1) }.disabled(
-                        index == attachments.count - 1)
-                    Button("Remove", role: .destructive) { onRemove(attachment.id) }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(optionIconFont)
+        }
+        .overlay {
+            if attachment.mimeType.hasPrefix("video/") {
+                Image(systemName: "play.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white)
+                    .padding(14)
+                    .background(.black.opacity(0.35), in: Circle())
+                    .accessibilityHidden(true)
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if attachment.error != nil || progress[attachment.id] != nil {
+                OutgoingImageStatus(attachment: attachment, progress: progress[attachment.id])
+                    .padding(8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(8)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Menu {
+                if let error = attachment.error {
+                    Text(error)
+                    Button("Retry") { onRetry(attachment.id) }
                 }
-                .menuStyle(.borderlessButton)
-                .frame(width: optionButtonSize, height: optionButtonSize)
-                .background(.regularMaterial, in: Circle())
-                .menuIndicator(.hidden)
-                .disabled(!isEnabled)
-                .accessibilityLabel("Options for \(attachment.fileName)")
-                .padding(8)
+                Button("Move earlier") { move(index, by: -1) }.disabled(index == 0)
+                Button("Move later") { move(index, by: 1) }.disabled(
+                    index == attachments.count - 1)
+                Button("Remove", role: .destructive) { onRemove(attachment.id) }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(optionIconFont)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .accessibilityLabel(attachment.fileName)
+            .menuStyle(.borderlessButton)
+            .frame(width: optionButtonSize, height: optionButtonSize)
+            .background(.regularMaterial, in: Circle())
+            .menuIndicator(.hidden)
+            .disabled(!isEnabled)
+            .accessibilityLabel("Options for \(attachment.fileName)")
+            .padding(8)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel(attachment.fileName)
     }
 
     private var optionButtonSize: CGFloat {

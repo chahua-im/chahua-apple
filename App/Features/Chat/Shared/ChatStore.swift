@@ -53,6 +53,23 @@ extension ChatState {
 final class ChatStore: ObservableObject {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "conversations")
     @Published private(set) var state = ChatState()
+    @Published private(set) var groupInfoByChatID: [String: GroupInfoResponse] = [:]
+    @Published private(set) var memberSpeakingModesByChatID:
+        [String: [Int32: MemberSpeakingModeResponse]] = [:]
+    @Published private(set) var sessionRevision = 0
+    @Published private(set) var messageUpdateError: String?
+    private var groupInfoRevisions: [String: Int] = [:]
+    private var groupInfoInvalidations = Set<String>()
+    private var groupInfoReadSequences: [String: Int] = [:]
+    private var groupSpeakingRevisions: [String: Int] = [:]
+    private var memberSpeakingRevisions: [String: [Int32: Int]] = [:]
+    private var fullSnapshotRecoveries = Set<String>()
+    private var confirmedThreadRoots = Set<ConversationKey>()
+    private var membershipPolicies: [String: MembershipMessagePolicy] = [:]
+    private var membershipPolicyRevisions: [String: Int] = [:]
+    private var membershipSettingsRevision = 0
+    private var membershipSettingsWrites = 0
+    private var membershipChatSettings: ChatSettings?
     // Viewport consumers change the transport watch, not visible UI state.
     // Publishing these through ObservableObject invalidates the list that owns
     // the consumers, reconfiguring every hosted row as avatars mount/unmount.
@@ -103,8 +120,16 @@ final class ChatStore: ObservableObject {
     @Published var currentUserProfile: MeResponse? {
         didSet {
             stickers.setAccount(currentUserProfile?.uid)
+            savedMessages.setAccount(currentUserProfile?.uid)
             stickers.setPackOrder(currentUserProfile?.stickerPackOrder ?? [])
             guard currentUserProfile != oldValue else { return }
+            if let settings = membershipChatSettings, currentUserProfile != nil,
+                currentUserProfile?.showMembershipMessages != settings.showMembershipMessages
+            {
+                currentUserProfile = currentUserProfile?.withChatSettings(settings)
+            } else if let show = currentUserProfile?.showMembershipMessages {
+                acceptChatSettings(.init(showMembershipMessages: show))
+            }
             if state.notificationDefaults == nil, let profile = currentUserProfile,
                 let groups = profile.muteGroupChatsByDefault,
                 let direct = profile.muteDirectChatsByDefault
@@ -134,6 +159,7 @@ final class ChatStore: ObservableObject {
     let pins: ChatPinController
     let drafts: ChatDraftStore
     let stickers: StickerLibrary
+    let savedMessages: SavedMessageController
     var onNotificationRead: ((ConversationKey, MessageID) -> Void)?
     private var outgoingObservation: AnyCancellable?
     private var storageObservation: AnyCancellable?
@@ -321,11 +347,16 @@ final class ChatStore: ObservableObject {
         )
         pins = ChatPinController(apiClient: apiClient, onInvalidToken: onInvalidToken)
         stickers = StickerLibrary(apiClient: apiClient, onInvalidToken: onInvalidToken)
+        savedMessages = SavedMessageController(apiClient: apiClient, onInvalidToken: onInvalidToken)
         outgoingObservation = outgoingQueue.events.sink { [weak self] event in
             self?.applyOutgoingEvent(event)
         }
         storageObservation = outgoingQueue.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
+        }
+        outgoingQueue.authorizeWrite = { [weak self] chatID, threadID in
+            guard let self else { throw SpeakingWriteError.unavailable }
+            try await self.requireSpeakingPermission(chatID: chatID, threadID: threadID)
         }
     }
 
@@ -475,6 +506,12 @@ final class ChatStore: ObservableObject {
         let receiptVersion = listReadReceipts.snapshot()
         if !initiallyLoaded { state[keyPath: list.phase] = .loading }
         do {
+            if membershipSettingsWrites > 0 {
+                _ = try await serializeGroupMutation(chatID: "\0membership-settings") {}
+                guard generation == requestGeneration, refreshGeneration == currentRefresh else {
+                    throw CancellationError()
+                }
+            }
             switch list {
             case .chats, .archivedChats:
                 var chats = try await fetchChatList(
@@ -570,6 +607,8 @@ final class ChatStore: ObservableObject {
         var seenIDs = Set<String>()
         var cursors = Set<String>()
         var cursor: String?
+        let settingsRevision = membershipSettingsRevision
+        let policyRevisions = membershipPolicyRevisions
         repeat {
             let response = try await apiClient.listChats(
                 query: ListChatsQuery(after: cursor, archived: archived))
@@ -577,9 +616,25 @@ final class ChatStore: ObservableObject {
             guard generation == requestGeneration, refreshGeneration == currentRefresh else {
                 throw CancellationError()
             }
+            guard membershipSettingsRevision == settingsRevision, membershipSettingsWrites == 0
+            else {
+                dirtyLists.insert(archived ? .archivedChats : .chats)
+                throw CancellationError()
+            }
+            if let settings = response.chatSettings { acceptChatSettings(settings) }
             for chat in response.chats
             where chat.archived == archived && seenIDs.insert(chat.id).inserted {
-                chats.append(chat)
+                guard
+                    membershipPolicyRevisions[chat.id, default: 0]
+                        == policyRevisions[chat.id, default: 0]
+                else {
+                    dirtyLists.insert(archived ? .archivedChats : .chats)
+                    throw CancellationError()
+                }
+                if let policy = chat.membershipMessagePolicy {
+                    acceptMembershipPolicy(policy, chatID: chat.id)
+                }
+                chats.append(membershipFilteredSnapshot(chat))
             }
             cursor = response.nextCursor
             if let cursor, !cursors.insert(cursor).inserted { throw APIError.unavailable }
@@ -848,6 +903,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func install(_ chat: ChatListItem) {
+        let chat = membershipFilteredSnapshot(chat)
         let previousExpiry = self.chat(id: chat.id)?.mutedUntil
         conversationReadStates[.init(chatID: chat.id)] = .init(
             lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
@@ -899,7 +955,7 @@ final class ChatStore: ObservableObject {
         if let chat = chat(id: thread.chatId) { return chat }
         let requestGeneration = generation
         do {
-            let info = try await apiClient.groupInfo(chatID: thread.chatId)
+            let info = try await groupInfo(chatID: thread.chatId)
             try Task.checkCancellation()
             guard generation == requestGeneration else { throw CancellationError() }
             guard info.id == thread.chatId else {
@@ -908,7 +964,8 @@ final class ChatStore: ObservableObject {
             }
             return ChatListItem(
                 id: thread.chatId, name: thread.chatName, avatar: thread.chatAvatar,
-                unreadCount: 0, archived: false, kind: info.kind, peer: info.peer)
+                unreadCount: 0, archived: false, kind: info.kind, peer: info.peer,
+                membershipMessagePolicy: info.membershipMessagePolicy)
         } catch {
             guard generation == requestGeneration else { throw CancellationError() }
             if case APIError.invalidToken = error { await onInvalidToken() }
@@ -931,30 +988,23 @@ final class ChatStore: ObservableObject {
         return root
     }
 
-    /// Payload identifiers are only navigation hints; authorize the message and
-    /// resolve its parent independently of the active (unarchived) list.
-    func chatForNotification(_ route: PushNotificationRoute) async throws -> ChatListItem {
-        try Task.checkCancellation()
+    /// Payload identifiers are hints; authorize the message before resolving its
+    /// actual root/thread scope, including parents absent from the visible list.
+    func resolveMessageLink(chatID: String, messageID: MessageID) async throws
+        -> (MessageResponse, ChatListItem)
+    {
         let requestGeneration = generation
-        do {
-            async let infoRequest = apiClient.groupInfo(chatID: route.chatID)
-            async let messageRequest = apiClient.getMessage(
-                chatID: route.chatID, messageID: route.messageID)
+        return try await performGroupRequest(generation: requestGeneration) {
+            async let infoRequest = groupInfo(chatID: chatID)
+            async let messageRequest = apiClient.getMessage(chatID: chatID, messageID: messageID)
             let (info, message) = try await (infoRequest, messageRequest)
             try Task.checkCancellation()
             guard generation == requestGeneration else { throw CancellationError() }
-            guard info.id == route.chatID,
-                message.chatId == route.chatID,
-                message.id == route.messageID,
-                message.replyRootId == route.threadID
-            else {
-                Self.logger.error(
-                    "Notification navigation failed: server returned a different conversation or message"
-                )
+            guard info.id == chatID, message.chatId == chatID, message.id == messageID else {
                 throw APIError.unexpectedResponse
             }
             let cached = chat(id: info.id)
-            return ChatListItem(
+            let resolved = ChatListItem(
                 id: info.id, name: info.name, avatar: info.avatar,
                 lastMessageAt: cached?.lastMessageAt,
                 unreadCount: cached?.unreadCount ?? 0,
@@ -967,12 +1017,17 @@ final class ChatStore: ObservableObject {
                 muteOverride: cached != nil ? cached?.muteOverride : info.muteOverride,
                 isMuted: cached != nil ? cached?.isMuted : info.isMuted,
                 archived: cached?.archived ?? false,
-                kind: info.kind, peer: info.peer)
-        } catch {
-            guard generation == requestGeneration else { throw CancellationError() }
-            if case APIError.invalidToken = error { await onInvalidToken() }
-            throw error
+                kind: info.kind, peer: info.peer,
+                membershipMessagePolicy: info.membershipMessagePolicy)
+            return (message, resolved)
         }
+    }
+
+    func chatForNotification(_ route: PushNotificationRoute) async throws -> ChatListItem {
+        let (message, chat) = try await resolveMessageLink(
+            chatID: route.chatID, messageID: route.messageID)
+        guard message.replyRootId == route.threadID else { throw APIError.unexpectedResponse }
+        return chat
     }
 
     /// Identifier-filtered reads reconcile only rows whose membership/preview is unknown.
@@ -996,10 +1051,19 @@ final class ChatStore: ObservableObject {
                     return
                 }
                 guard localStateWrites[key] == nil else { return }
+                if key.threadID == nil, membershipSettingsWrites > 0 {
+                    _ = try? await serializeGroupMutation(chatID: "\0membership-settings") {}
+                    guard generation == requestGeneration, refreshGeneration == currentRefresh
+                    else {
+                        return
+                    }
+                }
                 dirtyRows.remove(key)
                 let revision = rowRevisions[key, default: 0]
                 let receiptVersion = listReadReceipts.snapshot()
                 let readVersion = readStateVersion
+                let settingsRevision = membershipSettingsRevision
+                let policyRevision = membershipPolicyRevisions[key.chatID, default: 0]
                 do {
                     if let threadID = key.threadID, let rootID = MessageID(threadID) {
                         let preferred =
@@ -1037,12 +1101,33 @@ final class ChatStore: ObservableObject {
                                 query: .init(archived: archived, chatId: key.chatID))
                             try Task.checkCancellation()
                             found = response.chats.first { $0.id == key.chatID }
+                            guard generation == requestGeneration,
+                                refreshGeneration == currentRefresh
+                            else { return }
+                            guard membershipSettingsRevision == settingsRevision,
+                                membershipSettingsWrites == 0,
+                                membershipPolicyRevisions[key.chatID, default: 0] == policyRevision
+                            else {
+                                dirtyRows.insert(key)
+                                break
+                            }
+                            if let settings = response.chatSettings { acceptChatSettings(settings) }
                             if found != nil { break }
                         }
                         guard generation == requestGeneration, refreshGeneration == currentRefresh
                         else { return }
+                        guard membershipSettingsRevision == settingsRevision,
+                            membershipSettingsWrites == 0,
+                            membershipPolicyRevisions[key.chatID, default: 0] == policyRevision
+                        else {
+                            dirtyRows.insert(key)
+                            continue
+                        }
                         if rowRevisions[key, default: 0] == revision, localStateWrites[key] == nil {
                             if let found {
+                                if let policy = found.membershipMessagePolicy {
+                                    acceptMembershipPolicy(policy, chatID: found.id)
+                                }
                                 let response = resolveReadSnapshot(
                                     found.readState, key: key, version: readVersion)
                                 let found = found.withReadState(response)
@@ -1071,6 +1156,14 @@ final class ChatStore: ObservableObject {
     private func receivePreview(_ message: MessageResponse, isNew: Bool) {
         let key = ConversationKey(
             chatID: message.chatId, threadID: message.replyRootId?.description)
+        if key.threadID == nil, message.systemKind?.isMembership == true,
+            chat(id: message.chatId)?.kind == .group
+                || groupInfoByChatID[message.chatId]?.kind == .group,
+            conversationMessages.hidesMembershipMessages(chatID: message.chatId)
+        {
+            reconcileRow(key)
+            return
+        }
         rowRevisions[key, default: 0] += 1
         listStateRevision += 1
         if let rootID = key.threadID {
@@ -1130,13 +1223,40 @@ final class ChatStore: ObservableObject {
     func applyRealtimeEvent(_ event: RealtimeServerEvent, currentUserID: Int32) async {
         pins.applyRealtimeEvent(event)
         switch event {
+        case .groupSpeakingModeChanged(let response):
+            acceptGroupSpeakingMode(response)
+        case .memberSpeakingModeChanged(let response):
+            acceptMemberSpeakingMode(response)
+        case .membershipMessagePolicyChanged(let payload):
+            membershipPolicyRevisions[payload.chatId, default: 0] += 1
+            conversationMessages.invalidateMembershipSnapshots(chatID: payload.chatId)
+            groupInfoRevisions[payload.chatId, default: 0] += 1
+            groupInfoInvalidations.insert(payload.chatId)
+            invalidateMembershipVisibility(chatID: payload.chatId)
+        case .chatMembershipChanged(let payload):
+            confirmedThreadRoots.removeAll()
+            membershipPolicyRevisions[payload.chatId, default: 0] += 1
+            conversationMessages.invalidateMembershipSnapshots(chatID: payload.chatId)
+            groupInfoRevisions[payload.chatId, default: 0] += 1
+            groupInfoByChatID.removeValue(forKey: payload.chatId)
+            memberSpeakingModesByChatID.removeValue(forKey: payload.chatId)
+            groupInfoInvalidations.insert(payload.chatId)
+            reconcileRow(.init(chatID: payload.chatId))
+            invalidateConversationWatches()
+            scheduleRecovery(chatID: payload.chatId, membershipOnly: true)
         case .message(let message):
             let requestGeneration = generation
             let normalized = message.normalizedForRealtime(currentUserID: currentUserID)
             let handled = await outgoingQueue.acceptAcknowledgement(normalized)
             guard generation == requestGeneration else { return }
             if !handled { conversationMessages.apply(.message(normalized)) }
-            receivePreview(normalized, isNew: true)
+            let isOwnMembershipAnnouncement =
+                normalized.replyRootId == nil
+                && ((normalized.systemKind == .memberJoined
+                    && normalized.sender.uid == currentUserID)
+                    || (normalized.systemKind == .memberAdded
+                        && normalized.systemLinks?.uid == currentUserID))
+            if !isOwnMembershipAnnouncement { receivePreview(normalized, isNew: true) }
         case .messageUpdated(let message):
             conversationMessages.apply(
                 .messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
@@ -1257,6 +1377,10 @@ final class ChatStore: ObservableObject {
         case .friendRequestResolved, .friendshipRemoved:
             invalidateChatList()
             invalidateReadReceipts()
+            invalidateIndividualPresence()
+            socialInvalidations.send(())
+        case .friendRequestReceived:
+            socialInvalidations.send(())
         case .stickerPackOrderUpdated(let payload):
             stickers.setPackOrder(payload.order)
         case .conversationUnread(let payload):
@@ -1283,7 +1407,7 @@ final class ChatStore: ObservableObject {
             for group in snapshot.groups { updated.groupPresence[group.chatId] = group }
             state = updated
         case .pong, .presenceUpdate, .pinAdded, .threadPinAdded,
-            .pinRemoved, .threadPinRemoved, .friendRequestReceived:
+            .pinRemoved, .threadPinRemoved:
             break
         case .unknown:
             break
@@ -1298,10 +1422,16 @@ final class ChatStore: ObservableObject {
             return false
         }
         let requestGeneration = generation
-        let optimistic = message.replacingMessageText(text)
-        conversationMessages.apply(.messageUpdated(optimistic))
-        pins.applyRealtimeEvent(.messageUpdated(optimistic))
+        messageUpdateError = nil
+        var appliedOptimistically = false
         do {
+            try await requireSpeakingPermission(
+                chatID: message.chatId, threadID: message.replyRootId?.description)
+            guard generation == requestGeneration else { return false }
+            let optimistic = message.replacingMessageText(text)
+            conversationMessages.apply(.messageUpdated(optimistic))
+            pins.applyRealtimeEvent(.messageUpdated(optimistic))
+            appliedOptimistically = true
             let updated = try await apiClient.updateMessage(
                 chatID: message.chatId, messageID: message.id, body: .init(message: text))
             guard generation == requestGeneration else { return false }
@@ -1317,8 +1447,15 @@ final class ChatStore: ObservableObject {
             return true
         } catch {
             guard generation == requestGeneration else { return false }
-            conversationMessages.apply(.messageUpdated(message))
-            pins.applyRealtimeEvent(.messageUpdated(message))
+            if appliedOptimistically {
+                conversationMessages.apply(.messageUpdated(message))
+                pins.applyRealtimeEvent(.messageUpdated(message))
+            }
+            if let mode = (error as? APIError)?.speakingRestriction {
+                messageUpdateError = mode.restrictionExplanation
+            } else if let error = error as? SpeakingWriteError {
+                messageUpdateError = error.localizedDescription
+            }
             if case APIError.invalidToken = error { await onInvalidToken() }
             return false
         }
@@ -1347,6 +1484,34 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// Applies only IDs explicitly confirmed by the atomic server operation.
+    func bulkRecallMessages(_ messages: [MessageResponse]) async throws -> Set<MessageID> {
+        guard let first = messages.first, messages.count <= 100,
+            Set(messages.map(\.id)).count == messages.count,
+            messages.allSatisfy({
+                $0.chatId == first.chatId && !$0.isDeleted && $0.messageType != .system
+                    && !deletingMessageIDs.contains($0.id)
+            })
+        else { throw APIError.unavailable }
+        let requestGeneration = generation
+        let ids = Set(messages.map(\.id))
+        deletingMessageIDs.formUnion(ids)
+        defer {
+            if generation == requestGeneration { deletingMessageIDs.subtract(ids) }
+        }
+        let payload = try await performGroupRequest(generation: requestGeneration) {
+            try await apiClient.bulkDeleteMessages(
+                chatID: first.chatId, body: .init(messageIds: messages.map(\.id)))
+        }
+        guard payload.chatId == first.chatId, Set(payload.messageIds).isSubset(of: ids),
+            let uid = currentUserProfile?.uid
+        else { throw APIError.unavailable }
+        // Reuse the websocket reconciliation path so pins, reply previews and all
+        // mounted root/thread timelines observe the same authoritative tombstones.
+        await applyRealtimeEvent(.messagesBulkDeleted(payload), currentUserID: uid)
+        return Set(payload.messageIds)
+    }
+
     func setRealtimeStatus(_ status: RealtimeConnectionStatus) {
         guard state.realtimeStatus != status else { return }
         state.realtimeStatus = status
@@ -1355,6 +1520,8 @@ final class ChatStore: ObservableObject {
             clearConversationWatches()
             membershipStates.removeAll()
             membershipRevision += 1
+            groupInfoInvalidations.formUnion(groupInfoByChatID.keys)
+            confirmedThreadRoots.removeAll()
         }
         if status == .connected { refreshListReadReceipts(clear: true) }
         if status == .connected {
@@ -1474,6 +1641,89 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    let socialInvalidations = PassthroughSubject<Void, Never>()
+
+    func searchUsers(query: String) async throws -> SearchUsersResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.searchUsers(query: query)
+        }
+    }
+
+    func searchJoinedGroups(query: String, after: String?) async throws -> SocialGroupsResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.searchJoinedGroups(query: query, after: after)
+        }
+    }
+
+    func friendAddInfo(uid: Int32) async throws -> FriendVerificationSettings {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.friendAddInfo(uid: uid)
+        }
+    }
+
+    func friendVerificationSettings() async throws -> FriendVerificationSettings {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.friendVerificationSettings()
+        }
+    }
+
+    func updateFriendVerificationSettings(_ settings: FriendVerificationSettings) async throws
+        -> FriendVerificationSettings
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.updateFriendVerificationSettings(settings)
+        }
+    }
+
+    func listFriendRequests(archived: Bool) async throws -> FriendRequestsResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.listFriendRequests(archived: archived)
+        }
+    }
+
+    func createFriendRequest(toUID: Int32, message: String?) async throws -> FriendRequest {
+        let requestGeneration = generation
+        return try await performGroupRequest(generation: requestGeneration) {
+            let result = try await apiClient.createFriendRequest(toUID: toUID, message: message)
+            guard generation == requestGeneration else { throw CancellationError() }
+            invalidateReadReceipts(peerUID: toUID)
+            invalidateIndividualPresence()
+            invalidateChatList()
+            socialInvalidations.send(())
+            return result
+        }
+    }
+
+    func decideFriendRequest(id: String, decision: FriendRequestDecision) async throws {
+        let requestGeneration = generation
+        try await performGroupRequest(generation: requestGeneration) {
+            try await apiClient.decideFriendRequest(id: id, decision: decision)
+            guard generation == requestGeneration else { throw CancellationError() }
+            invalidateReadReceipts()
+            invalidateIndividualPresence()
+            invalidateChatList()
+            socialInvalidations.send(())
+        }
+    }
+
+    func blockedUsers() async throws -> BlockedUsersResponse {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.blockedUsers()
+        }
+    }
+
+    /// A directory or relationship may reference an archived chat absent from the visible list.
+    func socialChat(id: String) async throws -> ChatListItem {
+        let info = try await groupInfo(chatID: id)
+        guard info.id == id else { throw APIError.unexpectedResponse }
+        return chat(id: id)
+            ?? ChatListItem(
+                id: id, name: info.name, avatar: info.avatar, unreadCount: 0,
+                mutedUntil: info.mutedUntil, muteOverride: info.muteOverride, isMuted: info.isMuted,
+                archived: false, kind: info.kind, peer: info.peer,
+                membershipMessagePolicy: info.membershipMessagePolicy)
+    }
+
     func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
         let response = try await performGroupRequest(generation: generation) {
             try await apiClient.friendRelationship(peerUID: peerUID)
@@ -1490,6 +1740,7 @@ final class ChatStore: ObservableObject {
             invalidateReadReceipts(peerUID: peerUID)
             invalidateIndividualPresence()
             invalidateChatList()
+            socialInvalidations.send(())
         }
     }
 
@@ -1505,6 +1756,7 @@ final class ChatStore: ObservableObject {
             invalidateReadReceipts(peerUID: peerUID)
             invalidateIndividualPresence()
             invalidateChatList()
+            socialInvalidations.send(())
         }
     }
 
@@ -1645,6 +1897,15 @@ final class ChatStore: ObservableObject {
 
     func reconcileVisibleTimelines() async {
         let models = visibleTimelines()
+        let requestGeneration = generation
+        let groupIDs = Set(groupInfoByChatID.keys).union(
+            models.filter(\.isGroupChat).map(\.chatID))
+        await withTaskGroup(of: Void.self) { group in
+            for chatID in groupIDs {
+                group.addTask { _ = try? await self.groupInfo(chatID: chatID) }
+            }
+        }
+        guard generation == requestGeneration else { return }
         await withTaskGroup(of: Void.self) { group in
             let activeChatIDs = Set(models.filter { $0.threadID == nil }.map(\.chatID))
             group.addTask { await self.pins.reconcileAfterReconnect(activeChatIDs: activeChatIDs) }
@@ -1657,8 +1918,9 @@ final class ChatStore: ObservableObject {
         return timelines.values.compactMap(\.value)
     }
 
-    private func scheduleRecovery(chatID: String) {
+    private func scheduleRecovery(chatID: String, membershipOnly: Bool = false) {
         recoveryDirty.insert(chatID)
+        if !membershipOnly { fullSnapshotRecoveries.insert(chatID) }
         guard recoveryTasks[chatID] == nil else { return }
         let requestGeneration = generation
         let currentRecovery = recoveryGeneration
@@ -1677,7 +1939,17 @@ final class ChatStore: ObservableObject {
                     self.recoveryGeneration == currentRecovery
                 else { return }
                 self.recoveryDirty.remove(chatID)
-                let models = self.visibleTimelines().filter { $0.chatID == chatID }
+                if self.groupInfoInvalidations.contains(chatID) {
+                    _ = try? await self.groupInfo(chatID: chatID)
+                    guard self.generation == requestGeneration,
+                        self.recoveryGeneration == currentRecovery
+                    else { return }
+                }
+                let fullSnapshot = self.fullSnapshotRecoveries.remove(chatID) != nil
+                let models = self.visibleTimelines().filter {
+                    $0.chatID == chatID
+                        && (fullSnapshot || $0.hasPendingMembershipVisibilityRefresh)
+                }
                 await withTaskGroup(of: Void.self) { group in
                     for model in models { group.addTask { await model.reconcileAfterReconnect() } }
                 }
@@ -2031,37 +2303,509 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    /// Feature entry points may open an authorized chat before its list refresh arrives.
+    /// Keep the selection resolvable through the same list reducer used by live updates.
+    func retainChatForNavigation(_ chat: ChatListItem) {
+        guard self.chat(id: chat.id) == nil else { return }
+        listStateRevision += 1
+        rowRevisions[.init(chatID: chat.id), default: 0] += 1
+        install(chat)
+    }
+
+    func createGroup(name: String) async throws -> ChatListItem {
+        let response = try await performGroupRequest(generation: generation) {
+            try await apiClient.createGroup(name: name)
+        }
+        let chat = ChatListItem(
+            id: response.id, name: response.name, unreadCount: 0, archived: false, kind: .group)
+        retainChatForNavigation(chat)
+        invalidateChatList()
+        return chat
+    }
+
+    func previewGroupInvite(code: String) async throws -> GroupInvitePreview {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.previewGroupInvite(code: code)
+        }
+    }
+
+    func redeemGroupInvite(code: String) async throws -> ChatListItem {
+        let response = try await performGroupRequest(generation: generation) {
+            try await apiClient.redeemGroupInvite(code: code)
+        }
+        acceptGroupInfo(response)
+        let chat = groupChatSnapshot(response)
+        retainChatForNavigation(chat)
+        invalidateChatList()
+        return chat
+    }
+
+    func speakingMode(chatID: String) -> SpeakingMode? {
+        groupInfoByChatID[chatID]?.effectiveSpeakingMode
+    }
+
+    /// Membership and kind remain server decisions. A quote is still a main send;
+    /// only an actual destination thread changes the speaking action.
+    func requireSpeakingPermission(chatID: String, threadID: String?) async throws {
+        let requestGeneration = generation
+        // A loaded DM row already authorizes its kind; speaking policy never
+        // changes direct-message authorization or requires a group-info preflight.
+        if chat(id: chatID)?.kind == .dm { return }
+        let info: GroupInfoResponse
+        if let cached = groupInfoByChatID[chatID], !groupInfoInvalidations.contains(chatID) {
+            info = cached
+        } else {
+            info = try await groupInfo(chatID: chatID)
+        }
+        guard generation == requestGeneration else { throw CancellationError() }
+        guard !groupInfoInvalidations.contains(chatID) else {
+            throw SpeakingWriteError.unavailable
+        }
+        guard info.kind == .group else { return }
+        if info.myRole == .admin { return }
+        guard info.myRole != nil, let mode = info.effectiveSpeakingMode else {
+            throw SpeakingWriteError.unavailable
+        }
+        if let threadID {
+            guard let rootID = MessageID(threadID) else { throw SpeakingWriteError.unavailable }
+            if mode == .readOnly { throw SpeakingWriteError.restricted(mode) }
+            if mode == .repliesOnly {
+                let exists: Bool
+                if let cached = cachedThreadExistence(chatID: chatID, rootID: rootID) {
+                    exists = cached
+                } else {
+                    let root = try await forwardSourceMessage(chatID: chatID, messageID: rootID)
+                    guard generation == requestGeneration else { throw CancellationError() }
+                    guard root.chatId == chatID, root.id == rootID, root.replyRootId == nil else {
+                        throw SpeakingWriteError.unavailable
+                    }
+                    exists = root.threadInfo != nil
+                    if exists {
+                        confirmedThreadRoots.insert(.init(chatID: chatID, threadID: threadID))
+                    }
+                }
+                if groupInfoInvalidations.contains(chatID)
+                    || groupInfoByChatID[chatID]?.effectiveSpeakingMode != mode
+                {
+                    try await requireSpeakingPermission(chatID: chatID, threadID: threadID)
+                    return
+                }
+                guard groupInfoByChatID[chatID]?.myRole != nil else {
+                    throw SpeakingWriteError.unavailable
+                }
+                guard exists else { throw SpeakingWriteError.restricted(mode) }
+            }
+        } else if !mode.allowsMainMessages {
+            throw SpeakingWriteError.restricted(mode)
+        }
+        guard generation == requestGeneration else { throw CancellationError() }
+    }
+
+    /// Only an actual root's threadInfo proves existence. Reply counts and
+    /// preview records are not substitutes, including when the count is zero.
+    private func cachedThreadExistence(chatID: String, rootID: MessageID) -> Bool? {
+        let key = ConversationKey(chatID: chatID, threadID: rootID.description)
+        if confirmedThreadRoots.contains(key) { return true }
+        var sawRoot = false
+        for timeline in timelines.values {
+            guard let model = timeline.value, model.chatID == chatID else { continue }
+            for row in model.rows {
+                guard case .message(let row) = row, let message = row.entry.remoteMessage,
+                    message.chatId == chatID, message.id == rootID, message.replyRootId == nil
+                else { continue }
+                if message.threadInfo != nil {
+                    confirmedThreadRoots.insert(key)
+                    return true
+                }
+                sawRoot = true
+            }
+        }
+        return sawRoot ? false : nil
+    }
+
+    private func effectiveSpeakingMode(
+        group: SpeakingMode?, personal: SpeakingMode?, role: GroupRole?
+    ) -> SpeakingMode? {
+        guard let role else { return nil }
+        if role == .admin { return .unrestricted }
+        guard let group, let personal else { return nil }
+        func rank(_ mode: SpeakingMode) -> Int {
+            switch mode {
+            case .unrestricted: 0
+            case .threadsOnly: 1
+            case .repliesOnly: 2
+            case .readOnly: 3
+            }
+        }
+        return rank(group) >= rank(personal) ? group : personal
+    }
+
+    private func acceptGroupSpeakingMode(_ response: GroupSpeakingModeResponse) {
+        groupInfoRevisions[response.chatId, default: 0] += 1
+        groupSpeakingRevisions[response.chatId, default: 0] += 1
+        if let info = groupInfoByChatID[response.chatId] {
+            groupInfoByChatID[response.chatId] = info.withSpeakingState(
+                speakingMode: response.speakingMode, mySpeakingMode: info.mySpeakingMode,
+                effectiveSpeakingMode: effectiveSpeakingMode(
+                    group: response.speakingMode, personal: info.mySpeakingMode, role: info.myRole),
+                myRole: info.myRole)
+        } else {
+            groupInfoInvalidations.insert(response.chatId)
+            scheduleRecovery(chatID: response.chatId, membershipOnly: true)
+        }
+    }
+
+    private func acceptMemberSpeakingMode(_ response: MemberSpeakingModeResponse) {
+        memberSpeakingRevisions[response.chatId, default: [:]][response.uid, default: 0] += 1
+        memberSpeakingModesByChatID[response.chatId, default: [:]][response.uid] = response
+        guard response.uid == currentUserProfile?.uid else { return }
+        groupInfoRevisions[response.chatId, default: 0] += 1
+        if let info = groupInfoByChatID[response.chatId] {
+            if info.speakingMode != response.groupSpeakingMode {
+                groupSpeakingRevisions[response.chatId, default: 0] += 1
+            }
+            groupInfoByChatID[response.chatId] = info.withSpeakingState(
+                speakingMode: response.groupSpeakingMode, mySpeakingMode: response.speakingMode,
+                effectiveSpeakingMode: response.effectiveSpeakingMode, myRole: response.role)
+            if info.myRole != response.role {
+                membershipPolicyRevisions[response.chatId, default: 0] += 1
+                conversationMessages.invalidateMembershipSnapshots(chatID: response.chatId)
+                groupInfoInvalidations.insert(response.chatId)
+                invalidateMembershipVisibility(chatID: response.chatId)
+            }
+        } else {
+            groupInfoInvalidations.insert(response.chatId)
+            scheduleRecovery(chatID: response.chatId, membershipOnly: true)
+        }
+    }
+
+    private func memberSpeakingSnapshot(_ member: MemberResponse, chatID: String)
+        -> MemberSpeakingModeResponse?
+    {
+        guard let groupMode = groupInfoByChatID[chatID]?.speakingMode,
+            let personal = member.speakingMode,
+            let effective = effectiveSpeakingMode(
+                group: groupMode, personal: personal, role: member.role)
+        else { return nil }
+        return .init(
+            chatId: chatID, uid: member.uid, role: member.role, speakingMode: personal,
+            groupSpeakingMode: groupMode, effectiveSpeakingMode: effective)
+    }
+
+    private func acceptGroupInfo(_ info: GroupInfoResponse) {
+        groupInfoRevisions[info.id, default: 0] += 1
+        if groupInfoByChatID[info.id]?.speakingMode != info.speakingMode {
+            groupSpeakingRevisions[info.id, default: 0] += 1
+        }
+        groupInfoByChatID[info.id] = info
+        groupInfoInvalidations.remove(info.id)
+        if let uid = currentUserProfile?.uid {
+            if let role = info.myRole, let personal = info.mySpeakingMode,
+                let group = info.speakingMode, let effective = info.effectiveSpeakingMode
+            {
+                let member = MemberSpeakingModeResponse(
+                    chatId: info.id, uid: uid, role: role, speakingMode: personal,
+                    groupSpeakingMode: group, effectiveSpeakingMode: effective)
+                if memberSpeakingModesByChatID[info.id]?[uid] != member {
+                    memberSpeakingRevisions[info.id, default: [:]][uid, default: 0] += 1
+                    memberSpeakingModesByChatID[info.id, default: [:]][uid] = member
+                }
+            } else if info.myRole == nil {
+                memberSpeakingRevisions[info.id, default: [:]][uid, default: 0] += 1
+                memberSpeakingModesByChatID[info.id]?.removeValue(forKey: uid)
+            }
+        }
+        if let policy = info.membershipMessagePolicy {
+            acceptMembershipPolicy(policy, chatID: info.id)
+        }
+    }
+
+    private func acceptChatSettings(_ settings: ChatSettings) {
+        guard membershipChatSettings != settings else { return }
+        membershipChatSettings = settings
+        membershipSettingsRevision += 1
+        if currentUserProfile?.showMembershipMessages != settings.showMembershipMessages {
+            currentUserProfile = currentUserProfile?.withChatSettings(settings)
+        }
+        conversationMessages.setMembershipSettings(settings)
+        invalidateMembershipVisibility()
+    }
+
+    private func acceptMembershipPolicy(_ policy: MembershipMessagePolicy, chatID: String) {
+        guard membershipPolicies[chatID] != policy else { return }
+        membershipPolicies[chatID] = policy
+        membershipPolicyRevisions[chatID, default: 0] += 1
+        if let info = groupInfoByChatID[chatID] {
+            groupInfoByChatID[chatID] = info.withMembershipMessagePolicy(policy)
+        }
+        conversationMessages.setMembershipPolicy(policy, chatID: chatID)
+        invalidateMembershipVisibility(chatID: chatID)
+    }
+
+    private func membershipFilteredSnapshot(_ chat: ChatListItem) -> ChatListItem {
+        let chat = membershipPolicies[chat.id].map { chat.withMembershipMessagePolicy($0) } ?? chat
+        guard chat.kind == .group, chat.lastMessage?.systemKind?.isMembership == true,
+            conversationMessages.hidesMembershipMessages(chatID: chat.id)
+                || chat.membershipMessagePolicy?.canView == false
+        else { return chat }
+        return chat.withPreview(nil)
+    }
+
+    private func invalidateMembershipVisibility(chatID: String? = nil) {
+        listStateRevision += 1
+        dirtyLists.formUnion([.chats, .archivedChats].filter { refreshTasks[$0] != nil })
+        var chatIDs = Set(
+            (state.chats + state.archivedChats).filter {
+                $0.kind == .group && (chatID == nil || $0.id == chatID)
+            }.map(\.id))
+        chatIDs.formUnion(
+            visibleTimelines().filter {
+                $0.isGroupChat && $0.threadID == nil && (chatID == nil || $0.chatID == chatID)
+            }.map(\.chatID))
+        if let chatID { chatIDs.insert(chatID) }
+        state.chats = state.chats.map(membershipFilteredSnapshot)
+        state.archivedChats = state.archivedChats.map(membershipFilteredSnapshot)
+        invalidateConversationWatches()
+        for id in chatIDs {
+            let key = ConversationKey(chatID: id)
+            reconcileRow(key)
+            fallbackConversationStates(key)
+            scheduleRecovery(chatID: id, membershipOnly: true)
+        }
+    }
+
+    func updateChatSettings(showMembershipMessages: Bool) async throws -> ChatSettings {
+        let requestGeneration = generation
+        membershipSettingsWrites += 1
+        membershipSettingsRevision += 1
+        conversationMessages.invalidateMembershipSnapshots()
+        invalidateMembershipVisibility()
+        defer {
+            if generation == requestGeneration {
+                membershipSettingsWrites -= 1
+                membershipSettingsRevision += 1
+                conversationMessages.invalidateMembershipSnapshots()
+                invalidateMembershipVisibility()
+            }
+        }
+        return try await serializeGroupMutation(chatID: "\0membership-settings") {
+            let response = try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.updateChatSettings(
+                    .init(showMembershipMessages: showMembershipMessages))
+            }
+            self.acceptChatSettings(response)
+            return response
+        }
+    }
+
+    func updateGroupSpeakingMode(chatID: String, speakingMode: SpeakingMode) async throws
+        -> GroupSpeakingModeResponse
+    {
+        let requestGeneration = generation
+        return try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            self.groupInfoRevisions[chatID, default: 0] += 1
+            self.groupSpeakingRevisions[chatID, default: 0] += 1
+            let revision = self.groupSpeakingRevisions[chatID, default: 0]
+            let response = try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.updateGroupSpeakingMode(
+                    chatID: chatID, speakingMode: speakingMode)
+            }
+            guard response.chatId == chatID else { throw APIError.unexpectedResponse }
+            if self.groupSpeakingRevisions[chatID, default: 0] == revision {
+                self.acceptGroupSpeakingMode(response)
+            }
+            return .init(
+                chatId: chatID,
+                speakingMode: self.groupInfoByChatID[chatID]?.speakingMode ?? response.speakingMode)
+        }
+    }
+
+    func updateMemberSpeakingMode(chatID: String, uid: Int32, speakingMode: SpeakingMode)
+        async throws -> MemberSpeakingModeResponse
+    {
+        let requestGeneration = generation
+        return try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            if uid == self.currentUserProfile?.uid {
+                self.groupInfoRevisions[chatID, default: 0] += 1
+            }
+            self.memberSpeakingRevisions[chatID, default: [:]][uid, default: 0] += 1
+            let revision = self.memberSpeakingRevisions[chatID]?[uid, default: 0] ?? 0
+            let response = try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.updateMemberSpeakingMode(
+                    chatID: chatID, uid: uid, speakingMode: speakingMode)
+            }
+            guard response.chatId == chatID, response.uid == uid else {
+                throw APIError.unexpectedResponse
+            }
+            if self.memberSpeakingRevisions[chatID]?[uid, default: 0] == revision {
+                let member = MemberResponse(
+                    uid: uid, role: response.role, speakingMode: response.speakingMode)
+                self.acceptMemberSpeakingMode(
+                    self.memberSpeakingSnapshot(member, chatID: chatID) ?? response)
+            }
+            return self.memberSpeakingModesByChatID[chatID]?[uid] ?? response
+        }
+    }
+
+    func groupChatSnapshot(_ info: GroupInfoResponse) -> ChatListItem {
+        chat(id: info.id)
+            ?? ChatListItem(
+                id: info.id, name: info.name, avatar: info.avatar, unreadCount: 0,
+                archived: false, kind: info.kind, peer: info.peer,
+                membershipMessagePolicy: info.membershipMessagePolicy)
+    }
+
+    func listGroupInvites(chatID: String) async throws -> GroupInvitesPage {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.listGroupInvites(chatID: chatID)
+        }
+    }
+
+    func createGroupInvite(body: CreateGroupInviteBody) async throws -> GroupInvite {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.createGroupInvite(body: body)
+        }
+    }
+
+    func revokeGroupInvite(id: String) async throws {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.revokeGroupInvite(id: id)
+        }
+    }
+
+    func sendGroupInvite(body: SendGroupInviteBody) async throws {
+        let requestGeneration = generation
+        try await requireSpeakingPermission(chatID: body.destinationChatId, threadID: nil)
+        _ = try await performGroupRequest(generation: requestGeneration) {
+            try await apiClient.sendGroupInvite(body: body)
+        }
+    }
+
+    func updateGroup(chatID: String, body: UpdateGroupBody) async throws -> GroupInfoResponse {
+        let requestGeneration = generation
+        return try await serializeGroupMutation(chatID: chatID) {
+            guard self.generation == requestGeneration else { throw CancellationError() }
+            self.groupInfoRevisions[chatID, default: 0] += 1
+            self.membershipPolicyRevisions[chatID, default: 0] += 1
+            self.conversationMessages.invalidateMembershipSnapshots(chatID: chatID)
+            let revision = self.groupInfoRevisions[chatID, default: 0]
+            let policyRevision = self.membershipPolicyRevisions[chatID, default: 0]
+            var response = try await self.performGroupRequest(generation: requestGeneration) {
+                try await self.apiClient.updateGroup(chatID: chatID, body: body)
+            }
+            guard response.id == chatID else { throw APIError.unexpectedResponse }
+            if self.groupInfoRevisions[chatID, default: 0] != revision {
+                guard let current = self.groupInfoByChatID[chatID] else {
+                    throw CancellationError()
+                }
+                response = response.withSpeakingState(
+                    speakingMode: current.speakingMode, mySpeakingMode: current.mySpeakingMode,
+                    effectiveSpeakingMode: current.effectiveSpeakingMode, myRole: current.myRole)
+            }
+            if self.membershipPolicyRevisions[chatID, default: 0] != policyRevision {
+                response = response.withMembershipMessagePolicy(self.membershipPolicies[chatID])
+            }
+            let needsPolicyRefresh = self.groupInfoInvalidations.contains(chatID)
+            self.acceptGroupInfo(response)
+            if needsPolicyRefresh {
+                self.groupInfoInvalidations.insert(chatID)
+                self.scheduleRecovery(chatID: chatID, membershipOnly: true)
+            }
+            self.invalidateMembershipVisibility(chatID: chatID)
+            self.invalidateChatList()
+            return self.groupInfoByChatID[chatID] ?? response
+        }
+    }
+
+    func groupAvatarUpload(
+        chatID: String, filename: String, contentType: String, size: Int64,
+        width: Int, height: Int
+    ) async throws -> GroupAvatarUpload {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.groupAvatarUpload(
+                chatID: chatID, filename: filename,
+                contentType: contentType, size: size, width: width, height: height)
+        }
+    }
+
     func groupInfo(chatID: String) async throws -> GroupInfoResponse {
         let requestGeneration = generation
+        let revision = groupInfoRevisions[chatID, default: 0]
+        let policyRevision = membershipPolicyRevisions[chatID, default: 0]
+        groupInfoReadSequences[chatID, default: 0] += 1
+        let readSequence = groupInfoReadSequences[chatID, default: 0]
         let response: GroupInfoResponse = try await performGroupRequest(
             generation: requestGeneration
         ) {
             try await apiClient.groupInfo(chatID: chatID)
         }
         guard response.id == chatID else { throw APIError.unexpectedResponse }
+        if groupInfoRevisions[chatID, default: 0] != revision
+            || groupInfoReadSequences[chatID, default: 0] != readSequence
+            || membershipPolicyRevisions[chatID, default: 0] != policyRevision
+        {
+            guard let current = groupInfoByChatID[chatID] else { throw CancellationError() }
+            return current
+        }
+        acceptGroupInfo(response)
         return response
     }
 
     func groupMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse {
         let requestGeneration = generation
-        return try await performGroupRequest(generation: requestGeneration) {
+        let revisions = memberSpeakingRevisions[chatID, default: [:]]
+        let groupRevision = groupInfoRevisions[chatID, default: 0]
+        let response = try await performGroupRequest(generation: requestGeneration) {
             try await apiClient.listMembers(chatID: chatID, query: query)
         }
+        guard groupInfoRevisions[chatID, default: 0] == groupRevision else { return response }
+        for member in response.members
+        where (memberSpeakingRevisions[chatID]?[member.uid, default: 0] ?? 0)
+            == revisions[member.uid, default: 0]
+        {
+            if let snapshot = memberSpeakingSnapshot(member, chatID: chatID),
+                memberSpeakingModesByChatID[chatID]?[member.uid] != snapshot
+            {
+                acceptMemberSpeakingMode(snapshot)
+            }
+        }
+        return response
     }
 
     func updateGroupMemberRole(chatID: String, uid: Int32, role: GroupRole) async throws
         -> MemberResponse
     {
         let requestGeneration = generation
-        let member: MemberResponse = try await serializeGroupMutation(chatID: chatID) {
+        return try await serializeGroupMutation(chatID: chatID) {
             guard self.generation == requestGeneration else { throw CancellationError() }
-            return try await self.performGroupRequest(generation: requestGeneration) {
+            if uid == self.currentUserProfile?.uid {
+                self.groupInfoRevisions[chatID, default: 0] += 1
+            }
+            self.memberSpeakingRevisions[chatID, default: [:]][uid, default: 0] += 1
+            let revision = self.memberSpeakingRevisions[chatID]?[uid, default: 0] ?? 0
+            let member = try await self.performGroupRequest(generation: requestGeneration) {
                 try await self.apiClient.updateGroupMemberRole(chatID: chatID, uid: uid, role: role)
             }
+            guard member.uid == uid else { throw APIError.unexpectedResponse }
+            if self.memberSpeakingRevisions[chatID]?[uid, default: 0] == revision {
+                if let snapshot = self.memberSpeakingSnapshot(member, chatID: chatID) {
+                    self.acceptMemberSpeakingMode(snapshot)
+                } else {
+                    self.memberSpeakingModesByChatID[chatID]?.removeValue(forKey: uid)
+                    self.groupInfoInvalidations.insert(chatID)
+                    self.scheduleRecovery(chatID: chatID, membershipOnly: true)
+                }
+            }
+            self.invalidateChatList()
+            if let latest = self.memberSpeakingModesByChatID[chatID]?[uid] {
+                return .init(
+                    uid: uid, username: member.username, avatarUrl: member.avatarUrl,
+                    role: latest.role, speakingMode: latest.speakingMode)
+            }
+            return member
         }
-        guard member.uid == uid else { throw APIError.unexpectedResponse }
-        invalidateChatList()
-        return member
     }
 
     func removeGroupMember(chatID: String, uid: Int32) async throws {
@@ -2279,6 +3023,13 @@ final class ChatStore: ObservableObject {
     }
 
     private func removeGroupFromLists(chatID: String) {
+        confirmedThreadRoots.removeAll()
+        groupInfoRevisions[chatID, default: 0] += 1
+        membershipPolicyRevisions[chatID, default: 0] += 1
+        conversationMessages.invalidateMembershipSnapshots(chatID: chatID)
+        groupInfoByChatID.removeValue(forKey: chatID)
+        memberSpeakingModesByChatID.removeValue(forKey: chatID)
+        groupInfoInvalidations.remove(chatID)
         chatAccessInvalidations.send(chatID)
         state.chats.removeAll { $0.id == chatID }
         state.archivedChats.removeAll { $0.id == chatID }
@@ -2307,6 +3058,32 @@ final class ChatStore: ObservableObject {
     func forwardDestinationThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
         try await performGroupRequest(generation: generation) {
             try await apiClient.listThreads(query: query)
+        }
+    }
+
+    func chatAttachments(chatID: String, kind: ChatAttachmentKind, before: MessageID?)
+        async throws -> ListChatAttachmentsResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.listChatAttachments(chatID: chatID, kind: kind, before: before)
+        }
+    }
+
+    func browseChatThreads(chatID: String, cursor: MessageID?) async throws
+        -> ListChatThreadsResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.listChatThreads(
+                chatID: chatID, query: .init(limit: 20, cursor: cursor, order: .newest))
+        }
+    }
+
+    func threadParticipants(chatID: String, threadID: String, cursor: Int32?) async throws
+        -> ListThreadParticipantsResponse
+    {
+        try await performGroupRequest(generation: generation) {
+            try await apiClient.listThreadParticipants(
+                chatID: chatID, threadID: threadID, query: .init(limit: 100, cursor: cursor))
         }
     }
 
@@ -2339,14 +3116,64 @@ final class ChatStore: ObservableObject {
         -> ListMessagesResponse
     {
         let requestGeneration = generation
-        do {
-            let response = try await apiClient.listMessages(chatID: chatID, query: query)
-            guard generation == requestGeneration else { throw CancellationError() }
-            for message in response.messages {
-                _ = await outgoingQueue.acceptAcknowledgement(message)
-                guard generation == requestGeneration else { throw CancellationError() }
+        let tracksVisibility =
+            query.threadID == nil
+            && chat(id: chatID)?.kind != .dm && groupInfoByChatID[chatID]?.kind != .dm
+            && !timelines.values.contains {
+                $0.value?.chatID == chatID && $0.value?.isGroupChat == false
             }
-            return response
+        do {
+            while true {
+                try Task.checkCancellation()
+                if tracksVisibility, membershipSettingsWrites > 0 {
+                    _ = try await serializeGroupMutation(chatID: "\0membership-settings") {}
+                }
+                guard generation == requestGeneration else { throw CancellationError() }
+                let settingsRevision = membershipSettingsRevision
+                let policyRevision = membershipPolicyRevisions[chatID, default: 0]
+                let response = try await apiClient.listMessages(chatID: chatID, query: query)
+                try Task.checkCancellation()
+                guard generation == requestGeneration else { throw CancellationError() }
+                if tracksVisibility {
+                    guard membershipSettingsRevision == settingsRevision,
+                        membershipSettingsWrites == 0,
+                        membershipPolicyRevisions[chatID, default: 0] == policyRevision
+                    else { continue }
+                }
+                if membershipSettingsRevision == settingsRevision, membershipSettingsWrites == 0,
+                    let settings = response.chatSettings
+                {
+                    acceptChatSettings(settings)
+                }
+                if query.threadID == nil, let policy = response.membershipMessagePolicy {
+                    acceptMembershipPolicy(policy, chatID: chatID)
+                }
+                let acceptedSettingsRevision = membershipSettingsRevision
+                let acceptedPolicyRevision = membershipPolicyRevisions[chatID, default: 0]
+                for message in response.messages {
+                    _ = await outgoingQueue.acceptAcknowledgement(message)
+                    guard generation == requestGeneration else { throw CancellationError() }
+                }
+                if tracksVisibility {
+                    guard membershipSettingsRevision == acceptedSettingsRevision,
+                        membershipPolicyRevisions[chatID, default: 0] == acceptedPolicyRevision,
+                        membershipSettingsWrites == 0
+                    else { continue }
+                }
+                let isGroupRoot =
+                    query.threadID == nil
+                    && (response.membershipMessagePolicy != nil
+                        || chat(id: chatID)?.kind == .group
+                        || groupInfoByChatID[chatID]?.kind == .group)
+                guard isGroupRoot, conversationMessages.hidesMembershipMessages(chatID: chatID)
+                else { return response }
+                return .init(
+                    messages: response.messages.filter { $0.systemKind?.isMembership != true },
+                    olderCursor: response.olderCursor, newerCursor: response.newerCursor,
+                    nextCursor: response.nextCursor, prevCursor: response.prevCursor,
+                    membershipMessagePolicy: response.membershipMessagePolicy,
+                    chatSettings: response.chatSettings)
+            }
         } catch {
             guard generation == requestGeneration else { throw CancellationError() }
             if case APIError.invalidToken = error { await onInvalidToken() }
@@ -2426,6 +3253,8 @@ final class ChatStore: ObservableObject {
             guard generation == requestGeneration,
                 readResetVersions[key, default: 0] == resetVersion
             else { throw CancellationError() }
+            let settingsRevision = membershipSettingsRevision
+            let policyRevision = membershipPolicyRevisions[key.chatID, default: 0]
             let response: ReadStateResponse
             if let threadID = key.threadID {
                 response = try await apiClient.markThreadRead(
@@ -2437,6 +3266,14 @@ final class ChatStore: ObservableObject {
             guard generation == requestGeneration,
                 readResetVersions[key, default: 0] == resetVersion
             else { throw CancellationError() }
+            if key.threadID == nil,
+                membershipSettingsRevision != settingsRevision
+                    || membershipPolicyRevisions[key.chatID, default: 0] != policyRevision
+            {
+                if let cursor = response.lastReadMessageId { onNotificationRead?(key, cursor) }
+                fallbackConversationStates(key)
+                return
+            }
             let watchedThrough = readAcknowledgements[key]?.watchedThrough
             if let cursor = response.lastReadMessageId,
                 let watchedThrough, watchedThrough >= cursor
@@ -2561,12 +3398,28 @@ final class ChatStore: ObservableObject {
         invalidationTask = nil
         recoveryGeneration += 1
         recoveryDirty.removeAll()
+        fullSnapshotRecoveries.removeAll()
         for task in recoveryTasks.values { task.cancel() }
         recoveryTasks.removeAll()
     }
 
     func reset() {
         generation += 1
+        sessionRevision += 1
+        confirmedThreadRoots.removeAll()
+        groupInfoByChatID.removeAll()
+        memberSpeakingModesByChatID.removeAll()
+        groupInfoRevisions.removeAll()
+        groupInfoInvalidations.removeAll()
+        groupInfoReadSequences.removeAll()
+        groupSpeakingRevisions.removeAll()
+        memberSpeakingRevisions.removeAll()
+        membershipPolicies.removeAll()
+        membershipPolicyRevisions.removeAll()
+        membershipSettingsRevision += 1
+        membershipSettingsWrites = 0
+        membershipChatSettings = nil
+        messageUpdateError = nil
         notificationRevision += 1
         notificationVersions.removeAll()
         notificationSnapshots.removeAll()
@@ -2607,6 +3460,9 @@ final class ChatStore: ObservableObject {
         reactions.reset()
         pins.reset()
         stickers.reset()
+        savedMessages.reset()
+        VoicePlaybackSession.shared.stop()
+        VoicePlaybackController.stopAll()
         conversationMessages.reset()
         setRealtimeStatus(.idle)
         state = ChatState()
@@ -2629,18 +3485,19 @@ extension ChatListItem {
             lastReadMessageId: response.lastReadMessageId,
             peerLastReadMessageId: peerLastReadMessageId,
             lastMessage: lastMessage, mutedUntil: mutedUntil, muteOverride: muteOverride,
-            isMuted: isMuted, archived: archived, kind: kind, peer: peer)
+            isMuted: isMuted, archived: archived, kind: kind, peer: peer,
+            membershipMessagePolicy: membershipMessagePolicy)
     }
 
-    fileprivate func withPreview(_ preview: MessagePreview) -> ChatListItem {
+    fileprivate func withPreview(_ preview: MessagePreview?) -> ChatListItem {
         ChatListItem(
-            id: id, name: name, avatar: avatar, lastMessageAt: preview.createdAt,
+            id: id, name: name, avatar: avatar, lastMessageAt: preview?.createdAt,
             unreadCount: unreadCount, unreadMentions: unreadMentions,
             unreadReactions: unreadReactions, lastReadMessageId: lastReadMessageId,
             peerLastReadMessageId: peerLastReadMessageId,
             lastMessage: preview, mutedUntil: mutedUntil, muteOverride: muteOverride,
             isMuted: isMuted, archived: archived,
-            kind: kind, peer: peer)
+            kind: kind, peer: peer, membershipMessagePolicy: membershipMessagePolicy)
     }
 }
 

@@ -561,47 +561,49 @@
         }
 
         func testShortUnreadEntryReadsVisibleMessagesWithoutShowingJump() async throws {
-            let messages = try (1...3).map {
-                try TimelineTestFixtures.message(id: UInt64($0), senderID: 2, at: $0)
+            for (messageCount, unreadCount) in [(3, 2), (50, 1), (50, 3)] {
+                let messages = try (1...messageCount).map {
+                    try TimelineTestFixtures.message(id: UInt64($0), senderID: 2, at: $0)
+                }
+                let lastRead = MessageID(UInt64(messageCount - unreadCount))
+                var reads: [MessageID] = []
+                let model = ConversationTimelineModel(
+                    chatID: "chat", currentUserID: 1, isGroupChat: false,
+                    source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
+                    messageStore: ConversationMessageStore(),
+                    markRead: { reads.append($0) })
+                let parent = UIViewController()
+                let scene = try XCTUnwrap(
+                    UIApplication.shared.connectedScenes.first as? UIWindowScene)
+                let window = UIWindow(windowScene: scene)
+                window.rootViewController = parent
+                window.makeKeyAndVisible()
+                defer {
+                    model.close()
+                    window.isHidden = true
+                }
+                let controller = TimelineCollectionViewController(model: model, actions: .init())
+                controller.headerInset = 64.0 + 1.0 / 3.0
+                controller.composerInset = 80.0 + 2.0 / 3.0
+                parent.addChild(controller)
+                parent.view.addSubview(controller.view)
+                controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 700.0 + 1.0 / 3.0)
+                controller.didMove(toParent: parent)
+                model.updateReadState(unreadCount: Int64(unreadCount), lastReadMessageID: lastRead)
+                model.setReadTrackingActive(true)
+                await model.loadInitial(position: .unread(after: lastRead))
+                controller.viewDidLayoutSubviews()
+                try await Task.sleep(for: .milliseconds(200))
+                let collection = try XCTUnwrap(
+                    controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+                collection.layoutIfNeeded()
+                XCTAssertEqual(
+                    reads.last, messages.last?.id,
+                    "Entering \(messageCount) messages with \(unreadCount) unread must read the visible tail without a gesture."
+                )
+                XCTAssertTrue(model.state.live.isPinnedToBottom)
+                XCTAssertFalse(model.showsJumpToLatest)
             }
-            var reads: [MessageID] = []
-            let model = ConversationTimelineModel(
-                chatID: "chat", currentUserID: 1, isGroupChat: false,
-                source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
-                messageStore: ConversationMessageStore(),
-                markRead: { reads.append($0) })
-            let parent = UIViewController()
-            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-            let window = UIWindow(windowScene: scene)
-            window.rootViewController = parent
-            window.makeKeyAndVisible()
-            defer {
-                model.close()
-                window.isHidden = true
-            }
-            let controller = TimelineCollectionViewController(model: model, actions: .init())
-            controller.headerInset = 64
-            controller.composerInset = 80
-            parent.addChild(controller)
-            parent.view.addSubview(controller.view)
-            controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
-            controller.didMove(toParent: parent)
-            model.updateReadState(unreadCount: 2, lastReadMessageID: MessageID(1))
-            model.setReadTrackingActive(true)
-            await model.loadInitial(position: .unread(after: MessageID(1)))
-            controller.viewDidLayoutSubviews()
-            try await Task.sleep(for: .milliseconds(200))
-            let collection = try XCTUnwrap(
-                controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
-            collection.layoutIfNeeded()
-            XCTAssertLessThan(
-                collection.contentSize.height,
-                collection.bounds.height - collection.adjustedContentInset.top
-                    - collection.adjustedContentInset.bottom)
-            XCTAssertEqual(
-                reads, [MessageID(3)], "The entry scroll must report its settled visible row.")
-            XCTAssertTrue(model.state.live.isPinnedToBottom)
-            XCTAssertFalse(model.showsJumpToLatest)
         }
 
         func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
@@ -710,19 +712,21 @@
             try await show(
                 top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
             try await Task.sleep(for: .milliseconds(650))
-            XCTAssertEqual(reads, [], "A row clipped by both overlays must never be marked read.")
+            XCTAssertEqual(
+                reads, [messages[6].id],
+                "A message visible between the overlays is read even when the row is clipped.")
 
             try await show(top: try frame(5).midY, bottom: try frame(8).midY)
             try await Task.sleep(for: .milliseconds(650))
             XCTAssertEqual(
-                reads, [messages[7].id],
-                "Choose the last fully visible row, not the partially visible row under the composer."
+                reads, [messages[6].id, messages[8].id],
+                "Read through the last intersecting row, excluding rows wholly behind the composer."
             )
 
             try await show(top: try frame(14).midY, bottom: collection.contentSize.height)
             try await Task.sleep(for: .milliseconds(650))
             XCTAssertEqual(
-                reads, [messages[7].id, messages[15].id],
+                reads, [messages[6].id, messages[8].id, messages[15].id],
                 "Pending rows cannot advance read progress.")
         }
 

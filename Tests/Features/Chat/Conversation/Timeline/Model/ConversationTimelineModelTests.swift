@@ -997,7 +997,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         let viewport = TimelineViewport(
             firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1,
             distanceToTop: 0, distanceToBottom: 0, height: 600,
-            fullyVisibleMessageIDs: [MessageID(1), MessageID(2), MessageID(3)])
+            visibleMessageIDs: [MessageID(1), MessageID(2), MessageID(3)])
         model.viewportDidChange(viewport, reason: .layout, revision: model.updates.value.revision)
         XCTAssertFalse(
             model.state.live.followsLatest, "An unfinished reveal still owns navigation.")
@@ -1007,7 +1007,7 @@ final class ConversationTimelineModelTests: XCTestCase {
             viewport, reason: .programmatic, revision: model.updates.value.revision)
         await source.drain()
         XCTAssertEqual(
-            reads, [MessageID(3)], "Entering reads through the last fully visible message.")
+            reads, [MessageID(3)], "Entering reads through the last visible message.")
         XCTAssertTrue(model.state.live.isPinnedToBottom)
         XCTAssertTrue(model.state.live.followsLatest)
         XCTAssertFalse(
@@ -1396,7 +1396,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         model.close()
     }
 
-    func testEntryReadIsImmediateThenDwellUsesStableFullyVisibleCandidate()
+    func testEntryReadIsImmediateThenDwellUsesStableVisibleCandidate()
         async throws
     {
         var marked: [MessageID] = []
@@ -1424,7 +1424,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(
             marked, [MessageID(1)],
-            "Changing the latest fully visible message restarts subsequent dwell.")
+            "Changing the latest visible message restarts subsequent dwell.")
         reportVisible([MessageID(3)], to: model)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(
@@ -1440,7 +1440,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         reportVisible([], to: model)
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(
-            marked, [MessageID(1), MessageID(3)], "Losing all fully visible rows cancels dwell.")
+            marked, [MessageID(1), MessageID(3)], "Losing all visible rows cancels dwell.")
         model.close()
     }
 
@@ -1542,7 +1542,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         var duringAnimation = TimelineViewport(
             firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1, distanceToTop: 0,
             distanceToBottom: 0, height: 400)
-        duringAnimation.fullyVisibleMessageIDs = [MessageID(2)]
+        duringAnimation.visibleMessageIDs = [MessageID(2)]
         model.viewportDidChange(
             duringAnimation, reason: .programmatic, revision: model.updates.value.revision)
         try await Task.sleep(for: .milliseconds(600))
@@ -2267,7 +2267,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         var viewport = TimelineViewport(
             firstVisibleIndex: first, lastVisibleIndex: last, distanceToTop: 5_000,
             distanceToBottom: distanceToBottom, height: 400)
-        viewport.fullyVisibleMessageIDs = ids
+        viewport.visibleMessageIDs = ids
         model.viewportDidChange(
             viewport, reason: reason, revision: revision ?? model.updates.value.revision)
     }

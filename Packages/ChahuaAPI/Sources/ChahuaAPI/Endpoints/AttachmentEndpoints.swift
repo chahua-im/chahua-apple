@@ -1,5 +1,9 @@
 import Foundation
 
+public enum AttachmentUploadPurpose: String, Codable, Sendable {
+    case media, file, voice
+}
+
 /// Ephemeral upload instructions for one allocation-and-PUT attempt.
 public struct OutgoingUploadAllocation: Sendable {
     public let attachmentId: String
@@ -46,14 +50,15 @@ extension ChahuaClient {
     }
 
     public func requestAttachmentUpload(
-        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+        fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
+        size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation {
         let response = try await send(
             HTTPRequestSpec.json(
                 .post, ["attachments", "upload-url"],
                 body: AttachmentUploadBody(
                     filename: fileName, contentType: contentType, size: size,
-                    purpose: contentType.lowercased().hasPrefix("audio/") ? "voice" : "media",
+                    purpose: purpose.rawValue,
                     width: width, height: height, order: order
                 )),
             decoding: AttachmentUploadResponse.self

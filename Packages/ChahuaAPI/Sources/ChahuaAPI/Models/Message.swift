@@ -30,6 +30,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     public private(set) var forwardedFrom: ForwardedFromInfo?
     public private(set) var forwardedBundleId: String?
     public private(set) var forwardedPreview: ForwardedMessagesPreviewResponse?
+    public private(set) var systemKind: SystemMessageKind?
+    public private(set) var systemLinks: SystemMessageLinks?
 
     public init(
         id: MessageID, chatId: String, clientGeneratedId: String, messageType: MessageType,
@@ -39,7 +41,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         replyRootId: String? = nil, replyToMessage: MessagePreview? = nil,
         sticker: MessageStickerResponse? = nil, threadInfo: ThreadInfo? = nil,
         forwardedFrom: ForwardedFromInfo? = nil, forwardedBundleId: String? = nil,
-        forwardedPreview: ForwardedMessagesPreviewResponse? = nil
+        forwardedPreview: ForwardedMessagesPreviewResponse? = nil,
+        systemKind: SystemMessageKind? = nil, systemLinks: SystemMessageLinks? = nil
     ) {
         self.id = id
         self.chatId = chatId
@@ -61,6 +64,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         self.forwardedFrom = forwardedFrom
         self.forwardedBundleId = forwardedBundleId
         self.forwardedPreview = forwardedPreview
+        self.systemKind = systemKind
+        self.systemLinks = systemLinks
     }
 
     public init(from decoder: any Decoder) throws {
@@ -87,6 +92,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         forwardedBundleId = try container.decodeIfPresent(String.self, forKey: .forwardedBundleId)
         forwardedPreview = try container.decodeIfPresent(
             ForwardedMessagesPreviewResponse.self, forKey: .forwardedPreview)
+        systemKind = try container.decodeIfPresent(SystemMessageKind.self, forKey: .systemKind)
+        systemLinks = try container.decodeIfPresent(SystemMessageLinks.self, forKey: .systemLinks)
     }
 
     public var replyPreview: MessagePreview {
@@ -98,7 +105,9 @@ public struct MessageResponse: Codable, Hashable, Sendable {
             mentions: isDeleted ? [] : mentions, isDeleted: isDeleted,
             message: isDeleted ? nil : message,
             sticker: isDeleted ? nil : sticker.map { MessagePreviewSticker(emoji: $0.emoji) },
-            forwardedFromName: isDeleted ? nil : forwardedFrom?.sender.name
+            forwardedFromName: isDeleted ? nil : forwardedFrom?.sender.name,
+            systemKind: isDeleted ? nil : systemKind,
+            systemLinks: isDeleted ? nil : systemLinks
         )
     }
 
@@ -136,6 +145,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         copy.forwardedFrom = nil
         copy.forwardedBundleId = nil
         copy.forwardedPreview = nil
+        copy.systemKind = nil
+        copy.systemLinks = nil
         return copy
     }
 
@@ -182,12 +193,15 @@ public struct MessagePreview: Codable, Hashable, Sendable {
     public private(set) var message: String?
     public private(set) var sticker: MessagePreviewSticker?
     public private(set) var forwardedFromName: String?
+    public private(set) var systemKind: SystemMessageKind?
+    public private(set) var systemLinks: SystemMessageLinks?
 
     public init(
         id: MessageID, clientGeneratedId: String, createdAt: Date, sender: User,
         messageType: MessageType, attachments: [MessagePreviewAttachment] = [],
         mentions: [MentionInfo] = [], isDeleted: Bool = false, message: String? = nil,
-        sticker: MessagePreviewSticker? = nil, forwardedFromName: String? = nil
+        sticker: MessagePreviewSticker? = nil, forwardedFromName: String? = nil,
+        systemKind: SystemMessageKind? = nil, systemLinks: SystemMessageLinks? = nil
     ) {
         self.id = id
         self.clientGeneratedId = clientGeneratedId
@@ -200,6 +214,8 @@ public struct MessagePreview: Codable, Hashable, Sendable {
         self.message = message
         self.sticker = sticker
         self.forwardedFromName = forwardedFromName
+        self.systemKind = systemKind
+        self.systemLinks = systemLinks
     }
 
     public func redactedForDeletion() -> Self {
@@ -210,6 +226,8 @@ public struct MessagePreview: Codable, Hashable, Sendable {
         copy.attachments = []
         copy.mentions = []
         copy.forwardedFromName = nil
+        copy.systemKind = nil
+        copy.systemLinks = nil
         return copy
     }
 }
@@ -238,6 +256,19 @@ public struct AttachmentResponse: Codable, Hashable, Sendable {
     public let fileName: String
     public let width: Int32?
     public let height: Int32?
+
+    public init(
+        id: String, url: String, kind: String, size: Int64, fileName: String,
+        width: Int32? = nil, height: Int32? = nil
+    ) {
+        self.id = id
+        self.url = url
+        self.kind = kind
+        self.size = size
+        self.fileName = fileName
+        self.width = width
+        self.height = height
+    }
 }
 
 public struct MessageStickerResponse: Codable, Hashable, Sendable {
@@ -346,16 +377,21 @@ public struct ListMessagesResponse: Codable, Hashable, Sendable {
     public let newerCursor: MessageID?
     public let nextCursor: MessageID?
     public let prevCursor: MessageID?
+    public let membershipMessagePolicy: MembershipMessagePolicy?
+    public let chatSettings: ChatSettings?
 
     public init(
         messages: [MessageResponse], olderCursor: MessageID? = nil, newerCursor: MessageID? = nil,
-        nextCursor: MessageID? = nil, prevCursor: MessageID? = nil
+        nextCursor: MessageID? = nil, prevCursor: MessageID? = nil,
+        membershipMessagePolicy: MembershipMessagePolicy? = nil, chatSettings: ChatSettings? = nil
     ) {
         self.messages = messages
         self.olderCursor = olderCursor
         self.newerCursor = newerCursor
         self.nextCursor = nextCursor
         self.prevCursor = prevCursor
+        self.membershipMessagePolicy = membershipMessagePolicy
+        self.chatSettings = chatSettings
     }
 }
 

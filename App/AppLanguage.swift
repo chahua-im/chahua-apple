@@ -35,6 +35,20 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         Self(rawValue: UserDefaults.standard.string(forKey: storageKey) ?? "") ?? .system
     }
 
+    // Foundation's locale argument formats substitutions; it does not select the
+    // resource language. Cache the app's language bundles for eager String lookups.
+    nonisolated private static let mainLanguageBundles: [String: Bundle] = {
+        var bundles: [String: Bundle] = [:]
+        for language in ["en", "zh-Hans", "zh-Hant"] {
+            if let path = Bundle.main.path(forResource: language, ofType: "lproj"),
+                let bundle = Bundle(path: path)
+            {
+                bundles[language] = bundle
+            }
+        }
+        return bundles
+    }()
+
     /// Resolves a string using the current in-app language selection.
     ///
     /// Use this instead of `String(localized:)` where a `String` is required before
@@ -43,9 +57,23 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         _ key: String.LocalizationValue,
         table: String? = nil,
         bundle: Bundle? = nil,
-        comment: StaticString? = nil
+        comment: StaticString? = nil,
+        language: Self? = nil
     ) -> String {
-        String(
-            localized: key, table: table, bundle: bundle, locale: selected.locale, comment: comment)
+        let language = language ?? selected
+        let source = bundle ?? .main
+        let resources: Bundle
+        if language == .system {
+            resources = source
+        } else if source === Bundle.main {
+            resources = mainLanguageBundles[language.rawValue] ?? source
+        } else {
+            resources =
+                source.path(forResource: language.rawValue, ofType: "lproj")
+                .flatMap(Bundle.init(path:)) ?? source
+        }
+        return String(
+            localized: key, table: table, bundle: resources, locale: language.locale,
+            comment: comment)
     }
 }

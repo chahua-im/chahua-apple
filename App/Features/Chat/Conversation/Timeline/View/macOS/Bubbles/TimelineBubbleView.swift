@@ -88,6 +88,11 @@
                 view.configure(
                     title: title, row: row, fontSize: e.captionSize,
                     frames: binding.layout.titleFrames)
+                view.onActivate =
+                    !binding.context.isInteractionPreview
+                        && !binding.actions.isSelectingMessages
+                        && binding.actions.openMention != nil
+                    ? { binding.actions.openMention?(row.entry.senderID) } : nil
             } else {
                 headerView?.clear()
                 headerView?.isHidden = true
@@ -136,13 +141,13 @@
                     outgoing: row.isOutgoing,
                     enabled: !binding.context.isInteractionPreview
                         && !binding.actions.isSelectingMessages && row.entry.remoteMessage != nil
-                        && binding.actions.openForwardedMessages != nil)
+                        && binding.actions.canOpenCard(row.entry.remoteMessage))
                 view.onActivate = { [weak self] in
                     guard let binding = self?.binding,
                         case .message(let row) = binding.presentation.row,
                         let message = row.entry.remoteMessage
                     else { return }
-                    binding.actions.openForwardedMessages?(message)
+                    binding.actions.openCard(message)
                 }
             } else {
                 forwardedCardView?.isHidden = true
@@ -195,7 +200,6 @@
                             || binding.actions.interactionContext.isReadOnly
                             ? nil : binding.actions.openLink,
                         mentionAction: binding.context.isInteractionPreview
-                            || binding.actions.interactionContext.isReadOnly
                             ? nil : binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? p.metadata : nil,
                         failureAction: failureAction, geometry: geometry, fontSize: e.bodySize,
@@ -290,7 +294,7 @@
                     guard let self, !self.visible, self.voiceController === controller else {
                         return
                     }
-                    controller?.stop()
+                    controller?.releaseRow()
                 }
             }
             configureAudio()
@@ -428,8 +432,10 @@
                 clearAudio()
                 return
             }
-            let controller = voiceController ?? VoicePlaybackController()
+            let controller = VoicePlaybackController.controller(
+                for: binding.presentation.audioURL, reusing: voiceController)
             voiceController = controller
+            controller.setMessage(row.entry.presentationMessage)
             let environment = binding.presentation.environment
             let content = VoiceMessageBubbleView(
                 controller: controller, url: binding.presentation.audioURL,
@@ -452,10 +458,10 @@
         }
 
         private func clearAudio() {
-            // A recycled row no longer owns this controller. Retain it until
-            // teardown runs after the hosting view has left the update pass.
+            // Reuse releases only row-owned previews after the hosting update pass.
+            // The authenticated playback session retains the active voice message.
             if let controller = voiceController {
-                DispatchQueue.main.async { controller.stop() }
+                DispatchQueue.main.async { controller.releaseRow() }
             }
             voiceView?.removeFromSuperview()
             voiceView = nil
@@ -518,6 +524,10 @@
 
     @MainActor
     private final class TimelineHeaderView: NSView {
+        var onActivate: (() -> Void)? {
+            didSet { activationButton.isHidden = onActivate == nil }
+        }
+        private let activationButton = NSButton(frame: .zero)
         private let name = BubbleLabel()
         private let group = BubbleLabel()
         private let gender = BubbleLabel()
@@ -537,6 +547,13 @@
             addSubview(name)
             addSubview(group)
             addSubview(gender)
+            activationButton.title = ""
+            activationButton.isBordered = false
+            activationButton.setButtonType(.momentaryPushIn)
+            activationButton.target = self
+            activationButton.action = #selector(activate)
+            activationButton.isHidden = true
+            addSubview(activationButton)
             setAccessibilityElement(true)
             setAccessibilityRole(.staticText)
         }
@@ -563,6 +580,7 @@
             needsLayout = true
         }
         func clear() {
+            onActivate = nil
             title = nil
             row = nil
             itemFrames.removeAll(keepingCapacity: true)
@@ -574,11 +592,13 @@
         override func layout() {
             super.layout()
             name.frame = itemFrames.first ?? .zero
+            activationButton.frame = name.frame
             let groupFrame = itemFrames.count > 1 ? itemFrames[1] : .zero
             groupSurface.frame = groupFrame
             group.frame = groupFrame.insetBy(dx: min(5, groupFrame.width / 2), dy: 0)
             gender.frame = itemFrames.count > 2 ? itemFrames[2] : .zero
         }
+        @objc private func activate() { onActivate?() }
         override func viewDidChangeEffectiveAppearance() {
             super.viewDidChangeEffectiveAppearance()
             updateColors()

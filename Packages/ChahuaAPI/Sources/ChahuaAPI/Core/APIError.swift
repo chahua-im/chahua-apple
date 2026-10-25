@@ -17,6 +17,19 @@ public enum APIError: Error, Sendable {
     case encoding(description: String)
     case transport(URLError)
     case unexpectedResponse
+    /// Only the backend's structured speaking denial is classified; other 403s stay generic.
+    public var speakingRestriction: SpeakingMode? {
+        guard case .http(status: 403, body: let body) = self,
+            let restriction = try? JSONDecoder().decode(SpeakingRestriction.self, from: body),
+            restriction.code == "speakingRestricted"
+        else { return nil }
+        return restriction.effectiveSpeakingMode
+    }
+
+    private struct SpeakingRestriction: Decodable {
+        let code: String
+        let effectiveSpeakingMode: SpeakingMode
+    }
 
     /// UTF-8 response body for an `http` error, when the server returned one.
     public var bodyText: String? {

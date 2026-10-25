@@ -9,6 +9,7 @@ struct ChatListView: View {
     var archivedMode = false
     var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
     var onOpenArchived: (() -> Void)?
+    var onOpenFriendRequestHistory: (() -> Void)?
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
     let selectedConversationID: ConversationKey?
     let onSelectConversation: (ConversationListItem) -> Void
@@ -17,6 +18,7 @@ struct ChatListView: View {
     @State private var conversationStateConsumer = UUID()
     @State private var listSnapshotCache = ConversationListSnapshotCache()
     @State private var notificationChat: ChatListItem?
+    @State private var archiveConfirmation: ArchiveConfirmation?
     #if os(macOS)
         @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
@@ -25,6 +27,55 @@ struct ChatListView: View {
         let scope: ConversationListScope
         let archived: Bool
         let showThreadsInMessages: Bool
+    }
+
+    private struct ArchiveConfirmationContext: Equatable {
+        let currentUserID: Int32
+        let profileUserID: Int32?
+        let storeID: ObjectIdentifier
+        let list: LoadID
+        let selectedConversationID: ConversationKey?
+    }
+
+    private struct ArchiveConfirmation {
+        let conversation: ConversationKey
+        let action: ConversationListAction
+        let context: ArchiveConfirmationContext
+    }
+
+    private var archiveConfirmationContext: ArchiveConfirmationContext {
+        .init(
+            currentUserID: currentUserID, profileUserID: store.currentUserProfile?.uid,
+            storeID: ObjectIdentifier(store),
+            list: LoadID(
+                scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages),
+            selectedConversationID: selectedConversationID)
+    }
+
+    private enum ListAlert {
+        case archive(ArchiveConfirmation)
+        case failure(String)
+    }
+
+    private var listAlert: ListAlert? {
+        if let archiveConfirmation { return .archive(archiveConfirmation) }
+        return store.listActionError.map(ListAlert.failure)
+    }
+
+    private var listAlertTitle: LocalizedStringKey {
+        if case .archive(let confirmation) = listAlert {
+            return confirmation.action == .unarchive
+                ? "Unarchive conversation?" : "Archive conversation?"
+        }
+        return "Conversation actions"
+    }
+
+    private func dismissListAlert() {
+        if archiveConfirmation != nil {
+            archiveConfirmation = nil
+        } else {
+            store.listActionError = nil
+        }
     }
 
     private var chatPhase: ChatListLoadPhase {
@@ -81,6 +132,20 @@ struct ChatListView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
+            // Match the PWA Friends list: records remain visible even with no pending requests.
+            if !archivedMode, scope == .dms, let onOpenFriendRequestHistory {
+                Button(action: onOpenFriendRequestHistory) { friendRequestHistoryEntry }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("friend-request-records")
+                    #if os(macOS)
+                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                        .listRowInsets(EdgeInsets())
+                    #else
+                        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+                    #endif
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
             if items.isEmpty && isLoaded {
                 ChahuaEmptyStateView(
                     title: archivedMode ? "No archived conversations" : "No conversations",
@@ -120,8 +185,10 @@ struct ChatListView: View {
         .onChange(of: scope) { _, _ in revealedConversationID = nil }
         .onChange(of: archivedMode) { _, _ in revealedConversationID = nil }
         .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
+        .onChange(of: archiveConfirmationContext) { _, _ in archiveConfirmation = nil }
         .onDisappear {
             revealedConversationID = nil
+            archiveConfirmation = nil
             store.removeConversationStateScope(for: conversationStateConsumer)
         }
         .task(id: snapshot.conversationRefs) {
@@ -145,14 +212,25 @@ struct ChatListView: View {
             .frame(minWidth: 320, minHeight: 420)
         }
         .alert(
-            "Conversation actions",
+            listAlertTitle,
             isPresented: Binding(
-                get: { store.listActionError != nil },
-                set: { if !$0 { store.listActionError = nil } })
-        ) {
-            Button("OK") { store.listActionError = nil }
-        } message: {
-            Text(store.listActionError ?? "")
+                get: { listAlert != nil },
+                set: { if !$0 { dismissListAlert() } }),
+            presenting: listAlert
+        ) { alert in
+            switch alert {
+            case .archive(let confirmation):
+                if confirmation.action == .archive {
+                    Button("Archive") { confirmArchiveAction(confirmation) }
+                } else {
+                    Button("Unarchive") { confirmArchiveAction(confirmation) }
+                }
+                Button("Cancel", role: .cancel) { archiveConfirmation = nil }
+            case .failure:
+                Button("OK") { store.listActionError = nil }
+            }
+        } message: { alert in
+            if case .failure(let message) = alert { Text(message) }
         }
     }
 
@@ -184,6 +262,28 @@ struct ChatListView: View {
                     .background(.quaternary, in: Capsule())
                     .accessibilityLabel(badges.accessibilityValue(for: scope))
             }
+        }
+        .modifier(ConversationListRowLayout())
+        .contentShape(Rectangle())
+    }
+
+    private var friendRequestHistoryEntry: some View {
+        HStack(spacing: ChahuaTheme.Spacing.medium) {
+            AvatarFrame(diameter: ConversationListRow.avatarDiameter) { _ in
+                ChahuaTheme.ChatList.primary
+                    .overlay {
+                        Image(systemName: "person.crop.circle.badge.clock")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                    }
+            }
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Friend Requests").font(.headline)
+                Text("View friend request records")
+                    .modifier(ConversationListSubtitleStyle(isSelected: false))
+            }
+            Spacer(minLength: 8)
         }
         .modifier(ConversationListRowLayout())
         .contentShape(Rectangle())
@@ -310,7 +410,26 @@ struct ChatListView: View {
             notificationChat = chat
             return
         }
+        if action == .archive || action == .unarchive {
+            archiveConfirmation = ArchiveConfirmation(
+                conversation: item.id, action: action, context: archiveConfirmationContext)
+            return
+        }
         Task { await store.performListAction(action, conversation: item.id) }
+    }
+
+    private func confirmArchiveAction(_ confirmation: ArchiveConfirmation) {
+        // SwiftUI may clear the presentation binding before invoking the button.
+        // Validate the captured scope/account, not the now-dismissed UI state.
+        guard confirmation.context == archiveConfirmationContext else { return }
+        archiveConfirmation = nil
+        Task {
+            guard store.currentUserProfile?.uid == confirmation.context.currentUserID else {
+                return
+            }
+            await store.performListAction(
+                confirmation.action, conversation: confirmation.conversation)
+        }
     }
 
     private func loadScope() async {

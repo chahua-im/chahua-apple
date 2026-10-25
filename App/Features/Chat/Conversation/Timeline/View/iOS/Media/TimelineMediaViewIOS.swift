@@ -62,25 +62,33 @@
                 itemFrames =
                     count == 1
                     ? [CGRect(origin: .zero, size: mediaFrame.size)]
-                    : Array(binding.layout.mediaFrames.prefix(min(6, count)))
+                    : binding.layout.mediaFrames
                 for index in itemFrames.indices {
                     let tile = tile(at: index)
                     tile.frame = itemFrames[index]
-                    let overflow = index == 5 && count > 6 ? count - 5 : 0
+                    let overflow =
+                        row.entry.messageType != .file && index == 5 && count > 6
+                        ? count - 5 : 0
                     if !pending.isEmpty {
                         tile.configurePending(
                             pending[index], gallery: count > 1, overflow: overflow,
+                            asFile: row.entry.messageType == .file,
                             captionSize: environment.captionSize,
                             canOpen: !binding.context.isInteractionPreview
-                                && binding.actions.openMedia != nil)
+                                && (row.entry.messageType == .file
+                                    ? binding.actions.openAttachment != nil
+                                    : binding.actions.openMedia != nil)
+                        )
                     } else {
                         tile.configureRemote(
                             attachments[index], gallery: count > 1, overflow: overflow,
+                            asFile: row.entry.messageType == .file,
                             displayScale: environment.displayScale,
                             captionSize: environment.captionSize,
                             mediaContext: binding.mediaContext,
                             canOpen: !binding.context.isInteractionPreview
-                                && (attachments[index].isDocumentAttachment
+                                && (row.entry.messageType == .file
+                                    || attachments[index].isDocumentAttachment
                                     ? binding.actions.openAttachment != nil
                                     : binding.actions.openMedia != nil)
                         )
@@ -147,8 +155,17 @@
             guard let binding, !binding.context.isInteractionPreview,
                 case .message(let row) = binding.presentation.row
             else { return }
-            if let attachments = row.entry.presentationMessage?.attachments,
-                attachments.indices.contains(index), attachments[index].isDocumentAttachment
+            if case .pending(let pending) = row.entry, pending.attachments.indices.contains(index),
+                pending.messageType == .file
+            {
+                let file = pending.attachments[index]
+                binding.actions.openAttachment?(
+                    AttachmentResponse(
+                        id: file.id, url: URL(fileURLWithPath: file.sourcePath).absoluteString,
+                        kind: file.mimeType, size: file.byteCount, fileName: file.fileName))
+            } else if let attachments = row.entry.presentationMessage?.attachments,
+                attachments.indices.contains(index),
+                row.entry.messageType == .file || attachments[index].isDocumentAttachment
             {
                 binding.actions.openAttachment?(attachments[index])
             } else if let gallery = MessageImageGallery(entry: row.entry, attachmentIndex: index) {
@@ -257,7 +274,8 @@
         }
 
         func configureRemote(
-            _ attachment: AttachmentResponse, gallery: Bool, overflow: Int, displayScale: CGFloat,
+            _ attachment: AttachmentResponse, gallery: Bool, overflow: Int, asFile: Bool = false,
+            displayScale: CGFloat,
             captionSize: CGFloat, mediaContext: AppMediaContext?, canOpen: Bool
         ) {
             clearSticker()
@@ -265,13 +283,15 @@
             self.gallery = gallery
             self.captionSize = captionSize
             resetChrome()
-            let video = attachment.kind.lowercased().hasPrefix("video/")
+            let video = !asFile && attachment.kind.lowercased().hasPrefix("video/")
             configureSurface(gallery: gallery, video: video, overflow: overflow)
-            document = attachment.isDocumentAttachment
+            document = asFile || attachment.isDocumentAttachment
             if video {
-                // Neutral dark tile with a play badge; poster frames are not generated.
-                imageView.clear()
-                imageView.isHidden = true
+                imageView.configure(
+                    url: URL(string: attachment.url), contentMode: gallery ? .fill : .fit,
+                    animates: false, showsBlurredBackdrop: !gallery,
+                    thumbnailPixelSize: VideoPoster.pixelSize, mediaContext: mediaContext,
+                    isVideoPoster: true)
                 playBackground.isHidden = false
                 playSymbol.isHidden = false
             } else if document {
@@ -282,7 +302,7 @@
                 warningLabel.numberOfLines = 1
                 warningLabel.textAlignment = .left
                 warningLabel.lineBreakMode = .byTruncatingMiddle
-                documentSizeLabel.text = attachment.documentSize
+                documentSizeLabel.text = attachment.kind + " · " + attachment.documentSize
                 documentSizeLabel.textAlignment = .left
                 documentSizeLabel.font = .systemFont(ofSize: captionSize * 0.9)
                 documentSizeLabel.textColor = .secondaryLabel
@@ -311,8 +331,25 @@
 
         func configurePending(
             _ attachment: LocalOutgoingAttachment, gallery: Bool, overflow: Int,
+            asFile: Bool = false,
             captionSize: CGFloat, canOpen: Bool
         ) {
+            if asFile || attachment.isFile {
+                configureRemote(
+                    AttachmentResponse(
+                        id: attachment.id,
+                        url: URL(fileURLWithPath: attachment.sourcePath).absoluteString,
+                        kind: attachment.mimeType, size: attachment.byteCount,
+                        fileName: attachment.fileName),
+                    gallery: gallery, overflow: overflow, asFile: true, displayScale: 1,
+                    captionSize: captionSize, mediaContext: nil, canOpen: canOpen)
+                let state =
+                    attachment.error != nil
+                    ? "Upload failed"
+                    : attachment.isUploaded ? "Ready" : "Waiting to upload"
+                documentSizeLabel.text = state + " · " + attachment.mimeType
+                return
+            }
             clearSticker()
             let changed =
                 localPath != attachment.previewPath

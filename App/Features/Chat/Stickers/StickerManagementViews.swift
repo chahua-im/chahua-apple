@@ -58,6 +58,9 @@ struct ReactionManagementView: View {
             }
         }
         .navigationTitle("Reaction Management")
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task(id: currentUserID) {
             library.setAccount(currentUserID)
             pinnedReactionText = library.pinnedReactions.joined()
@@ -110,6 +113,7 @@ struct StickerPackManagementView: View {
         }
         .navigationTitle("Manage Sticker Packs")
         #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     EditButton()

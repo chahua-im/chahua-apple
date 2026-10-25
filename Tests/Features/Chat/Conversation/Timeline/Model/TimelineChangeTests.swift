@@ -52,6 +52,6 @@ final class TimelineChangeTests: XCTestCase {
     private func makeBuilder() -> TimelineRowsBuilder {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
-        return TimelineRowsBuilder(currentUserID: 1, isGroupChat: true, calendar: calendar)
+        return TimelineRowsBuilder(currentUserID: 1, calendar: calendar)
     }
 }

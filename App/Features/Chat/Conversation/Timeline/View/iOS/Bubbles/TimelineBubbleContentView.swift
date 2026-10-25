@@ -91,6 +91,11 @@
                 view.configure(
                     title: title, row: row, fontSize: environment.captionSize,
                     frames: binding.layout.titleFrames)
+                view.onActivate =
+                    !binding.context.isInteractionPreview
+                        && !binding.actions.isSelectingMessages
+                        && binding.actions.openMention != nil
+                    ? { binding.actions.openMention?(row.entry.senderID) } : nil
             } else {
                 headerView?.clear()
                 headerView?.isHidden = true
@@ -139,13 +144,13 @@
                     outgoing: row.isOutgoing,
                     enabled: !binding.context.isInteractionPreview
                         && !binding.actions.isSelectingMessages && row.entry.remoteMessage != nil
-                        && binding.actions.openForwardedMessages != nil)
+                        && binding.actions.canOpenCard(row.entry.remoteMessage))
                 view.onActivate = { [weak self] in
                     guard let binding = self?.binding,
                         case .message(let row) = binding.presentation.row,
                         let message = row.entry.remoteMessage
                     else { return }
-                    binding.actions.openForwardedMessages?(message)
+                    binding.actions.openCard(message)
                 }
             } else {
                 forwardedCardView?.isHidden = true
@@ -195,8 +200,7 @@
                         currentUserID: binding.context.currentUserID, isOutgoing: row.isOutgoing,
                         action: isPreview || binding.actions.interactionContext.isReadOnly
                             ? nil : binding.actions.openLink,
-                        mentionAction: isPreview || binding.actions.interactionContext.isReadOnly
-                            ? nil : binding.actions.openMention,
+                        mentionAction: isPreview ? nil : binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? presentation.metadata : nil,
                         failureAction: failureAction, geometry: geometry,
                         fontSize: environment.bodySize, document: presentation.markdown
@@ -275,7 +279,7 @@
                     guard let self, !self.visible, self.voiceController === controller else {
                         return
                     }
-                    controller?.stop()
+                    controller?.releaseRow()
                 }
             }
             configureAudio()
@@ -434,8 +438,10 @@
                 clearAudio()
                 return
             }
-            let controller = voiceController ?? VoicePlaybackController()
+            let controller = VoicePlaybackController.controller(
+                for: binding.presentation.audioURL, reusing: voiceController)
             voiceController = controller
+            controller.setMessage(row.entry.presentationMessage)
             let environment = binding.presentation.environment
             // Exception to native timeline sections: the existing UIKit timeline must
             // retain measured row geometry, but playback/seek is one shared SwiftUI
@@ -461,7 +467,7 @@
 
         private func clearAudio() {
             if let controller = voiceController {
-                DispatchQueue.main.async { controller.stop() }
+                DispatchQueue.main.async { controller.releaseRow() }
             }
             voiceView?.removeFromSuperview()
             voiceView = nil
@@ -507,6 +513,13 @@
 
     @MainActor
     private final class TimelineHeaderView: UIView {
+        var onActivate: (() -> Void)? {
+            didSet {
+                tapMarker.configure(.tap(onActivate))
+                accessibilityTraits = onActivate == nil ? .staticText : .button
+            }
+        }
+        private let tapMarker = MessageRowGestureMarker(frame: .zero)
         private let name = BubbleLabel()
         private let group = BubbleLabel()
         private let gender = BubbleLabel()
@@ -525,6 +538,7 @@
             addSubview(name)
             addSubview(group)
             addSubview(gender)
+            addSubview(tapMarker)
             isAccessibilityElement = true
             accessibilityTraits = .staticText
             registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
@@ -557,6 +571,7 @@
         }
 
         func clear() {
+            onActivate = nil
             title = nil
             row = nil
             itemFrames.removeAll(keepingCapacity: true)
@@ -569,10 +584,17 @@
         override func layoutSubviews() {
             super.layoutSubviews()
             name.frame = itemFrames.first ?? .zero
+            tapMarker.frame = name.frame
             let groupFrame = itemFrames.count > 1 ? itemFrames[1] : .zero
             groupSurface.frame = groupFrame
             group.frame = groupFrame.insetBy(dx: min(5, groupFrame.width / 2), dy: 0)
             gender.frame = itemFrames.count > 2 ? itemFrames[2] : .zero
+        }
+
+        override func accessibilityActivate() -> Bool {
+            guard let onActivate else { return false }
+            onActivate()
+            return true
         }
 
         private func updateColors() {

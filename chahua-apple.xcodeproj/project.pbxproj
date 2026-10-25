@@ -13,7 +13,7 @@
 		C0CC0001303BCC2200320001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0005303BCC2200320001 /* Kingfisher */; };
 		C0CC0002303BCC2200320001 /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = C0CC0006303BCC2200320001 /* Kingfisher */; };
 		C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C0EE0002303BCC2200320001 /* ChahuaAudio */; };
-		C0F0000130460000003200C0 /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = C0F0000230460000003200C0 /* ShareExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		C0F0000130460000003200C0 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C0F0000230460000003200C0 /* ShareExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		C0F0000330460000003200C0 /* ChahuaAPI in Frameworks */ = {isa = PBXBuildFile; productRef = C0F0000430460000003200C0 /* ChahuaAPI */; };
 		C0F1000130460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000330460000003200C0 /* libwebp */; };
 		C0F1000230460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000430460000003200C0 /* libwebp */; };
@@ -38,15 +38,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		C0F0000530460000003200C0 /* Embed App Extensions */ = {
+		C0F0000530460000003200C0 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				C0F0000130460000003200C0 /* ShareExtension.appex in Embed App Extensions */,
+				C0F0000130460000003200C0 /* ShareExtension.appex in Embed Foundation Extensions */,
 			);
-			name = "Embed App Extensions";
+			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -175,7 +175,7 @@
 				C0985FCA303BCC22003200C0 /* Sources */,
 				C0985FCB303BCC22003200C0 /* Frameworks */,
 				C0985FCC303BCC22003200C0 /* Resources */,
-				C0F0000530460000003200C0 /* Embed App Extensions */,
+				C0F0000530460000003200C0 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
@@ -256,7 +256,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2660;
-				LastUpgradeCheck = 2700;
+				LastUpgradeCheck = 2710;
 				TargetAttributes = {
 					C0985FCD303BCC22003200C0 = {
 						CreatedOnToolsVersion = 26.6;

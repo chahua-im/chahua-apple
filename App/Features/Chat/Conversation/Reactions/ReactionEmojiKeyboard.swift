@@ -9,6 +9,12 @@ struct ReactionEmojiKeyboard: View {
     private var recentStorage = MessageReactionPreferences.defaultRecentStorage
     @State private var selectedCategory = -1
     @State private var visiblePage: Int?
+    @State private var searchQuery = ""
+    @FocusState private var isSearchFocused: Bool
+
+    private var isSearching: Bool {
+        !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     init(eligibility: MessageReactionEligibility, onSelect: @escaping (String) -> Void) {
         self.eligibility = eligibility
@@ -33,16 +39,21 @@ struct ReactionEmojiKeyboard: View {
     private func keyboard(_ catalog: ReactionEmojiCatalog) -> some View {
         let entries = entries(in: catalog)
         return VStack(spacing: 0) {
+            searchField
             GeometryReader { geometry in
                 let columns = max(1, Int(max(0, geometry.size.width - 32) / 44))
                 let rows = max(1, Int(max(0, geometry.size.height - 16) / 48))
                 let pageSize = columns * rows
                 let pageCount = max(1, (entries.count + pageSize - 1) / pageSize)
                 if entries.isEmpty {
-                    Text("No recent emoji")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Text(
+                        isSearching
+                            ? AppLanguage.localized("No matching emoji")
+                            : AppLanguage.localized("No recent emoji")
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 0) {
@@ -61,11 +72,15 @@ struct ReactionEmojiKeyboard: View {
                     .scrollTargetBehavior(.paging)
                     .scrollPosition(id: $visiblePage)
                     .scrollIndicators(.hidden)
-                    .accessibilityLabel(categoryTitle(selectedCategory))
+                    .accessibilityLabel(
+                        isSearching
+                            ? AppLanguage.localized("Search results")
+                            : categoryTitle(selectedCategory)
+                    )
                     .accessibilityValue(
                         Text("Page \(min((visiblePage ?? 0) + 1, pageCount)) of \(pageCount)")
                     )
-                    .id("\(selectedCategory)-\(columns)-\(rows)")
+                    .id("\(selectedCategory)-\(searchQuery)-\(columns)-\(rows)")
                 }
             }
             Divider()
@@ -75,6 +90,37 @@ struct ReactionEmojiKeyboard: View {
         .padding(.top, 8)
         .padding(.bottom, 8)
         .onChange(of: selectedCategory) { _, _ in visiblePage = 0 }
+        .onChange(of: searchQuery) { _, _ in visiblePage = 0 }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Search emoji", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .focused($isSearchFocused)
+                .submitLabel(.done)
+                .onSubmit { isSearchFocused = false }
+                .accessibilityIdentifier("reaction-emoji-search")
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+                .accessibilityIdentifier("reaction-emoji-search-clear")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
     }
 
     private func emojiPage(
@@ -127,6 +173,8 @@ struct ReactionEmojiKeyboard: View {
     private func categoryButton(_ category: Int, symbol: String) -> some View {
         Button {
             selectedCategory = category
+            searchQuery = ""
+            isSearchFocused = false
         } label: {
             Image(systemName: symbol)
                 .font(.system(size: 18))
@@ -148,6 +196,7 @@ struct ReactionEmojiKeyboard: View {
     }
 
     private func entries(in catalog: ReactionEmojiCatalog) -> [ReactionEmojiCatalog.Entry] {
+        if isSearching { return catalog.search(searchQuery) }
         if selectedCategory == -1 {
             return MessageReactionPreferences.recent(from: recentStorage).compactMap {
                 catalog.entry(for: $0)

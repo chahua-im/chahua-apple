@@ -116,8 +116,10 @@
                     Image(systemName: action.symbol)
                         .font(.system(size: 22))
                     Text(
-                        action.label(
-                            hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
+                        action == .save && context.isSaved
+                            ? AppLanguage.localized("Remove Saved Message")
+                            : action.label(
+                                hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
                     )
                     .font(.caption2)
                     .multilineTextAlignment(.center)
@@ -134,8 +136,11 @@
             .accessibilityHint(enabled ? Text("") : Text("Not implemented yet"))
             .help(
                 enabled
-                    ? action.label(hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
-                    : AppLanguage.localized("Not implemented yet"))
+                    ? (action == .save && context.isSaved
+                        ? AppLanguage.localized("Remove Saved Message")
+                        : action.label(
+                            hasAttachments: row.entry.remoteMessage?.hasAttachments == true))
+                    : AppLanguage.localized("Unavailable"))
         }
 
         private func react(_ emoji: String) {

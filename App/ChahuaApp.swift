@@ -87,6 +87,7 @@ struct ChahuaApp: App {
                 realtimeCoordinator: compositionRoot.realtimeCoordinator,
                 notifications: compositionRoot.notifications
             )
+            .appAppearance()
             #if os(macOS)
                 .frame(minWidth: ChatSplitMetrics.splitThreshold)
             #endif

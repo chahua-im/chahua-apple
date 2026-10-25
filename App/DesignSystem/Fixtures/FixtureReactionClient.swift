@@ -143,7 +143,8 @@
             throw Failure.unexpectedOperation
         }
         func requestAttachmentUpload(
-            fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+            fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
+            size: Int64, width: Int, height: Int, order: Int
         ) async throws -> OutgoingUploadAllocation { throw Failure.unexpectedOperation }
         func listOwnedStickerPacks() async throws -> [StickerPackSummary] {
             throw Failure.unexpectedOperation

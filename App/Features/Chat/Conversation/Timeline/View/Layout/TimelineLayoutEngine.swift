@@ -41,7 +41,7 @@ struct TimelineLayoutEngine {
                 size: CGSize(width: e.timelineWidth, height: pixel(e.avatarSize + 8, e)),
                 frames: [:], textGeometry: nil, mediaFrames: [], reactionFrames: [])
         }
-        let centralX = pixel(12 + e.avatarSize + 8, e)
+        let centralX = pixel(TimelineRowMetrics.rowHorizontalInset + e.identityLaneWidth, e)
         let placeholder = row.entry.messageType == .placeholder
         let text =
             placeholder
@@ -62,10 +62,13 @@ struct TimelineLayoutEngine {
             local = []
         }
         let mediaCount = local.isEmpty ? remote.count : local.count
+        let fileMessage = row.entry.messageType == .file
         let preferredMedia =
-            local.isEmpty
-            ? BubbleMediaLayout.size(for: remote, availableWidth: c)
-            : BubbleMediaLayout.size(for: local, availableWidth: c)
+            fileMessage && mediaCount > 0
+            ? CGSize(width: min(284, c), height: CGFloat(mediaCount) * 82 - 2)
+            : local.isEmpty
+                ? BubbleMediaLayout.size(for: remote, availableWidth: c)
+                : BubbleMediaLayout.size(for: local, availableWidth: c)
         let hasMedia = preferredMedia != nil
         let metadata = p.metadata
         var preferredText: CGFloat = 0
@@ -263,7 +266,12 @@ struct TimelineLayoutEngine {
             height += mediaHeight
         } else if let preferredMedia {
             var mediaHeight: CGFloat
-            if mediaCount > 1 {
+            if fileMessage {
+                mediaHeight = CGFloat(mediaCount) * 82 - 2
+                mediaFrames = (0..<mediaCount).map {
+                    CGRect(x: 0, y: CGFloat($0) * 82, width: b, height: 80)
+                }
+            } else if mediaCount > 1 {
                 if !local.isEmpty,
                     let gallery = BubbleMediaLayout.gallery(for: local, resolvedWidth: b)
                 {
@@ -407,7 +415,9 @@ struct TimelineLayoutEngine {
                 x: bubbleX, y: bubbleY + height, width: b, height: footerHeight)
             height += footerHeight
         }
-        let showsAvatar = row.groupPosition == .single || row.groupPosition == .last
+        let showsAvatar =
+            e.showsMessageDetails
+            && (e.showAllAvatars || row.groupPosition == .single || row.groupPosition == .last)
         if showsAvatar && !plainText {
             height = max(height, e.avatarSize)
         }
@@ -566,31 +576,13 @@ struct TimelineLayoutEngine {
         let frame: CGRect
         let height: CGFloat
         switch p.row {
-        case .message(let row):
+        case .message:
             let width = max(0, min(520, e.timelineWidth - 32))
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = 3
-            paragraph.alignment = .center
-            let attributed = NSMutableAttributedString(
-                string: "",
-                attributes: [
-                    .font: BubbleNativeFont.systemFont(ofSize: 13), .paragraphStyle: paragraph,
-                ])
-            if let name = row.entry.remoteMessage?.sender.name, !name.isEmpty {
-                attributed.append(
-                    NSAttributedString(
-                        string: name + " ",
-                        attributes: [
-                            .font: BubbleNativeFont.systemFont(ofSize: 13, weight: .semibold),
-                            .paragraphStyle: paragraph,
-                        ]))
-            }
-            attributed.append(
-                NSAttributedString(
+            let attributed =
+                p.systemContent?.attributedText(color: bubbleLabelColor, linksEnabled: false)
+                ?? NSAttributedString(
                     string: text,
-                    attributes: [
-                        .font: BubbleNativeFont.systemFont(ofSize: 13), .paragraphStyle: paragraph,
-                    ]))
+                    attributes: [.font: BubbleNativeFont.systemFont(ofSize: 13)])
             let size = attributed.boundingRect(
                 with: CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil

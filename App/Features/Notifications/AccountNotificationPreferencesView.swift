@@ -122,6 +122,9 @@ private struct NotificationCategoryView: View {
         }
         .formStyle(.grouped)
         .navigationTitle(LocalizedStringKey(kind == .dm ? "Direct messages" : "Groups"))
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
         .disabled(saving)
         .task {
             do { try await store.loadNotificationDefaults() } catch is CancellationError {
@@ -371,6 +374,9 @@ private struct NotificationExceptionPicker: View {
             if let error { Text(verbatim: error).foregroundStyle(.red) }
         }
         .navigationTitle("Add exception")
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
         .searchable(text: $query, prompt: "Search")
         .disabled(saving || store.state.notificationDefaults == nil)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }

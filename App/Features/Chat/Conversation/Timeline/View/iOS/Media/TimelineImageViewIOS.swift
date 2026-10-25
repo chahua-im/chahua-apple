@@ -15,6 +15,7 @@
             let pixels: CGSize
             let context: ObjectIdentifier?
             let animates: Bool
+            let isVideoPoster: Bool
         }
 
         private let foreground = UIImageView(frame: .zero)
@@ -31,6 +32,8 @@
         private var active = false
         private var generation: UInt64 = 0
         private var imageTask: DownloadTask?
+        private var posterProvider: VideoPoster?
+        private var requestCacheKey: String?
         private var loading = false
         private var failed = false
         private var requestFinished = false
@@ -91,23 +94,29 @@
             NotificationCenter.default.removeObserver(self)
             MainActor.assumeIsolated {
                 imageTask?.cancel()
+                posterProvider?.cancel()
                 animatedForeground?.stopAnimating()
             }
         }
 
         func configure(
             url: URL?, contentMode: ScalingMode, animates: Bool, showsBlurredBackdrop: Bool,
-            thumbnailPixelSize: CGSize, mediaContext: AppMediaContext?
+            thumbnailPixelSize: CGSize, mediaContext: AppMediaContext?, isVideoPoster: Bool = false
         ) {
-            let pixels = CGSize(
-                width: max(1, thumbnailPixelSize.width), height: max(1, thumbnailPixelSize.height))
+            let pixels =
+                isVideoPoster
+                ? VideoPoster.pixelSize
+                : CGSize(
+                    width: max(1, thumbnailPixelSize.width),
+                    height: max(1, thumbnailPixelSize.height))
             let key = RequestKey(
                 url: url, pixels: pixels, context: mediaContext.map(ObjectIdentifier.init),
-                animates: animates)
+                animates: animates && !isVideoPoster, isVideoPoster: isVideoPoster)
             if key != requestKey || isLocal {
                 let sameMedia =
                     !isLocal && url != nil && requestKey?.url == url
                     && requestKey?.context == key.context
+                    && requestKey?.isVideoPoster == isVideoPoster
                 if sameMedia {
                     cancelRequests(preservingImages: true)
                     requestFinished = animates && requestKey?.animates == true && requestFinished
@@ -121,6 +130,15 @@
                 }
                 requestKey = key
                 self.mediaContext = mediaContext
+                if let url {
+                    if isVideoPoster {
+                        let provider = VideoPoster(url: url)
+                        posterProvider = provider
+                        requestCacheKey = provider.cacheKey
+                    } else {
+                        requestCacheKey = url.absoluteString
+                    }
+                }
                 failed = failed || url == nil
                 restoreFromMemory()
             } else {
@@ -262,16 +280,18 @@
         }
 
         private func restoreFromMemory() {
-            guard let key = requestKey, let url = key.url else { return }
+            guard let key = requestKey, let url = key.url, let cacheKey = requestCacheKey else {
+                return
+            }
             let cache = mediaContext?.cache ?? .default
             if !requestFinished,
                 let image = cache.retrieveImageInMemoryCache(
-                    forKey: url.absoluteString, options: imageOptions(for: key)
+                    forKey: cacheKey, options: imageOptions(for: key)
                 ), installImage(image, animates: key.animates)
             {
                 requestFinished = true
             }
-            guard decodedCGImage == nil else { return }
+            guard !key.isVideoPoster, decodedCGImage == nil else { return }
             // A different thumbnail size still has useful pixels. Never ask the
             // network or wait for disk just to restore a warm first frame.
             if let image = cache.retrieveImageInMemoryCache(
@@ -293,13 +313,21 @@
             else { return }
             restoreFromMemory()
             guard !requestFinished else { return }
+            let source: Source
+            if key.isVideoPoster {
+                let provider = posterProvider ?? VideoPoster(url: url)
+                posterProvider = provider
+                source = .provider(provider)
+            } else {
+                source = .network(url)
+            }
             let current = generation
             loading = true
             // The manager never mutates our views before the reuse guard runs. One
             // image supplies both the static frame and lazy animation, so a second
             // representation's failure cannot erase a successfully decoded frame.
             let task = KingfisherManager.shared.retrieveImage(
-                with: url, options: imageOptions(for: key),
+                with: source, options: imageOptions(for: key),
                 downloadTaskUpdated: { [weak self] task in
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == current, self.requestKey == key,
@@ -317,6 +345,7 @@
                             return
                         }
                         self.imageTask = nil
+                        self.posterProvider = nil
                         self.loading = false
                         self.requestFinished = true
                         switch result {
@@ -381,7 +410,7 @@
             foreground.image = firstFrame
             decodedCGImage = pixels
             failed = false
-            if let url = requestKey?.url {
+            if let key = requestKey, !key.isVideoPoster, let url = key.url {
                 (mediaContext?.cache ?? .default).store(
                     firstFrame, forKey: TimelineImageMemory.firstFrameKey(for: url), toDisk: false
                 )
@@ -427,6 +456,8 @@
             generation &+= 1
             imageTask?.cancel()
             imageTask = nil
+            posterProvider?.cancel()
+            posterProvider = nil
             animatedForeground?.stopAnimating()
             if !preservingImages {
                 foreground.image = nil
@@ -441,6 +472,7 @@
             cancelRequests(preservingImages: false)
             cancelBackdrop()
             requestKey = nil
+            requestCacheKey = nil
             mediaContext = nil
             decodedImage = nil
             decodedCGImage = nil

@@ -39,12 +39,18 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertTrue(recovered.dispatchClaimed)
         XCTAssertEqual(restored.first?.draft, draft.draft)
         _ = try await store!.fail(
-            chatID: "destination", threadID: "thread", clientGeneratedID: pending.clientGeneratedID)
+            chatID: "destination", threadID: "thread", clientGeneratedID: pending.clientGeneratedID,
+            speakingRestriction: .repliesOnly)
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restricted = try await store!.restore()
+        XCTAssertEqual(restricted.first?.outgoing.first?.speakingRestriction, .repliesOnly)
         let retried = try await store!.retry(
             chatID: "destination", threadID: "thread", clientGeneratedID: pending.clientGeneratedID,
             scope: .message)
         XCTAssertEqual(retried.outgoing.first?.forwardRequest, request)
         XCTAssertEqual(retried.outgoing.first?.clientGeneratedID, pending.clientGeneratedID)
+        XCTAssertNil(retried.outgoing.first?.speakingRestriction)
     }
 
     func testForwardedTextCannotBecomeEditableCompositionButCanBeRevoked() async throws {

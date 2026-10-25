@@ -68,6 +68,23 @@ struct TimelineWindow: Equatable {
         return count - previousCount
     }
 
+    /// Recalibrates an already loaded range without replacing its pagination boundaries.
+    mutating func mergePreservingCursors(
+        _ page: ListMessagesResponse, accepting: (MessageResponse) -> Bool
+    ) {
+        mergeAuthoritative(page.messages.filter(accepting))
+    }
+
+    mutating func removeAll(where shouldRemove: (MessageResponse) -> Bool) {
+        messages.removeAll { message in
+            guard shouldRemove(message) else { return false }
+            if !message.clientGeneratedId.isEmpty {
+                serverIDByClientID.removeValue(forKey: message.clientGeneratedId)
+            }
+            return true
+        }
+    }
+
     enum LiveInsertOutcome: Equatable {
         case appended
         case duplicate

@@ -67,6 +67,32 @@ private struct UpdateGroupMemberRoleBody: Encodable {
 }
 
 extension ChahuaClient {
+    public func updateGroupSpeakingMode(chatID: String, speakingMode: SpeakingMode) async throws
+        -> GroupSpeakingModeResponse
+    {
+        try await send(
+            HTTPRequestSpec.json(
+                .put, ["group", chatID, "speaking-mode"],
+                body: UpdateSpeakingModeBody(speakingMode: speakingMode)),
+            decoding: GroupSpeakingModeResponse.self)
+    }
+
+    public func updateMemberSpeakingMode(chatID: String, uid: Int32, speakingMode: SpeakingMode)
+        async throws -> MemberSpeakingModeResponse
+    {
+        try await send(
+            HTTPRequestSpec.json(
+                .put, ["group", chatID, "members", String(uid), "speaking-mode"],
+                body: UpdateSpeakingModeBody(speakingMode: speakingMode)),
+            decoding: MemberSpeakingModeResponse.self)
+    }
+
+    public func updateChatSettings(_ body: UpdateChatSettingsBody) async throws -> ChatSettings {
+        try await send(
+            HTTPRequestSpec.json(.put, ["users", "me", "chat-settings"], body: body),
+            decoding: ChatSettings.self)
+    }
+
     public func chatReadState(chatID: String) async throws -> ReadStateResponse {
         try await send(
             HTTPRequestSpec(method: .get, path: ["chats", chatID, "unread"]),

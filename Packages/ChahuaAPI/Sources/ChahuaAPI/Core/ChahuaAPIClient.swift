@@ -3,7 +3,7 @@
 /// Feature code should depend on this protocol instead of `ChahuaClient` so it can
 /// inject deterministic transports. Every chat and message identifier is an opaque
 /// server `String`; do not convert identifiers or cursors to numeric types.
-public protocol ChahuaAPIClient: Sendable {
+public protocol ChahuaAPIClient: SocialAPIClient, GroupAPIClient {
     /// Immutable forwarding operations; reuse the same key and source IDs for retries.
     func forwardMessage(chatID: String, messageID: MessageID, body: ForwardMessageBody)
         async throws -> MessageResponse
@@ -13,6 +13,14 @@ public protocol ChahuaAPIClient: Sendable {
         async throws -> ForwardedMessagesResponse
     func getSavedForwardedMessages(savedMessageID: String, bundleID: String?)
         async throws -> ForwardedMessagesResponse
+
+    /// Account-owned immutable snapshots, independent of later source changes.
+    func listSavedMessages(before: String?, limit: Int) async throws -> ListSavedMessagesResponse
+    func listChatSavedMessages(chatID: String, before: String?, limit: Int)
+        async throws -> ListSavedMessagesResponse
+    func saveMessage(messageID: MessageID) async throws -> SavedMessageResponse
+    func removeSavedMessage(savedMessageID: String) async throws
+    func removeSavedMessage(originalMessageID: MessageID) async throws
 
     /// Validates and installs a candidate JWT, returning the authenticated account.
     ///
@@ -59,9 +67,14 @@ public protocol ChahuaAPIClient: Sendable {
     /// Fetches the current attachment size limit with `GET /attachments/config`.
     func attachmentConfig() async throws -> AttachmentConfigResponse
 
+    /// Pages chat-wide attachments, including thread replies, by message cursor.
+    func listChatAttachments(chatID: String, kind: ChatAttachmentKind, before: MessageID?)
+        async throws -> ListChatAttachmentsResponse
+
     /// Allocates an attachment ID and presigned PUT URL; allocation is not upload completion.
     func requestAttachmentUpload(
-        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+        fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
+        size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation
 
     /// Fetches one server-ordered page from `GET /chats`.
@@ -76,6 +89,15 @@ public protocol ChahuaAPIClient: Sendable {
     /// Use `archived: false` for active threads and pass `nextCursor` as
     /// `ListThreadsQuery.before` for the next page.
     func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse
+
+    /// Lists all chat thread roots, independent of subscriptions, by exclusive root ID.
+    func listChatThreads(chatID: String, query: ListChatThreadsQuery) async throws
+        -> ListChatThreadsResponse
+
+    /// Lists root/reply authors in ascending UID order, not thread subscribers.
+    func listThreadParticipants(
+        chatID: String, threadID: String, query: ListThreadParticipantsQuery
+    ) async throws -> ListThreadParticipantsResponse
 
     /// Group mentions and replies share a newest-first message queue, scoped to the main chat or thread.
     func unreadMentions(chatID: String, threadID: MessageID?) async throws
@@ -120,6 +142,13 @@ public protocol ChahuaAPIClient: Sendable {
     /// Fetches current membership and DM peer identity with `GET /group/{chatID}`.
     func groupInfo(chatID: String) async throws -> GroupInfoResponse
 
+    func updateGroupSpeakingMode(chatID: String, speakingMode: SpeakingMode) async throws
+        -> GroupSpeakingModeResponse
+    func updateMemberSpeakingMode(chatID: String, uid: Int32, speakingMode: SpeakingMode)
+        async throws
+        -> MemberSpeakingModeResponse
+    func updateChatSettings(_ body: UpdateChatSettingsBody) async throws -> ChatSettings
+
     /// Searches current group members with authenticated `GET /group/{chatID}/members`.
     func listMembers(chatID: String, query: ListMembersQuery) async throws -> ListMembersResponse
 
@@ -159,6 +188,10 @@ public protocol ChahuaAPIClient: Sendable {
 
     /// Recalls a published message for all participants with `DELETE /chats/{chatID}/messages/{messageID}`.
     func deleteMessage(chatID: String, messageID: MessageID) async throws
+
+    /// Whole-batch validated recall; never implemented by sequential single-message deletion.
+    func bulkDeleteMessages(chatID: String, body: BulkDeleteMessagesBody) async throws
+        -> BulkDeletedPayload
 
     /// Idempotent reaction mutation at `/chats/{chatID}/messages/{messageID}/reactions/{emoji}`.
     func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws
@@ -236,6 +269,64 @@ public protocol ChahuaAPIClient: Sendable {
 }
 
 extension ChahuaAPIClient {
+    public func updateGroupSpeakingMode(chatID: String, speakingMode: SpeakingMode) async throws
+        -> GroupSpeakingModeResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func updateMemberSpeakingMode(chatID: String, uid: Int32, speakingMode: SpeakingMode)
+        async throws -> MemberSpeakingModeResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func updateChatSettings(_ body: UpdateChatSettingsBody) async throws -> ChatSettings {
+        throw APIError.unavailable
+    }
+
+    public func listChatThreads(chatID: String, query: ListChatThreadsQuery) async throws
+        -> ListChatThreadsResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func listThreadParticipants(
+        chatID: String, threadID: String, query: ListThreadParticipantsQuery
+    ) async throws -> ListThreadParticipantsResponse {
+        throw APIError.unavailable
+    }
+
+    public func listSavedMessages(before: String?, limit: Int)
+        async throws -> ListSavedMessagesResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func listChatSavedMessages(chatID: String, before: String?, limit: Int)
+        async throws -> ListSavedMessagesResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func saveMessage(messageID: MessageID) async throws -> SavedMessageResponse {
+        throw APIError.unavailable
+    }
+
+    public func removeSavedMessage(savedMessageID: String) async throws {
+        throw APIError.unavailable
+    }
+
+    public func removeSavedMessage(originalMessageID: MessageID) async throws {
+        throw APIError.unavailable
+    }
+
+    public func listChatAttachments(chatID: String, kind: ChatAttachmentKind, before: MessageID?)
+        async throws -> ListChatAttachmentsResponse
+    {
+        throw APIError.unavailable
+    }
+
     public func forwardMessage(chatID: String, messageID: MessageID, body: ForwardMessageBody)
         async throws -> MessageResponse
     {
@@ -338,6 +429,12 @@ extension ChahuaAPIClient {
 
     public func updateMessage(chatID: String, messageID: MessageID, body: UpdateMessageBody)
         async throws -> MessageResponse
+    {
+        throw APIError.unavailable
+    }
+
+    public func bulkDeleteMessages(chatID: String, body: BulkDeleteMessagesBody) async throws
+        -> BulkDeletedPayload
     {
         throw APIError.unavailable
     }

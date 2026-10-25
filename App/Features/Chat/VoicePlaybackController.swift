@@ -1,4 +1,5 @@
 import AVFoundation
+import ChahuaAPI
 import ChahuaAudio
 import Combine
 import Foundation
@@ -11,6 +12,31 @@ final class VoicePlaybackController: ObservableObject {
     @Published private(set) var position: TimeInterval = 0
     @Published private(set) var waveform: [Float] = []
     @Published private(set) var error: String?
+    private(set) var message: MessageResponse?
+
+    /// A row reattaches to the session-owned player when its message returns onscreen.
+    static func controller(for url: URL?, reusing controller: VoicePlaybackController?)
+        -> VoicePlaybackController
+    {
+        if let retained = VoicePlaybackSession.shared.controller, retained.source == url {
+            return retained
+        }
+        if let controller, VoicePlaybackSession.shared.controller !== controller {
+            return controller
+        }
+        return VoicePlaybackController()
+    }
+
+    func setMessage(_ message: MessageResponse?) { self.message = message }
+
+    /// Visibility/reuse may discard previews but must not stop session-owned playback.
+    func releaseRow() {
+        if VoicePlaybackSession.shared.controller !== self { stop() }
+    }
+
+    func setSpeed(_ speed: Float) {
+        player?.rate = speed
+    }
 
     private static weak var active: VoicePlaybackController?
     private static var recordingActive = false
@@ -87,6 +113,8 @@ final class VoicePlaybackController: ObservableObject {
                 throw VoicePlaybackError.unreadable
             }
             player = audio
+            audio.enableRate = true
+            audio.rate = VoicePlaybackSession.shared.speed
             duration = audio.duration
             waveform = prepared.waveform
             isLoading = false
@@ -124,6 +152,7 @@ final class VoicePlaybackController: ObservableObject {
             guard player.play() else { throw VoicePlaybackError.unreadable }
             Self.active = self
             error = nil
+            if message != nil { VoicePlaybackSession.shared.adopt(self) }
             isPlaying = true
             position = player.currentTime
             timer?.invalidate()
@@ -149,10 +178,11 @@ final class VoicePlaybackController: ObservableObject {
             && waveform.isEmpty && error == nil
     }
 
-    /// Releases downloaded/decoded files and invalidates in-flight loads on cell reuse.
+    /// Releases playback resources on row disposal or account teardown.
     func stop() {
         guard !isStopped else { return }
         generation = UUID()
+        VoicePlaybackSession.shared.remove(self)
         preparation?.cancel()
         preparation = nil
         pause()
@@ -167,7 +197,7 @@ final class VoicePlaybackController: ObservableObject {
         error = nil
     }
 
-    private func pause() {
+    func pause() {
         player?.pause()
         isPlaying = false
         timer?.invalidate()

@@ -6,9 +6,54 @@ import XCTest
 
 @MainActor
 final class MessageActionPolicyTests: XCTestCase {
-    private let writable = MessageInteractionContext(canWrite: true)
+    private let writable = MessageInteractionContext(canWrite: true, speakingMode: .unrestricted)
 
-    func testTextMessagesEnableCopyReplyAndThreadButNotUnimplementedActions() {
+    func testSpeakingModesRestrictWritesWithoutRemovingReactionDeleteOrForward() {
+        let cases: [(SpeakingMode, Bool, Bool, Bool)] = [
+            (.unrestricted, true, true, true),
+            (.threadsOnly, false, true, true),
+            (.repliesOnly, false, false, true),
+            (.readOnly, false, false, false),
+        ]
+        for (mode, mainAllowed, creationAllowed, replyAllowed) in cases {
+            let context = MessageInteractionContext(canWrite: true, speakingMode: mode)
+            let main = MessageActionPolicy(
+                messageType: .text, text: "Own message", isOwn: true,
+                hasReactions: true, context: context)
+            XCTAssertEqual(main.availability(of: .reply), mainAllowed ? .enabled : .hidden)
+            XCTAssertEqual(main.availability(of: .edit), mainAllowed ? .enabled : .hidden)
+            XCTAssertEqual(main.availability(of: .thread), creationAllowed ? .enabled : .hidden)
+            XCTAssertEqual(main.availability(of: .delete), .enabled)
+            XCTAssertEqual(main.availability(of: .forward), .enabled)
+            XCTAssertTrue(main.canReact)
+
+            var thread = context
+            thread.isThreadView = true
+            thread.hasExistingThread = true
+            let reply = MessageActionPolicy(
+                messageType: .text, text: "Own reply", isOwn: true,
+                isThreadReply: true, context: thread)
+            XCTAssertEqual(reply.availability(of: .reply), replyAllowed ? .enabled : .hidden)
+            XCTAssertEqual(reply.availability(of: .edit), replyAllowed ? .enabled : .hidden)
+            let root = MessageActionPolicy(
+                messageType: .text, text: "Thread root", isOwn: true, context: thread)
+            XCTAssertEqual(root.availability(of: .edit), mainAllowed ? .enabled : .hidden)
+
+            thread.hasExistingThread = false
+            XCTAssertEqual(thread.canSend, creationAllowed)
+        }
+    }
+
+    func testUnknownSpeakingModeDoesNotGrantGroupWritesButAdminAndDMRemainExempt() {
+        XCTAssertFalse(MessageInteractionContext(canWrite: true).canSend)
+        XCTAssertTrue(MessageInteractionContext(isDM: true, canWrite: true).canSend)
+        XCTAssertTrue(
+            MessageInteractionContext(canWrite: true, isAdmin: true, speakingMode: .readOnly)
+                .canSend)
+        XCTAssertFalse(MessageInteractionContext(isDM: true, isAdmin: true).canSend)
+    }
+
+    func testTextMessagesEnableAvailableHistoryAndConversationActions() {
         let policy = MessageActionPolicy(messageType: .text, text: "Hello", context: writable)
         XCTAssertEqual(policy.availability(of: .copy), .enabled)
         XCTAssertEqual(policy.availability(of: .reply), .enabled)
@@ -67,6 +112,62 @@ final class MessageActionPolicyTests: XCTestCase {
         XCTAssertEqual(
             MessageActionPolicy(messageType: .text, context: context).availability(of: .unpin),
             .hidden)
+    }
+
+    func testWritableDMPinsDoNotRequireAdminButGroupsAndInactiveDMsRemainRestricted() {
+        var dm = MessageInteractionContext(isDM: true, canWrite: true)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: dm).availability(of: .pin), .enabled)
+        dm.isPinned = true
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: dm).availability(of: .unpin), .enabled)
+        dm.canWrite = false
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: dm).availability(of: .unpin), .hidden)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: writable).availability(of: .pin),
+            .hidden)
+    }
+
+    func testMessageLinksKeepFullWidthIDsAndExcludeDMsAndPendingMessages() throws {
+        let link = try XCTUnwrap(
+            MessagePermalink(
+                chatID: "18446744073709551615", messageID: MessageID(9_007_199_254_740_993)))
+        let decoded = try XCTUnwrap(MessagePermalink(url: link.url))
+        XCTAssertEqual(decoded, link)
+        XCTAssertTrue(link.url.path.hasPrefix("/m/"))
+        XCTAssertEqual(link.url.scheme, "https")
+        XCTAssertEqual(link.url.host, "chahua.app")
+        XCTAssertEqual(
+            GroupInviteLink.url(code: "invitation-code")?.absoluteString,
+            "https://chahua.app/chats/join/invitation-code")
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: writable).availability(of: .copyLink),
+            .enabled)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: .init(isDM: true, canWrite: true))
+                .availability(of: .copyLink), .hidden)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, isPending: true, context: writable)
+                .availability(of: .copyLink), .hidden)
+        XCTAssertNil(MessagePermalink(url: URL(string: "https://example.com/m/not-a-message")!))
+    }
+
+    func testSavingRequiresLoadedScopeAndKeepsDeletedContentUnavailable() {
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: writable).availability(of: .save),
+            .hidden)
+        var loaded = writable
+        loaded.canSave = true
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, context: loaded).availability(of: .save),
+            .enabled)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .forwarded, context: loaded).availability(of: .save),
+            .enabled)
+        XCTAssertEqual(
+            MessageActionPolicy(messageType: .text, isDeleted: true, context: loaded)
+                .availability(of: .save), .hidden)
     }
 
     func testExistingThreadsAndThreadViewsCannotCreateNestedThreads() {

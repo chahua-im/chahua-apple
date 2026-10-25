@@ -104,7 +104,8 @@
                     mediaContext: mediaContext, actions: actions,
                     animation: animation,
                     onBlock: { pending in
-                        guard pending.body.messageType == .text, pending.forwardRequest == nil
+                        guard [.text, .file].contains(pending.body.messageType),
+                            pending.forwardRequest == nil
                         else { return }
                         self.target = nil
                         actions.blockPendingMessage?(pending)
@@ -164,6 +165,15 @@
                         {
                             self.target = nil
                             openDetails(message)
+                        } else if action == .save, let message = liveRow.entry.remoteMessage {
+                            self.target = nil
+                            actions.toggleSavedMessage?(message)
+                        } else if action == .copyLink, let message = liveRow.entry.remoteMessage,
+                            let link = MessagePermalink(
+                                chatID: message.chatId, messageID: message.id)
+                        {
+                            UIPasteboard.general.string = link.url.absoluteString
+                            self.target = nil
                         } else if action == .copy, let text = liveRow.entry.text {
                             UIPasteboard.general.string = text
                             self.target = nil
@@ -357,7 +367,8 @@
                                         ) { onBlock(pending) }
                                         .disabled(
                                             actions.blockPendingMessage == nil
-                                                || pending.body.messageType != .text
+                                                || ![.text, .file].contains(
+                                                    pending.body.messageType)
                                         )
                                         .frame(maxWidth: .infinity, minHeight: 44)
                                         Divider()
@@ -424,7 +435,9 @@
                     if showsEmojiKeyboard && unavailable { onClose() }
                 }
             }
-            .ignoresSafeArea()
+            // Keep the dock above the software keyboard while emoji search is
+            // focused; only the container's safe areas are intentionally ignored.
+            .ignoresSafeArea(.container)
         }
 
         private var emojiPopoverPresentation: Binding<Bool> {

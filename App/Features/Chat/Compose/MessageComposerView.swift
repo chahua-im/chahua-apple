@@ -26,6 +26,7 @@ struct MessageComposerView: View {
     var attachmentProgress: [String: Double] = [:]
     var compressionEnabled = true
     var onImportImages: (([URL]) async throws -> Void)? = nil
+    var onImportFiles: (([URL]) async throws -> Void)? = nil
     var onRemoveAttachment: ((String) async throws -> Void)? = nil
     var onRetryAttachment: ((String) async throws -> Void)? = nil
     var onCompressionChanged: ((Bool) async throws -> Void)? = nil
@@ -96,7 +97,7 @@ struct MessageComposerView: View {
     private var hasContent: Bool { hasText || (editingMessage == nil && !attachments.isEmpty) }
     private var canAcquire: Bool {
         isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
-            && editingMessage == nil && onImportImages != nil
+            && editingMessage == nil && (onImportImages != nil || onImportFiles != nil)
             && !isCameraPresented
     }
     private var canPickSticker: Bool {
@@ -191,6 +192,7 @@ struct MessageComposerView: View {
                             Button("Take Photo", systemImage: "camera") {
                                 takePhoto()
                             }
+                            .disabled(onImportImages == nil)
                         #endif
                         Button("Photos", systemImage: "photo.on.rectangle") {
                             dismissStickerPicker(restoreFocus: false)
@@ -198,12 +200,14 @@ struct MessageComposerView: View {
                             isInputFocused = false
                             showsPhotos = true
                         }
+                        .disabled(onImportImages == nil)
                         Button("Files", systemImage: "folder") {
                             dismissStickerPicker(restoreFocus: false)
                             input.settleNativeInput()
                             isInputFocused = false
                             showsFiles = true
                         }
+                        .disabled(onImportFiles == nil)
                     } label: {
                         Image(systemName: "paperclip")
                             .font(.system(size: 20))
@@ -215,7 +219,7 @@ struct MessageComposerView: View {
                     .disabled(!canAcquire)
                     .accessibilityLabel(
                         editingMessage == nil
-                            ? "Add media" : "Attachments cannot be changed while editing"
+                            ? "Add attachments" : "Attachments cannot be changed while editing"
                     )
                     .modifier(ChatGlassSurface(cornerRadius: 22))
                 }
@@ -240,6 +244,7 @@ struct MessageComposerView: View {
                                 .padding(.leading, 12)
                                 .padding(.vertical, 12)
                                 .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
+                                .modifier(ComposerFormattingShortcuts(input: input))
                                 .focused($isInputFocused)
                                 #if !os(macOS)
                                     .onSubmit(keyboardSubmit)
@@ -464,16 +469,16 @@ struct MessageComposerView: View {
             }
         }
         .fileImporter(
-            isPresented: $showsFiles, allowedContentTypes: [.image, .movie],
+            isPresented: $showsFiles, allowedContentTypes: [.item],
             allowsMultipleSelection: true
         ) { result in
             switch result {
             case .success(let urls):
-                performImageOperation(opensDialog: true) { try await onImportImages?(urls) }
+                performImageOperation(opensDialog: true) { try await onImportFiles?(urls) }
             case .failure(let error): imageError = error.localizedDescription
             }
         }
-        .onDrop(of: [.image, .movie, .fileURL], isTargeted: nil) { providers in
+        .onDrop(of: [.item, .fileURL], isTargeted: nil) { providers in
             guard canAcquire else { return false }
             return attachmentState.acceptDrop(providers)
         }
@@ -640,10 +645,17 @@ struct MessageComposerView: View {
         performImageOperation(opensDialog: true) {
             var urls: [URL] = []
             defer { ComposerImageAcquisition.removeTemporary(urls) }
-            for provider in providers {
-                urls.append(try await ComposerImageAcquisition.materialize(provider))
+            for provider in providers where ComposerImageAcquisition.supports(provider) {
+                let url = try await ComposerImageAcquisition.materialize(provider)
+                urls.append(url)
+                if ComposerImageAcquisition.isFile(provider, materializedURL: url) {
+                    guard let onImportFiles else { throw APIError.unavailable }
+                    try await onImportFiles([url])
+                } else {
+                    guard let onImportImages else { throw APIError.unavailable }
+                    try await onImportImages([url])
+                }
             }
-            try await onImportImages?(urls)
         }
     }
 
@@ -683,7 +695,7 @@ struct MessageComposerView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Cancel reply")
-            .disabled(!isEnabled || voiceRecorder.isBusy)
+            .disabled(voiceRecorder.isBusy)
             .modifier(ComposerSendFocus())
         }
         .padding(.horizontal, 12)
@@ -717,7 +729,6 @@ struct MessageComposerView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Cancel edit")
-            .disabled(!isEnabled)
             .modifier(ComposerSendFocus())
         }
         .padding(.horizontal, 12)

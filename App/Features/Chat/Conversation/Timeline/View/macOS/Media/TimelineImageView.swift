@@ -8,12 +8,14 @@
     @MainActor
     final class TimelineImageView: NSView {
         enum ContentMode { case fit, fill }
+        enum SourceKind { case image, videoPoster }
 
         private struct RequestKey: Equatable {
             let url: URL?
             let pixels: CGSize
             let context: ObjectIdentifier?
             let animates: Bool
+            let sourceKind: SourceKind
         }
 
         private let foreground = NSImageView(frame: .zero)
@@ -30,6 +32,8 @@
         private var active = false
         private var generation: UInt64 = 0
         private var imageTask: DownloadTask?
+        private var requestSource: Source?
+        private var videoPosterProvider: VideoPoster?
         private var loading = false
         private var failed = false
         private var requestFinished = false
@@ -90,6 +94,7 @@
             NotificationCenter.default.removeObserver(self)
             MainActor.assumeIsolated {
                 imageTask?.cancel()
+                videoPosterProvider?.cancel()
                 animatedForeground?.stopAnimating()
             }
         }
@@ -100,17 +105,21 @@
             animates: Bool,
             showsBlurredBackdrop: Bool,
             thumbnailPixelSize: CGSize,
-            mediaContext: AppMediaContext?
+            mediaContext: AppMediaContext?,
+            sourceKind: SourceKind = .image
         ) {
+            let requestedPixels =
+                sourceKind == .videoPoster ? VideoPoster.pixelSize : thumbnailPixelSize
             let pixels = CGSize(
-                width: max(1, thumbnailPixelSize.width), height: max(1, thumbnailPixelSize.height))
+                width: max(1, requestedPixels.width), height: max(1, requestedPixels.height))
             let key = RequestKey(
                 url: url, pixels: pixels, context: mediaContext.map(ObjectIdentifier.init),
-                animates: animates)
+                animates: animates && sourceKind == .image, sourceKind: sourceKind)
             if key != requestKey || isLocal {
                 let sameMedia =
                     !isLocal && url != nil && requestKey?.url == url
                     && requestKey?.context == key.context
+                    && requestKey?.sourceKind == sourceKind
                 if sameMedia {
                     cancelRequests(preservingImages: true)
                     requestFinished = animates && requestKey?.animates == true && requestFinished
@@ -124,6 +133,7 @@
                 }
                 requestKey = key
                 self.mediaContext = mediaContext
+                prepareSource(for: key)
                 failed = failed || url == nil
                 restoreFromMemory()
             } else {
@@ -273,17 +283,33 @@
             return options
         }
 
+        private func prepareSource(for key: RequestKey) {
+            guard let url = key.url else {
+                requestSource = nil
+                return
+            }
+            if key.sourceKind == .videoPoster {
+                let provider = VideoPoster(url: url)
+                videoPosterProvider = provider
+                requestSource = .provider(provider)
+            } else {
+                requestSource = .network(url)
+            }
+        }
+
         private func restoreFromMemory() {
-            guard let key = requestKey, let url = key.url else { return }
+            guard let key = requestKey, let url = key.url, let source = requestSource else {
+                return
+            }
             let cache = mediaContext?.cache ?? .default
             if !requestFinished,
                 let image = cache.retrieveImageInMemoryCache(
-                    forKey: url.absoluteString, options: imageOptions(for: key)
+                    forKey: source.cacheKey, options: imageOptions(for: key)
                 ), installImage(image, animates: key.animates)
             {
                 requestFinished = true
             }
-            guard decodedCGImage == nil else { return }
+            guard decodedCGImage == nil, key.sourceKind == .image else { return }
             // A different thumbnail size still has useful pixels. Never ask the
             // network or wait for disk just to restore a warm first frame.
             if let image = cache.retrieveImageInMemoryCache(
@@ -301,17 +327,21 @@
 
         private func startMissingRequests() {
             guard active, !isLocal, !loading, !failed, !requestFinished,
-                let key = requestKey, let url = key.url
+                let key = requestKey, key.url != nil
             else { return }
             restoreFromMemory()
             guard !requestFinished else { return }
+            if key.sourceKind == .videoPoster, videoPosterProvider == nil {
+                prepareSource(for: key)
+            }
+            guard let source = requestSource else { return }
             let current = generation
             loading = true
             // The manager never mutates our views before the reuse guard runs. One
             // image supplies both the static frame and lazy animation, so a second
             // representation's failure cannot erase a successfully decoded frame.
             let task = KingfisherManager.shared.retrieveImage(
-                with: url, options: imageOptions(for: key),
+                with: source, options: imageOptions(for: key),
                 downloadTaskUpdated: { [weak self] task in
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == current, self.requestKey == key,
@@ -393,7 +423,7 @@
             foreground.image = firstFrame
             decodedCGImage = pixels
             failed = false
-            if let url = requestKey?.url {
+            if let key = requestKey, key.sourceKind == .image, let url = key.url {
                 (mediaContext?.cache ?? .default).store(
                     firstFrame, forKey: TimelineImageMemory.firstFrameKey(for: url), toDisk: false
                 )
@@ -440,6 +470,8 @@
             generation &+= 1
             imageTask?.cancel()
             imageTask = nil
+            videoPosterProvider?.cancel()
+            videoPosterProvider = nil
             animatedForeground?.stopAnimating()
             if !preservingImages {
                 foreground.image = nil
@@ -454,6 +486,7 @@
             cancelRequests(preservingImages: false)
             cancelBackdrop()
             requestKey = nil
+            requestSource = nil
             mediaContext = nil
             decodedImage = nil
             decodedCGImage = nil
@@ -531,4 +564,5 @@
             return backdropContext.createCGImage(blurred, from: crop)
         }
     }
+
 #endif

@@ -89,6 +89,20 @@
                 requestDisplayUpdate()
             }
         }
+        var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars {
+            didSet {
+                guard showAllAvatars != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
+        var showDmDetails = ConversationTimelinePreferences.defaultShowDmDetails {
+            didSet {
+                guard showDmDetails != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
         var headerInset: CGFloat = 0 {
             didSet {
                 guard headerInset != oldValue, isViewLoaded else { return }
@@ -352,7 +366,9 @@
                     systemSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
                     defaultSize: 10),
                 layoutDirection: view.userInterfaceLayoutDirection == .rightToLeft
-                    ? .rightToLeft : .leftToRight, language: appLanguage)
+                    ? .rightToLeft : .leftToRight, language: appLanguage,
+                showAllAvatars: showAllAvatars,
+                showsMessageDetails: model.isGroupChat || showDmDetails)
         }
 
         private func exactLayout(for row: TimelineRow, allowingStaleOffscreen: Bool = false)
@@ -928,6 +944,8 @@
                     ? nil : { [weak self] in self?.actions.openSticker?($0) },
                 openReply: actions.openReply == nil
                     ? nil : { [weak self] in self?.actions.openReply?($0) },
+                openSystemMessage: actions.openSystemMessage == nil
+                    ? nil : { [weak self] in self?.actions.openSystemMessage?($0) },
                 openReactionDetails: actions.openReactionDetails == nil
                     ? nil : { [weak self] in self?.actions.openReactionDetails?($0) },
                 replyToMessage: actions.replyToMessage == nil
@@ -1087,13 +1105,13 @@
                 width: max(0, visible.width - insets.left - insets.right),
                 height: max(0, visible.height - insets.top - insets.bottom)
             )
-            var fullyVisibleMessageIDs: [MessageID] = []
+            var visibleMessageIDs: [MessageID] = []
             if hasVisibleRows, !unobscured.isEmpty {
                 for index in range.location..<min(NSMaxRange(range), rows.count) {
                     guard let id = rows[index].messageID,
-                        unobscured.contains(tableView.rect(ofRow: index))
+                        unobscured.intersects(tableView.rect(ofRow: index))
                     else { continue }
-                    fullyVisibleMessageIDs.append(id)
+                    visibleMessageIDs.append(id)
                 }
             }
             settledPosition = capturePosition()
@@ -1105,7 +1123,7 @@
                     distanceToBottom: max(
                         0, tableView.bounds.maxY + scrollView.contentInsets.bottom - visible.maxY),
                     height: visible.height,
-                    fullyVisibleMessageIDs: fullyVisibleMessageIDs
+                    visibleMessageIDs: visibleMessageIDs
                 ), reason: reason, revision: installedRevision)
         }
     }

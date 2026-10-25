@@ -1,8 +1,8 @@
-# PWA → Apple feature parity plan
+# PWA → Apple feature parity and device-verification checklist
 
-Review date: 2026-10-24. Baseline: the current `chahua/pwa` implementation, compared with the native Apple client on **iOS and macOS**. Flutter is not a reference for this plan and was not inspected.
+Review date: 2026-10-25. Baseline: the current `chahua/pwa` implementation, compared with the native Apple client on **iOS and macOS**. Incremental review includes speaking restrictions (`cba43b0d`), membership visibility (`abc4dd1e`), membership reconciliation (`2884ac6e`), member management (`367b5243`), startup recovery (`079dc5fe`), system targets (`d9a7ecdf`), and pending-forward destination changes (`8c335f31`). Flutter is not a reference and was not inspected.
 
-This is a **source-reviewed implementation backlog**, not a runtime certification. A PWA feature counts only when a reachable screen/action has an implementation behind it, not merely a generated endpoint. “Missing” means no corresponding native workflow was found in the inspected UI/API paths; “partial” means Apple already supplies part of the capability. Native files were changing during review; recheck each item before implementation, particularly relationship actions and the emoji picker.
+This checklist separates the original source-reviewed gaps from the implementation pass below. **Unchecked capability boxes remain open until the acceptance scenario is verified on both iOS and macOS.** “Implemented; device verification pending” means code and navigation were added, not that an authenticated workflow has passed on a device. The original starting-point notes are historical context, not a description of the updated client.
 
 ## Working rules
 
@@ -12,172 +12,413 @@ This is a **source-reviewed implementation backlog**, not a runtime certificatio
 - Add missing native API models/endpoints using the current PWA request/response contract; do not assume the older checked-in Apple OpenAPI snapshot contains every current operation. Existing PWA calls establish a contract to inspect, not proof that every server deployment supports it.
 - Verify mutations with a local backend/development database or isolated request interception. Do not write test data or upload files to production; the PWA development proxy can target production.
 - Keep this document current as capabilities land. Do not inherit completion marks or runtime claims from the old Flutter checklist.
+- **Entry-point decision:** The conversation-list account avatar opens a menu for Settings, Directory, Friend Requests, Create Group, Join Group, and Saved Messages. Friend Requests and its profiles push in the conversation-list navigation (compact) or only the sidebar/list pane (split), preserving the selected conversation. Other shared feature sheets preserve the underlying conversation/draft; their profiles push within that sheet. Content-browser source/thread navigation pushes above the browser so Back retains its page/position.
+- **Public-link / Associated Domains decision:** Public message and invitation links use `https://chahua.app`, independent of the API/asset origin `https://chahui.app`. Both Apple targets declare `applinks:chahua.app`; regenerate signing profiles with Associated Domains enabled. `https://chahua.app/.well-known/apple-app-site-association` now directly returns HTTP 200 and `application/json`, authorizing `9422PL3GFR.app.chahua.chat` for `/m/`* and `/chats/join/*`. The PWA publishes the association asset automatically. Signed OS delivery still needs on-device verification; a successful website response does not certify that delivery.
+
+
 
 ## Recommended delivery order
 
-| Phase | Work | Dependency / rationale |
-| --- | --- | --- |
-| 1 | M1–M5: complete operations in existing conversations | Useful without a new social-navigation surface; closes explicit unavailable actions and narrower native behavior. |
-| 2 | S1–S4 and G1–G4: discovery, friends, safety settings, group lifecycle | Establish S1 profile navigation before request entry points and profile-based management; G2 invite redemption must work before G3 invite sharing is complete. |
-| 3 | B1–B4: chat/thread browsing and continuous voice playback | Reuse S1 for participant profiles and M2 for message-target navigation; media browsing can ship independently of file sending. |
-| 4 | U1–U4: presentation and input preferences | Independent of social APIs. Emoji search extends the existing picker rather than replacing it. |
+
+| Phase | Work                                                                  | Dependency / rationale                                                                                                                                         |
+| ----- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | M1–M5: complete operations in existing conversations                  | Useful without a new social-navigation surface; closes explicit unavailable actions and narrower native behavior.                                              |
+| 2     | S1–S4 and G1–G4: discovery, friends, safety settings, group lifecycle | Establish S1 profile navigation before request entry points and profile-based management; G2 invite redemption must work before G3 invite sharing is complete. |
+| 3     | B1–B4: chat/thread browsing and continuous voice playback             | Reuse S1 for participant profiles and M2 for message-target navigation; media browsing can ship independently of file sending.                                 |
+| 4     | U1–U4: presentation and input preferences                             | Independent of social APIs. Emoji search extends the existing picker rather than replacing it.                                                                 |
+
 
 These are recommended batches, not a requirement to finish unrelated work before shipping an individual item.
 
 ## Phase 1 — Existing conversation capabilities
 
-### M1 — Saved-message snapshots · Missing
+
+
+### M1 — Saved-message snapshots · Implemented; device verification pending
 
 - [ ] Add **Save / remove saved message** and a global **Saved Messages** destination with paging, captured-content viewing, source navigation when available, and removal. Preserve saved snapshots when the source is edited, recalled, or no longer accessible; saved forwarded records must use saved-message authorization, not source-chat access. Sticker favorites and shared pins remain separate features.
-- **PWA evidence:** [saved-message store](../../chahua/pwa/src/app/messages/saved-message-store.ts) (`save`/remove mutations), [saved-message list](../../chahua/pwa/src/app/messages/saved-message-list/saved-message-list.ts) (paging and source navigation), [routes](../../chahua/pwa/src/app/app.routes.ts) (`chats/saved` and saved forwarded records).
-- **Apple starting points:** [message action policy](../App/Features/Chat/Conversation/Timeline/View/Interaction/MessageActionPolicy.swift) marks `.save` as `.unimplemented`; [forwarding endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/ForwardingEndpoints.swift) can read a saved forwarded record but do not implement the save/list/remove workflow. Add the destination to [the shell](../App/AuthenticatedShell.swift).
-- **Acceptance:** Save text, media, and a forwarded record; reopen and page the global list; change/remove the source and confirm the captured content remains viewable; inaccessible source navigation fails clearly without losing the snapshot; unsave removes only the saved item.
 
-### M2 — Copy and open message links · Missing
+- **PWA evidence:** [saved-message store](../../chahua/pwa/src/app/messages/saved-message-store.ts) (`save`/remove mutations), [saved-message list](../../chahua/pwa/src/app/messages/saved-message-list/saved-message-list.ts) (paging and source navigation), [routes](../../chahua/pwa/src/app/app.routes.ts) (`chats/saved` and saved forwarded records).
+- **Original gap:** Save was explicitly unavailable in [message action policy](../App/Features/Chat/Conversation/Timeline/View/Interaction/MessageActionPolicy.swift); only saved-forwarded reading existed. **Current implementation:** [Saved](../App/Features/Chat/Saved/) and [forwarding endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/ForwardingEndpoints.swift).
+- **Acceptance:** Save text, media, and a forwarded record; reopen and page the global list; change/remove the source and confirm the captured content remains viewable; inaccessible source navigation fails clearly without losing the snapshot; unsave removes only the saved item.
+- **Re-evaluation / decision:** Added account-menu Saved Messages, paging, save/remove actions, and captured-content detail using a dedicated read-only record timeline. Snapshot state is account-scoped and independent of live edits/recalls/membership changes. Saved forwarded content, including nested bundles, uses saved-row authorization. Source lookup is a separate authorized action; failure leaves the snapshot intact. Removing a saved row never recalls its source.
+- **Failure UX decision:** Background saved-status loading never interrupts conversation navigation with a modal. A chat-scoped error and Retry remain visible above the composer; unknown status is not treated as unsaved, so Save/remove stays unavailable until reload succeeds. Explicit mutation failures keep an actionable retry alert; global list failures keep their separate paging retry.
+- **macOS menu correction:** Native menu presentation uses the same message-specific saved/pin context as action dispatch. The prior base-context rendering hid Save even after saved status loaded. For manual verification, right-click a published text/media/forwarded message, Save it, then reopen the menu and remove its saved snapshot; verify the global list follows both mutations.
+- **Authenticated-startup correction:** Session replacement resets account-owned stores, including saved snapshots. Bind the authenticated profile after `RealtimeCoordinator.setSession` performs that reset, not before it; otherwise saved-status loading has no account and Save disappears on both platforms without a load error. Cold-launch with an existing session and switch accounts before exercising Save/remove; the new account must not inherit snapshots.
+- **macOS regression evidence:** `.ci/SaveMenu-20261024-message-row.xcresult`: 22 tests passed. The native-host regression opens the real message menu, saves through `SavedMessageController` using an isolated API fixture, verifies the captured snapshot, then removes it through the reopened menu. Exported native Save/Remove menu captures were inspected. This does not certify authenticated backend/device scenarios.
+- **Authenticated iOS evidence:** `.ci/Feedback-20261024-iOS.xcresult` passed 21 tests, including the actual `AppCompositionRoot` stored-session bootstrap, save/captured-content mutation, and account replacement. Inspected native iOS captures show Save after startup and Remove Saved after mutation. The corresponding macOS integration run passed 109 tests in `.ci/Feedback-20261024-macOS.xcresult`. Isolated API data, not production backend/device certification.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above; also switch accounts while loading and remove a saved item while its detail is open.
+
+
+
+### M2 — Copy and open message links · Implemented; external-link prerequisite and device verification pending
 
 - [ ] Enable copying the existing application message-link format for eligible group messages, including thread replies, and route incoming links to the correct chat/thread and highlighted message. Keep the PWA's DM exclusion; do not invent a second URL format.
+
 - **PWA evidence:** [message menu](../../chahua/pwa/src/app/messages/message-menu/message-menu.ts) (link-copy action near lines 597–599), [chat-link route handler](../../chahua/pwa/src/app/chats/chat-link/chat-link.ts), and `/m/:encoded` in [routes](../../chahua/pwa/src/app/app.routes.ts).
-- **Apple starting points:** [message action policy](../App/Features/Chat/Conversation/Timeline/View/Interaction/MessageActionPolicy.swift), `.copyLink`, is explicitly unimplemented outside DMs. Reuse search/notification message-target navigation in [the shell](../App/AuthenticatedShell.swift); inspect existing app URL handling before extending it.
+- **Original gap:** Copy Link was unavailable and no app URL handler existed. **Current implementation:** [permalink codec](../App/Features/Chat/Shared/MessagePermalink.swift), [action policy](../App/Features/Chat/Conversation/Timeline/View/Interaction/MessageActionPolicy.swift), and [shell routing](../App/AuthenticatedShell.swift).
 - **Acceptance:** Copy a root-message link and a thread-reply link; open from outside the app on iOS and macOS; verify exact IDs, parent scope, target highlighting, and useful unavailable/unauthorized behavior. Copying a link must not mutate the conversation.
+- **Re-evaluation / decision:** Added exact PWA 16-byte big-endian ID/base64url links at `https://chahua.app/m/:encoded`. DMs and pending messages remain excluded. Incoming URL origin checks use the same public application origin, not the API/CDN host. Links survive the login boundary; authoritative source lookup determines the parent/thread scope and reuses highlighted-message navigation. Invalid/unauthorized/unavailable links produce an error rather than falling back to a different message.
+- **External dependency:** Website association is live on `chahua.app`; see Working rules. A correctly signed Associated Domains build and OS delivery verification remain required. Copy/parse and Apple-side routing alone do not establish external OS delivery.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above with the correct signing profile; include opening while signed out and IDs beyond JavaScript's exact integer range.
 
-### M3 — General file attachments · Partial
 
-- [ ] Extend acquisition, upload/outbox, message rendering, and open/save handling to ordinary files, not only images/videos. Preserve original bytes for the explicit Files workflow; keep the media workflow's image preparation separate. Cover supported paste/drop inputs as well as file selection.
+
+### M3 — General file attachments · Implemented; device verification pending
+
+- [x] Extend acquisition, upload/outbox, message rendering, and open/save handling to ordinary files, not only images/videos. Preserve original bytes for the explicit Files workflow; keep the media workflow's image preparation separate. Cover supported paste/drop inputs as well as file selection.
+
 - **PWA evidence:** [composer template](../../chahua/pwa/src/app/messages/message-composer/message-composer.html) has a separate unrestricted file input; [composer logic](../../chahua/pwa/src/app/messages/message-composer/message-composer.ts) routes files separately from media.
-- **Apple starting points:** [composer](../App/Features/Chat/Compose/MessageComposerView.swift) restricts `.fileImporter` to `.image` and `.movie` and hands both to `onImportImages`. Extend the existing [outbox](../App/Features/Chat/Outbox/) and attachment presentation rather than just widening the picker filter.
+- **Original gap:** The composer/outbox handled media only. **Current implementation:** [Compose](../App/Features/Chat/Compose/), [Outbox](../App/Features/Chat/Outbox/), and [file presentation](../App/Features/Chat/ImageDetail/MessageFileAttachmentView.swift).
 - **Acceptance:** Send and receive a PDF and a non-media document on both platforms; verify filename/type presentation, byte-preserving download/export, progress, offline retry, cancellation, and that ordinary files do not enter image conversion.
+- **Re-evaluation / decision:** Added an explicit Files workflow, persisted file intent in the existing outbox, and upload-purpose selection independent of MIME type. Explicit Files preserve original bytes even when the file is an image/audio asset; Photos/media retain their existing preparation path. Native supported paste/drop routes ordinary documents as files. Received files use shared filename/type/size presentation with download/export handling, also reused by B1 and saved content.
+- **Caption decision:** The inspected backend does not accept captions on `.file` messages; a file selection's caption is queued as an adjacent text message through the existing outbox, not silently dropped or sent in an unsupported field.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above; compare exported bytes, include an image selected via Files, and test supported paste/drop plus outbox restoration after relaunch.
 
-### M4 — Atomic multi-select recall · Partial
 
-- [ ] Replace sequential single-message recall for a selection with the PWA's bulk recall operation, up to 100 messages from one chat. Retain eligibility checks, pending-audio publication handling, cancellation, and retryable selection state.
+
+### M4 — Atomic multi-select recall · Implemented; device verification pending
+
+- [x] Replace sequential single-message recall for a selection with the PWA's bulk recall operation, up to 100 messages from one chat. Retain eligibility checks, pending-audio publication handling, cancellation, and retryable selection state.
+
 - **PWA evidence:** [conversation](../../chahua/pwa/src/app/conversations/conversation/conversation.page.ts) (selection recall near lines 419–480) prepares selected messages and submits through `recallMany`; [message actions](../../chahua/pwa/src/app/messages/message-actions.ts) calls the batch endpoint.
-- **Apple starting points:** [chat detail](../App/Features/Chat/ChatDetail/ChatDetailView.swift), `deleteSelection`, loops over `store.deleteMessage` and stops at the first failure; [message endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/MessageEndpoints.swift) exposes individual deletion. Multi-select and multi-message forwarding already exist.
+- **Original gap:** Selection recall used sequential single deletes. **Current implementation:** [chat detail](../App/Features/Chat/ChatDetail/ChatDetailView.swift), [store](../App/Features/Chat/Shared/ChatStore.swift), and [message endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/MessageEndpoints.swift).
 - **Acceptance:** Confirm a multi-message selection produces one bulk submission for its ready items, with server whole-batch validation rather than partially successful sequential deletes. Exercise unauthorized selections, audio awaiting publication, batch failure/retry, and leaving/cancelling during preparation; keep unresolved items selected and only treat server-confirmed recall as successful.
+- **Re-evaluation / decision:** Replaced sequential selection deletes with one bulk request for up to 100 eligible messages in one chat. Preparation preserves audio publication handling and cancellation. Batch failure does not mark local rows recalled; unresolved/preparation-failed items stay selected for retry. Only server-confirmed IDs are treated as recalled.
+- **Confirmation decision:** Batch recall uses a centered native alert with destructive Delete and Cancel, not a popover/confirmation dialog anchored at the top of the screen. Verify the alert after selecting several messages; Cancel must leave the selection and messages intact.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above with ready plus pending-audio items; observe request count and whole-batch rejection using an isolated backend/interception.
 
-### M5 — DM pin permissions · Partial
 
-- [ ] Allow either participant in a writable DM to manage shared pins, while retaining admin-only pin management in groups. Apply the same policy to the message menu, pin preview, full pin list, and mutation path.
+
+### M5 — DM pin permissions · Implemented; device verification pending
+
+- [x] Allow either participant in a writable DM to manage shared pins, while retaining admin-only pin management in groups. Apply the same policy to the message menu, pin preview, full pin list, and mutation path.
+
 - **PWA evidence:** [message menu](../../chahua/pwa/src/app/messages/message-menu/message-menu.ts), pin availability near lines 271–291, distinguishes DMs from groups.
-- **Apple starting points:** [message action policy](../App/Features/Chat/Conversation/Timeline/View/Interaction/MessageActionPolicy.swift), `.pin`/`.unpin`, and [chat detail](../App/Features/Chat/ChatDetail/ChatDetailView.swift) pin controls require `isAdmin`.
+- **Original gap:** DM controls inherited group-admin pin restrictions. **Current implementation:** [action policy](../App/Features/Chat/Conversation/Timeline/View/Interaction/MessageActionPolicy.swift) and [chat detail](../App/Features/Chat/ChatDetail/ChatDetailView.swift).
 - **Acceptance:** Both DM participants can pin and unpin with synchronized results; ordinary group members cannot manage pins; administrators still can; read-only/inactive relationships do not gain write access.
+- **Re-evaluation / decision:** Shared pin policy now allows either writable DM participant while retaining group-admin checks. Menu, preview/list controls, and mutation entry use the same write-access rule. Relationship invalidations must fence/reload mounted DM permission state, including changes made from the new standalone profile.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above; additionally block/remove/re-add a peer while the DM remains mounted beneath a profile sheet.
+
+
 
 ## Phase 2 — Discovery, friends, and groups
 
-### S1 — Directory search and standalone user profiles · Missing outside existing DM info
+
+
+### S1 — Directory search and standalone user profiles · Implemented; device verification pending
 
 - [ ] Add the PWA's group/user directory search and a user-profile destination reachable from search results, member/participant rows, and applicable message identities/mentions. Show available user identity, existing relationship actions, a message entry when a chat is available, and the external forum/personal-space link. Do not require an existing DM merely to inspect a user profile.
-- **PWA evidence:** [directory search](../../chahua/pwa/src/app/chats/directory-search/directory-search.ts) queries joined groups and users, then opens chat/profile routes; [member rows](../../chahua/pwa/src/app/chats/chat-members/chat-members.html) link to profiles; [chat details](../../chahua/pwa/src/app/chats/chat-details/chat-details.html) includes the personal-space link and relationship actions. `/profile/:uid` is declared in [routes](../../chahua/pwa/src/app/app.routes.ts).
-- **Apple starting points:** [the shell](../App/AuthenticatedShell.swift) has group-info and chat-message-search destinations, not directory/profile destinations; [group member rows](../App/Features/Groups/GroupMembersView.swift) display identity/admin actions without profile navigation. [Group/DM info](../App/Features/Groups/GroupInfoView.swift) already handles existing DM identity, friend removal, blocking, and privacy; reuse those capabilities.
-- **Acceptance:** Find a user without a prior DM, inspect their profile, open their forum space, and return without losing the conversation/draft. Open the same profile from a group member and a message identity. Directory search must not be labelled global message-history search.
 
-### S2 — Friend requests and request history · Missing
+- **PWA evidence:** [directory search](../../chahua/pwa/src/app/chats/directory-search/directory-search.ts) queries joined groups and users, then opens chat/profile routes; [member rows](../../chahua/pwa/src/app/chats/chat-members/chat-members.html) link to profiles; [chat details](../../chahua/pwa/src/app/chats/chat-details/chat-details.html) includes the personal-space link and relationship actions. `/profile/:uid` is declared in [routes](../../chahua/pwa/src/app/app.routes.ts).
+- **Original gap:** Profiles were limited to existing-DM info; directory and identity navigation were missing. **Current implementation:** [Social](../App/Features/Social/), [member rows](../App/Features/Groups/GroupMembersView.swift), native timeline identity actions, and [shell](../App/AuthenticatedShell.swift).
+- **Acceptance:** Find a user without a prior DM, inspect their profile, open their forum space, and return without losing the conversation/draft. Open the same profile from a group member and a message identity. Directory search must not be labelled global message-history search.
+- **Re-evaluation / decision:** Added shared directory/profile destinations. Directory means users plus joined groups (group results page independently), not global message history. Profiles resolve exact UID through the current user-search contract and show canonical DM/relationship actions and the PWA forum-space URL; historical DM presence does not imply friendship. Member/participant/message entry points reuse shared profile navigation.
+- **DM-info layout decision:** The first action is a globe-labelled Forum link to the peer's existing external forum space, before Mute, Search, and More. Remove the dedicated View Profile row from DM info; existing profile navigation elsewhere remains. Profile-page redesign is explicitly deferred.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above; also fail/retry directory loading and open a profile without any DM.
+
+
+
+### S2 — Friend requests and request history · Implemented; device verification pending
 
 - [ ] Add user lookup/add-friend entry points, request submission subject to the recipient's verification mode, incoming accept/reject/archive actions, outgoing request status, and non-pending request history. Integrate friendship changes with the existing DM list and relationship/privacy state rather than treating every historical DM as an active friendship.
+
 - **PWA evidence:** [start-chat routes](../../chahua/pwa/src/app/app.routes.ts) include `chats/add-friend`; [chat details](../../chahua/pwa/src/app/chats/chat-details/chat-details.ts), `addFriend`, reads the recipient's policy and submits a request; [chat-list content](../../chahua/pwa/src/app/chats/chat-list-content/chat-list-content.html) displays incoming/outgoing requests, decisions, and history.
-- **Apple starting points:** [conversation scopes](../App/Features/Chat/ChatList/ConversationListItem.swift) include DMs but no request inbox/history; [friend endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/FriendEndpoints.swift) currently cover relationship lookup, removal, and block/unblock, not the request lifecycle.
+- **Original gap:** No request lifecycle or history. **Current implementation:** [request inbox/history](../App/Features/Social/FriendRequestsView.swift), [profile](../App/Features/Social/UserProfileView.swift), and [friend endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/FriendEndpoints.swift).
 - **Acceptance:** Exercise direct, verification-message, question, and forbidden modes; prevent duplicate pending requests; accept/reject/archive an incoming request and revisit history; verify accepted friendships and revoked relationships update both clients' accessible actions. S1 supplies the profile entry point.
+- **Re-evaluation / decision:** A single Friend Requests list combines pending incoming requests with sent/resolved history, deduplicates by request ID (history wins a transition overlap), and orders newest first. Rows show avatar, name, incoming/sent subtitle, and trailing status; no UID/date clutter or Incoming/History segmented picker. Incoming pending/archived requests retain verification details and accept/reject/archive controls. Profile submission still rechecks recipient policy and relationship; committed decisions remain distinct from refresh failure.
+- **Navigation decision:** The DMs/Friends-list row opens Friend Requests; the redundant avatar/account-menu entry is removed. Compact layout uses the existing list navigation stack. Split layout pushes/replaces only the list/sidebar pane and preserves the selected conversation/detail pane. Back restores the list; profile navigation from a request stays in that same stack.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above using two accounts; include mixed incoming/sent accepted/pending records, accepting an archived request, and concurrent decisions. Check compact push/Back, split sidebar push with an open conversation, and resizing between layouts.
 
-### S3 — Configure add-friend verification · Missing
 
-- [ ] Add account privacy settings for allowing direct requests, requiring a message, requiring a question response, or forbidding requests. Save simple mode changes immediately; require explicit Apply for a valid question rather than saving incomplete question text.
+
+### S3 — Configure add-friend verification · Implemented; device verification pending
+
+- [ ] Add account privacy settings for allowing direct requests, requiring a message, requiring a question response, or forbidding requests. All modes use explicit Save; incomplete question text cannot be submitted.
+
 - **PWA evidence:** [friend-verification settings](../../chahua/pwa/src/app/settings/friend-verification-settings/friend-verification-settings.ts), `loadVerification`/`chooseMode`/`saveVerification`, and [privacy navigation](../../chahua/pwa/src/app/settings/privacy-settings/privacy-settings.html).
-- **Apple starting points:** [settings pages](../App/Features/Notifications/NotificationSettingsView.swift), `privacyPages`, currently expose presence and read receipts only. Add the current friend-settings API contract to `ChahuaAPI`.
+- **Original gap:** Privacy settings lacked add-friend policy. **Current implementation:** [verification settings](../App/Features/Social/FriendVerificationSettingsView.swift) and [settings navigation](../App/Features/Notifications/NotificationSettingsView.swift).
 - **Acceptance:** Persist and reopen all four modes; reject an empty/whitespace question; retain unsaved values on failure and offer retry; a second account sees the saved policy when adding this user.
+- **Re-evaluation / decision:** Settings → Friend Request Permission is a direct top-level entry, separate from Blocked Users. On iOS it pushes within the existing Settings navigation, like Last Seen/Read Receipts; it never opens another pop-up sheet. macOS uses the existing Settings sidebar/detail. Both use a compact title and top-right Save, without autosave/Apply. Save is disabled until loaded and valid (question: nonblank, at most 100 characters), shows a spinner and locks controls while writing, then returns to Settings only after success. Failed saves retain edits and Retry Save.
+- **Save emphasis:** Valid unsaved changes turn the top-right Save button blue. Unchanged forms keep a neutral button; invalid/loading/saving states retain the existing disabled/spinner behavior. Verify changing a mode or question, reverting to the original values, and entering an invalid question.
+- **Exit decision:** Unchanged Back returns without writing. On iOS, use UIKit's actual Back item and native interactive edge/content swipe-back; `UINavigationItem.backAction` and a forwarding gesture delegate intercept dirty attempts before popping and show Discard Changes / Keep Editing. Clean swipes retain normal interactive completion/cancellation. Saving blocks navigation. Installed actions/delegates are restored on exit; no method swizzling or private APIs. Dirty/saving editors still block interactive Settings-sheet dismissal and Close; macOS retains guarded Back/Escape and sidebar protection.
+- **Shared convention:** Follow [Explicit-save settings pages](arch/settings-editing.md); Friend Request Permission, account Read Receipts, and account Last Seen & Online share the same controls and native exit guard.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Exercise all modes, invalid questions, delayed/failed saves, and successful return. On iOS, confirm the real chevron Back item, clean completed/cancelled swipe-back, dirty button/swipe → Keep Editing/Discard, blocked navigation while saving, and normal swiping on other settings pages after exit. On macOS check Escape/sidebar protection. No second sheet opens; only explicit Save changes server policy.
 
-### S4 — Blocked-user index · Partial safety workflow
+
+
+### S4 — Blocked-user index · Implemented; device verification pending
 
 - [ ] Add the privacy overview/count and a blocked-users list that opens a profile for unblock management, including users with no currently visible DM.
-- **PWA evidence:** [privacy overview](../../chahua/pwa/src/app/settings/privacy-settings/privacy-settings.html) shows the loaded block count and [blocked-users page](../../chahua/pwa/src/app/settings/blocked-users/blocked-users.ts) loads the account's block resource.
-- **Apple starting points:** [settings pages](../App/Features/Notifications/NotificationSettingsView.swift) have no block-list destination. **Block/unblock themselves are already implemented** in [Group/DM info](../App/Features/Groups/GroupInfoView.swift), `performSafetyAction`, and [friend endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/FriendEndpoints.swift); reuse them rather than rebuilding them.
-- **Acceptance:** Block a peer, find them in the index even without a listed DM, open their profile, unblock, and confirm the count/list refresh. Loading failure must not look like an empty successful list.
 
-### G1 — Create a group · Missing
+- **PWA evidence:** [privacy overview](../../chahua/pwa/src/app/settings/privacy-settings/privacy-settings.html) shows the loaded block count and [blocked-users page](../../chahua/pwa/src/app/settings/blocked-users/blocked-users.ts) loads the account's block resource.
+- **Original gap:** Block/unblock existed, but no account-wide index/count. **Current implementation:** [blocked users](../App/Features/Social/BlockedUsersView.swift), reusing existing safety mutations in [the store](../App/Features/Chat/Shared/ChatStore.swift).
+- **Acceptance:** Block a peer, find them in the index even without a listed DM, open their profile, unblock, and confirm the count/list refresh. Loading failure must not look like an empty successful list.
+- **Re-evaluation / decision:** Settings → Blocked Users is a direct top-level privacy destination with the account-wide block-resource count and a list independent of visible DMs. Profiles reuse existing block/unblock mutations. Count/list/profile refresh through social invalidation; loading and failure never masquerade as an empty list or zero count.
+- **Title decision:** Use a compact navigation title, matching the other privacy pages. The settings root and pushed settings pages—including notification exceptions and sticker/reaction management—also use inline iOS titles rather than the expanding large-title effect. Retain legitimate form section headings and macOS card headings.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above, including hiding/removing the DM before locating the blocked peer.
+
+
+
+### S5 — Explicit-save Read Receipts and Last Seen & Online · Implemented; device verification pending
+
+- [ ] Account Read Receipts and Last Seen & Online stage choices locally until explicit Save, matching Friend Request Permission rather than saving on selection.
+- **Design:** Reuse [the explicit-save convention](arch/settings-editing.md): compact pushed page, neutral unchanged Save, blue valid-dirty Save, spinner/locked exits during saving, successful save returns, failed save retains the draft. Back never writes; dirty native Back/swipe asks Discard Changes / Keep Editing. macOS returns to the previous non-editor settings category and protects sidebar/Close/Escape.
+- **Scope:** Account-wide privacy pages only. Per-friend read-receipt/presence overrides retain their current instant-save behavior. Existing committed receipt/presence invalidation remains server-result-driven; draft selection must not invalidate the live policy.
+- **Device sign-off:** iOS [ ] · macOS [ ]. On each page change and revert a choice, verify Save emphasis, dismiss a clean form without a write, try dirty Back and completed/cancelled swipes, and exercise both discard choices. Delay/fail/retry a save: spinner and locked exits while pending, draft retained on failure, return only after success. Reopen to verify persistence; switch account during delayed responses. Repeat in compact/split settings and confirm per-friend overrides still save immediately.
+
+
+### G1 — Create a group · Implemented; device verification pending
 
 - [ ] Add a reachable create-group form, submit the group name, refresh the conversation list, and open the created group.
-- **PWA evidence:** [start-chat flow](../../chahua/pwa/src/app/chats/start-chat/start-chat.ts), `submit`, calls `postGroup`; [routes](../../chahua/pwa/src/app/app.routes.ts) exposes `chats/new`.
-- **Apple starting points:** [the shell](../App/AuthenticatedShell.swift) and [API client contract](../Packages/ChahuaAPI/Sources/ChahuaAPI/Core/ChahuaAPIClient.swift) have no corresponding creation workflow.
-- **Acceptance:** Create a group from the list on each platform; prevent empty names and duplicate submissions; handle failure without dropping the input; successful creation opens the server-created group once.
 
-### G2 — Preview and redeem group invites · Missing
+- **PWA evidence:** [start-chat flow](../../chahua/pwa/src/app/chats/start-chat/start-chat.ts), `submit`, calls `postGroup`; [routes](../../chahua/pwa/src/app/app.routes.ts) exposes `chats/new`.
+- **Original gap:** No group creation workflow. **Current implementation:** [group lifecycle forms](../App/Features/Groups/GroupLifecycleViews.swift) and [group endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/GroupEndpoints.swift).
+- **Acceptance:** Create a group from the list on each platform; prevent empty names and duplicate submissions; handle failure without dropping the input; successful creation opens the server-created group once.
+- **Re-evaluation / decision:** Added account-menu Create Group with a shared form, trimmed nonempty name validation, in-flight/completed submission guards, and retained input on failure. The authorized created-chat snapshot is installed before selection; list refresh uses revision fences so an older response cannot discard it.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above; exercise failure followed by retry and repeated taps.
+
+
+
+### G2 — Preview and redeem group invites · Implemented; external-link prerequisite and device verification pending
 
 - [ ] Accept an invite code or existing invite URL, preview the group/status, and join only after explicit confirmation. Already-member previews open the existing group without redeeming again.
-- **PWA evidence:** [start-chat flow](../../chahua/pwa/src/app/chats/start-chat/start-chat.ts), `lookup`/`previewValid`/`submit`, and `chats/join[/code]` in [routes](../../chahua/pwa/src/app/app.routes.ts).
-- **Apple starting points:** Add invite-preview/redemption endpoints and list/shell entry points alongside [existing group info](../App/Features/Groups/GroupInfoView.swift); reuse app URL routing rather than limiting the feature to manual code entry.
-- **Acceptance:** Preview never joins automatically. Exercise valid, expired, revoked, ineligible, and already-member invitations; join succeeds once and updates list/navigation; opening the link works on both platforms.
 
-### G3 — Group invite management and invite messages · Missing
+- **PWA evidence:** [start-chat flow](../../chahua/pwa/src/app/chats/start-chat/start-chat.ts), `lookup`/`previewValid`/`submit`, and `chats/join[/code]` in [routes](../../chahua/pwa/src/app/app.routes.ts).
+- **Original gap:** No invitation preview/redemption or URL entry. **Current implementation:** [group lifecycle forms/link parser](../App/Features/Groups/GroupLifecycleViews.swift), [group endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/GroupEndpoints.swift), and [shell](../App/AuthenticatedShell.swift).
+- **Acceptance:** Preview never joins automatically. Exercise valid, expired, revoked, ineligible, and already-member invitations; join succeeds once and updates list/navigation; opening the link works on both platforms.
+- **Re-evaluation / decision:** Added account-menu Join Group accepting a raw code or existing invite URL, plus incoming URL and invite-card routing. Opening an invitation fetches preview/status only; Join is explicit, while already-member previews open without redeeming again. Copied invitation URLs use `https://chahua.app/chats/join/:code`, independent of API/CDN configuration.
+- **External dependency:** See the Associated Domains / website association prerequisite in Working rules. Manual code/pasted-URL entry and in-app cards do not depend on website association.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run every invite-status scenario above, then test external links with a correctly signed Associated Domains build.
+
+
+
+### G3 — Group invite management and invite messages · Implemented; device verification pending
 
 - [ ] Let authorized group administrators list/create/revoke invites, choose supported invite types and optional expiry, copy invite URLs, and send an invite card to a selected destination chat. Support targeted-user and prerequisite-membership selection where the selected type requires them.
-- **PWA evidence:** [invite management](../../chahua/pwa/src/app/chats/chat-invites/chat-invites.ts), `create`/`copy`/`revoke`/`share`, uses those parameters and the send-invite-message endpoint; the admin entry is in [chat details](../../chahua/pwa/src/app/chats/chat-details/chat-details.html).
-- **Apple starting points:** [group info](../App/Features/Groups/GroupInfoView.swift) has no invite-management action. Add native API operations and integrate received invite-card activation with G2; a generic forwarded message is not an invite-sharing implementation.
-- **Acceptance:** Create each UI-supported invite type, copy and redeem its URL, send/open its card in another chat, revoke with confirmation, and confirm revoked/expired links cannot join. Non-admins must not gain management access.
 
-### G4 — Edit group name, description, and avatar · Partial (read-only identity)
+- **PWA evidence:** [invite management](../../chahua/pwa/src/app/chats/chat-invites/chat-invites.ts), `create`/`copy`/`revoke`/`share`, uses those parameters and the send-invite-message endpoint; the admin entry is in [chat details](../../chahua/pwa/src/app/chats/chat-details/chat-details.html).
+- **Original gap:** No invite administration, selectors, sharing, or received-card activation. **Current implementation:** [invite management](../App/Features/Groups/GroupInvitesView.swift), [group info](../App/Features/Groups/GroupInfoView.swift), and native timeline invite-card rendering.
+- **Acceptance:** Create each UI-supported invite type, copy and redeem its URL, send/open its card in another chat, revoke with confirmation, and confirm revoked/expired links cannot join. Non-admins must not gain management access.
+- **Re-evaluation / decision:** Added admin-only invite management for all three supported types, optional expiry, user/prerequisite selectors, copy, confirmed revoke, and invite-card send. Prerequisite/destination selectors use joined groups, matching the PWA selector scope. The API supplies a bounded invite index (up to 100), not cursor paging. Received cards use native card geometry; activation fetches G2 preview, never auto-joins. Failed sends retain the same idempotency key for retry.
+- **Chat-info placement decision:** Authorized administrators reach Manage Invitations through More, not an additional standalone row. Verify opening it from More, returning to info, and permission loss; non-admins must not see the entry.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above; test required selectors, send retry, revoked cards, and permission loss while management is open.
+
+
+
+### G4 — Edit group name, description, and avatar · Implemented; device verification pending
 
 - [ ] Add permission-gated field editing and avatar selection/upload to group info; save only the edited field and refresh group/list identity after success. Permit clearing the description, not an empty name; retain input on failure.
+
 - **PWA evidence:** [chat-details template](../../chahua/pwa/src/app/chats/chat-details/chat-details.html) exposes admin edit/avatar controls; [chat-details logic](../../chahua/pwa/src/app/chats/chat-details/chat-details.ts), `save`/`avatar`, performs group patches and avatar upload.
-- **Apple starting points:** [group info](../App/Features/Groups/GroupInfoView.swift), `hero`/`descriptionCard`, is display-only. Reuse upload handling with the group-avatar endpoint contract.
+- **Original gap:** Group identity was display-only. **Current implementation:** [group editor](../App/Features/Groups/GroupEditingView.swift), [group info](../App/Features/Groups/GroupInfoView.swift), and [group endpoints](../Packages/ChahuaAPI/Sources/ChahuaAPI/Endpoints/GroupEndpoints.swift).
 - **Acceptance:** An admin edits each field independently and changes the avatar, then sees the result in info and list rows on both clients. Ordinary members remain read-only. Do not add group visibility editing or avatar removal merely because an API field could support it; this review established the PWA's avatar replacement UI, not removal UI.
+- **Re-evaluation / decision:** Added admin-only Edit Group with independent name/description saves and a separate image-select/upload/commit action. Avatar acquisition reuses native image preparation; ordinary-file byte preservation in M3 does not apply to avatars. Failed edits retain input; successful mutations refresh group/list identity. Description can be cleared; empty names, avatar removal, and visibility controls are not added.
+- **Chat-info placement decision:** An admin-only Edit button at the top right opens the existing group editor. Do not duplicate Edit Group or invitation management as prominent rows below the hero. Verify saved name/avatar updates on returning to info.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above, including upload cancellation/failure and refreshed identity in another client.
+
+
 
 ## Phase 3 — Browse existing content
 
-### B1 — Chat-wide image, video, and file browser · Missing
+
+
+### B1 — Chat-wide image, video, and file browser · Implemented; device verification pending
 
 - [ ] Implement real, independently paged Images/Videos/Files sections in conversation info, including open/download and source-message navigation. A per-message gallery is not a chat-wide browser. When shown from a thread, label the scope honestly: the current PWA queries the parent chat's attachments, not thread-only media.
+
 - **PWA evidence:** [chat-details tabs](../../chahua/pwa/src/app/chats/chat-details/chat-details.html) render [chat attachments](../../chahua/pwa/src/app/chats/chat-attachments/chat-attachments.ts), which queries by kind/cursor and resolves source messages into their parent/thread scope.
-- **Apple starting points:** [group/DM info](../App/Features/Groups/GroupInfoView.swift), `sectionTabs`, renders noninteractive section labels and only loads group members. Reuse [the existing media viewer](../App/Features/Chat/ImageDetail/) for viewing rather than replacing it.
+- **Original gap:** Info section labels were placeholders, not chat-wide browsing. **Current implementation:** [attachment browser](../App/Features/Chat/Browsing/ChatAttachmentsView.swift), [group/DM info](../App/Features/Groups/GroupInfoView.swift), and [existing media viewer](../App/Features/Chat/ImageDetail/).
 - **Acceptance:** Page images/videos/files independently, open an item, locate a thread attachment in its actual thread, and return to the same browsing position. Distinguish empty, failed, and exhausted lists. Do not implement the placeholder Links/Voice tabs as if PWA parity required them.
+- **Re-evaluation / decision:** `ChatAttachmentsView` retains independent Images/Videos/Files paging, original-file handling, existing media presentation, and authoritative source-message lookup. Conversation info restores the native Liquid Glass segmented selector: Members / Media / Files / Threads for groups, Media / Files / Threads for DMs. Media contains Images/Videos. Keep browsers mounted across section changes so page/error/selection state is not recreated. Source navigation pushes above the browser; thread info labels attachment scope as the parent chat. Links/Voice placeholders are not added.
+- **Album presentation decision:** Images and videos use an adaptive square thumbnail grid, not filename rows; Files retain their document list. Video posters share the 512-pixel image-cache representation used by message bubbles. Tap opens the existing viewer. Long press / secondary click opens a native **Locate Message** context menu; VoiceOver exposes the same action. Thumbnail failure offers retry without hiding source navigation. Inactive sections stop thumbnail work while retaining paging state.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above, including page failure/retry and Back restoring the browser. Check a mixed portrait/landscape album, a failed poster, and long-press Locate for image/video items in both ordinary chats and threads. Confirm no filenames replace the visual media grid.
 
-### B2 — Per-chat thread discovery · Partial (global subscribed Threads already exists)
 
-- [ ] Add an info section listing thread roots from the selected chat, including roots not already in the user's subscribed Threads list. Continue using message-page cursors; a page without roots is not end-of-history.
+
+### B2 — Per-chat thread discovery · Implemented; device verification pending
+
+- [ ] List thread roots from the selected chat using the dedicated chat-thread API, including roots not in the user's subscribed Threads list. Preserve the server's newest-first order and exclusive root-ID cursor.
+
 - **PWA evidence:** [chat threads](../../chahua/pwa/src/app/chats/chat-threads/chat-threads.ts), `load`, pages ordinary messages and filters `threadInfo`; [chat details](../../chahua/pwa/src/app/chats/chat-details/chat-details.html) mounts it only outside thread detail.
-- **Apple starting points:** [group info](../App/Features/Groups/GroupInfoView.swift) has no thread section; [chat detail](../App/Features/Chat/ChatDetail/ChatDetailView.swift) already opens threads and supplies whole-thread forwarding. Reuse that navigation and current message APIs.
-- **Acceptance:** Open an unsubscribed thread from chat info; continue beyond a page containing no thread roots; preserve browsing position on return. Do not scan all history to claim a complete thread directory or invent a nonexistent per-chat thread-list endpoint.
+- **Original gap:** Global subscribed Threads existed, but no per-chat discovery. **Current implementation:** [thread browser](../App/Features/Chat/Browsing/ChatThreadsView.swift) and [group info](../App/Features/Groups/GroupInfoView.swift).
+- **Acceptance:** Open an unsubscribed thread from chat info; page beyond the initial results without scanning messages; preserve browsing position on return. Exhaustion comes from `nextCursor`, not an empty ordinary-message page. Loading failures remain retryable.
+- **Re-evaluation / decision:** The latest backend now provides `GET /chats/{chatId}/threads`. `ChatThreadsView` uses 20-root pages with `order=newest` and an exact `MessageID` cursor; it no longer scans message history or infers directory coverage. The global subscribed `/threads` list remains independent. Opened threads push above the retained browser.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Use a chat with more than 20 roots, including unsubscribed roots separated by many ordinary messages. Load more, open a root, return, fail/retry a page, and switch accounts while loading.
 
-### B3 — Thread participants · Missing as a browseable surface
 
-- [ ] Add a thread information destination with a participant list, using server-provided thread participants when cached and otherwise the root plus loaded replies. Make partial coverage explicit and open user profiles through S1; do not substitute the parent group's member directory.
+
+### B3 — Thread participants · Implemented; device verification pending
+
+- [ ] Populate thread information from the dedicated participant API, with UID-cursor pagination. Open user profiles through S1; never substitute cached reply authors or the parent group's membership.
+
 - **PWA evidence:** [thread participants](../../chahua/pwa/src/app/chats/thread-participants/thread-participants.ts) merges cached participants with the root/loaded messages; [chat details](../../chahua/pwa/src/app/chats/chat-details/chat-details.html) selects that view for thread info.
-- **Apple starting points:** [thread detail](../App/Features/Chat/ChatDetail/ThreadDetailView.swift) and [chat detail](../App/Features/Chat/ChatDetail/ChatDetailView.swift) supply conversation/subscription UI, but no participant directory. The existing group directory represents a different scope.
-- **Acceptance:** Show unique thread participants, reflect newly loaded replies, disclose incomplete coverage when no authoritative cache exists, and open profiles without scanning historical messages or losing thread position/draft.
+- **Original gap:** No browsable thread participant surface. **Current implementation:** [thread info](../App/Features/Chat/Browsing/ThreadInfoView.swift), hosted by [the live chat detail](../App/Features/Chat/ChatDetail/ChatDetailView.swift).
+- **Acceptance:** Show the server's unique thread participants, including authors absent from the loaded timeline; load subsequent UID pages; retry failures; open profiles without losing thread position/draft. Missing/inaccessible threads must show an error, not an inferred partial list.
+- **Re-evaluation / decision:** `ThreadInfoView` now uses `GET /chats/{chatId}/threads/{rootId}/participants`, 100 users per page in ascending UID order. Participants are the root author plus surviving published reply authors, not subscribers. Cached/loaded reply inference and its partial-coverage footer are removed. Root-preview loading remains separate; account/chat/thread scope and cancellation fence late responses.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Use a thread with an author outside the loaded replies and, where available, more than 100 authors. Load more, open/return from profiles, retry a failure, and verify inaccessible/deleted-thread errors. Loading older replies must not manufacture participants.
 
-### B4 — Persistent voice player and shared playback speed · Partial
+
+
+### B4 — Persistent voice player and shared playback speed · Implemented; device verification pending
 
 - [ ] Move active voice-playback ownership out of the message row and provide the PWA-equivalent persistent playback bar, play/pause, shared speed setting, sender/time, and jump-to-source navigation. Keep one active voice message and retain playback across conversation/list navigation.
+
 - **PWA evidence:** [voice playback state](../../chahua/pwa/src/app/messages/voice-player/voice-playback.ts) adopts playback when inline players disappear and retains global speed; [voice bar](../../chahua/pwa/src/app/messages/voice-player/voice-bar.html) exposes playback, source, and speed controls.
-- **Apple starting points:** [voice controller](../App/Features/Chat/VoicePlaybackController.swift) owns row-level playback, has only a weak static active controller, and releases player/resources in `stop()`. Basic recording, waveform playback, and seeking already exist.
+- **Original gap:** Row-owned playback could not persist across navigation. **Current implementation:** [session](../App/Features/Chat/VoicePlaybackSession.swift), [bar](../App/Features/Chat/VoicePlaybackBar.swift), [controller](../App/Features/Chat/VoicePlaybackController.swift), and account reset integration.
 - **Acceptance:** Start playback, scroll the row away, visit another chat and the list, and still control the same message. Change speed, play a second message, and jump back to the source; verify single-player behavior, failure, and account teardown. Native lock-screen/background audio is not established as PWA parity and is outside this item.
+- **Re-evaluation / decision:** Implemented a strongly owning `VoicePlaybackSession` and shell-level `VoicePlaybackBar`; rows reconnect to the one active controller. Speed is a persisted device-local preference. The bar includes playback/seek/speed/sender/time/source/close; sign-out/account changes stop playback. No background-audio or lock-screen scope was added.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above, including interruption, failed source navigation, token expiry/account teardown, switching A → B → A while both rows remain visible, and closing/reopening the bar without losing prepared row playback.
+
+
 
 ## Phase 4 — Presentation and input
 
-### U1 — System / Light / Dark override · Partial (system appearance exists)
+
+
+### U1 — System / Light / Dark override · Implemented; device verification pending
 
 - [ ] Add a persisted app-level appearance choice and apply it to the whole app from launch, including sheets and native timeline surfaces. System follows OS changes; explicit Light/Dark overrides do not.
-- **PWA evidence:** [general settings](../../chahua/pwa/src/app/settings/general-settings/general-settings.html), [preferences](../../chahua/pwa/src/app/settings/preferences.ts), and [appearance application](../../chahua/pwa/src/app/settings/appearance.ts).
-- **Apple starting points:** [settings](../App/Features/Notifications/NotificationSettingsView.swift) exposes typography and badge colors but no mode choice; [theme](../App/DesignSystem/ChahuaTheme.swift) consumes the environment color scheme. Apply the preference at the app/root presentation boundary.
-- **Acceptance:** Switch all three choices on iOS/macOS, relaunch, open sheets/media/settings, and change the OS appearance while System is selected; no surface should retain the wrong scheme.
 
-### U2 — Avatar density and DM identity preferences · Missing preferences
+- **PWA evidence:** [general settings](../../chahua/pwa/src/app/settings/general-settings/general-settings.html), [preferences](../../chahua/pwa/src/app/settings/preferences.ts), and [appearance application](../../chahua/pwa/src/app/settings/appearance.ts).
+- **Original gap:** System appearance only. **Current implementation:** [appearance preference](../App/AppAppearance.swift), [app root](../App/ChahuaApp.swift), and [settings](../App/Features/Notifications/NotificationSettingsView.swift).
+- **Acceptance:** Switch all three choices on iOS/macOS, relaunch, open sheets/media/settings, and change the OS appearance while System is selected; no surface should retain the wrong scheme.
+- **Re-evaluation / decision:** Settings → Appearance → Color scheme persists a device-local System/Light/Dark choice. The shared `appAppearance()` modifier uses a UIKit window override on iOS and application-level `NSApp.appearance` on macOS so existing sheets, covers, and native controls update together. System clears the native override (`.unspecified` / `nil`). SwiftUI presentation preferences alone retained an old explicit scheme on returning to System in native smoke verification. Do not recreate Settings/navigation to force a refresh. The existing deliberately dark full-screen media canvas is retained.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Keep Settings open and repeat System → Dark → Light → Dark → System without closing it; verify current/subsequent pages and the underlying app update immediately. Change OS appearance again in System mode. Distinguish the intentional dark media canvas from incorrectly themed controls or timeline cells.
+
+
+
+### U2 — Avatar density and DM identity preferences · Implemented; device verification pending
 
 - [ ] Add persisted controls for showing all message avatars and showing/hiding both avatars and names in DMs. Apply the avatar-density choice to normal timelines and forwarded records; the DM-only choice must not hide group identities or incorrectly change record-detail rules.
-- **PWA evidence:** [general settings](../../chahua/pwa/src/app/settings/general-settings/general-settings.html), [preferences](../../chahua/pwa/src/app/settings/preferences.ts), [conversation template](../../chahua/pwa/src/app/conversations/conversation/conversation.page.html), and [forwarded records](../../chahua/pwa/src/app/messages/forwarded-records/forwarded-records.html).
-- **Apple starting points:** [conversation preferences](../App/Features/Chat/ChatList/ConversationListPreferences.swift) and [settings](../App/Features/Notifications/NotificationSettingsView.swift) do not expose these options. Preserve native timeline grouping and shared geometry rather than rendering separate message implementations.
-- **Acceptance:** Toggle each option across DM/group/thread/forwarded-record views, reopen the app, and verify name/avatar visibility, reclaimed DM avatar-column space, grouping, and source-author presentation.
 
-### U3 — Bold/italic composer shortcuts · Partial (rendering already exists)
+- **PWA evidence:** [general settings](../../chahua/pwa/src/app/settings/general-settings/general-settings.html), [preferences](../../chahua/pwa/src/app/settings/preferences.ts), [conversation template](../../chahua/pwa/src/app/conversations/conversation/conversation.page.html), and [forwarded records](../../chahua/pwa/src/app/messages/forwarded-records/forwarded-records.html).
+- **Original gap:** Neither identity preference existed. **Current implementation:** [timeline preferences](../App/Features/Chat/Conversation/Timeline/Model/ConversationTimelinePreferences.swift), shared timeline geometry, both native hosts, and [settings](../App/Features/Notifications/NotificationSettingsView.swift).
+- **Acceptance:** Toggle each option across DM/group/thread/forwarded-record views, reopen the app, and verify name/avatar visibility, reclaimed DM avatar-column space, grouping, and source-author presentation.
+- **Re-evaluation / decision:** Implemented Settings → Conversations controls with PWA defaults: show-all avatars off; DM details on. DM hiding also applies to DM threads and reclaims avatar lanes. Density changes avatars without changing message grouping. Group identities and captured forwarded-record authors remain visible; forwarded records still obey density. Both native layout invalidation paths receive the preferences.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above, including resizing/scrolling after toggles and nested/saved forwarded records.
+
+
+
+### U3 — Bold/italic composer shortcuts · Implemented; device verification pending
 
 - [ ] Implement Cmd/Ctrl+B and Cmd/Ctrl+I on selected composer text using `**bold**` and `__italic__` wire markup. Match the existing whitespace/paragraph behavior and preserve editing/selection; do nothing for an empty selection or during IME composition. On iOS, exercise with a hardware keyboard.
-- **PWA evidence:** [composer](../../chahua/pwa/src/app/messages/message-composer/message-composer.ts), formatting handler near lines 278–296 and key handler near 532–538, wired by [the template](../../chahua/pwa/src/app/messages/message-composer/message-composer.html).
-- **Apple starting points:** [composer](../App/Features/Chat/Compose/MessageComposerView.swift) handles Return/Escape/arrows but not these format shortcuts. The existing Markdown parser/renderer already supports bold and italic; no format toolbar is required.
-- **Acceptance:** Format selections containing leading/trailing spaces and blank lines; verify unchanged outside text, expected sent rendering, undo/edit behavior, and no mutation during Chinese input composition.
 
-### U4 — Search within the full reaction picker · Partial; changes an intentional native UX choice
+- **PWA evidence:** [composer](../../chahua/pwa/src/app/messages/message-composer/message-composer.ts), formatting handler near lines 278–296 and key handler near 532–538, wired by [the template](../../chahua/pwa/src/app/messages/message-composer/message-composer.html).
+- **Original gap:** Markdown rendering existed but input shortcuts did not. **Current implementation:** [formatting helper](../App/Features/Chat/Compose/ComposerInlineFormatting.swift), [native input](../App/Features/Chat/Compose/ComposerNativeInput.swift), and [composer](../App/Features/Chat/Compose/MessageComposerView.swift).
+- **Acceptance:** Format selections containing leading/trailing spaces and blank lines; verify unchanged outside text, expected sent rendering, undo/edit behavior, and no mutation during Chinese input composition.
+- **Re-evaluation / decision:** Added Cmd/Ctrl+B and Cmd/Ctrl+I through the existing native composer input bridge, inserting `*`*/`__` wire markers per selected paragraph while preserving edge whitespace, blank lines, UTF-16 boundaries, and valid mention identity. Empty/marked selections do nothing; changes participate in native undo and retain editing selection. No formatting toolbar was added.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above, including emoji at selection edges, mention text, typing ordinary “b”/“i” while mention suggestions are open, and iOS hardware keyboards.
+
+
+
+### U4 — Search within the full reaction picker · Implemented; device verification pending
 
 - [ ] Add localized emoji name/keyword search and pasted-emoji lookup to the existing Unicode 17 reaction picker. Keep exact emoji sequences, skin-tone variants, recent choices, reaction eligibility, and platform-native presentation. This explicitly expands the current category-only design; it is not a missing full-picker implementation.
+
 - **PWA evidence:** [emoji picker](../../chahua/pwa/src/app/messages/emoji-picker/emoji-picker.ts) and [picker data](../../chahua/pwa/src/app/messages/emoji-picker/picker-data.ts) supply search and localized data.
-- **Apple starting points:** [reaction keyboard](../App/Features/Chat/Conversation/Reactions/ReactionEmojiKeyboard.swift) has categories/pages/recents/variants but no search input; [catalog](../App/Features/Chat/Conversation/Reactions/ReactionEmojiCatalog.swift) already loads bundled Unicode 17 data. Add search metadata as needed; do not replace working catalog/tone support.
+- **Original gap:** Full Unicode 17/tone/category picker existed, but search did not. **Current implementation:** [keyboard](../App/Features/Chat/Conversation/Reactions/ReactionEmojiKeyboard.swift), [catalog](../App/Features/Chat/Conversation/Reactions/ReactionEmojiCatalog.swift), and [metadata generator](../scripts/generate-reaction-emoji.py).
 - **Acceptance:** Find available emoji by English, Simplified Chinese, and Traditional Chinese names/keywords and by pasting a full sequence; select toned/mixed sequences without normalization loss; verify no-results, recents, and permission/deletion changes while open.
+- **Re-evaluation / decision:** Implemented inline search in the existing picker, using the PWA's pinned emojibase 17.0.0 English/Simplified Chinese/Traditional Chinese metadata with bundled attribution. All three languages are searched together; whitespace-separated terms use AND substring matching. Exact pasted sequence takes precedence; optional VS16 is ignored for lookup only, never removed from the selected wire sequence. Tone menus, mixed-tone sequences, recents, eligibility, glyph filtering, and category paging remain.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above; additionally verify the iOS search keyboard does not cover results.
+- **Observed font limit:** On the verification Mac, Apple Color Emoji shapes `🫱🏻‍🫲🏿` as two visible glyphs, so the existing native support filter excludes it. The mixed-tone `🧑🏻‍🤝‍🧑🏿` is supported and preserved exactly. Verify sequences available on each device; do not mistake intentional unsupported-glyph filtering for search normalization loss.
+
+
+
+## Latest PWA additions — incremental parity and device verification
+
+These capabilities remain unchecked until authenticated acceptance on both platforms. Existing B2/B3 dedicated thread APIs, M2 authoritative message-link resolution, and native member search/role/removal management are reused, not rebuilt.
+
+### L1 — Group and member speaking permissions · Implemented; device verification pending
+
+- [ ] Match group-wide and personal `unrestricted`, `threadsOnly`, `repliesOnly`, and `readOnly` permissions, including every write path and live role/mode changes.
+- **PWA evidence:** [speaking policy](../../chahua/pwa/src/app/chats/speaking.ts), [member management](../../chahua/pwa/src/app/chats/chat-members/chat-members.ts), and [backend contract](../../chahua/backend/docs/speaking-restrictions.md).
+- **Design:** Admins are exempt; ordinary members obey the stricter group/personal setting. Modes do not expire. Existing Edit Group contains separate explicit speaking-policy Save; member menus expose personal controls only for ordinary nonself members with server `canManageMembers`. Keep existing search, paging, promote/demote/remove confirmations and the glass selector/More/Edit layout.
+- **Chat-info presentation:** Speaking-permission summaries, including Your permissions, are admin-only for now. Ordinary members see neither label in chat details; composer restrictions and all write authorization remain enforced. Verify both roles and a live promotion/demotion while details remain open.
+- **Write boundaries:** Main-chat quotes remain main-chat sends. `threadsOnly` permits thread creation/replies; `repliesOnly` requires an already-threaded root, including a zero-reply root with `threadInfo`; `readOnly` blocks writes. Editing uses the original message scope, so a thread root remains main-chat content. Reactions, reading, own-message deletion, subscriptions, and forwarding a source to another allowed destination remain available.
+- **Failure decision:** Structured HTTP403 `speakingRestricted` displays its actual mode and retains the failed content durably. A permission change/reconnect/relaunch does not automatically resend it; retry is explicit. Unknown authorization never grants group writes.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Test all modes as admin/member, with group stricter than personal and vice versa. Exercise text, quote, attachment, voice, sticker, forward, invite card, root/reply edit and zero-reply threads. Change mode during recording/editing/upload; retain content. Promote a restricted member, demote, leave/rejoin, and verify server-owned transitions. Fail a mutation, retry, and repeat with delayed responses/account switching. Confirm member search/pages and allowed read-only actions survive.
+
+### L2 — Membership-announcement preference and group visibility · Implemented; device verification pending
+
+- [ ] Match account Show group membership messages and group visibility `members` / `admins` / `nobody`, including existing history, list previews and unread/read state.
+- **PWA evidence:** [system classification](../../chahua/pwa/src/app/messages/system-message.ts), [chat state](../../chahua/pwa/src/app/chats/chat-store.ts), and [conversation state](../../chahua/pwa/src/app/conversations/conversation-store.ts).
+- **Design:** Account preference lives in Settings → Conversations and saves immediately with an in-flight lock, authoritative rollback and retry on failure. Group policy has its own explicit Save in Edit Group, separate from identity/speaking saves so partial endpoint failures are not reported as one atomic success.
+- **Filtering boundary:** Only `member_joined`, `member_left`, `member_added`, and `member_removed` in group root streams are membership announcements. DMs, thread replies, pins and other system events are unaffected. Account preference and server `membershipMessagePolicy.canView` both apply; do not infer permission from display text or role alone. Reconcile cached content/summaries and reject stale page/policy responses without resetting paging or flashing valid content.
+- **Cross-device boundary:** The backend broadcasts group policy changes, but has no account-preference websocket event. Same-device preference saves apply immediately; another device learns the account preference through existing profile/list/message refresh and reconnect recovery. Do not invent instantaneous cross-device preference propagation.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Use admin/member accounts and all three group policies, with account show/hide both ways. Change group policy from another client while history/list are mounted; check past/new announcements, previews, unread counts and read advancement. Change account preference elsewhere and refresh/reconnect Apple to converge. Page/search during delayed changes; hidden content must not return. Unhide/refetch, change role and switch accounts. DMs, threads and pin events remain visible.
+
+### L3 — Joined-chat realtime reconciliation · Implemented; device verification pending
+
+- [ ] Use dedicated `chatMembershipChanged` events to reconcile joined groups independently of visible membership announcements.
+- **PWA evidence:** [list reconciliation](../../chahua/pwa/src/app/chats/chat-list-store.ts).
+- **Design:** Reuse targeted chat-ID calibration and existing list generations/cursors, not a full-list reload or a second membership subsystem. A hidden announcement must not prevent a new group appearing; the current user's join/add announcement must not manufacture an incorrect preview.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Add/join the account from a second client while Apple is open, loading a page, backgrounded, and reconnecting. Repeat with announcements hidden by account preference and each group policy. Verify one correct row/preview, unchanged pagination, stale response fencing and no cross-account additions.
+
+### L4 — Stable system-message profile and message targets · Implemented; device verification pending
+
+- [ ] Make structured membership and pin/unpin targets navigable using `systemLinks` IDs.
+- **PWA evidence:** [system-message preview](../../chahua/pwa/src/app/messages/message-preview/message-preview.ts).
+- **Design:** Preserve stored wording and literal names; actor and recipient identities remain separate, and user/message targets are independently reachable when both exist. Target identity always comes from `systemLinks.uid` / exact `messageId`, never matching a display name. Message targets resolve authoritatively and open their actual chat/thread scope. Legacy records without IDs remain inert. Captured-only saved/forwarded timelines and interaction previews cannot activate live targets.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Tap actor versus added/removed recipient, all pin/unpin event kinds, both targets on one row, wrapped/centered text, and a cross-thread message target. Verify unavailable/deleted targets show an error; Back retains source position/draft. Legacy records, selection mode, saved snapshots and forwarded captures must not leak live source/profile navigation.
+
+### L5 — Change a pending forward's destination · Implemented; device verification pending
+
+- [ ] Stage a pending forward at a destination, change that destination without sending, and send only on explicit Send Forward.
+- **PWA evidence:** [destination picker](../../chahua/pwa/src/app/messages/forward-picker/forward-picker.ts) and [atomic navigation handoff](../../chahua/pwa/src/app/conversations/conversation-navigation.ts).
+- **Design:** The existing picker/outbox remain the only forwarding path. Choosing a destination opens its pending preview and never enqueues. Change Destination transfers only the forward selection after successful navigation; cancellation/failure restores the old preview and the new target's prior selection. Text, reply and attachment drafts stay with their original destinations. Pending forward selections are account-scoped and memory-only, matching the PWA; explicit sending creates the existing durable outbox operation.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Prepare different text/reply/attachment drafts and existing forward previews in two chats and a thread. Stage, move, choose the same target, cancel, fail navigation, and retry; verify no send before Send Forward, no lost/reassigned drafts, and only one resulting operation. Check whole-thread/placeholder consent, restricted destinations and account replacement.
+
+### L6 — Explicit startup failures and bounded sign-in recovery · Implemented; device verification pending
+
+- [ ] Distinguish missing/expired credentials from retryable network/server/unknown failures; show slow-start feedback after 10 seconds and bound authentication attempts to 30 seconds.
+- **PWA evidence:** [startup scenarios](../../chahua/pwa/docs/startup-verification.md), [entry states](../../chahua/pwa/src/app/app/app.ts), and [session deadline](../../chahua/pwa/src/app/session/session-store.ts).
+- **Native decision:** Keep native username/password sign-in rather than PWA announcement-post/cookie entry. Expired credentials show sign-in guidance and are removed; non-401 failures preserve the stored credential and offer Retry. Retry during slow restoration cancels/restarts that attempt, not the whole native application. Browser script/translation bootstrap reload states do not apply to a compiled app. Existing realtime and durable-outbox recovery remain separate, unchanged mechanisms.
+- **Fencing:** One authentication deadline covers credential exchange/validation; cancelled/older attempts must not install a late session or overwrite a retry. Error copy distinguishes network, service and unknown failure without exposing tokens or response bodies.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Cold-launch with no token, invalid token, offline network, HTTP503 and another failure such as403. Confirm only invalid credentials are removed. Retry a transient failure successfully. Delay beyond10/30 seconds; retry while slow, restore connectivity, and verify cancellation/no late identity changes. Check repeated taps, native sign-in timeout, persisted queued sends, reconnect and account isolation.
+
+## Device-feedback regressions
+
+
+
+### R1 — Unread entry and visible-message read progress · Implemented; device verification pending
+
+- [ ] Opening an unread conversation places its unread boundary/first unread message at the top of the unobscured viewport when content below permits; otherwise clamp naturally at the bottom. A settled initial viewport acknowledges its visible messages without a scroll gesture.
+
+- **Current implementation:** [shared read candidate and entry positioning](../App/Features/Chat/Conversation/Timeline/Model/ConversationTimelineModel.swift), [iOS viewport reporting](../App/Features/Chat/Conversation/Timeline/View/iOS/Host/TimelineCollectionViewController.swift), and [macOS viewport reporting](../App/Features/Chat/Conversation/Timeline/View/macOS/Host/TimelineTableViewController.swift). Preserve native top-alignment/clamping; change whole-row read eligibility to unobscured intersection.
+- **Visibility decision:** Any confirmed message row intersecting the viewport between the floating header and composer counts as visible, including tall media and partially clipped rows. Whole-row containment is not required. Rows wholly hidden by chrome or below/above the viewport, pending sends, and an isolated thread root must not advance the read cursor.
+- **Read-state invariants:** Keep immediate first-entry acknowledgement, the existing subsequent 500 ms stable-visibility dwell, monotonic server-confirmed progress, account/lifecycle fencing, and independent chat/thread scopes. Never acknowledge an unseen newest message merely because the chat opened.
+- **Acceptance:** Open a long chat with one and then a few unread tail messages, without touching the timeline, and confirm the badge/cursor clears through the visible tail. Repeat with tall media and fractional keyboard/composer sizes. Open a larger unread batch with enough content below it: verify top alignment and that offscreen newer messages remain unread. Repeat in a thread and after background/foreground; scrolling backwards must not regress progress.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Record initial visible message IDs and the acknowledged cursor, not only badge disappearance.
+
+
+
+### R2 — Confirm archive and unarchive · Implemented; device verification pending
+
+- [ ] Swiping Archive or Unarchive presents a native confirmation alert before changing the conversation.
+
+- **Decision:** Both directions require explicit confirmation; Cancel makes no archive request. Capture the selected conversation and action, and discard a pending confirmation when the account, store, list scope, or destination changes. Read/unread and notification swipes retain their existing behavior.
+- **Presentation decision:** Confirmation and list-action failures share one native alert presenter. Validate the captured account/list context on confirmation rather than requiring the presentation binding to remain set; SwiftUI may clear that binding before invoking its button action.
+- **Device sign-off:** iOS [ ] · macOS [ ]. In Messages and Threads, test short and full swipes, Cancel, confirmation, and API failure/retry. Repeat from the archived list to unarchive. Verify only the selected conversation moves.
+
+
+
+### R3 — Video posters, full-file cache, and download progress · Implemented; device verification pending
+
+- [ ] Message bubbles show generated video posters behind their play control. Opening a video shows a circular byte-based download indicator with percentage, then plays the completed local movie.
+
+- **Playback decision (user-selected):** Download/cache the complete video before playback rather than stream immediately. The old player used a remote URL and did not provide an explicit full-file disk cache. Only the selected, visible, foreground viewer page starts a movie download; creating a poster does not populate the full-video cache.
+- **Cache decision:** A separate 512 MiB movie cache sits beside the existing image cache. Completed movies survive reopening/relaunch; concurrent consumers share a download. Active playback leases pin their files. Least-recently-used unleased movies are evicted; an oversized active movie can temporarily exceed the budget and is removed after release. Settings cache size/clear includes both stores; clearing does not interrupt an active lease, but marks it for removal on release.
+- **Progress/error decision:** Known, consistent byte counts drive the ring and centered percentage. Unknown lengths and encoded transfers remain indeterminate instead of inventing a percentage. Failed or unplayable downloads never become completed cache entries; cancellation, account/viewer teardown, and retry release their work.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Check posters while scrolling/reusing bubbles and in the album. Open an uncached slow movie: observe increasing percentage and local playback after completion; reopen offline. Try unknown-length delivery, interruption/backgrounding, paging rapidly, failure/retry, and cache clearing during playback. Confirm paused/autoplay behavior and existing viewer controls are preserved.
+
+
+
+### R4 — Localized relative mute deadlines · Implemented; device verification pending
+
+- [ ] The chat-info mute tile localizes both its “until” phrase and relative day using the selected app language, not only the system language.
+- **Root cause / decision:** Foundation's `String(localized:locale:)` formats substitutions but did not select the requested resource language. Eager `AppLanguage.localized` lookups now select the appropriate cached language bundle. Chat info observes the app-language preference and passes it to deadline formatting, so switching language updates an already-open tile. Keep the existing compact numerical same-day/later-date formats and calendar/time-zone boundaries.
+- **Device sign-off:** iOS [ ] · macOS [ ]. With OS language different from app language, mute until tomorrow and switch English → Simplified Chinese → Traditional Chinese while chat info remains open. Expect “until tomorrow” / “至 明天”; no mixed-language relative word. Check today, later dates, expired deadlines, permanent mute and System Default.
 
 ## Already implemented — do not rebuild as missing features
 
@@ -195,6 +436,8 @@ The following native implementations were found in source. This does **not** new
 - Global and per-friend presence/read-receipt privacy, authorized DM receipts, online/away/last-seen display, DM online dots, group member/online counts, unread mention/reaction navigation and server-wide badge summaries: [Notifications](../App/Features/Notifications/), [presence display](../App/DesignSystem/Components/UserPresenceDisplay.swift), and [timeline architecture](arch/conversation-timeline.md). Account-level “Coming soon” exception-list placeholders do not mean per-friend overrides are absent; the PWA does not establish a bulk privacy-exception index requirement here.
 - Language selection, five-step message sizing with system-default option, thread inclusion in Messages, badge-color presets, cache inspection/clearing, and sticker/reaction preferences: [settings](../App/Features/Notifications/NotificationSettingsView.swift). Apple credential login, Keychain session restoration, and sign-out also exist; the PWA's token-entry lifecycle is not a native gap.
 
+
+
 ## Differences and exclusions
 
 - **Sticker picker shortcuts:** PWA can create packs/upload into an owned pack directly from its picker; Apple exposes these capabilities in Settings → Manage Sticker Packs. This is a navigation difference, not missing pack management. Reusing those screens from the picker is optional, not a blocker for the capability backlog.
@@ -203,8 +446,61 @@ The following native implementations were found in source. This does **not** new
 - No PWA implementation was established for self-profile editing, adding arbitrary members directly, group visibility editing, global message-history search, or sender/date message filters. Do not add them to this parity plan based only on API shapes or old client assumptions.
 - Do not regress Apple-only strengths such as secure credentials, durable drafts/outbox behavior, native Photos/export integration, or existing administrator tools to match narrower browser behavior.
 
+
+
 ## Verification and completion record
 
-This review used static source inspection across routed PWA UI/actions and corresponding native UI, policies, stores, and endpoint surfaces. No application builds, authenticated runtime scenarios, device interactions, or production mutations were performed. All new backlog boxes are intentionally unchecked.
+The initial review was static source inspection. The implementation pass added the workflows and design decisions recorded above. Capability boxes intentionally remain unchecked pending authenticated iOS/macOS acceptance; automated results do not certify device behavior. No production mutations or uploads were performed.
 
 For each implementation, exercise the changed UI through to its observable result on iOS and macOS, including failure/retry and navigation/state preservation. Use existing regression coverage where applicable; add focused tests for uncertain consumer-visible boundaries such as batch atomicity, snapshot authorization, invite eligibility, account switching, and exact ID/emoji preservation. Do not substitute copied request mocks or menu-presence assertions for actual behavior verification. Record manual device checks separately from automated/build evidence.
+
+### Automated and smoke evidence
+
+
+| Check                                                                                                   | Observed result                                                                                                                                                                                                                                                                                                                                                      | Limit                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `swift test --package-path Packages/ChahuaAPI --scratch-path .ci/SwiftPM/ChahuaAPI`                     | 75 tests passed, zero failures.                                                                                                                                                                                                                                                                                                                                      | Existing API/model coverage; not device UI certification.                                                                                                                                                                                                       |
+| iOS Simulator and macOS `build-for-testing`                                                             | Both passed after integration fixes; final macOS input correction rebuilt successfully.                                                                                                                                                                                                                                                                              | Simulator/ad-hoc builds do not verify signed Associated Domains or authenticated workflows.                                                                                                                                                                     |
+| Targeted macOS regressions (`.ci/Parity-20261024-macOS.xcresult`)                                       | Initial 199 tests: 198 passed; Finder image paste failed. The source regression was fixed; all 34 composer/focus/input tests then passed in `.ci/Parity-20261024-macOS-input-fix.xcresult`.                                                                                                                                                                          | Existing original-byte and no-filename-insertion assertions retained; no timeout/assertion weakening.                                                                                                                                                           |
+| Final macOS saved-state and reconnect verification                                                      | All 3 focused saved-state/snapshot/atomic-recall tests passed in `.ci/Parity-20261024-macOS-saved-fix.xcresult`; all 29 realtime-coordinator tests passed in `.ci/Parity-20261024-macOS-recovery.xcresult`.                                                                                                                                                          | Focused post-fix coverage, not a second full-suite claim.                                                                                                                                                                                                       |
+| Initial iOS simulator regression runs                                                                   | iOS 27 runner timed out after 600 seconds without a finalized result bundle. On iOS 26.5, 169 of 170 targeted tests passed; forwarded push/pop exposed an unsolicited saved-status error modal, fixed in source with a nonmodal in-place retry and focused regression.                                                                                               | The initial runner timeout is not reported as a pass; see focused post-fix results below.                                                                                                                                                                       |
+| Final iOS saved-state/navigation verification                                                           | All 6 focused tests passed on iOS 27 in `.ci/Parity-20261024-iOS27-saved-fix.xcresult`: forwarded push/pop, in-place saved-status retry, saved-forwarded source loss, delayed access-loss fencing, atomic recall failure/retry, and invalid batches.                                                                                                                 | A prior post-fix attempt on iOS 26.5 could not launch because that runtime became unavailable; it is not counted as test execution.                                                                                                                             |
+| Native Save/public-link integration                                                                     | `.ci/Feedback-20261024-macOS.xcresult`: 109 passed. `.ci/Feedback-20261024-iOS.xcresult`: 21 passed, including the authenticated bootstrap/account-replacement regression and exact `chahua.app` message/invitation URLs.                                                                                                                                            | Isolated API; no production mutations or signed Universal Link certification.                                                                                                                                                                                   |
+| iOS feedback-surface visual smoke                                                                       | Inspected native Save/remove menus, group info's selector/Edit, DM's first-position Forum action, Friends request-record row, and History & Sent initial selection.                                                                                                                                                                                                  | Throwaway harness reused the existing API fixture; unavailable data intentionally produces errors/loading. Does not verify real records, membership paging, invitation operations, or modal button taps.                                                        |
+| Final native read/appearance integration                                                                | `.ci/Feedback-Verified2-macOS.xcresult`: 217 passed. `.ci/Feedback-Verified2-iOS.xcresult`: 112 passed. Native controllers exercise gesture-free entry with one/three unread tail messages, unread top alignment, partial-row visibility excluding wholly obscured messages, and repeated appearance changes in the same Settings presentation.                      | Includes temporary native UI smoke using existing fixtures; no backend/device certification. One earlier iOS attempt timed out and is not counted as a pass.                                                                                                    |
+| Read regression before/after                                                                            | The updated AppKit scenario failed before the visibility fix: a visible clipped row was not acknowledged, and another viewport acknowledged 8 rather than visible message 9. The same native scenario passes on both platforms after switching to unobscured intersection.                                                                                           | Initial acknowledgement remains immediate; subsequent stable-visibility dwell is retained.                                                                                                                                                                      |
+| Real HTTP full-video cache smoke                                                                        | A throwaway executable compiled the production cache and downloaded a generated playable MP4. Seven scenarios passed: exact bytes/progress/cache replay/restart; active lease plus durable clear; gzip plus durable invalidation; unknown length; single-flight with independent cancellation; HTTP failure/retry; pinned oversized file and eviction after release. | Local HTTP transport and AVFoundation validation, not production CDN behavior. Smoke caught and fixed AVFoundation rejecting staging files without a movie extension.                                                                                           |
+| iOS album/video visual smoke                                                                            | `.ci/Media-Verified15-iOS.xcresult`: 10 passed, including existing media hosting, progress boundaries, and a temporary native surface exercise. Inspected three-column image/video grids, generated bubble posters, a centered 3% circular indicator, and archive confirmation; AVPlayer reached `readyToPlay` with a completed local-file asset.                    | Generated media and existing isolated API fixtures; actual long-press/swipe gestures and authenticated source navigation still need device sign-off.                                                                                                            |
+| macOS album/video integration                                                                           | `.ci/Media-Final7-macOS.xcresult`: 9 passed. Native album/bubble posters and a centered 3% ring were inspected; AVPlayer reached `readyToPlay` with a completed local-file asset.                                                                                                                                                                                    | Temporary harness supplies a foreground notification because the test host is not reliably active. The ready movie canvas remained black in offscreen bitmap capture; these state assertions are not visual playback proof. Verify playback/controls on device. |
+| Live macOS appearance smoke                                                                             | Repeated native appearance checks passed in `.ci/Media-Live3-macOS.xcresult`; a WindowServer capture shows the open Settings surface in Dark, including its sidebar.                                                                                                                                                                                                 | Offscreen AppKit bitmap captures omit vibrant sidebar text; they are not used as contrast evidence. This result bundle also contains a separate earlier media-harness failure, not an overall pass.                                                             |
+| iOS archive confirmation surface                                                                        | `.ci/Archive-Typed14-iOS.xcresult`: the isolated native-row dispatch smoke passed. Inspected the centered Archive/Cancel alert and verified the chat remains active before confirmation.                                                                                                                                                                             | A temporary typed dispatch seam exercises the real row callback, not a touch gesture. Short/full swipes, Cancel/confirm button interaction, and Unarchive remain explicit device scenarios; the seam is removed after smoke verification.                       |
+| Final platform integration regressions                                                                  | `.ci/Feedback-Final16-macOS.xcresult`: 232 passed. `.ci/Feedback-Final17-iOS.xcresult`: 226 passed. Zero failures, covering saved/session state, realtime, message actions, shared/native timeline behavior, image galleries/hosting, and video progress boundaries.                                                                                                 | Targeted suites, not a full-suite or physical-device claim. The final iOS run also rebuilt after removing the temporary UI harnesses and dispatch hook.                                                                                                         |
+| `./format.sh --check`                                                                                   | Passed after formatting.                                                                                                                                                                                                                                                                                                                                             | Formatting only.                                                                                                                                                                                                                                                |
+| iOS 27 simulator visual smoke                                                                           | Launched the actual sign-in surface with Dark and Light overrides; Light remained light against OS Dark. System followed a live OS Dark → Light change after the transition settled. The existing local timeline diagnostic also rendered with all-avatar preference enabled. Screenshots were inspected.                                                            | Root appearance/native timeline smoke only; settings persistence, authenticated sheets, and per-chat identity scenarios still require device sign-off.                                                                                                          |
+| Throwaway executable using the real `ChahuaClient` with isolated `URLProtocol` interception             | Passed: explicit image-as-file upload intent, invite preview without redemption, Unicode verification-question update, one bulk recall retaining IDs above 2^53. All four requests intercepted.                                                                                                                                                                      | Transport/decoding smoke only; no real server, file-byte export, or UI claims.                                                                                                                                                                                  |
+| Throwaway executable compiling the real reaction catalog with bundled resources and native font shaping | Passed English/Hans/Hant/mixed-token lookup, exact supported tone/mixed-tone/ZWJ/VS16 sequences, no-results, and tone variants.                                                                                                                                                                                                                                      | This Mac's font intentionally filters unsupported sequences; not picker-interaction/device certification.                                                                                                                                                       |
+| macOS native timeline diagnostic launch                                                                 | The existing `-bubble-timeline -fixture-split` window launched with all-avatar preference enabled; no backend started.                                                                                                                                                                                                                                               | Window capture failed with both window-ID and region capture, so no macOS visual correctness claim is made.                                                                                                                                                     |
+| Website association discovery                                                                           | Earlier checks against the former host returned 404. The canonical `https://chahua.app/.well-known/apple-app-site-association` now returns HTTP 200 directly, `Content-Type: application/json`, and the expected app identifier and routes.                                                                                                                          | Signing profile capability, Apple association caching, and external OS delivery still need device verification.                                                                                                                                                 |
+| Dedicated thread API transport smoke | Passed four real `ChahuaClient` requests through isolated HTTP interception: chat-root and participant pagination, exact root ID/cursor `9007199254740995`, UID cursor `2147483646`, final UID `2147483647`, and terminal cursors. | Throwaway smoke removed afterward; no production-server or authenticated UI claim. |
+| Native request/editor integration | `.ci/Friend-Settings7-macOS.xcresult`: 1 passed; `.ci/Friend-Settings7-iPad.xcresult`: 2 passed; `.ci/Friend-Settings8-iPhone.xcresult`: 1 passed. Inspected compact and sidebar-only request pushes, compact Settings titles, pushed permission form, Save spinner, and discard alert. Invalid forms and mode changes made no writes; failed saves retained the draft; retry saved the trimmed question and returned to Settings. | Reused isolated fixtures and temporary dispatch seams, not real backend mutations or touch/gesture automation. macOS offscreen captures omit native toolbar/vibrant text. All temporary source scaffolds were removed. |
+| iOS audio-session ownership smoke | The iPad run exercised actual queued `AVAudioSession` calls: two owners active; first release retained audio; rapid final release/reopen stayed active; final release deactivated. Queue drain asserted non-main execution. No runtime warnings recorded in the result bundle. | Simulator lifecycle proof, not physical-device audio routing, interruptions, or audible playback certification. Temporary inspection seam removed afterward. |
+| Final API package regression | `swift test` in `Packages/ChahuaAPI`: 75 passed, zero failures, after removing the temporary transport smoke. | Existing package suite; new endpoint behavior separately exercised above. |
+| Final source integration, without temporary scaffolds | `.ci/Friend-Final9-iOS.xcresult` and `.ci/Friend-Final9-macOS.xcresult`: 63 tests passed on each platform, zero failures, covering the existing ChatStore, message gallery, and video-progress suites. `./format.sh --check` passed. | Targeted regressions and rebuilt final app/test targets, not a full-suite or physical-device claim. |
+| 2026-10-25 final native suites | `.ci/Latest-Parity9-iOS-final.xcresult`: 408 passed; `.ci/Latest-Parity9-macOS-final.xcresult`: 452 passed. Zero failures or skipped tests; final sources rebuilt after all temporary smoke code was removed. `./format.sh --check` passed. | Complete native test target on iOS Simulator/ad-hoc macOS, not physical-device or authenticated-backend certification. |
+| Native Back and startup recovery smoke | `.ci/Latest-Parity8-iOS-smoke.xcresult`: 8 passed. Inspected the actual chevron Back item; exercised clean/dirty native action and swipe-delegate decisions, cleanup/restoration, 10-second slow feedback, cancellation/retry, 30-second timeout, retained credential and successful retry. | Temporary harness reuses existing fixtures; native event/delegate dispatch is not a physical swipe. UIKit copies `UIAction`: smoke caught an ownership/cleanup defect, fixed using action identifiers rather than reference identity. |
+| Latest policy/forward/system surfaces | Inspected native iOS group controls/account preference, actor/recipient/message links, and unsent Change Destination / Send Forward preview. macOS live WindowServer capture verified the grouped, scrollable editor keeps speaking/membership/avatar controls reachable; `.ci/Latest-Parity6-macOS-live.xcresult`: 3 passed; `.ci/Latest-Parity7-macOS-live.xcresult`: 1 passed. | Isolated fixtures; member loading and saved-status failures in screenshots are intentionally unsupported fixture operations. Actual mutations, target taps and narrow-window/device interactions still require the L1–L5 acceptance steps. Offscreen AppKit form captures were not accepted as visual proof. |
+| Selected-language mute deadline | A throwaway executable compiled the real localization helper against built app resources: English `until tomorrow`, Simplified/Traditional Chinese `至 明天`. Native iOS/macOS captures show the same open mute tile switching from English to Chinese. | Resource/visible-caption proof; calendar-boundary, System Default and all deadline variants remain R4 device scenarios. Temporary executable/source removed. |
+| Latest API and durable restriction contracts | `swift test` in `Packages/ChahuaAPI`: 75 passed, zero failures, including extended speaking/membership/system-target transport/model and durable restriction coverage. | Isolated request interception/storage, no production mutations. The first latest-feature iOS full run timed out without a finalized bundle; it is not counted as a pass. Final native suite results above supersede it. |
+| Explicit-save settings native surfaces | `.ci/Settings-ExplicitSave3-iOS-settled.xcresult`: 1 passed. Inspected loaded Read Receipts/Last Seen forms with compact title, native chevron and Save. Shared controls exercised neutral → blue Save, pending spinner, native Back → discard alert, and exactly one explicit write. `.ci/Settings-ExplicitSave1-iOS.xcresult` captures also show speaking summaries hidden for a restricted member, then appearing after live admin promotion. | Existing isolated fixtures; shared controls driven by the real receipt model. Physical swipe/alert-button interactions and actual account-form save/return remain S3/S5 device checks. Early captures obscured by an old alert or still loading were not used as loaded-form proof. Temporary smoke code removed. |
+| Final explicit-save/settings integration | `.ci/Settings-ExplicitSave4-iOS-final.xcresult`: 415 passed; `.ci/Settings-ExplicitSave4-macOS-final.xcresult`: 459 passed. Zero failures/skips/runtime warnings; temporary UI smoke code removed and all final app/test sources rebuilt, including the avatar-menu removal. `./format.sh --check` passed. | Complete native test target. Draft/revert zero-write, failed-save retention/retry, successful baselines, repeated saves, cancellation and account/session fencing covered with existing fixtures. Physical-device settings interactions and avatar-menu/DM navigation remain manual acceptance. |
+
+
+
+
+### Device run preparation
+
+- Use an isolated development backend and two accounts; verify its API/web origin before mutations. Never use the PWA production-targeting proxy for these scenarios.
+- Prepare a group with admin/member roles, a writable DM, a thread with unsubscribed roots and multiple history pages, text/media/forwarded records, a PDF, another ordinary document, and voice messages.
+- For the feedback regressions, also prepare one/three unread tail messages, a tall media row, a multi-page image/video album, active/archived chats and threads, and an uncached movie on a throttled connection. Keep an already-cached movie available for offline replay and clear-during-playback checks.
+- Run every item's Acceptance plus its extra Device sign-off scenarios. Mark iOS and macOS separately, recording build/device, result, and any failure. Check the capability box only when both pass.
+- M2/G2 external-link cases require a correctly signed `applinks:chahua.app` entitlement. The canonical website association is live; regenerate provisioning profiles that lack Associated Domains, then test actual external delivery on both platforms. Pasted invite URLs and in-app cards do not verify OS association.

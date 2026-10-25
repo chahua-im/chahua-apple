@@ -214,10 +214,13 @@
                 case .reactionDetails: available = actions.openReactionDetails != nil
                 case .select: available = actions.toggleMessageSelection != nil
                 case .forward: available = actions.forwardMessage != nil
+                case .save: available = actions.toggleSavedMessage != nil
                 default: available = true
                 }
-                let label = action.label(
-                    hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
+                let label =
+                    action == .save && context.isSaved
+                    ? AppLanguage.localized("Remove Saved Message")
+                    : action.label(hasAttachments: row.entry.remoteMessage?.hasAttachments == true)
                 button.configureAction(
                     symbol: action.symbol, label: label, destructive: action == .delete)
                 button.isEnabled = implemented && available
@@ -249,7 +252,8 @@
             }
             pendingSurface.isHidden = !showsPending
             blockButton.isEnabled =
-                actions.blockPendingMessage != nil && row.entry.messageType == .text
+                actions.blockPendingMessage != nil
+                && [.text, .file].contains(row.entry.messageType)
                 && row.entry.presentationMessage?.forwardedFrom == nil
             revokeButton.isEnabled = actions.revokePendingMessage != nil
             blockButton.alphaValue = blockButton.isEnabled ? 1 : 0.4

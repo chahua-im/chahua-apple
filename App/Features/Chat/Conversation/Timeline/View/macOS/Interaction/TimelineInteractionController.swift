@@ -173,7 +173,8 @@
                     width: rect.width, height: rect.height)
             let localSource = overlay.convert(sourceInContent, from: content)
             overlay.configure(
-                row: row, context: context, actions: actions, sourceRect: localSource)
+                row: row, context: actions.pinContext(for: row, base: context),
+                actions: actions, sourceRect: localSource)
         }
 
         func dismiss(animated: Bool = true) {
@@ -291,6 +292,19 @@
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
                 dismiss()
+            case .copyLink:
+                guard let message = row.entry.remoteMessage,
+                    let link = MessagePermalink(chatID: message.chatId, messageID: message.id)
+                else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(link.url.absoluteString, forType: .string)
+                dismiss()
+            case .save:
+                guard let message = row.entry.remoteMessage,
+                    let toggleSaved = actions.toggleSavedMessage
+                else { return }
+                dismiss()
+                toggleSaved(message)
             case .select, .forward:
                 guard let message = row.entry.remoteMessage else { return }
                 let callback =
@@ -344,7 +358,9 @@
             }
             guard case .pending(let pending) = row.entry, !pending.dispatchClaimed,
                 actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID),
-                revoke || (pending.body.messageType == .text && pending.forwardRequest == nil),
+                revoke
+                    || ([.text, .file].contains(pending.body.messageType)
+                        && pending.forwardRequest == nil),
                 let operation = revoke ? actions.revokePendingMessage : actions.blockPendingMessage
             else {
                 refresh()

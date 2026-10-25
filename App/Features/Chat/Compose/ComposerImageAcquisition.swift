@@ -21,8 +21,9 @@ final class ComposerAttachmentState: ObservableObject {
     @Published private(set) var dropRequest: DropRequest?
 
     func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard !isAcquiring, dropRequest == nil, !providers.isEmpty else { return false }
-        dropRequest = DropRequest(providers: providers)
+        let attachments = providers.filter { ComposerImageAcquisition.supports($0) }
+        guard !isAcquiring, dropRequest == nil, !attachments.isEmpty else { return false }
+        dropRequest = DropRequest(providers: attachments)
         return true
     }
 
@@ -89,17 +90,55 @@ enum ComposerImageAcquisition {
         for url in urls { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     }
 
+    static func isFile(_ provider: NSItemProvider, materializedURL: URL) -> Bool {
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            let type = UTType(filenameExtension: materializedURL.pathExtension)
+            return type?.conforms(to: .image) != true && type?.conforms(to: .movie) != true
+        }
+        return !provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+            && !provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier)
+    }
+
+    static func supports(_ provider: NSItemProvider) -> Bool {
+        provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+            || provider.registeredTypeIdentifiers.contains {
+                guard let type = UTType($0) else { return false }
+                return type.conforms(to: .data) && !type.conforms(to: .text)
+                    && !type.conforms(to: .url)
+            }
+    }
+
     static func materialize(_ provider: NSItemProvider) async throws -> URL {
         try Task.checkCancellation()
-        if let type = provider.registeredTypeIdentifiers.first(where: {
-            guard let type = UTType($0) else { return false }
-            return type.conforms(to: .image) || type.conforms(to: .movie)
-        }) {
+        if !provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
+            let type = provider.registeredTypeIdentifiers.first(where: {
+                guard let type = UTType($0) else { return false }
+                return type.conforms(to: .data) && !type.conforms(to: .text)
+                    && !type.conforms(to: .url)
+            })
+        {
+            let suggestedName = provider.suggestedName
             return try await withCheckedThrowingContinuation { continuation in
                 provider.loadFileRepresentation(forTypeIdentifier: type) { url, error in
                     do {
                         guard let url else { throw error ?? AcquisitionError.unavailable }
-                        continuation.resume(returning: try copyTemporary(url))
+                        let copied = try copyTemporary(url)
+                        if let name = suggestedName, !name.isEmpty {
+                            let safeName = (name as NSString).lastPathComponent
+                            var destination = copied.deletingLastPathComponent()
+                                .appendingPathComponent(safeName)
+                            if destination.pathExtension.isEmpty,
+                                let suffix = UTType(type)?.preferredFilenameExtension
+                            {
+                                destination.appendPathExtension(suffix)
+                            }
+                            if destination != copied {
+                                try FileManager.default.moveItem(at: copied, to: destination)
+                            }
+                            continuation.resume(returning: destination)
+                        } else {
+                            continuation.resume(returning: copied)
+                        }
                     } catch { continuation.resume(throwing: error) }
                 }
             }
@@ -128,7 +167,7 @@ enum ComposerImageAcquisition {
     enum AcquisitionError: LocalizedError {
         case unavailable
         var errorDescription: String? {
-            "This photo or video couldn’t be read. Try choosing it from Files or Photos again."
+            "This attachment couldn’t be read. Try choosing it from Files or Photos again."
         }
     }
 }

@@ -286,7 +286,7 @@
             var replies: [MessageID] = []
             var actions = TimelineBubbleActions()
             actions.replyToMessage = { replies.append($0.id) }
-            actions.interactionContext = .init(canWrite: true)
+            actions.interactionContext = .init(canWrite: true, speakingMode: .unrestricted)
             let entered = try XCTUnwrap(
                 NSEvent.enterExitEvent(
                     with: .mouseEntered, location: .zero, modifierFlags: [], timestamp: 0,
@@ -339,7 +339,7 @@
             defer { window.close() }
             var actions = TimelineBubbleActions()
             actions.replyToMessage = { _ in }
-            actions.interactionContext = .init(canWrite: true)
+            actions.interactionContext = .init(canWrite: true, speakingMode: .unrestricted)
             let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
             let rows = try (0..<2).map { index -> TimelineRowView in
                 let message = try TimelineTestFixtures.message(id: UInt64(index + 1), at: index)

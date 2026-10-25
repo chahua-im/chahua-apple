@@ -268,19 +268,21 @@
             try await show(
                 top: partial.minY + partial.height / 4, bottom: partial.maxY - partial.height / 4)
             try await Task.sleep(for: .milliseconds(650))
-            XCTAssertEqual(reads, [], "A row clipped by both overlays must never be marked read.")
+            XCTAssertEqual(
+                reads, [messages[6].id],
+                "A message visible between the overlays is read even when the row is clipped.")
 
             try await show(top: try frame(5).midY, bottom: try frame(8).midY)
             try await Task.sleep(for: .milliseconds(650))
             XCTAssertEqual(
-                reads, [messages[7].id],
-                "Choose the last fully visible row, not the partially visible row under the composer."
+                reads, [messages[6].id, messages[8].id],
+                "Read through the last intersecting row, excluding rows wholly behind the composer."
             )
 
             try await show(top: try frame(14).midY, bottom: table.bounds.maxY)
             try await Task.sleep(for: .milliseconds(650))
             XCTAssertEqual(
-                reads, [messages[7].id, messages[15].id],
+                reads, [messages[6].id, messages[8].id, messages[15].id],
                 "Pending rows cannot advance read progress.")
         }
 

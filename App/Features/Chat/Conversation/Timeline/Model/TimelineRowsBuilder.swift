@@ -54,7 +54,6 @@ enum TimelineRow: Hashable, Identifiable {
 
 struct TimelineRowsBuilder {
     var currentUserID: Int32
-    var isGroupChat: Bool
 
     var calendar: Calendar
     var capturedReplyRedactedIDs: Set<MessageID> = []
@@ -106,16 +105,10 @@ struct TimelineRowsBuilder {
                 groupedWithNext: groupedWithNext
             )
             let isOutgoing = entry.senderID == currentUserID
-            #if os(macOS)
-                let showsSenderName =
-                    isGroupChat
-                    && entry.messageType != .system
-                    && (groupPosition == .single || groupPosition == .first)
-            #else
-                let showsSenderName =
-                    entry.messageType != .system
-                    && (groupPosition == .single || groupPosition == .first)
-            #endif
+            // Identity preferences are presentation inputs, not grouping rules.
+            let showsSenderName =
+                entry.messageType != .system
+                && (groupPosition == .single || groupPosition == .first)
             rows.append(
                 .message(
                     .init(

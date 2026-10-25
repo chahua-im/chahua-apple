@@ -101,6 +101,20 @@
                 requestDisplayUpdate()
             }
         }
+        var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars {
+            didSet {
+                guard showAllAvatars != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
+        var showDmDetails = ConversationTimelinePreferences.defaultShowDmDetails {
+            didSet {
+                guard showDmDetails != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
         private lazy var rowCache = TimelineRowCache(
             currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil)
         /// Prepared rows backing `rows`; on-demand measurement may refresh individual entries.
@@ -333,7 +347,9 @@
                 avatarSize: UIFontMetrics(forTextStyle: .body).scaledValue(
                     for: 36, compatibleWith: traits),
                 layoutDirection: view.effectiveUserInterfaceLayoutDirection == .rightToLeft
-                    ? .rightToLeft : .leftToRight, language: appLanguage)
+                    ? .rightToLeft : .leftToRight, language: appLanguage,
+                showAllAvatars: showAllAvatars,
+                showsMessageDetails: model.isGroupChat || showDmDetails)
         }
 
         private func exactLayout(for row: TimelineRow) -> TimelineRowLayout {
@@ -529,6 +545,8 @@
                     ? nil : { [weak self] in self?.actions.openSticker?($0) },
                 openReply: actions.openReply == nil
                     ? nil : { [weak self] in self?.actions.openReply?($0) },
+                openSystemMessage: actions.openSystemMessage == nil
+                    ? nil : { [weak self] in self?.actions.openSystemMessage?($0) },
                 openReactionDetails: actions.openReactionDetails == nil
                     ? nil : { [weak self] in self?.actions.openReactionDetails?($0) },
                 replyToMessage: actions.replyToMessage == nil
@@ -1049,12 +1067,8 @@
             let visibleItems = items ?? visibleItems()
             position = capturePosition(visibleItems: visibleItems)
             let visible = visibleItems.map(\.indexPath.item)
-            let unobscured = unobscuredViewport
-            let fullyVisibleMessageIDs = visibleItems.sorted { $0.indexPath < $1.indexPath }
-                .compactMap { item -> MessageID? in
-                    guard !unobscured.isEmpty, unobscured.contains(item.frame) else { return nil }
-                    return rows[item.indexPath.item].messageID
-                }
+            let visibleMessageIDs = visibleItems.sorted { $0.indexPath < $1.indexPath }
+                .compactMap { rows[$0.indexPath.item].messageID }
             let top = max(
                 0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top)
             let height = max(
@@ -1068,7 +1082,7 @@
                     distanceToTop: top,
                     distanceToBottom: max(0, collectionView.contentSize.height - top - height),
                     height: height,
-                    fullyVisibleMessageIDs: fullyVisibleMessageIDs
+                    visibleMessageIDs: visibleMessageIDs
                 ), reason: reason, revision: installedRevision)
         }
     }

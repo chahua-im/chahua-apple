@@ -24,11 +24,11 @@ enum DesignSystemFixtures {
                             senderID: 1, state: state
                         )))
             }
-            return bubbleRowsBuilder(isGroupChat: true).build(entries)
+            return bubbleRowsBuilder().build(entries)
         }
 
         static var directTextBubbleRows: [TimelineRow] {
-            bubbleRowsBuilder(isGroupChat: false).build(Array(textBubbleMessages.prefix(2)))
+            bubbleRowsBuilder().build(Array(textBubbleMessages.prefix(2)))
         }
 
         static var textBubbleMessages: [MessageResponse] {
@@ -86,11 +86,11 @@ enum DesignSystemFixtures {
 
         private static let bubbleDate = ISO8601DateFormatter().date(from: "2026-09-01T13:05:00Z")!
 
-        private static func bubbleRowsBuilder(isGroupChat: Bool) -> TimelineRowsBuilder {
+        private static func bubbleRowsBuilder() -> TimelineRowsBuilder {
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = TimeZone(secondsFromGMT: 0)!
             return TimelineRowsBuilder(
-                currentUserID: 1, isGroupChat: isGroupChat, calendar: calendar)
+                currentUserID: 1, calendar: calendar)
         }
     #endif
 }

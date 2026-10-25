@@ -5,25 +5,32 @@ import Foundation
 protocol BubbleMediaAttachment: Hashable {
     var id: String { get }
     var mediaDimensions: CGSize { get }
+    var isFilePresentation: Bool { get }
 }
 
 extension AttachmentResponse: BubbleMediaAttachment {
+    var isFilePresentation: Bool {
+        isDocumentAttachment || (width == 0 && height == 0)
+    }
     var isDocumentAttachment: Bool {
         let mime = kind.lowercased()
-        return !mime.hasPrefix("image/") && !mime.hasPrefix("video/") && !mime.hasPrefix("audio/")
+        return !mime.hasPrefix("image/") && !mime.hasPrefix("video/")
     }
     var documentSize: String {
         ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }
     var mediaDimensions: CGSize {
-        isDocumentAttachment
+        isFilePresentation
             ? CGSize(width: 284, height: 80)
             : .init(width: Int(width ?? 0), height: Int(height ?? 0))
     }
 }
 
 extension LocalOutgoingAttachment: BubbleMediaAttachment {
-    var mediaDimensions: CGSize { .init(width: width, height: height) }
+    var isFilePresentation: Bool { isFile }
+    var mediaDimensions: CGSize {
+        isFile ? CGSize(width: 284, height: 80) : .init(width: width, height: height)
+    }
 }
 
 enum BubbleMediaLayout {
@@ -119,6 +126,17 @@ enum BubbleMediaLayout {
         for attachments: [Attachment], resolvedWidth: CGFloat
     ) -> Gallery<Attachment>? {
         guard resolvedWidth.isFinite, resolvedWidth > 0, attachments.count > 1 else { return nil }
+        if attachments.contains(where: \.isFilePresentation) {
+            let width = min(resolvedWidth, 420)
+            let cells = attachments.enumerated().map { index, attachment in
+                Cell(
+                    attachment: attachment,
+                    frame: CGRect(x: 0, y: CGFloat(index) * 82, width: width, height: 80),
+                    overflowCount: 0)
+            }
+            return Gallery(
+                cells: cells, size: CGSize(width: width, height: CGFloat(cells.count) * 82 - 2))
+        }
         let limits = CGSize(width: resolvedWidth, height: min(560, resolvedWidth * 4 / 3))
         let items = attachments.prefix(6)
         let ratios = items.map { attachment -> CGFloat in

@@ -8,6 +8,10 @@
         @AppStorage(MessageTextSizePreference.storageKey)
         private var messageTextSize = MessageTextSizePreference.defaultValue
         @AppStorage(AppLanguage.storageKey) private var appLanguage = AppLanguage.system.rawValue
+        @AppStorage(ConversationTimelinePreferences.showAllAvatarsStorageKey)
+        private var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars
+        @AppStorage(ConversationTimelinePreferences.showDmDetailsStorageKey)
+        private var showDmDetails = ConversationTimelinePreferences.defaultShowDmDetails
         let model: ConversationTimelineModel
         var actions = TimelineBubbleActions()
         var mediaContext: AppMediaContext?
@@ -18,6 +22,8 @@
             controller.colorScheme = colorScheme
             controller.messageTextSize = messageTextSize
             controller.appLanguage = appLanguage
+            controller.showAllAvatars = showAllAvatars
+            controller.showDmDetails = showDmDetails
             controller.headerInset = chatHeaderInset
             controller.composerInset = chatComposerInset
             return controller
@@ -31,6 +37,8 @@
             controller.colorScheme = colorScheme
             controller.messageTextSize = messageTextSize
             controller.appLanguage = appLanguage
+            controller.showAllAvatars = showAllAvatars
+            controller.showDmDetails = showDmDetails
             controller.headerInset = chatHeaderInset
             controller.composerInset = chatComposerInset
         }

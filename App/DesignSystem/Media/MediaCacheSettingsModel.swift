@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import Kingfisher
 
-/// The asynchronous operation currently affecting the account's Kingfisher media cache.
+/// The asynchronous operation currently affecting the account's image and full-video caches.
 enum MediaCacheSettingsState: Equatable {
     case idle
     case refreshing
@@ -40,13 +40,15 @@ final class MediaCacheSettingsModel: ObservableObject {
     var isClearing: Bool { state == .clearing }
     var isBusy: Bool { isRefreshing || isClearing }
 
-    /// Reads the account-scoped Kingfisher disk cache size in bytes.
+    /// Reads the account-scoped image and completed full-video disk cache size in bytes.
     func refresh() async {
         guard !isBusy, let mediaContext else { return }
         let id = beginOperation(state: .refreshing)
 
         do {
-            let size = try await mediaContext.cache.diskStorageSize
+            let imageSize = try await mediaContext.cache.diskStorageSize
+            let videoSize = try await mediaContext.videoCache.diskStorageSize()
+            let size = imageSize + videoSize
             guard id == operationID else { return }
             diskStorageSize = size
             state = .idle
@@ -55,8 +57,8 @@ final class MediaCacheSettingsModel: ObservableObject {
         }
     }
 
-    /// Removes the account-scoped Kingfisher image/media cache from memory and disk.
-    /// This does not touch drafts, the outgoing-message store, or any other local data.
+    /// Removes the account's image and full-video caches. Playing videos remain pinned until
+    /// their players release them; drafts, outgoing messages and other local data are untouched.
     func clear() async {
         guard !isClearing, let mediaContext else { return }
         let id = beginOperation(state: .clearing)
@@ -64,7 +66,10 @@ final class MediaCacheSettingsModel: ObservableObject {
         await mediaContext.cache.clearDiskCache()
 
         do {
-            let size = try await mediaContext.cache.diskStorageSize
+            try await mediaContext.videoCache.clear()
+            let imageSize = try await mediaContext.cache.diskStorageSize
+            let videoSize = try await mediaContext.videoCache.diskStorageSize()
+            let size = imageSize + videoSize
             guard id == operationID else { return }
             diskStorageSize = size
             state = .cleared

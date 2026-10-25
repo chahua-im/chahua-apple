@@ -73,6 +73,9 @@ struct ChatNotificationSettingsView: View {
             .disabled(saving)
         }
         .navigationTitle("Notification settings")
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
         }

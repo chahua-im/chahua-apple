@@ -5,12 +5,16 @@ struct PresencePrivacySettingsView: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: PresencePrivacySettingsModel
     @State private var loadRetryTask: Task<Void, Never>?
+    @State private var saveTask: Task<Void, Never>?
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     let grouped: Bool
+    private let onFinish: (() -> Void)?
 
-    init(store: ChatStore, grouped: Bool) {
+    init(store: ChatStore, grouped: Bool, onFinish: (() -> Void)? = nil) {
         self.store = store
         self.grouped = grouped
+        self.onFinish = onFinish
         _model = StateObject(wrappedValue: PresencePrivacySettingsModel(store: store))
     }
 
@@ -60,11 +64,17 @@ struct PresencePrivacySettingsView: View {
             }
         }
         .navigationTitle("Last Seen & Online")
-        #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .task(id: store.currentUserProfile?.uid) { await model.load() }
+        .settingsEditorControls(
+            isDirty: model.isDirty, canSave: model.canSave, isSaving: model.isSaving,
+            accountID: store.currentUserProfile?.uid, onSave: beginSave, onFinish: finish
+        )
+        .task(id: store.currentUserProfile?.uid) {
+            loadRetryTask?.cancel()
+            saveTask?.cancel()
+            await model.load()
+        }
         .onDisappear {
+            saveTask?.cancel()
             loadRetryTask?.cancel()
             loadRetryTask = nil
             model.cancelLoading()
@@ -87,20 +97,14 @@ struct PresencePrivacySettingsView: View {
         case .loaded:
             ForEach(PresenceVisibility.allCases, id: \.self) { value in
                 Button {
-                    Task { await model.chooseVisibility(value) }
+                    model.chooseVisibility(value)
                 } label: {
                     HStack(spacing: 12) {
                         ZStack {
                             if model.visibility == value {
-                                if model.isSaving {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .accessibilityLabel("Saving…")
-                                } else {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.tint)
-                                        .accessibilityHidden(true)
-                                }
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.tint)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .frame(width: 24)
@@ -119,8 +123,8 @@ struct PresencePrivacySettingsView: View {
                     Text("Save failed. Please try again.")
                         .foregroundStyle(.red)
                     Spacer()
-                    Button("Retry") { Task { await model.retrySave() } }
-                        .disabled(model.isSaving)
+                    Button("Retry", action: beginSave)
+                        .disabled(!model.canSave)
                 }
                 .font(.footnote)
             }
@@ -160,6 +164,26 @@ struct PresencePrivacySettingsView: View {
     private func retryLoad() {
         loadRetryTask?.cancel()
         loadRetryTask = Task { await model.load() }
+    }
+
+    private func beginSave() {
+        guard model.canSave else { return }
+        let uid = store.currentUserProfile?.uid
+        let sessionRevision = store.sessionRevision
+        saveTask?.cancel()
+        saveTask = Task {
+            guard !Task.isCancelled, store.currentUserProfile?.uid == uid,
+                store.sessionRevision == sessionRevision
+            else { return }
+            guard await model.save(), !Task.isCancelled,
+                store.currentUserProfile?.uid == uid, store.sessionRevision == sessionRevision
+            else { return }
+            finish()
+        }
+    }
+
+    private func finish() {
+        if let onFinish { onFinish() } else { dismiss() }
     }
 
     private func title(for value: PresenceVisibility) -> LocalizedStringKey {

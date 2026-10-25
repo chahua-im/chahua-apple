@@ -5,6 +5,7 @@ import Foundation
 enum ConversationChange {
     case pendingChanged(chatID: String)
     case realtime(RealtimeServerEvent)
+    case membershipVisibilityChanged(chatID: String?)
     case reset
 }
 
@@ -19,6 +20,8 @@ final class ConversationMessageStore: ObservableObject {
     private struct Snapshot {
         let chatID: String
         let revision: UInt64
+        let membershipSettingsRevision: Int
+        let membershipPolicyRevision: Int
     }
     private struct JournalEntry {
         let revision: UInt64
@@ -26,6 +29,43 @@ final class ConversationMessageStore: ObservableObject {
     }
     private var snapshots: [UUID: Snapshot] = [:]
     private var journals: [String: [JournalEntry]] = [:]
+    private var showMembershipMessages: Bool?
+    private var membershipPolicies: [String: MembershipMessagePolicy] = [:]
+    private var membershipSettingsRevision = 0
+    private var membershipPolicyRevisions: [String: Int] = [:]
+
+    func invalidateMembershipSnapshots(chatID: String? = nil) {
+        if let chatID {
+            membershipPolicyRevisions[chatID, default: 0] += 1
+        } else {
+            membershipSettingsRevision += 1
+        }
+    }
+
+    func membershipSnapshotIsCurrent(_ token: UUID) -> Bool {
+        guard let snapshot = snapshots[token] else { return false }
+        return snapshot.membershipSettingsRevision == membershipSettingsRevision
+            && snapshot.membershipPolicyRevision
+                == membershipPolicyRevisions[snapshot.chatID, default: 0]
+    }
+
+    func hidesMembershipMessages(chatID: String) -> Bool {
+        showMembershipMessages == false || membershipPolicies[chatID]?.canView == false
+    }
+
+    func setMembershipSettings(_ settings: ChatSettings) {
+        guard showMembershipMessages != settings.showMembershipMessages else { return }
+        showMembershipMessages = settings.showMembershipMessages
+        invalidateMembershipSnapshots()
+        changes.send(.membershipVisibilityChanged(chatID: nil))
+    }
+
+    func setMembershipPolicy(_ policy: MembershipMessagePolicy, chatID: String) {
+        guard membershipPolicies[chatID] != policy else { return }
+        membershipPolicies[chatID] = policy
+        invalidateMembershipSnapshots(chatID: chatID)
+        changes.send(.membershipVisibilityChanged(chatID: chatID))
+    }
 
     func replacePending(
         chatID: String, threadID: String? = nil, with pending: [PendingOutgoingMessage],
@@ -108,7 +148,10 @@ final class ConversationMessageStore: ObservableObject {
 
     func beginSnapshot(chatID: String) -> UUID {
         let token = UUID()
-        snapshots[token] = Snapshot(chatID: chatID, revision: receiveRevision)
+        snapshots[token] = Snapshot(
+            chatID: chatID, revision: receiveRevision,
+            membershipSettingsRevision: membershipSettingsRevision,
+            membershipPolicyRevision: membershipPolicyRevisions[chatID, default: 0])
         return token
     }
 
@@ -136,6 +179,10 @@ final class ConversationMessageStore: ObservableObject {
         deletedReplyIDs.removeAll()
         snapshots.removeAll()
         journals.removeAll()
+        showMembershipMessages = nil
+        membershipPolicies.removeAll()
+        membershipSettingsRevision += 1
+        membershipPolicyRevisions.removeAll()
         receiveRevision = 0
         changes.send(.reset)
     }
@@ -202,7 +249,8 @@ extension RealtimeServerEvent {
         case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
             .threadMembershipChanged, .readReceiptChanged, .notification,
             .notificationSettingsChanged, .chatNotificationSettingChanged,
-            .notificationExceptionsCleared,
+            .notificationExceptionsCleared, .groupSpeakingModeChanged, .memberSpeakingModeChanged,
+            .membershipMessagePolicyChanged, .chatMembershipChanged,
             .conversationUnread, .conversationUnreadError, .conversationStates,
             .conversationStatesError,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,

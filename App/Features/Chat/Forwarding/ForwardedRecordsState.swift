@@ -46,6 +46,8 @@ final class ForwardedRecordSnapshot {
             })
         // The source scope is an acceptance key only. It is never registered as a
         // live timeline and the dedicated message store never receives chat events.
+        // Captured authors remain visible regardless of the enclosing DM preference.
+        // Avatar density still flows through the shared native timeline environment.
         timeline = ConversationTimelineModel(
             chatID: captured.first?.chatId ?? "captured-empty",
             currentUserID: currentUserID, isGroupChat: true,
@@ -92,7 +94,7 @@ final class ForwardedRecordsSession: ObservableObject {
 
     @Published private(set) var records: [Key: Phase] = [:]
     @Published private(set) var revision = 0
-    private let store: ChatStore
+    let store: ChatStore
     private let root: Root
     private let accountID: Int32?
     private var observations: Set<AnyCancellable> = []
@@ -104,6 +106,12 @@ final class ForwardedRecordsSession: ObservableObject {
         self.store = store
         self.root = root
         accountID = store.currentUserProfile?.uid
+        store.savedMessages.removedSnapshots.sink { [weak self] savedMessageID in
+            guard let self, case .saved(let rootID) = root, rootID == savedMessageID else {
+                return
+            }
+            invalidate(permanently: true)
+        }.store(in: &observations)
         store.conversationMessages.changes.sink { [weak self] change in
             self?.receive(change)
         }.store(in: &observations)
@@ -208,7 +216,7 @@ final class ForwardedRecordsSession: ObservableObject {
                 }
             default: break
             }
-        case .pendingChanged: break
+        case .pendingChanged, .membershipVisibilityChanged: break
         }
     }
 

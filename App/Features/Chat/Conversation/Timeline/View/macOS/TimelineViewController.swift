@@ -74,6 +74,8 @@
             colorScheme: ColorScheme,
             messageTextSize: Int,
             appLanguage: String,
+            showAllAvatars: Bool,
+            showDmDetails: Bool,
             unreadBadgeColor: ConversationUnreadBadgeColor,
             headerInset: CGFloat,
             composerInset: CGFloat,
@@ -89,6 +91,8 @@
             tableController.colorScheme = colorScheme
             tableController.messageTextSize = messageTextSize
             tableController.appLanguage = appLanguage
+            tableController.showAllAvatars = showAllAvatars
+            tableController.showDmDetails = showDmDetails
             // The table applies these as contentInsets. Chrome only positions itself;
             // neither this controller nor its representable adds another safe area.
             tableController.headerInset = headerInset

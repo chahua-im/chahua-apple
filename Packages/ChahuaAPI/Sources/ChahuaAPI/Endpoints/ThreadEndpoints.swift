@@ -1,5 +1,70 @@
 import Foundation
 
+/// Root-ID ordering for the chat-wide thread directory, independent of subscriptions.
+public enum ThreadOrder: String, Codable, Sendable {
+    case newest
+    case oldest
+}
+
+public struct ListChatThreadsQuery: Sendable, Equatable {
+    public var limit: Int?
+    public var cursor: MessageID?
+    public var order: ThreadOrder?
+
+    public init(limit: Int? = nil, cursor: MessageID? = nil, order: ThreadOrder? = nil) {
+        self.limit = limit
+        self.cursor = cursor
+        self.order = order
+    }
+
+    var queryItems: [URLQueryItem] {
+        [
+            limit.map { URLQueryItem(name: "limit", value: String($0)) },
+            cursor.map { URLQueryItem(name: "cursor", value: $0.description) },
+            order.map { URLQueryItem(name: "order", value: $0.rawValue) },
+        ].compactMap { $0 }
+    }
+}
+
+/// A root-message page; retain the same order when passing the exclusive cursor.
+public struct ListChatThreadsResponse: Codable, Hashable, Sendable {
+    public let threads: [MessageResponse]
+    public let nextCursor: MessageID?
+
+    public init(threads: [MessageResponse], nextCursor: MessageID? = nil) {
+        self.threads = threads
+        self.nextCursor = nextCursor
+    }
+}
+
+public struct ListThreadParticipantsQuery: Sendable, Equatable {
+    public var limit: Int?
+    public var cursor: Int32?
+
+    public init(limit: Int? = nil, cursor: Int32? = nil) {
+        self.limit = limit
+        self.cursor = cursor
+    }
+
+    var queryItems: [URLQueryItem] {
+        [
+            limit.map { URLQueryItem(name: "limit", value: String($0)) },
+            cursor.map { URLQueryItem(name: "cursor", value: String($0)) },
+        ].compactMap { $0 }
+    }
+}
+
+/// Root and surviving published reply authors, sorted by UID, not subscribers.
+public struct ListThreadParticipantsResponse: Codable, Hashable, Sendable {
+    public let participants: [User]
+    public let nextCursor: Int32?
+
+    public init(participants: [User], nextCursor: Int32? = nil) {
+        self.participants = participants
+        self.nextCursor = nextCursor
+    }
+}
+
 /// Query fields accepted by `GET /threads` for the current user's subscriptions.
 ///
 /// Set `archived` to `false` for active threads. Pass the response's opaque
@@ -46,6 +111,27 @@ public struct ThreadSubscriptionStatus: Codable, Hashable, Sendable {
 }
 
 extension ChahuaClient {
+    public func listChatThreads(chatID: String, query: ListChatThreadsQuery) async throws
+        -> ListChatThreadsResponse
+    {
+        try await send(
+            HTTPRequestSpec(
+                method: .get, path: ["chats", chatID, "threads"], query: query.queryItems),
+            decoding: ListChatThreadsResponse.self
+        )
+    }
+
+    public func listThreadParticipants(
+        chatID: String, threadID: String, query: ListThreadParticipantsQuery
+    ) async throws -> ListThreadParticipantsResponse {
+        try await send(
+            HTTPRequestSpec(
+                method: .get, path: ["chats", chatID, "threads", threadID, "participants"],
+                query: query.queryItems),
+            decoding: ListThreadParticipantsResponse.self
+        )
+    }
+
     public func threadReadState(chatID: String, threadID: String) async throws -> ReadStateResponse
     {
         try await send(

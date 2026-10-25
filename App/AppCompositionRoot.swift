@@ -89,8 +89,10 @@ final class AppCompositionRoot {
             guard let self else { return }
             self.mediaContext.clearMemoryCache()
             if case .authenticated(let me) = state {
-                self.chatStore.currentUserProfile = me
+                // Session replacement resets account-owned stores; bind the new
+                // profile only after that reset, before any feature can load.
                 self.realtimeCoordinator.setSession(uid: me.uid)
+                self.chatStore.currentUserProfile = me
                 self.notifications.setSession(uid: me.uid)
             } else {
                 self.chatStore.currentUserProfile = nil

@@ -5,6 +5,13 @@
     /// adding a SwiftUI host to every timeline row and reaction participant.
     @MainActor
     final class TimelineAvatarView: NSView {
+        var onActivate: (() -> Void)? {
+            didSet {
+                activationButton.isHidden = onActivate == nil
+                setAccessibilityRole(onActivate == nil ? .image : .button)
+            }
+        }
+        private let activationButton = NSButton(frame: .zero)
         private let imageView = TimelineImageView(frame: .zero)
         private var name: String?
         private var diameter: CGFloat = 0
@@ -27,6 +34,13 @@
             addSubview(imageView)
             setAccessibilityElement(true)
             setAccessibilityRole(.image)
+            activationButton.title = ""
+            activationButton.isBordered = false
+            activationButton.setButtonType(.momentaryPushIn)
+            activationButton.target = self
+            activationButton.action = #selector(activate)
+            activationButton.isHidden = true
+            addSubview(activationButton)
         }
 
         required init?(coder: NSCoder) { nil }
@@ -80,6 +94,7 @@
         }
 
         func clear() {
+            onActivate = nil
             imageView.clear()
             name = nil
             diameter = 0
@@ -97,12 +112,18 @@
             imageView.setVisible(visible)
         }
 
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard onActivate != nil else { return nil }
+            return super.hitTest(point)
+        }
+
+        @objc private func activate() { onActivate?() }
 
         override func layout() {
             super.layout()
             layer?.cornerRadius = min(bounds.width, bounds.height) / 2
             imageView.frame = bounds
+            activationButton.frame = bounds
             imageView.setVisible(visible)
         }
 

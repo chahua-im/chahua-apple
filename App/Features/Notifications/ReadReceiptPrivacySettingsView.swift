@@ -5,12 +5,16 @@ struct ReadReceiptPrivacySettingsView: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: ReadReceiptPrivacySettingsModel
     @State private var loadRetryTask: Task<Void, Never>?
+    @State private var saveTask: Task<Void, Never>?
+    @Environment(\.dismiss) private var dismiss
     let grouped: Bool
+    private let onFinish: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
 
-    init(store: ChatStore, grouped: Bool) {
+    init(store: ChatStore, grouped: Bool, onFinish: (() -> Void)? = nil) {
         self.store = store
         self.grouped = grouped
+        self.onFinish = onFinish
         _model = StateObject(wrappedValue: ReadReceiptPrivacySettingsModel(store: store))
     }
 
@@ -19,7 +23,8 @@ struct ReadReceiptPrivacySettingsView: View {
             if grouped {
                 Form {
                     Section {
-                        ReadReceiptPrivacyOptions(model: model, onRetryLoad: retryLoad)
+                        ReadReceiptPrivacyOptions(
+                            model: model, onRetryLoad: retryLoad, onRetrySave: beginSave)
                     } header: {
                         Text("Who can see my read receipts")
                     } footer: {
@@ -43,7 +48,8 @@ struct ReadReceiptPrivacySettingsView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 16) {
-                            ReadReceiptPrivacyOptions(model: model, onRetryLoad: retryLoad)
+                            ReadReceiptPrivacyOptions(
+                                model: model, onRetryLoad: retryLoad, onRetrySave: beginSave)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(20)
@@ -72,11 +78,17 @@ struct ReadReceiptPrivacySettingsView: View {
             }
         }
         .navigationTitle("Read Receipts")
-        #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .task(id: store.currentUserProfile?.uid) { await model.load() }
+        .settingsEditorControls(
+            isDirty: model.isDirty, canSave: model.canSave, isSaving: model.isSaving,
+            accountID: store.currentUserProfile?.uid, onSave: beginSave, onFinish: finish
+        )
+        .task(id: store.currentUserProfile?.uid) {
+            loadRetryTask?.cancel()
+            saveTask?.cancel()
+            await model.load()
+        }
         .onDisappear {
+            saveTask?.cancel()
             loadRetryTask?.cancel()
             loadRetryTask = nil
             model.cancelLoading()
@@ -98,6 +110,26 @@ struct ReadReceiptPrivacySettingsView: View {
     private func retryLoad() {
         loadRetryTask?.cancel()
         loadRetryTask = Task { await model.load() }
+    }
+
+    private func beginSave() {
+        guard model.canSave else { return }
+        let uid = store.currentUserProfile?.uid
+        let sessionRevision = store.sessionRevision
+        saveTask?.cancel()
+        saveTask = Task {
+            guard !Task.isCancelled, store.currentUserProfile?.uid == uid,
+                store.sessionRevision == sessionRevision
+            else { return }
+            guard await model.save(), !Task.isCancelled,
+                store.currentUserProfile?.uid == uid, store.sessionRevision == sessionRevision
+            else { return }
+            finish()
+        }
+    }
+
+    private func finish() {
+        if let onFinish { onFinish() } else { dismiss() }
     }
 }
 
@@ -249,6 +281,7 @@ struct FriendPrivacySettingsView: View {
 private struct ReadReceiptPrivacyOptions: View {
     @ObservedObject var model: ReadReceiptPrivacySettingsModel
     let onRetryLoad: () -> Void
+    var onRetrySave: (() -> Void)? = nil
 
     @ViewBuilder
     var body: some View {
@@ -277,7 +310,7 @@ private struct ReadReceiptPrivacyOptions: View {
                     HStack(spacing: 12) {
                         ZStack {
                             if model.selection == choice {
-                                if model.isSaving {
+                                if model.isSaving && model.scope != .account {
                                     ProgressView()
                                         .controlSize(.small)
                                         .accessibilityLabel("Saving…")
@@ -304,8 +337,14 @@ private struct ReadReceiptPrivacyOptions: View {
                     Text("Save failed. Please try again.")
                         .foregroundStyle(.red)
                     Spacer()
-                    Button("Retry") { Task { await model.retrySave() } }
-                        .disabled(model.isSaving)
+                    Button("Retry") {
+                        if let onRetrySave {
+                            onRetrySave()
+                        } else {
+                            Task { await model.retrySave() }
+                        }
+                    }
+                    .disabled(model.isSaving || (model.scope == .account && !model.canSave))
                 }
                 .font(.footnote)
             }

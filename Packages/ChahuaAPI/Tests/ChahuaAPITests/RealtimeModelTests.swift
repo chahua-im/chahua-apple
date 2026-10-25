@@ -14,6 +14,26 @@ final class RealtimeModelTests: XCTestCase {
             MessageResponse.self, from: Data(messageJSON.utf8))
         XCTAssertNil(ordinary.forwardedFrom)
         XCTAssertNil(ordinary.forwardedPreview)
+        XCTAssertNil(ordinary.systemKind)
+        XCTAssertNil(ordinary.systemLinks)
+        var systemWire = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(messageJSON.utf8)) as? [String: Any])
+        systemWire["messageType"] = "system"
+        systemWire["systemKind"] = "message_pinned"
+        systemWire["systemLinks"] = ["messageId": "9223372036854775807", "uid": 17]
+        let system = try JSONCoding.decoder.decode(
+            MessageResponse.self, from: JSONSerialization.data(withJSONObject: systemWire))
+        XCTAssertEqual(system.systemKind, .messagePinned)
+        XCTAssertEqual(system.systemLinks?.messageId, MessageID(UInt64(Int64.max)))
+        XCTAssertEqual(system.replyPreview.systemLinks, system.systemLinks)
+        XCTAssertEqual(system.replyPreview.systemKind, system.systemKind)
+        XCTAssertNil(system.redactedForDeletion().systemLinks)
+        XCTAssertNil(system.replyPreview.redactedForDeletion().systemLinks)
+        XCTAssertEqual(
+            try JSONCoding.decoder.decode(
+                MessageResponse.self, from: JSONCoding.encoder.encode(system)), system)
+        XCTAssertTrue(SystemMessageKind.memberAdded.isMembership)
+        XCTAssertFalse(SystemMessageKind.messagePinned.isMembership)
         let original = User(
             uid: 2, gender: 0, name: "Captured sender", avatarUrl: nil, userGroup: nil)
         let captured = ForwardedMessagePreviewResponse(
@@ -340,6 +360,31 @@ final class RealtimeModelTests: XCTestCase {
                 "friendshipRemoved", #"{"actorUid":19}"#)
         else { return XCTFail("Expected friendship removed") }
         XCTAssertEqual(removed.actorUid, 19)
+        guard
+            case .groupSpeakingModeChanged(let groupMode) = try event(
+                "groupSpeakingModeChanged",
+                #"{"chatId":"9007199254740993","speakingMode":"threadsOnly"}"#)
+        else { return XCTFail("Expected group speaking mode") }
+        XCTAssertEqual(groupMode.chatId, largeID)
+        XCTAssertEqual(groupMode.speakingMode, .threadsOnly)
+        guard
+            case .memberSpeakingModeChanged(let memberMode) = try event(
+                "memberSpeakingModeChanged",
+                #"{"chatId":"9007199254740993","uid":17,"role":"member","speakingMode":"repliesOnly","groupSpeakingMode":"threadsOnly","effectiveSpeakingMode":"repliesOnly"}"#
+            )
+        else { return XCTFail("Expected member speaking mode") }
+        XCTAssertEqual(memberMode.uid, 17)
+        XCTAssertEqual(memberMode.effectiveSpeakingMode, .repliesOnly)
+        guard
+            case .chatMembershipChanged(let membership) = try event(
+                "chatMembershipChanged", #"{"chatId":"9007199254740993"}"#)
+        else { return XCTFail("Expected chat membership change") }
+        XCTAssertEqual(membership.chatId, largeID)
+        guard
+            case .membershipMessagePolicyChanged(let policy) = try event(
+                "membershipMessagePolicyChanged", #"{"chatId":"9007199254740993"}"#)
+        else { return XCTFail("Expected membership policy invalidation") }
+        XCTAssertEqual(policy.chatId, largeID)
         guard case .pong = try decode(#"{"type":"pong"}"#) else { return XCTFail("Expected pong") }
         guard case .unknown(let type) = try decode(#"{"type":"futureFeature","payload":42}"#) else {
             return XCTFail("Expected unknown")

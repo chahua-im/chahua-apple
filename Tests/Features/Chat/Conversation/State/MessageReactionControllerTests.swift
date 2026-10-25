@@ -418,7 +418,8 @@ private actor HeldReactionAPI: ChahuaAPIClient {
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(
-        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+        fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
+        size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
     func listSubscribedStickerPacks() async throws -> [StickerPackSummary] {

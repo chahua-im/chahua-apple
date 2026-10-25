@@ -202,6 +202,15 @@ extension ChahuaClient {
                 method: .delete, path: ["chats", chatID, "messages", messageID.description]))
     }
 
+    /// Atomically recalls up to 100 messages after whole-batch server validation.
+    public func bulkDeleteMessages(chatID: String, body: BulkDeleteMessagesBody) async throws
+        -> BulkDeletedPayload
+    {
+        try await send(
+            HTTPRequestSpec.json(.post, ["chats", chatID, "messages", "bulk-delete"], body: body),
+            decoding: BulkDeletedPayload.self)
+    }
+
     /// Adds the current user's reaction. The server returns an empty 204 response.
     public func putReaction(chatID: String, messageID: MessageID, emoji: String) async throws {
         try await send(
@@ -224,5 +233,13 @@ public struct UpdateMessageBody: Codable, Hashable, Sendable {
 
     public init(message: String) {
         self.message = message
+    }
+}
+
+public struct BulkDeleteMessagesBody: Codable, Hashable, Sendable {
+    public let messageIds: [MessageID]
+
+    public init(messageIds: [MessageID]) {
+        self.messageIds = messageIds
     }
 }

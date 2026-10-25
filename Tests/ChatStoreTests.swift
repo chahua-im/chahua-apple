@@ -1,17 +1,203 @@
 import ChahuaAPI
 import Combine
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import chahua_apple
 
 #if os(iOS)
-    import SwiftUI
     import UIKit
+#else
+    import AppKit
 #endif
 
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    func testMembershipVisibilityPrunesOnlyGroupRootAnnouncementsAndRestoresHistory() async throws {
+        let base = try TimelineTestFixtures.message(id: 1, at: 1)
+        func message(
+            _ id: UInt64, chatID: String = "group", kind: SystemMessageKind? = nil,
+            threadID: String? = nil
+        ) -> MessageResponse {
+            .init(
+                id: MessageID(id), chatId: chatID, clientGeneratedId: "policy-\(chatID)-\(id)",
+                messageType: kind == nil ? .text : .system, sender: base.sender,
+                createdAt: base.createdAt.addingTimeInterval(TimeInterval(id)),
+                message: "Message \(id)", replyRootId: threadID, systemKind: kind)
+        }
+        let rootMessages = [
+            message(1), message(2, kind: .memberJoined), message(3, kind: .memberLeft),
+            message(4, kind: .memberAdded), message(5, kind: .memberRemoved),
+            message(6, kind: .messagePinned), message(7),
+        ]
+        let directMessages = [message(20, chatID: "dm", kind: .memberJoined)]
+        let threadMessages = [rootMessages[0], message(21, kind: .memberRemoved, threadID: "1")]
+        let allowed = GroupInfoResponse(
+            id: "group", myRole: .member, kind: .group, speakingMode: .unrestricted,
+            mySpeakingMode: .unrestricted, effectiveSpeakingMode: .unrestricted,
+            membershipMessagePolicy: .init(visibility: .members, canView: true))
+        let api = FakeChatAPI()
+        await api.setConversationPageMetadata(group: allowed)
+        await api.setPolicyMessagePage(rootMessages, chatID: "group")
+        await api.setPolicyMessagePage(directMessages, chatID: "dm")
+        await api.setPolicyMessagePage(threadMessages, chatID: "group", threadID: "1")
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[],"showMembershipMessages":true}"#
+                    .utf8))
+        _ = try await store.groupInfo(chatID: "group")
+        let root = ConversationTimelineModel(
+            chatID: "group", currentUserID: 1, isGroupChat: true, source: store,
+            messageStore: store.conversationMessages)
+        let direct = ConversationTimelineModel(
+            chatID: "dm", currentUserID: 1, isGroupChat: false, source: store,
+            messageStore: store.conversationMessages)
+        let thread = ConversationTimelineModel(
+            chatID: "group", currentUserID: 1, isGroupChat: true, source: store,
+            messageStore: store.conversationMessages, threadID: "1")
+        for model in [root, direct, thread] {
+            store.registerTimeline(model)
+            await model.loadInitial()
+        }
+        XCTAssertEqual(root.rows.compactMap(\.messageID), rootMessages.map(\.id))
+
+        _ = try await store.updateChatSettings(showMembershipMessages: false)
+        XCTAssertEqual(
+            root.rows.compactMap(\.messageID), [MessageID(1), MessageID(6), MessageID(7)])
+        XCTAssertEqual(direct.rows.compactMap(\.messageID), directMessages.map(\.id))
+        XCTAssertEqual(thread.rows.compactMap(\.messageID), threadMessages.map(\.id))
+        XCTAssertEqual(store.currentUserProfile?.showMembershipMessages, false)
+
+        let preferenceRestored = expectation(
+            description: "Preference restores loaded announcements")
+        let preferenceObservation = root.$rows.first {
+            $0.compactMap(\.messageID) == rootMessages.map(\.id)
+        }.sink { _ in preferenceRestored.fulfill() }
+        defer { preferenceObservation.cancel() }
+        _ = try await store.updateChatSettings(showMembershipMessages: true)
+        await fulfillment(of: [preferenceRestored], timeout: 5)
+        XCTAssertEqual(root.rows.compactMap(\.messageID), rootMessages.map(\.id))
+
+        await api.setConversationPageMetadata(
+            group: allowed.withMembershipMessagePolicy(.init(visibility: .nobody, canView: false)))
+        _ = try await store.groupInfo(chatID: "group")
+        XCTAssertEqual(
+            root.rows.compactMap(\.messageID), [MessageID(1), MessageID(6), MessageID(7)])
+        XCTAssertEqual(direct.rows.compactMap(\.messageID), directMessages.map(\.id))
+        XCTAssertEqual(thread.rows.compactMap(\.messageID), threadMessages.map(\.id))
+
+        let policyRestored = expectation(description: "Server policy restores loaded announcements")
+        let policyObservation = root.$rows.first {
+            $0.compactMap(\.messageID) == rootMessages.map(\.id)
+        }.sink { _ in policyRestored.fulfill() }
+        defer { policyObservation.cancel() }
+        await api.setConversationPageMetadata(group: allowed)
+        _ = try await store.groupInfo(chatID: "group")
+        await fulfillment(of: [policyRestored], timeout: 5)
+        XCTAssertEqual(root.rows.compactMap(\.messageID), rootMessages.map(\.id))
+    }
+
+    func testSpeakingEventsAndMutationsFenceLateGroupInfoResponses() async throws {
+        let unrestricted = GroupInfoResponse(
+            id: "group", myRole: .member, kind: .group, speakingMode: .unrestricted,
+            mySpeakingMode: .unrestricted, effectiveSpeakingMode: .unrestricted)
+        let api = FakeChatAPI()
+        await api.setConversationPageMetadata(group: unrestricted)
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        _ = try await store.groupInfo(chatID: "group")
+
+        await api.suspendNextPolicyGroupInfo()
+        let beforeEvent = Task { try await store.groupInfo(chatID: "group") }
+        await api.waitForPolicyGroupInfo()
+        await store.applyRealtimeEvent(
+            .groupSpeakingModeChanged(.init(chatId: "group", speakingMode: .readOnly)),
+            currentUserID: 1)
+        await api.resumePolicyGroupInfo(with: unrestricted)
+        let eventResult = try await beforeEvent.value
+        XCTAssertEqual(eventResult.effectiveSpeakingMode, .readOnly)
+        do {
+            try await store.requireSpeakingPermission(chatID: "group", threadID: nil)
+            XCTFail("A late unrestricted fetch must not reopen the main composer")
+        } catch {
+            XCTAssertEqual((error as? SpeakingWriteError)?.speakingRestriction, .readOnly)
+        }
+
+        let readOnly = unrestricted.withSpeakingState(
+            speakingMode: .readOnly, mySpeakingMode: .unrestricted,
+            effectiveSpeakingMode: .readOnly, myRole: .member)
+        await api.setConversationPageMetadata(group: readOnly)
+        await api.setPolicySpeakingMutation(.init(chatId: "group", speakingMode: .threadsOnly))
+        await api.suspendNextPolicyGroupInfo()
+        let beforeMutation = Task { try await store.groupInfo(chatID: "group") }
+        await api.waitForPolicyGroupInfo()
+        _ = try await store.updateGroupSpeakingMode(chatID: "group", speakingMode: .threadsOnly)
+        await api.resumePolicyGroupInfo(with: readOnly)
+        let mutationResult = try await beforeMutation.value
+        XCTAssertEqual(mutationResult.effectiveSpeakingMode, .threadsOnly)
+        try await store.requireSpeakingPermission(chatID: "group", threadID: "42")
+        do {
+            try await store.requireSpeakingPermission(chatID: "group", threadID: nil)
+            XCTFail("A late read-only fetch must not replace the committed threads-only policy")
+        } catch {
+            XCTAssertEqual((error as? SpeakingWriteError)?.speakingRestriction, .threadsOnly)
+        }
+    }
+
+    func testChatMembershipChangedAddsGroupWithoutItsHiddenOwnJoinAnnouncement() async throws {
+        let base = try TimelineTestFixtures.message(id: 1, chatID: "joined", at: 1)
+        let announcement = MessageResponse(
+            id: MessageID(2), chatId: "joined", clientGeneratedId: "own-join",
+            messageType: .system, sender: base.sender,
+            createdAt: base.createdAt.addingTimeInterval(1), message: "Joined",
+            systemKind: .memberJoined)
+        let joined = ChatListItem(
+            id: "joined", name: "Joined group", lastMessageAt: base.createdAt, unreadCount: 0,
+            lastMessage: base.replyPreview, archived: false, kind: .group,
+            membershipMessagePolicy: .init(visibility: .nobody, canView: false))
+        let api = FakeChatAPI(chatResults: [.success(.init(chats: []))])
+        await api.setPolicyTargetedChat(joined)
+        await api.setConversationPageMetadata(
+            group: .init(
+                id: "joined", myRole: .member, kind: .group,
+                membershipMessagePolicy: .init(visibility: .nobody, canView: false)))
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[],"showMembershipMessages":false}"#
+                    .utf8))
+        await store.loadActiveChats()
+        await store.applyRealtimeEvent(.message(announcement), currentUserID: 1)
+        XCTAssertTrue(store.state.chats.isEmpty)
+        let beforeMembership = await api.recordedChatQueries()
+        XCTAssertEqual(
+            beforeMembership.count, 1, "Own announcements must not drive list calibration")
+
+        await store.applyRealtimeEvent(
+            .chatMembershipChanged(.init(chatId: "joined")), currentUserID: 1)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while store.state.chats.first(where: { $0.id == "joined" }) == nil,
+            ContinuousClock.now < deadline
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let visible = try XCTUnwrap(store.state.chats.first { $0.id == "joined" })
+        XCTAssertEqual(visible.lastMessage?.id, base.id)
+        XCTAssertEqual(store.state.chatListLoadPhase, .loaded)
+        let requests = await api.recordedChatQueries()
+        XCTAssertGreaterThan(requests.count, 1)
+        XCTAssertTrue(requests.dropFirst().allSatisfy { $0.chatId == "joined" && $0.after == nil })
+    }
+
     func testNotificationDefaultsDeferredDuringSaveAndReloadedAfterReconnect() async throws {
         let api = FakeChatAPI()
         await api.suspendNotificationPreferences()
@@ -245,6 +431,10 @@ final class ChatStoreTests: XCTestCase {
             try await waitUntil {
                 !views(TimelineForwardedCardView.self, in: window).isEmpty
             }
+            // Background saved-status failure must not steal the navigation surface.
+            await store.savedMessages.ensure(chatID: "chat")
+            XCTAssertNotNil(store.savedMessages.scopeError(chatID: "chat"))
+            XCTAssertNil(store.savedMessages.errorMessage)
             let navigation = try XCTUnwrap(
                 controllers(
                     UINavigationController.self, in: try XCTUnwrap(window.rootViewController)
@@ -1122,6 +1312,383 @@ final class ChatStoreTests: XCTestCase {
             message.replyPreview.redactedForDeletion())
     }
 
+    func testAtomicRecallFailureKeepsContentAndRetryUsesOneBatchRequest() async throws {
+        let messages = try [1, 2].map {
+            try TimelineTestFixtures.message(id: UInt64($0), at: $0, text: "private \($0)")
+        }
+        let api = FakeChatAPI(
+            messageResults: ["chat": [.success(try TimelineTestFixtures.page(messages))]])
+        await api.setBulkDeleteResults([
+            .failure(FakeChatAPIError.failed),
+            .success(.init(chatId: "chat", messageIds: messages.map(\.id))),
+        ])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: true, source: store,
+            messageStore: store.conversationMessages)
+        await model.loadInitial()
+        store.drafts.setDraftReply(messages[0].replyPreview, chatID: "chat")
+        do {
+            _ = try await store.bulkRecallMessages(messages)
+            XCTFail("The failed batch must not be reported as recalled")
+        } catch {}
+        XCTAssertEqual(
+            model.rows.compactMap {
+                if case .message(let row) = $0 { return row.entry.remoteMessage?.id }
+                return nil
+            }, messages.map(\.id))
+        XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), messages[0].replyPreview)
+        let recalled = try await store.bulkRecallMessages(messages)
+        XCTAssertEqual(recalled, Set(messages.map(\.id)))
+        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertEqual(
+            store.drafts.draftReply(chatID: "chat"),
+            messages[0].replyPreview.redactedForDeletion())
+        let batches = await api.recordedBulkDeleteIDs()
+        XCTAssertEqual(batches, [messages.map(\.id), messages.map(\.id)])
+    }
+
+    func testAtomicRecallRejectsMixedChatsDuplicatesAndOversizedBatchesBeforeSubmission()
+        async throws
+    {
+        let api = FakeChatAPI()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        let first = try TimelineTestFixtures.message(id: 1, at: 1)
+        let other = MessageResponse(
+            id: MessageID(2), chatId: "other", clientGeneratedId: "other", messageType: .text,
+            sender: first.sender, createdAt: first.createdAt, message: "other")
+        let oversized = try (1...101).map {
+            try TimelineTestFixtures.message(id: UInt64($0), at: $0)
+        }
+        for batch in [[], [first, first], [first, other], oversized] {
+            do {
+                _ = try await store.bulkRecallMessages(batch)
+                XCTFail("Invalid batches must not reach the server")
+            } catch {}
+        }
+        let submitted = await api.recordedBulkDeleteIDs()
+        XCTAssertTrue(submitted.isEmpty)
+    }
+
+    func testBackgroundSavedScopeFailureRetainsUnknownStateAndCanRetryInPlace() async throws {
+        let api = FakeChatAPI()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        await store.savedMessages.ensure(chatID: "chat")
+        XCTAssertFalse(store.savedMessages.hasLoaded(chatID: "chat"))
+        XCTAssertFalse(store.savedMessages.isLoading(chatID: "chat"))
+        XCTAssertNotNil(store.savedMessages.scopeError(chatID: "chat"))
+        XCTAssertNil(store.savedMessages.errorMessage)
+        let emptyPage = try JSONDecoder().decode(
+            ListSavedMessagesResponse.self, from: Data(#"{"savedMessages":[]}"#.utf8))
+        await api.setChatSavedResults([.success(emptyPage)])
+        await store.savedMessages.ensure(chatID: "chat")
+        XCTAssertTrue(store.savedMessages.hasLoaded(chatID: "chat"))
+        XCTAssertNil(store.savedMessages.scopeError(chatID: "chat"))
+        XCTAssertNil(store.savedMessages.errorMessage)
+    }
+
+    func testAuthenticatedSessionCanSaveAndRebindSnapshotsAfterAccountChange() async throws {
+        let api = FakeChatAPI()
+        let decoder = JSONDecoder()
+        func profile(_ uid: Int32) throws -> MeResponse {
+            try decoder.decode(
+                MeResponse.self,
+                from: Data(
+                    #"{"uid":\#(uid),"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                        .utf8))
+        }
+        await api.setAuthenticatedProfile(try profile(1))
+        let emptyPage = try decoder.decode(
+            ListSavedMessagesResponse.self, from: Data(#"{"savedMessages":[]}"#.utf8))
+        await api.setChatSavedResults([.success(emptyPage), .success(emptyPage)])
+        let message = try TimelineTestFixtures.message(
+            id: 1, senderID: 2, at: 1, text: "Captured text")
+        let snapshotData = try JSONSerialization.data(withJSONObject: [
+            "id": "saved-1", "originalMessageId": "1", "originalChatId": "chat",
+            "originalSenderUid": 2, "originalCreatedAt": 0, "savedAt": 0,
+            "messageType": "text", "message": "Captured text", "mentions": [], "attachments": [],
+            "sender": try JSONSerialization.jsonObject(with: JSONEncoder().encode(message.sender)),
+            "chat": ["id": "chat", "name": "Chat"], "canLocateContext": true,
+        ])
+        await api.setSaveResult(try decoder.decode(SavedMessageResponse.self, from: snapshotData))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "saved-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        let root = AppCompositionRoot(
+            apiClient: api, realtimeProvider: api,
+            credentialLoginClient: PrototypeCredentialLoginClient(),
+            tokenStorage: InMemorySessionTokenStorage(token: "isolated-test-token"),
+            mediaNamespace: directory.lastPathComponent,
+            localStoreFactory: { uid in
+                try ChahuaLocalStore(directory: directory.appendingPathComponent(String(uid)))
+            })
+        defer {
+            root.realtimeCoordinator.setSession(uid: nil)
+            root.chatStore.currentUserProfile = nil
+            let queue = root.chatStore.outgoingQueue
+            Task {
+                await queue.deactivate()
+                try? FileManager.default.removeItem(at: directory)
+            }
+        }
+        for _ in 0..<100 {
+            if case .authenticated = root.sessionModel.state { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        guard case .authenticated(let first) = root.sessionModel.state else {
+            return XCTFail("The stored test session did not restore")
+        }
+        XCTAssertEqual(first.uid, 1)
+        let saved = root.chatStore.savedMessages
+        await saved.ensure(chatID: "chat")
+        #if os(iOS)
+            let source = ScriptedTimelineSource(pages: [
+                .success(try TimelineTestFixtures.page([message]))
+            ])
+            let previewModel = ConversationTimelineModel(
+                chatID: "chat", currentUserID: first.uid, isGroupChat: true,
+                source: source, messageStore: source.store)
+            func menuRoot() -> some View {
+                var actions = TimelineBubbleActions()
+                actions.savedMessageIDs = saved.savedIDs(chatID: "chat")
+                if saved.hasLoaded(chatID: "chat") {
+                    actions.toggleSavedMessage = { message in
+                        Task { await saved.toggle(message) }
+                    }
+                }
+                return MessageInteractionHost(
+                    model: previewModel, context: .init(canWrite: true), actions: actions
+                ) { actions in
+                    ConversationTimelineView(
+                        model: previewModel, loadsInitialAutomatically: false, actions: actions)
+                }
+                .environment(\.scenePhase, .active)
+            }
+            let host = UIHostingController(rootView: menuRoot())
+            let previewWindow = UIWindow(
+                windowScene: try XCTUnwrap(
+                    UIApplication.shared.connectedScenes.first as? UIWindowScene))
+            previewWindow.rootViewController = host
+            previewWindow.makeKeyAndVisible()
+            defer {
+                previewWindow.isHidden = true
+                previewWindow.rootViewController = nil
+                previewModel.close()
+            }
+            func bubbles(in view: UIView) -> [TimelineBubbleContentView] {
+                (view as? TimelineBubbleContentView).map { [$0] }
+                    ?? view.subviews.flatMap { bubbles(in: $0) }
+            }
+            await previewModel.loadInitial()
+            for _ in 0..<100 {
+                if !bubbles(in: previewWindow).isEmpty { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let bubble = try XCTUnwrap(bubbles(in: previewWindow).first)
+            let action = try XCTUnwrap(bubble.accessibilityCustomActions?.first)
+            XCTAssertTrue(try XCTUnwrap(action.actionHandler)(action))
+            try await Task.sleep(for: .milliseconds(700))
+            func captureMenu(_ name: String) {
+                previewWindow.layoutIfNeeded()
+                let attachment = XCTAttachment(
+                    image: UIGraphicsImageRenderer(bounds: previewWindow.bounds).image { _ in
+                        previewWindow.drawHierarchy(
+                            in: previewWindow.bounds, afterScreenUpdates: true)
+                    })
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            XCTAssertEqual(bubbles(in: previewWindow).count, 2)
+            captureMenu("iOS Save menu after authenticated startup")
+        #endif
+        await saved.toggle(message)
+        XCTAssertTrue(saved.isSaved(chatID: "chat", messageID: message.id))
+        XCTAssertEqual(saved.items.first?.message, "Captured text")
+        XCTAssertNil(saved.errorMessage)
+        #if os(iOS)
+            host.rootView = menuRoot()
+            try await Task.sleep(for: .milliseconds(300))
+            captureMenu("iOS saved menu after captured snapshot")
+            previewWindow.isHidden = true
+            previewWindow.rootViewController = nil
+        #endif
+
+        await api.setAuthenticatedProfile(try profile(2))
+        await root.sessionModel.signIn(candidateJWT: "isolated-second-token")
+        guard case .authenticated(let second) = root.sessionModel.state else {
+            return XCTFail("The replacement test account did not authenticate")
+        }
+        XCTAssertEqual(second.uid, 2)
+        XCTAssertTrue(saved.items.isEmpty)
+        XCTAssertFalse(saved.hasLoaded(chatID: "chat"))
+        await saved.ensure(chatID: "chat")
+        XCTAssertTrue(saved.hasLoaded(chatID: "chat"))
+        XCTAssertFalse(saved.isSaved(chatID: "chat", messageID: message.id))
+        XCTAssertNil(saved.scopeError(chatID: "chat"))
+    }
+
+    #if os(macOS)
+        func testNativeMessageMenuSavesAndRemovesSnapshotAfterStatusLoads() async throws {
+            // Use the existing native-test clock when no display link is available.
+            let previousTickSource = TimelineDisplayScheduler.tickSource
+            TimelineDisplayScheduler.tickSource = .runLoop
+            defer { TimelineDisplayScheduler.tickSource = previousTickSource }
+            let message = try TimelineTestFixtures.message(
+                id: 1, senderID: 2, at: 1, text: "Original")
+            let api = FakeChatAPI()
+            let emptyPage = try JSONDecoder().decode(
+                ListSavedMessagesResponse.self, from: Data(#"{"savedMessages":[]}"#.utf8))
+            await api.setChatSavedResults([.success(emptyPage)])
+            let snapshotData = try JSONSerialization.data(withJSONObject: [
+                "id": "saved-1", "originalMessageId": "1", "originalChatId": "chat",
+                "originalSenderUid": 2, "originalCreatedAt": 0, "savedAt": 0,
+                "messageType": "text", "message": "Captured text",
+                "mentions": [], "attachments": [],
+                "sender": try JSONSerialization.jsonObject(
+                    with: JSONEncoder().encode(message.sender)),
+                "chat": ["id": "chat", "name": "Chat"], "canLocateContext": true,
+            ])
+            await api.setSaveResult(
+                try JSONDecoder().decode(SavedMessageResponse.self, from: snapshotData))
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            store.currentUserProfile = try JSONDecoder().decode(
+                MeResponse.self,
+                from: Data(
+                    #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                        .utf8))
+            await store.savedMessages.ensure(chatID: "chat")
+            let source = ScriptedTimelineSource(pages: [
+                .success(try TimelineTestFixtures.page([message]))
+            ])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: true, source: source,
+                messageStore: source.store)
+            await model.loadInitial()
+            let host = TimelineViewController(model: model)
+            func refreshActions() {
+                var actions = TimelineBubbleActions()
+                actions.savedMessageIDs = store.savedMessages.savedIDs(chatID: "chat")
+                actions.pendingSavedMessageIDs = store.savedMessages.pendingIDs(chatID: "chat")
+                if store.savedMessages.hasLoaded(chatID: "chat") {
+                    actions.toggleSavedMessage = { message in
+                        Task {
+                            await store.savedMessages.toggle(message)
+                            refreshActions()
+                        }
+                    }
+                }
+                host.configure(
+                    actions: actions, interactionContext: .init(canWrite: true, isAdmin: true),
+                    mediaContext: nil, colorScheme: .light,
+                    messageTextSize: MessageTextSizePreference.defaultValue,
+                    appLanguage: AppLanguage.selected.rawValue,
+                    showAllAvatars: ConversationTimelinePreferences.defaultShowAllAvatars,
+                    showDmDetails: ConversationTimelinePreferences.defaultShowDmDetails,
+                    unreadBadgeColor: .default, headerInset: 0, composerInset: 0,
+                    isSplitResizing: false)
+            }
+            refreshActions()
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 600, height: 650),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.setContentSize(CGSize(width: 600, height: 650))
+            host.view.frame = CGRect(x: 0, y: 0, width: 600, height: 650)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            defer {
+                host.tearDown()
+                window.close()
+                window.contentViewController = nil
+                store.reset()
+            }
+            host.view.layoutSubtreeIfNeeded()
+
+            func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+                (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+            }
+            func waitUntil(_ ready: () -> Bool) async throws {
+                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                while !ready(), ContinuousClock.now < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertTrue(ready(), "The native save workflow did not reach its expected state")
+            }
+            let content = try XCTUnwrap(window.contentView)
+            func messageRow() -> TimelineRowView? {
+                descendants(TimelineRowView.self, in: content).first {
+                    $0.accessibilityCustomActions()?.first?.handler != nil
+                }
+            }
+            try await waitUntil { messageRow() != nil }
+            let frame = try XCTUnwrap(content.superview)
+            func recordMenu(_ name: String) throws {
+                let bitmap = try XCTUnwrap(frame.bitmapImageRepForCachingDisplay(in: frame.bounds))
+                frame.cacheDisplay(in: frame.bounds, to: bitmap)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                    uniformTypeIdentifier: "public.png")
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            func openMenu() throws {
+                let row = try XCTUnwrap(messageRow())
+                let action = try XCTUnwrap(row.accessibilityCustomActions()?.first?.handler)
+                XCTAssertTrue(action())
+                frame.layoutSubtreeIfNeeded()
+            }
+            try openMenu()
+            let save = try XCTUnwrap(
+                descendants(NSButton.self, in: frame).first {
+                    $0.accessibilityLabel() == MessageMenuAction.save.label(hasAttachments: false)
+                })
+            XCTAssertTrue(save.isEnabled)
+            try recordMenu("Native Save menu")
+            save.performClick(nil)
+            try await waitUntil {
+                store.savedMessages.isSaved(chatID: "chat", messageID: message.id)
+            }
+            XCTAssertEqual(store.savedMessages.items.first?.message, "Captured text")
+            XCTAssertEqual(store.savedMessages.items.first?.originalMessageId, message.id)
+            try await waitUntil {
+                !descendants(TimelineActionOverlayView.self, in: frame).contains { !$0.isHidden }
+            }
+            try openMenu()
+            let remove = try XCTUnwrap(
+                descendants(NSButton.self, in: frame).first {
+                    $0.accessibilityLabel() == AppLanguage.localized("Remove Saved Message")
+                })
+            XCTAssertTrue(remove.isEnabled)
+            try recordMenu("Native Remove Saved Message menu")
+            remove.performClick(nil)
+            try await waitUntil {
+                !store.savedMessages.isSaved(chatID: "chat", messageID: message.id)
+            }
+            XCTAssertTrue(store.savedMessages.items.isEmpty)
+            XCTAssertNil(store.savedMessages.errorMessage)
+        }
+    #endif
+
     func testDraftSubmissionIsDurableAndSharedAcrossStoreRestoration() async throws {
         let api = FakeChatAPI()
         let queue = testOutgoingQueue(apiClient: api)
@@ -1919,7 +2486,7 @@ final class ChatStoreTests: XCTestCase {
         let viewport = TimelineViewport(
             firstVisibleIndex: 0, lastVisibleIndex: model.rows.count - 1,
             distanceToTop: 0, distanceToBottom: 0, height: 400,
-            fullyVisibleMessageIDs: [message.id])
+            visibleMessageIDs: [message.id])
         model.viewportDidChange(viewport, reason: .layout, revision: model.updates.value.revision)
         await store.performListAction(.markUnread, conversation: .init(chatID: "chat"))
         model.viewportDidChange(viewport, reason: .layout, revision: model.updates.value.revision)
@@ -2180,11 +2747,62 @@ private final class DraftStorageProbe {
     }
 }
 
-actor FakeChatAPI: ChahuaAPIClient {
+actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
     var chatQueries: [ListChatsQuery] = []
     private var threadQueries: [ListThreadsQuery] = []
     private var receiptVisibility: ReadReceiptVisibility = .friends
     private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
+    private var bulkDeleteResults: [Result<BulkDeletedPayload, Error>] = []
+    private var bulkDeleteIDs: [[MessageID]] = []
+
+    func setBulkDeleteResults(_ results: [Result<BulkDeletedPayload, Error>]) {
+        bulkDeleteResults = results
+    }
+
+    func recordedBulkDeleteIDs() -> [[MessageID]] { bulkDeleteIDs }
+
+    private var chatSavedResults: [Result<ListSavedMessagesResponse, Error>] = []
+    private var saveResult: SavedMessageResponse?
+    private var authenticatedProfile: MeResponse?
+    private var authenticationFailure: APIError?
+    func setAuthenticationFailure(_ error: APIError?) {
+        authenticationFailure = error
+    }
+
+    func setAuthenticatedProfile(_ profile: MeResponse) {
+        authenticatedProfile = profile
+    }
+
+    func openRealtimeConnection() async throws -> any RealtimeConnection {
+        throw APIError.unavailable
+    }
+
+    func setSaveResult(_ result: SavedMessageResponse) {
+        saveResult = result
+    }
+
+    func saveMessage(messageID: MessageID) async throws -> SavedMessageResponse {
+        guard let saveResult, saveResult.originalMessageId == messageID else {
+            throw APIError.unavailable
+        }
+        return saveResult
+    }
+
+    func removeSavedMessage(originalMessageID: MessageID) async throws {
+        guard saveResult?.originalMessageId == originalMessageID else { throw APIError.unavailable }
+        saveResult = nil
+    }
+
+    func setChatSavedResults(_ results: [Result<ListSavedMessagesResponse, Error>]) {
+        chatSavedResults = results
+    }
+
+    func listChatSavedMessages(chatID: String, before: String?, limit: Int)
+        async throws -> ListSavedMessagesResponse
+    {
+        guard !chatSavedResults.isEmpty else { throw APIError.unavailable }
+        return try chatSavedResults.removeFirst().get()
+    }
 
     enum ForwardedRequest: Equatable, Sendable {
         case chat(chatID: String, messageID: MessageID, bundleID: String?)
@@ -2233,6 +2851,52 @@ actor FakeChatAPI: ChahuaAPIClient {
 
     func setConversationPageMetadata(group: GroupInfoResponse) {
         conversationPageGroup = group
+    }
+
+    private var policyMessagePages: [ConversationKey: ListMessagesResponse] = [:]
+    private var policyTargetedChats: [String: ChatListItem] = [:]
+    private var policySpeakingMutation: GroupSpeakingModeResponse?
+    private var suspendsNextPolicyGroupInfo = false
+    private var pendingPolicyGroupInfo: CheckedContinuation<GroupInfoResponse, Error>?
+    private var policyGroupInfoObserver: CheckedContinuation<Void, Never>?
+
+    func setPolicyMessagePage(
+        _ messages: [MessageResponse], chatID: String, threadID: String? = nil
+    ) {
+        policyMessagePages[.init(chatID: chatID, threadID: threadID)] = .init(messages: messages)
+    }
+
+    func setPolicyTargetedChat(_ chat: ChatListItem) {
+        policyTargetedChats[chat.id] = chat
+    }
+
+    func updateChatSettings(_ body: UpdateChatSettingsBody) async throws -> ChatSettings {
+        .init(showMembershipMessages: body.showMembershipMessages)
+    }
+
+    func setPolicySpeakingMutation(_ response: GroupSpeakingModeResponse) {
+        policySpeakingMutation = response
+    }
+
+    func updateGroupSpeakingMode(chatID: String, speakingMode: SpeakingMode) async throws
+        -> GroupSpeakingModeResponse
+    {
+        guard let response = policySpeakingMutation, response.chatId == chatID,
+            response.speakingMode == speakingMode
+        else { throw APIError.unavailable }
+        return response
+    }
+
+    func suspendNextPolicyGroupInfo() { suspendsNextPolicyGroupInfo = true }
+
+    func waitForPolicyGroupInfo() async {
+        if pendingPolicyGroupInfo != nil { return }
+        await withCheckedContinuation { policyGroupInfoObserver = $0 }
+    }
+
+    func resumePolicyGroupInfo(with response: GroupInfoResponse) {
+        pendingPolicyGroupInfo?.resume(returning: response)
+        pendingPolicyGroupInfo = nil
     }
 
     func listPins(chatID: String) async throws -> ListPinsResponse {
@@ -2452,7 +3116,9 @@ actor FakeChatAPI: ChahuaAPIClient {
     }
 
     func authenticate(candidateJWT: String) async throws -> MeResponse {
-        throw APIError.unavailable
+        if let authenticationFailure { throw authenticationFailure }
+        guard let authenticatedProfile else { throw APIError.unavailable }
+        return authenticatedProfile
     }
     func createDevSession(uid: Int32, clientID: String) async throws -> String {
         throw APIError.unavailable
@@ -2460,9 +3126,18 @@ actor FakeChatAPI: ChahuaAPIClient {
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(
-        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+        fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
+        size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse {
+        if suspendsNextPolicyGroupInfo {
+            suspendsNextPolicyGroupInfo = false
+            return try await withCheckedThrowingContinuation {
+                pendingPolicyGroupInfo = $0
+                policyGroupInfoObserver?.resume()
+                policyGroupInfoObserver = nil
+            }
+        }
         guard let group = conversationPageGroup, group.id == chatID else {
             throw APIError.unavailable
         }
@@ -2496,6 +3171,13 @@ actor FakeChatAPI: ChahuaAPIClient {
     func deleteMessage(chatID: String, messageID: MessageID) async throws {
         guard !deleteResults.isEmpty else { throw APIError.unavailable }
         try deleteResults.removeFirst().get()
+    }
+    func bulkDeleteMessages(chatID: String, body: BulkDeleteMessagesBody) async throws
+        -> BulkDeletedPayload
+    {
+        bulkDeleteIDs.append(body.messageIds)
+        guard !bulkDeleteResults.isEmpty else { throw APIError.unavailable }
+        return try bulkDeleteResults.removeFirst().get()
     }
     func archiveChat(chatID: String) async throws {
         guard !archiveResults.isEmpty else { throw APIError.unavailable }
@@ -2613,6 +3295,9 @@ actor FakeChatAPI: ChahuaAPIClient {
 
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         chatQueries.append(query)
+        if let chatID = query.chatId, let chat = policyTargetedChats[chatID] {
+            return .init(chats: chat.archived == (query.archived ?? false) ? [chat] : [])
+        }
         if query.archived == true ? suspendArchivedChatRequests : suspendChatRequests {
             chatRequestObserver?.resume()
             chatRequestObserver = nil
@@ -2632,6 +3317,9 @@ actor FakeChatAPI: ChahuaAPIClient {
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
     {
         messageChatIDs.append(chatID)
+        if let page = policyMessagePages[.init(chatID: chatID, threadID: query.threadID)] {
+            return page
+        }
         guard var results = messageResults[chatID], !results.isEmpty else {
             throw APIError.unavailable
         }
@@ -2655,5 +3343,72 @@ actor FakeChatAPI: ChahuaAPIClient {
         case .failure(let error): pendingChatRequest?.resume(throwing: error)
         }
         pendingChatRequest = nil
+    }
+}
+
+extension ChatStoreTests {
+    func testMovingPendingForwardRollsBackFailureAndPreservesDestinationDrafts() async throws {
+        let h = try await openDraftHarness()
+        let drafts = h.store.drafts
+        let first = ConversationListItem.chat(
+            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
+        let second = ConversationListItem.chat(
+            .init(id: "other", unreadCount: 0, archived: false, kind: .group))
+        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
+        let otherSource = try TimelineTestFixtures.message(id: 11, chatID: "source", at: 1)
+        let reply = try TimelineTestFixtures.message(id: 1, chatID: "chat", at: 0).replyPreview
+        drafts.setDraftText("first caption", chatID: "chat")
+        drafts.setDraftReply(reply, chatID: "chat")
+        drafts.setDraftText("second caption", chatID: "other")
+        _ = try await drafts.prepareForward(
+            sources: [source], allowPlaceholders: false, destination: first,
+            moveFrom: nil, expectedID: nil, navigate: { _ in true })
+        _ = try await drafts.prepareForward(
+            sources: [otherSource], allowPlaceholders: true, destination: second,
+            moveFrom: nil, expectedID: nil, navigate: { _ in true })
+        let firstSelection = try XCTUnwrap(drafts.pendingForwards[first.id])
+        let secondSelection = try XCTUnwrap(drafts.pendingForwards[second.id])
+        let rejected = try await drafts.prepareForward(
+            sources: firstSelection.sources, allowPlaceholders: false, destination: second,
+            moveFrom: first.id, expectedID: firstSelection.id, navigate: { _ in false })
+        XCTAssertFalse(rejected)
+        XCTAssertEqual(drafts.pendingForwards[first.id], firstSelection)
+        XCTAssertEqual(drafts.pendingForwards[second.id], secondSelection)
+
+        let moved = try await drafts.prepareForward(
+            sources: firstSelection.sources, allowPlaceholders: false, destination: second,
+            moveFrom: first.id, expectedID: firstSelection.id, navigate: { _ in true })
+        XCTAssertTrue(moved)
+        XCTAssertNil(drafts.pendingForwards[first.id])
+        XCTAssertEqual(drafts.pendingForwards[second.id]?.sources, [source])
+        XCTAssertEqual(drafts.draftText(chatID: "chat"), "first caption")
+        XCTAssertEqual(drafts.draftReply(chatID: "chat"), reply)
+        XCTAssertEqual(drafts.draftText(chatID: "other"), "second caption")
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "other").isEmpty)
+    }
+
+    func testForwardCancelledDuringDestinationEntryCannotReappearAtNewTarget() async throws {
+        let h = try await openDraftHarness()
+        let drafts = h.store.drafts
+        let first = ConversationListItem.chat(
+            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
+        let second = ConversationListItem.chat(
+            .init(id: "other", unreadCount: 0, archived: false, kind: .group))
+        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
+        _ = try await drafts.prepareForward(
+            sources: [source], allowPlaceholders: false, destination: first,
+            moveFrom: nil, expectedID: nil, navigate: { _ in true })
+        let selection = try XCTUnwrap(drafts.pendingForwards[first.id])
+        let moved = try await drafts.prepareForward(
+            sources: [source], allowPlaceholders: false, destination: second,
+            moveFrom: first.id, expectedID: selection.id,
+            navigate: { _ in
+                drafts.cancelForward(at: first.id, expectedID: selection.id)
+                return true
+            })
+        XCTAssertFalse(moved)
+        XCTAssertNil(drafts.pendingForwards[first.id])
+        XCTAssertNil(drafts.pendingForwards[second.id])
     }
 }

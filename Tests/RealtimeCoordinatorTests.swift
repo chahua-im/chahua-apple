@@ -7,38 +7,54 @@ import XCTest
 
 @MainActor
 final class RealtimeCoordinatorTests: XCTestCase {
-    func testPrivacySelectionAutomaticallySavesAcrossPageDismissal() async throws {
+    func testPresenceDraftSelectionAndRevertDoNotWrite() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = PresencePrivacySettingsModel(store: store)
+        XCTAssertFalse(model.canSave)
+        let unloadedSave = await model.save()
+        XCTAssertFalse(unloadedSave)
+        model.chooseVisibility(.nobody)
+        XCTAssertNil(model.visibility)
+        await model.load()
+        XCTAssertTrue(model.canSave)
+        XCTAssertFalse(model.isDirty)
+        model.chooseVisibility(.nobody)
+        XCTAssertTrue(model.isDirty)
+        model.chooseVisibility(.everyone)
+        XCTAssertFalse(model.isDirty)
+        let writes = await api.presenceUpdateCount
+        XCTAssertEqual(writes, 0)
+    }
+
+    func testPresenceExplicitSaveRejectsRepeatedSaveAndAdoptsBaseline() async {
         let api = RealtimeTestHTTP()
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
         let model = PresencePrivacySettingsModel(store: store)
         await model.load()
+        model.chooseVisibility(.nobody)
         await api.holdNextPresenceUpdate()
-        let choosing = Task { await model.chooseVisibility(.nobody) }
+        let saving = Task { await model.save() }
         await eventually { await api.hasHeldPresenceUpdate }
-        XCTAssertEqual(model.visibility, .nobody)
         XCTAssertTrue(model.isSaving)
-
-        // Leaving and reopening the page must not abort or reload over the write.
-        model.cancelLoading()
+        XCTAssertFalse(model.canSave)
+        let repeatedSave = await model.save()
+        XCTAssertFalse(repeatedSave)
         await model.load()
-        XCTAssertTrue(model.isSaving)
         XCTAssertEqual(model.visibility, .nobody)
         await api.releasePresenceUpdate()
-        await choosing.value
+        let saved = await saving.value
+        XCTAssertTrue(saved)
         XCTAssertFalse(model.isSaving)
+        XCTAssertFalse(model.isDirty)
         XCTAssertNil(model.saveError)
-        let stored = try await api.presenceSettings()
-        XCTAssertEqual(stored.visibility, .nobody)
-
-        // Tapping the already selected policy must not start another fallible write.
-        await api.setPresenceUpdateError(.unavailable)
-        await model.chooseVisibility(.nobody)
-        XCTAssertNil(model.saveError)
-        XCTAssertEqual(model.visibility, .nobody)
+        let writes = await api.presenceUpdateCount
+        XCTAssertEqual(writes, 1)
     }
 
-    func testAutomaticPrivacySaveRetainsFailedSelectionAndRetries() async {
+    func testPresenceExplicitSaveRetainsFailedDraftAndRetries() async {
         let api = RealtimeTestHTTP()
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
@@ -53,18 +69,159 @@ final class RealtimeCoordinatorTests: XCTestCase {
                     requestId: 1, users: [UserPresenceResponse(uid: 2, online: true)], groups: [])),
             currentUserID: 1)
         await api.setPresenceUpdateError(.unavailable)
-        await model.chooseVisibility(.friends)
+        model.chooseVisibility(.friends)
+        let failed = await model.save()
+        XCTAssertFalse(failed)
+        XCTAssertTrue(model.isDirty)
         XCTAssertEqual(model.visibility, .friends)
         XCTAssertNotNil(model.saveError)
         XCTAssertFalse(model.isSaving)
         XCTAssertEqual(store.state.userPresence[2]?.online, true)
 
         await api.setPresenceUpdateError(nil)
-        await model.retrySave()
+        let saved = await model.save()
+        XCTAssertTrue(saved)
+        XCTAssertFalse(model.isDirty)
         XCTAssertEqual(model.visibility, .friends)
         XCTAssertNil(model.saveError)
         XCTAssertFalse(model.isSaving)
         XCTAssertNil(store.state.userPresence[2])
+    }
+
+    func testPresenceCancelledSaveCannotReportSuccessOrAdoptBaseline() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = PresencePrivacySettingsModel(store: store)
+        await model.load()
+        model.chooseVisibility(.nobody)
+        await api.holdNextPresenceUpdate()
+        let saving = Task { await model.save() }
+        await eventually { await api.hasHeldPresenceUpdate }
+        saving.cancel()
+        await api.releasePresenceUpdate()
+        let saved = await saving.value
+        XCTAssertFalse(saved)
+        XCTAssertFalse(model.isSaving)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertEqual(model.visibility, .nobody)
+        XCTAssertNil(model.saveError)
+    }
+
+    func testPresenceAccountResetRejectsLateSaveAndRequiresNewLoad() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = PresencePrivacySettingsModel(store: store)
+        await model.load()
+        model.chooseVisibility(.nobody)
+        await api.holdNextPresenceUpdate()
+        let saving = Task { await model.save() }
+        await eventually { await api.hasHeldPresenceUpdate }
+        store.reset()
+        XCTAssertNil(model.visibility)
+        XCTAssertFalse(model.canSave)
+        await api.releasePresenceUpdate()
+        let saved = await saving.value
+        XCTAssertFalse(saved)
+        XCTAssertEqual(model.loadPhase, .idle)
+        XCTAssertNil(model.visibility)
+        XCTAssertFalse(model.isSaving)
+        await model.load()
+        XCTAssertTrue(model.canSave)
+        XCTAssertFalse(model.isDirty)
+    }
+
+    func testReadReceiptDraftSelectionAndRevertDoNotWrite() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = ReadReceiptPrivacySettingsModel(store: store)
+        XCTAssertFalse(model.canSave)
+        let unloadedSave = await model.save()
+        XCTAssertFalse(unloadedSave)
+        await model.choose(.visibility(.nobody))
+        XCTAssertNil(model.selection)
+        await model.load()
+        XCTAssertTrue(model.canSave)
+        await model.choose(.visibility(.nobody))
+        XCTAssertTrue(model.isDirty)
+        await model.choose(.visibility(.friends))
+        XCTAssertFalse(model.isDirty)
+        let writes = await api.receiptUpdateCount
+        XCTAssertEqual(writes, 0)
+    }
+
+    func testReadReceiptExplicitSaveRetainsFailedDraftAndAdoptsSuccessfulBaseline() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = ReadReceiptPrivacySettingsModel(store: store)
+        await model.load()
+        await model.choose(.visibility(.nobody))
+        await api.setReceiptUpdateError(.unavailable)
+        let failed = await model.save()
+        XCTAssertFalse(failed)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertEqual(model.selection, .visibility(.nobody))
+        XCTAssertNotNil(model.saveError)
+        XCTAssertFalse(model.isSaving)
+        await model.choose(.visibility(.friends))
+        XCTAssertNil(model.saveError)
+        XCTAssertFalse(model.isDirty)
+        await model.choose(.visibility(.nobody))
+        await api.setReceiptUpdateError(nil)
+        let saved = await model.save()
+        XCTAssertTrue(saved)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertEqual(model.selection, .visibility(.nobody))
+        XCTAssertNil(model.saveError)
+    }
+
+    func testReadReceiptCancelledSaveCannotReportSuccessOrAdoptBaseline() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = ReadReceiptPrivacySettingsModel(store: store)
+        await model.load()
+        await model.choose(.visibility(.nobody))
+        await api.holdNextReceiptUpdate()
+        let saving = Task { await model.save() }
+        await eventually { await api.hasHeldReceiptUpdate }
+        let repeatedSave = await model.save()
+        XCTAssertFalse(repeatedSave)
+        saving.cancel()
+        await api.releaseReceiptUpdate()
+        let saved = await saving.value
+        XCTAssertFalse(saved)
+        XCTAssertFalse(model.isSaving)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertNil(model.saveError)
+    }
+
+    func testReadReceiptAccountChangeRejectsLateSaveAndRequiresNewLoad() async throws {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        store.currentUserProfile = try await api.authenticate(candidateJWT: "1")
+        let model = ReadReceiptPrivacySettingsModel(store: store)
+        await model.load()
+        await model.choose(.visibility(.nobody))
+        await api.holdNextReceiptUpdate()
+        let saving = Task { await model.save() }
+        await eventually { await api.hasHeldReceiptUpdate }
+        store.currentUserProfile = try await api.authenticate(candidateJWT: "2")
+        XCTAssertNil(model.selection)
+        XCTAssertFalse(model.canSave)
+        await api.releaseReceiptUpdate()
+        let saved = await saving.value
+        XCTAssertFalse(saved)
+        XCTAssertNil(model.selection)
+        XCTAssertEqual(model.loadPhase, .idle)
+        XCTAssertFalse(model.isSaving)
+        await model.load()
+        XCTAssertTrue(model.canSave)
+        XCTAssertFalse(model.isDirty)
     }
 
     func testPrivacySaveClearsIndividualPresenceAndRefreshesUnchangedWatch() async throws {
@@ -1101,11 +1258,17 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     init(holdChats: Bool = false) { self.holdChats = holdChats }
     private var visibility: PresenceVisibility = .everyone
     private var presenceUpdateError: APIError?
+    private(set) var presenceUpdateCount = 0
     private var holdsPresenceUpdate = false
     private var heldPresenceUpdate: CheckedContinuation<PresenceSettingsResponse, Error>?
     var hasHeldPresenceUpdate: Bool { heldPresenceUpdate != nil }
     private var receiptVisibility: ReadReceiptVisibility = .friends
     private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
+    private(set) var receiptUpdateCount = 0
+    private var receiptUpdateError: APIError?
+    private var holdsReceiptUpdate = false
+    private var heldReceiptUpdate: CheckedContinuation<ReadReceiptSettingsResponse, Error>?
+    var hasHeldReceiptUpdate: Bool { heldReceiptUpdate != nil }
 
     private enum UnexpectedActivityCall: Error { case unread }
     func unreadMentions(chatID: String, threadID: MessageID?) async throws
@@ -1133,8 +1296,21 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func updateReadReceiptSettings(visibility: ReadReceiptVisibility) async throws
         -> ReadReceiptSettingsResponse
     {
+        receiptUpdateCount += 1
+        if let receiptUpdateError { throw receiptUpdateError }
         receiptVisibility = visibility
+        if holdsReceiptUpdate {
+            holdsReceiptUpdate = false
+            return try await withCheckedThrowingContinuation { heldReceiptUpdate = $0 }
+        }
         return .init(visibility: visibility)
+    }
+    func setReceiptUpdateError(_ error: APIError?) { receiptUpdateError = error }
+    func holdNextReceiptUpdate() { holdsReceiptUpdate = true }
+    func releaseReceiptUpdate() {
+        heldReceiptUpdate?.resume(
+            returning: ReadReceiptSettingsResponse(visibility: receiptVisibility))
+        heldReceiptUpdate = nil
     }
     func friendReadReceiptSettings(peerUID: Int32) async throws -> FriendReadReceiptSettingsResponse
     {
@@ -1154,6 +1330,7 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func updatePresenceSettings(visibility: PresenceVisibility) async throws
         -> PresenceSettingsResponse
     {
+        presenceUpdateCount += 1
         if let presenceUpdateError { throw presenceUpdateError }
         self.visibility = visibility
         if holdsPresenceUpdate {
@@ -1184,7 +1361,8 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     func me() async throws -> MeResponse { throw APIError.unavailable }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(
-        fileName: String, contentType: String, size: Int64, width: Int, height: Int, order: Int
+        fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
+        size: Int64, width: Int, height: Int, order: Int
     ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
     func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
     func listSubscribedStickerPacks() async throws -> [StickerPackSummary] {

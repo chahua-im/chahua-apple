@@ -8,6 +8,9 @@ struct ForwardedRecordsView: View {
     private let key: ForwardedRecordsSession.Key
     @State private var childBundleID: String?
     @State private var presentedGalleryID: UUID?
+    @State private var profileUID: Int32?
+    @State private var profileChat: ChatListItem?
+    @State private var presentedFile: AttachmentResponse?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.imageDetailPresenter) private var imageDetailPresenter
     @Environment(\.openURL) private var openURL
@@ -44,6 +47,39 @@ struct ForwardedRecordsView: View {
             #endif
             .navigationDestination(item: $childBundleID) { bundleID in
                 ForwardedRecordsView(session: session, bundleID: bundleID)
+            }
+            .navigationDestination(item: $profileUID) { uid in
+                if let currentUserID = session.store.currentUserProfile?.uid {
+                    UserProfileView(
+                        uid: uid, currentUserID: currentUserID,
+                        store: session.store, onOpenChat: { profileChat = $0 })
+                }
+            }
+            .navigationDestination(item: $profileChat) { chat in
+                if let uid = session.store.currentUserProfile?.uid {
+                    ChatDetailView(chat: chat, currentUserID: uid, store: session.store)
+                }
+            }
+            .sheet(
+                isPresented: Binding(
+                    get: { presentedFile != nil },
+                    set: { if !$0 { presentedFile = nil } })
+            ) {
+                if let file = presentedFile {
+                    NavigationStack {
+                        MessageFileAttachmentView(
+                            url: URL(string: file.url), fileName: file.fileName,
+                            contentType: file.kind, byteCount: file.size
+                        )
+                        .padding()
+                        .frame(minWidth: 300, minHeight: 180)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { presentedFile = nil }
+                            }
+                        }
+                    }
+                }
             }
             .task(id: session.revision) {
                 session.load(key)
@@ -115,11 +151,11 @@ struct ForwardedRecordsView: View {
     private func actions(for snapshot: ForwardedRecordSnapshot) -> TimelineBubbleActions {
         var actions = TimelineBubbleActions()
         actions.interactionContext = readOnlyContext
+        actions.openMention = { profileUID = $0 }
         actions.openAttachment = { attachment in
-            guard case .ready(let current) = session.phase(for: key), current === snapshot,
-                let url = URL(string: attachment.url)
+            guard case .ready(let current) = session.phase(for: key), current === snapshot
             else { return }
-            openURL(url)
+            presentedFile = attachment
         }
         if let imageDetailPresenter {
             actions.openMedia = { gallery in

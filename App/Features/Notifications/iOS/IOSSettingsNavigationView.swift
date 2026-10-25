@@ -5,6 +5,7 @@
     // A single SwiftUI settings form cannot provide the separate category destinations.
     struct IOSSettingsNavigationView: View {
         let settings: NotificationSettingsView
+        @State private var protectsEditorEdits = false
         @Environment(\.dismiss) private var dismiss
         @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.system.rawValue
 
@@ -27,8 +28,12 @@
                     }
                     Section("Privacy and Security") {
                         ForEach(SettingsPage.privacyPages) { page in
-                            NavigationLink(value: page) {
-                                Label(page.title, systemImage: page.symbol)
+                            if page == .blockedUsers {
+                                settings.blockedUsersRow
+                            } else {
+                                NavigationLink(value: page) {
+                                    Label(page.title, systemImage: page.symbol)
+                                }
                             }
                         }
                     }
@@ -50,14 +55,20 @@
                 }
                 .listStyle(.insetGrouped)
                 .navigationTitle(settingsTitle)
+                .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: SettingsPage.self) { page in
                     settings.page(page, grouped: true)
+                        .navigationBarTitleDisplayMode(.inline)
                 }
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Close") { dismiss() }
+                            .disabled(protectsEditorEdits)
                     }
                 }
+            }
+            .onPreferenceChange(SettingsEditorExitProtectionKey.self) {
+                protectsEditorEdits = $0
             }
         }
     }

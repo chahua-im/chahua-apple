@@ -5,13 +5,15 @@ import UserNotifications
 enum SettingsPage: String, Identifiable {
     case language, appearance, conversations, presencePrivacy, readReceiptPrivacy, storage,
         reactions,
-        stickerPacks, notifications
+        stickerPacks, notifications, friendRequestPermission, blockedUsers
 
     static let generalPages: [Self] = [
         .language, .appearance, .conversations, .storage,
     ]
     static let stickerPages: [Self] = [.reactions, .stickerPacks]
-    static let privacyPages: [Self] = [.presencePrivacy, .readReceiptPrivacy]
+    static let privacyPages: [Self] = [
+        .presencePrivacy, .readReceiptPrivacy, .friendRequestPermission, .blockedUsers,
+    ]
     var id: Self { self }
 
     var title: LocalizedStringKey {
@@ -25,6 +27,8 @@ enum SettingsPage: String, Identifiable {
         case .reactions: "Quick Reaction"
         case .stickerPacks: "Manage Sticker Packs"
         case .notifications: "Push Notifications"
+        case .friendRequestPermission: "Friend Request Permission"
+        case .blockedUsers: "Blocked Users"
         }
     }
 
@@ -39,6 +43,8 @@ enum SettingsPage: String, Identifiable {
         case .reactions: "face.smiling"
         case .stickerPacks: "square.stack"
         case .notifications: "bell"
+        case .friendRequestPermission: "person.badge.shield.checkmark"
+        case .blockedUsers: "hand.raised.slash"
         }
     }
 
@@ -63,7 +69,14 @@ struct NotificationSettingsView: View {
     let me: MeResponse
     let isSigningOut: Bool
     let onSignOut: () -> Void
+    var onOpenChat: (ChatListItem) -> Void = { _ in }
+    @State private var profileUserID: Int32?
     @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.system.rawValue
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(ConversationTimelinePreferences.showAllAvatarsStorageKey)
+    private var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars
+    @AppStorage(ConversationTimelinePreferences.showDmDetailsStorageKey)
+    private var showDmDetails = ConversationTimelinePreferences.defaultShowDmDetails
     @AppStorage(ConversationListPreferences.showThreadsInMessagesStorageKey)
     private var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
     @AppStorage(MessageTextSizePreference.storageKey)
@@ -82,7 +95,28 @@ struct NotificationSettingsView: View {
                 IOSSettingsNavigationView(settings: self)
             #endif
         }
+        .appAppearance()
         .task { await notifications.refreshAuthorization() }
+        .sheet(
+            isPresented: Binding(
+                get: { profileUserID != nil },
+                set: { if !$0 { profileUserID = nil } })
+        ) {
+            NavigationStack {
+                if let uid = profileUserID {
+                    UserProfileView(
+                        uid: uid, currentUserID: me.uid, store: chatStore,
+                        onOpenChat: onOpenChat
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { profileUserID = nil }
+                        }
+                    }
+                }
+            }
+            .frame(minWidth: 320, minHeight: 420)
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task { await notifications.refreshAuthorization() }
@@ -119,9 +153,20 @@ struct NotificationSettingsView: View {
         StickerSortRow(library: chatStore.stickers, packs: false)
     }
 
+    var blockedUsersRow: some View {
+        BlockedUsersSettingsLink(currentUserID: me.uid, store: chatStore)
+    }
+
     @ViewBuilder
     func page(_ page: SettingsPage, grouped: Bool) -> some View {
-        if page == .presencePrivacy {
+        if page == .friendRequestPermission {
+            FriendVerificationSettingsView(store: chatStore, grouped: grouped)
+                .id(ObjectIdentifier(chatStore))
+        } else if page == .blockedUsers {
+            BlockedUsersView(
+                currentUserID: me.uid, store: chatStore,
+                onOpenProfile: { profileUserID = $0 })
+        } else if page == .presencePrivacy {
             PresencePrivacySettingsView(store: chatStore, grouped: grouped)
                 .id(ObjectIdentifier(chatStore))
         } else if page == .readReceiptPrivacy {
@@ -181,7 +226,8 @@ struct NotificationSettingsView: View {
     @ViewBuilder
     private func pageRows(_ page: SettingsPage, showsDividers: Bool) -> some View {
         switch page {
-        case .reactions, .stickerPacks, .presencePrivacy, .readReceiptPrivacy, .notifications:
+        case .reactions, .stickerPacks, .presencePrivacy, .readReceiptPrivacy, .notifications,
+            .friendRequestPermission, .blockedUsers:
             EmptyView()
         case .language:
             LabeledContent("App language") {
@@ -193,6 +239,12 @@ struct NotificationSettingsView: View {
                 .labelsHidden()
             }
         case .appearance:
+            Picker("Color scheme", selection: $appearance) {
+                ForEach(AppAppearance.allCases) { option in
+                    Text(option.title).tag(option.rawValue)
+                }
+            }
+            if showsDividers { Divider() }
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Message text size", systemImage: "textformat.size")
@@ -270,6 +322,12 @@ struct NotificationSettingsView: View {
         case .conversations:
             Toggle("Show 'Threads' in Messages", isOn: $showThreadsInMessages)
                 .toggleStyle(.switch)
+            Toggle("Show all message avatars", isOn: $showAllAvatars)
+                .toggleStyle(.switch)
+            Toggle("Show avatars and names in DMs", isOn: $showDmDetails)
+                .toggleStyle(.switch)
+            MembershipMessagePreferenceRow(store: chatStore, accountUID: me.uid)
+                .id("\(me.uid)-\(chatStore.sessionRevision)")
             if showsDividers {
                 Divider()
                 VStack(alignment: .leading, spacing: 12) {
@@ -393,6 +451,89 @@ private struct StickerSortRow: View {
                 "Auto-sort favorite stickers",
                 isOn: Binding(
                     get: { library.autoSortFavorites }, set: library.setAutoSortFavorites))
+        }
+    }
+}
+
+private struct MembershipMessagePreferenceRow: View {
+    @ObservedObject var store: ChatStore
+    let accountUID: Int32
+    private let sessionRevision: Int
+    @State private var isSaving = false
+    @State private var pendingChoice: Bool?
+    @State private var failedChoice: Bool?
+    @State private var saveError: String?
+
+    init(store: ChatStore, accountUID: Int32) {
+        self.store = store
+        self.accountUID = accountUID
+        sessionRevision = store.sessionRevision
+    }
+
+    private var authorized: Bool {
+        store.currentUserProfile?.uid == accountUID && store.sessionRevision == sessionRevision
+    }
+
+    private var savedValue: Bool? {
+        guard authorized else { return nil }
+        return store.currentUserProfile?.showMembershipMessages
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let savedValue {
+                HStack {
+                    Toggle(
+                        "Show group membership messages",
+                        isOn: Binding(
+                            get: { pendingChoice ?? savedValue },
+                            set: { value in Task { await save(value) } })
+                    )
+                    .toggleStyle(.switch)
+                    .disabled(isSaving)
+                    .accessibilityIdentifier("show-membership-messages-toggle")
+                    if isSaving {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel("Saving…")
+                    }
+                }
+            } else {
+                Text("Membership message preference is unavailable.")
+                    .foregroundStyle(.secondary)
+            }
+            Text("Show join and leave messages when the group policy allows them.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let saveError {
+                Text(saveError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                if let failedChoice {
+                    Button("Retry") { Task { await save(failedChoice) } }
+                        .disabled(isSaving || !authorized)
+                }
+            }
+        }
+    }
+
+    private func save(_ value: Bool) async {
+        guard authorized, !isSaving, savedValue != nil else { return }
+        isSaving = true
+        pendingChoice = value
+        failedChoice = nil
+        saveError = nil
+        defer {
+            pendingChoice = nil
+            isSaving = false
+        }
+        do {
+            _ = try await store.updateChatSettings(showMembershipMessages: value)
+            // The shared store applies only the server-confirmed account preference.
+        } catch is CancellationError {} catch {
+            guard authorized else { return }
+            failedChoice = value
+            saveError = error.localizedDescription
         }
     }
 }

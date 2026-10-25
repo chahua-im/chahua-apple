@@ -43,14 +43,19 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
     public var byteCount: Int64
     public var attachmentID: String?
     public var error: String?
+    // Optional for compatibility with durable rows written before general-file acquisition.
+    public var preservesOriginal: Bool?
+    public var isFile: Bool { preservesOriginal == true }
     public var isUploaded: Bool { attachmentID != nil }
-    public var isAudio: Bool { mimeType.lowercased().hasPrefix("audio/") }
+    public var isAudio: Bool { !isFile && mimeType.lowercased().hasPrefix("audio/") }
     public var uploadPath: String { preparedPath ?? sourcePath }
 
     public init(
         id: String, generation: String, position: Int, sourcePath: String,
         preparedPath: String? = nil, previewPath: String, fileName: String, mimeType: String,
-        width: Int, height: Int, byteCount: Int64, attachmentID: String? = nil, error: String? = nil
+        width: Int, height: Int, byteCount: Int64, attachmentID: String? = nil,
+        error: String? = nil,
+        preservesOriginal: Bool? = nil
     ) {
         self.id = id
         self.generation = generation
@@ -65,6 +70,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
         self.byteCount = byteCount
         self.attachmentID = attachmentID
         self.error = error
+        self.preservesOriginal = preservesOriginal
     }
 }
 
@@ -116,6 +122,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public var dispatchClaimed: Bool = false
     public var sticker: MessageStickerResponse? = nil
     public var forwardRequest: LocalForwardRequest? = nil
+    public var speakingRestriction: SpeakingMode? = nil
 
     public var messageType: MessageType {
         if let forwardRequest {
@@ -124,6 +131,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
         }
         if sticker != nil { return .sticker }
         if attachments.count == 1, attachments[0].isAudio { return .audio }
+        if attachments.contains(where: \.isFile) { return .file }
         return .text
     }
 

@@ -93,7 +93,7 @@ final class ConversationTimelineModel: ObservableObject {
     private var readCandidateMature = false
     private var readDwellTask: Task<Void, Never>?
     private var readSendTask: Task<Void, Never>?
-    private let isGroupChat: Bool
+    let isGroupChat: Bool
     private let fetchUnreadMentions:
         (@MainActor (String?) async throws -> UnreadMentionIDsResponse)?
     private let fetchUnreadReactions:
@@ -116,6 +116,11 @@ final class ConversationTimelineModel: ObservableObject {
     private var knownUnreadMentions: Int64?
     private var knownUnreadReactions: Int64?
     private var accountWasReset = false
+    private var membershipRefreshRequired = false
+    var hasPendingMembershipVisibilityRefresh: Bool { membershipRefreshRequired }
+    private var membershipRefreshLowerBound: MessageID?
+    private var membershipRefreshUpperBound: MessageID?
+    private var membershipRefreshAtLiveEdge = false
 
     init(
         chatID: String, currentUserID: Int32, isGroupChat: Bool, source: any TimelineMessageSource,
@@ -143,7 +148,7 @@ final class ConversationTimelineModel: ObservableObject {
         self.fetchUnreadReactions = fetchUnreadReactions
         self.acknowledgeReactions = acknowledgeReactions
         builder = TimelineRowsBuilder(
-            currentUserID: currentUserID, isGroupChat: isGroupChat, calendar: calendar,
+            currentUserID: currentUserID, calendar: calendar,
             capturedReplyRedactedIDs: capturedReplyRedactedIDs)
         // A final leave acknowledgement can outlive timeline observation. Keep the account
         // fence subscribed until the model dies so it cannot write for a replacement login.
@@ -675,7 +680,7 @@ final class ConversationTimelineModel: ObservableObject {
             state.content == .ready, pendingScroll == nil, viewportRevision == snapshotRevision,
             lastViewport.isValid(forRowCount: rows.count),
             let first = lastViewport.firstVisibleIndex, let last = lastViewport.lastVisibleIndex,
-            let candidateID = lastViewport.fullyVisibleMessageIDs.last,
+            let candidateID = lastViewport.visibleMessageIDs.last,
             candidateID != threadRootID
         else { return nil }
         for index in (first...last).reversed() {
@@ -768,6 +773,10 @@ final class ConversationTimelineModel: ObservableObject {
             await loadInitial()
             return
         }
+        if membershipRefreshRequired {
+            await reconcileMembershipVisibility()
+            return
+        }
         guard state.content == .ready else { return }
         let followsLatest = window.isAtLiveEdge && state.live.followsLatest
         let anchor = followsLatest ? nil : visibleRemoteAnchor
@@ -816,6 +825,59 @@ final class ConversationTimelineModel: ObservableObject {
                 invalidateRequests()
             }
         }
+    }
+
+    /// Uses the existing recovery task, but merges the loaded interval rather than
+    /// replacing it with one page. Visibility changes must not discard paged history.
+    private func reconcileMembershipVisibility() async {
+        let requestGeneration = generation
+        let lower = membershipRefreshLowerBound ?? window.messages.first?.id
+        let upper =
+            membershipRefreshAtLiveEdge
+            ? nil
+            : (membershipRefreshUpperBound ?? window.messages.last?.id)
+        membershipRefreshRequired = false
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == requestGeneration { recoveryTask = nil } }
+            do {
+                guard let lower else {
+                    try await fetchSnapshot(
+                        query: liveEdgeQuery, mode: .replace(latest: true),
+                        generation: requestGeneration
+                    ) {
+                        self.state.content = .ready
+                        self.publish()
+                    }
+                    return
+                }
+                var query = aroundQuery(for: .message(lower))
+                var cursors = Set<MessageID>()
+                while true {
+                    let next = try await fetchSnapshot(
+                        query: query, mode: .membershipRange(lower: lower, upper: upper),
+                        generation: requestGeneration
+                    ) {
+                        self.publish()
+                    }
+                    guard let cursor = next, upper.map({ cursor < $0 }) ?? true else { break }
+                    guard cursors.insert(cursor).inserted else { throw APIError.unexpectedResponse }
+                    query = .init(after: cursor, max: Self.pageSize, threadID: threadID)
+                }
+                if !membershipRefreshRequired {
+                    membershipRefreshLowerBound = nil
+                    membershipRefreshUpperBound = nil
+                    membershipRefreshAtLiveEdge = false
+                }
+                state.reconciliationFailed = false
+            } catch {
+                guard generation == requestGeneration else { return }
+                membershipRefreshRequired = true
+                if !(error is CancellationError) { state.reconciliationFailed = true }
+            }
+        }
+        recoveryTask = task
+        await awaitRecovery(task, generation: requestGeneration)
     }
 
     func userScrollBegan() {
@@ -905,7 +967,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private var isAtOrBeyondReadBoundary: Bool {
-        guard let lastReadMessageID, let visibleID = lastViewport.fullyVisibleMessageIDs.last else {
+        guard let lastReadMessageID, let visibleID = lastViewport.visibleMessageIDs.last else {
             return false
         }
         return visibleID >= lastReadMessageID
@@ -1092,26 +1154,40 @@ final class ConversationTimelineModel: ObservableObject {
         case replace(latest: Bool)
         case page(EdgeSide)
         case seekOlder
+        case membershipRange(lower: MessageID, upper: MessageID?)
     }
 
     private struct MessageNotFound: Error {}
 
     /// The baseline, ordered replay and caller's publication execute without a suspension.
+    @discardableResult
     private func fetchSnapshot(
         query: ListMessagesQuery, mode: SnapshotMode, generation requestGeneration: Int,
         requiredMessageID: MessageID? = nil, commit: () -> Void
-    ) async throws {
+    ) async throws -> MessageID? {
         try Task.checkCancellation()
         guard generation == requestGeneration else { throw CancellationError() }
-        let token = messageStore.beginSnapshot(chatID: chatID)
+        var token = messageStore.beginSnapshot(chatID: chatID)
         snapshotTokens.insert(token)
         defer {
             messageStore.endSnapshot(token)
             snapshotTokens.remove(token)
         }
-        let page = try await source.fetchMessages(chatID: chatID, query: query)
-        try Task.checkCancellation()
-        guard generation == requestGeneration else { throw CancellationError() }
+        var page: ListMessagesResponse
+        while true {
+            page = try await source.fetchMessages(chatID: chatID, query: query)
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            guard isGroupChat, threadID == nil,
+                !messageStore.membershipSnapshotIsCurrent(token)
+            else { break }
+            // Metadata can change while this actor is suspended returning from
+            // the source, even after its own response fence has passed.
+            messageStore.endSnapshot(token)
+            snapshotTokens.remove(token)
+            token = messageStore.beginSnapshot(chatID: chatID)
+            snapshotTokens.insert(token)
+        }
         if let requiredMessageID,
             !page.messages.contains(where: { $0.id == requiredMessageID && accepts($0) })
         {
@@ -1138,11 +1214,17 @@ final class ConversationTimelineModel: ObservableObject {
             }
         case .page(.older): window.prependOlder(page, accepting: accepts)
         case .page(.newer): window.appendNewer(page, accepting: accepts)
+        case .membershipRange(let lower, let upper):
+            window.mergePreservingCursors(page) { message in
+                message.id >= lower && (upper.map { message.id <= $0 } ?? true)
+                    && self.accepts(message)
+            }
         }
         preHistoryAcknowledgementKeys.removeAll()
         for event in events { reduce(event, replay: true) }
         absorbDeferredCreates()
         commit()
+        return page.newerCursor
     }
 
     private func accepts(_ message: MessageResponse) -> Bool {
@@ -1151,6 +1233,8 @@ final class ConversationTimelineModel: ObservableObject {
             return message.id == threadRootID || message.replyRootId == threadID
         }
         return message.replyRootId == nil
+            && !(isGroupChat && message.systemKind?.isMembership == true
+                && messageStore.hidesMembershipMessages(chatID: chatID))
     }
 
     private func observeChanges() {
@@ -1165,6 +1249,29 @@ final class ConversationTimelineModel: ObservableObject {
             cancelReadReceipt(clear: true)
             invalidateRequests()
             clearWindow()
+        case .membershipVisibilityChanged(let changedChatID):
+            guard isGroupChat, threadID == nil,
+                changedChatID == nil || changedChatID == chatID
+            else { return }
+            let lower = window.messages.first?.id
+            let upper = window.messages.last?.id
+            membershipRefreshAtLiveEdge = membershipRefreshAtLiveEdge || window.isAtLiveEdge
+            if let lower {
+                membershipRefreshLowerBound = min(membershipRefreshLowerBound ?? lower, lower)
+            }
+            if let upper {
+                membershipRefreshUpperBound = max(membershipRefreshUpperBound ?? upper, upper)
+            }
+            membershipRefreshRequired = true
+            let hidden = Set(
+                window.messages.lazy.filter { !self.accepts($0) }.map(\.id))
+            window.removeAll { !self.accepts($0) }
+            deferredCreates = deferredCreates.filter { self.accepts($0.value) }
+            removeActivityTargets(hidden)
+            resetUnreadActivity()
+            refreshUnreadActivity()
+            cancelReadCandidate()
+            publish()
         case .pendingChanged(let changedChatID):
             guard changedChatID == chatID else { return }
             canReuseLatestWindowAfterPendingChange =
@@ -1258,7 +1365,8 @@ final class ConversationTimelineModel: ObservableObject {
         case .pong, .chatArchiveStateChanged, .presenceUpdate, .presenceSnapshot,
             .threadMembershipChanged, .readReceiptChanged, .notification,
             .notificationSettingsChanged, .chatNotificationSettingChanged,
-            .notificationExceptionsCleared,
+            .notificationExceptionsCleared, .groupSpeakingModeChanged, .memberSpeakingModeChanged,
+            .membershipMessagePolicyChanged, .chatMembershipChanged,
             .conversationUnread, .conversationUnreadError, .conversationStates,
             .conversationStatesError,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
@@ -1337,6 +1445,10 @@ final class ConversationTimelineModel: ObservableObject {
         preHistoryAcknowledgementKeys.removeAll()
         canReuseLatestWindowAfterPendingChange = false
         deletedIDs.removeAll()
+        membershipRefreshRequired = false
+        membershipRefreshLowerBound = nil
+        membershipRefreshUpperBound = nil
+        membershipRefreshAtLiveEdge = false
         state = ConversationTimelineState(realtimeStatus: realtimeStatus)
         state.live.unreadCount = unreadCount
         pendingScroll = nil

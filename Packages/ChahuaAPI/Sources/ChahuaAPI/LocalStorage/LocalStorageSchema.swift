@@ -143,6 +143,9 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
         // Existing ordinary messages remain ordinary; forwarded snapshots are immutable payloads.
         try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN forward_request BLOB")
     }
+    migrator.registerMigration("v7_speaking_restriction") { db in
+        try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN speaking_restriction TEXT")
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }
