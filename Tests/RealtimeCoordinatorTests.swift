@@ -7,6 +7,68 @@ import XCTest
 
 @MainActor
 final class RealtimeCoordinatorTests: XCTestCase {
+    func testLanguageDraftSelectionAndRevertNeverWritePreferences() throws {
+        let namespace = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = LanguageSettingsModel(store: store, defaults: defaults)
+        XCTAssertEqual(model.selection, .system)
+        XCTAssertFalse(model.isDirty)
+        for language in AppLanguage.allCases {
+            model.choose(language)
+            XCTAssertEqual(model.selection, language)
+            XCTAssertNil(defaults.string(forKey: AppLanguage.storageKey))
+        }
+        model.choose(.system)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertFalse(model.save())
+        XCTAssertTrue(defaults.persistentDomain(forName: namespace)?.isEmpty ?? true)
+    }
+
+    func testLanguageDiscardLeavesPreferencesUnwrittenAndReopensPersistedSelection() throws {
+        let namespace = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = LanguageSettingsModel(store: store, defaults: defaults)
+        model.choose(.traditionalChinese)
+        XCTAssertTrue(model.isDirty)
+        model.discardChanges()
+        XCTAssertEqual(model.selection, .system)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertTrue(defaults.persistentDomain(forName: namespace)?.isEmpty ?? true)
+        let reopened = LanguageSettingsModel(store: store, defaults: defaults)
+        XCTAssertEqual(reopened.selection, .system)
+    }
+
+    func testLanguageExplicitSaveCommitsAppWidePreferenceAndAdoptsBaseline() throws {
+        let namespace = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        defaults.set(AppLanguage.english.rawValue, forKey: AppLanguage.storageKey)
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = LanguageSettingsModel(store: store, defaults: defaults)
+        model.choose(.simplifiedChinese)
+        XCTAssertEqual(
+            defaults.string(forKey: AppLanguage.storageKey), AppLanguage.english.rawValue)
+        XCTAssertTrue(model.save())
+        XCTAssertEqual(
+            defaults.string(forKey: AppLanguage.storageKey), AppLanguage.simplifiedChinese.rawValue)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertFalse(model.save())
+        let anotherStore = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let reopened = LanguageSettingsModel(store: anotherStore, defaults: defaults)
+        XCTAssertEqual(reopened.selection, .simplifiedChinese)
+    }
+
     func testPresenceDraftSelectionAndRevertDoNotWrite() async {
         let api = RealtimeTestHTTP()
         let store = ChatStore(

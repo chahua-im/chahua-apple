@@ -26,6 +26,8 @@ private struct SettingsEditorControls: ViewModifier {
     @State private var showsDiscardConfirmation = false
     @State private var discardAccountID: Int32?
 
+    private var primarySave: Bool { isSaving || (isDirty && canSave) }
+
     func body(content: Content) -> some View {
         content
             .disabled(isSaving)
@@ -49,16 +51,26 @@ private struct SettingsEditorControls: ViewModifier {
                 #endif
                 ToolbarItem(placement: .confirmationAction) {
                     Button(action: onSave) {
-                        if isSaving {
-                            ProgressView()
-                                .controlSize(.small)
-                                .accessibilityLabel("Saving…")
-                        } else {
-                            Text("Save")
+                        Group {
+                            if isSaving {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(primarySave ? .white : .primary)
+                                    .accessibilityLabel("Saving…")
+                            } else {
+                                Text("Save")
+                            }
                         }
+                        .foregroundStyle(primarySave ? Color.white : Color.primary)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 36)
+                        .background(
+                            primarySave ? Color.blue : Color.clear,
+                            in: Capsule())
                     }
+                    .buttonStyle(.plain)
                     .disabled(!canSave)
-                    .tint(isDirty && canSave ? Color.blue : Color.primary)
+                    .tint(.primary)
                 }
             }
             .interactiveDismissDisabled(isDirty || isSaving)

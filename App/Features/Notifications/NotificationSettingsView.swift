@@ -5,7 +5,7 @@ import UserNotifications
 enum SettingsPage: String, Identifiable {
     case language, appearance, conversations, presencePrivacy, readReceiptPrivacy, storage,
         reactions,
-        stickerPacks, notifications, friendRequestPermission, blockedUsers
+        stickerPacks, notifications, friendRequestPermission, blockedUsers, savedMessages
 
     static let generalPages: [Self] = [
         .language, .appearance, .conversations, .storage,
@@ -29,6 +29,7 @@ enum SettingsPage: String, Identifiable {
         case .notifications: "Push Notifications"
         case .friendRequestPermission: "Friend Request Permission"
         case .blockedUsers: "Blocked Users"
+        case .savedMessages: "Saved Messages"
         }
     }
 
@@ -45,21 +46,46 @@ enum SettingsPage: String, Identifiable {
         case .notifications: "bell"
         case .friendRequestPermission: "person.badge.shield.checkmark"
         case .blockedUsers: "hand.raised.slash"
+        case .savedMessages: "bookmark"
         }
     }
 
-    static func navigationTitle(languageRawValue: String) -> String {
-        let language = AppLanguage(rawValue: languageRawValue) ?? .system
-        let bundle: Bundle
-        if language != .system,
-            let path = Bundle.main.path(forResource: language.rawValue, ofType: "lproj"),
-            let selectedBundle = Bundle(path: path)
-        {
-            bundle = selectedBundle
-        } else {
-            bundle = .main
+    var iconColor: Color {
+        switch self {
+        case .savedMessages, .language: .blue
+        case .appearance, .friendRequestPermission: .purple
+        case .conversations: .green
+        case .storage: .gray
+        case .presencePrivacy: .cyan
+        case .readReceiptPrivacy, .reactions: .orange
+        case .blockedUsers: .red
+        case .stickerPacks: .pink
+        case .notifications: .red
         }
-        return String(localized: "Settings", bundle: bundle, locale: language.locale)
+    }
+}
+
+struct SettingsPageLabel: View {
+    let page: SettingsPage
+
+    var body: some View {
+        Label {
+            Text(page.title)
+                .foregroundStyle(.primary)
+        } icon: {
+            Image(systemName: page.symbol)
+                .resizable()
+                .scaledToFit()
+                .symbolVariant(.fill)
+                .foregroundStyle(.white)
+                .frame(width: 16, height: 16)
+                .frame(width: 28, height: 28)
+                .background(
+                    page.iconColor,
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -70,8 +96,10 @@ struct NotificationSettingsView: View {
     let isSigningOut: Bool
     let onSignOut: () -> Void
     var onOpenChat: (ChatListItem) -> Void = { _ in }
+    let onOpenSource: (MessageResponse, ChatListItem) -> Void
+    var usesHeroLayout = false
+    var onClose: (() -> Void)? = nil
     @State private var profileUserID: Int32?
-    @AppStorage(AppLanguage.storageKey) private var language = AppLanguage.system.rawValue
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
     @AppStorage(ConversationTimelinePreferences.showAllAvatarsStorageKey)
     private var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars
@@ -106,13 +134,8 @@ struct NotificationSettingsView: View {
                 if let uid = profileUserID {
                     UserProfileView(
                         uid: uid, currentUserID: me.uid, store: chatStore,
-                        onOpenChat: onOpenChat
+                        isPresentedAsRoot: true, onOpenChat: onOpenChat
                     )
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { profileUserID = nil }
-                        }
-                    }
                 }
             }
             .frame(minWidth: 320, minHeight: 420)
@@ -124,19 +147,52 @@ struct NotificationSettingsView: View {
         }
     }
 
-    var accountSummary: some View {
-        VStack(spacing: 12) {
-            AvatarView(
-                url: me.avatarUrl.flatMap(URL.init(string:)),
-                displayName: me.username,
-                diameter: 88)
-            Text(me.username)
-                .font(.title2.weight(.bold))
-                .textSelection(.enabled)
+    @ViewBuilder
+    func accountSummary(transitionTarget: Bool = true) -> some View {
+        if usesHeroLayout {
+            VStack(spacing: 14) {
+                let avatar = AvatarView(
+                    url: me.avatarUrl.flatMap(URL.init(string:)),
+                    displayName: me.username,
+                    diameter: 112
+                )
+                .overlay {
+                    Circle().strokeBorder(.white, lineWidth: 4)
+                }
+                .shadow(
+                    color: Color.black.opacity(colorScheme == .dark ? 0.22 : 0.10),
+                    radius: 16, y: 12
+                )
+                #if os(iOS)
+                    if transitionTarget {
+                        avatar.modifier(AccountAvatarEndpoint(role: .hero))
+                    } else {
+                        avatar
+                    }
+                #else
+                    avatar
+                #endif
+                Text(me.username)
+                    .font(.system(size: 28, weight: .bold))
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
+            .accessibilityElement(children: .combine)
+        } else {
+            VStack(spacing: 12) {
+                AvatarView(
+                    url: me.avatarUrl.flatMap(URL.init(string:)),
+                    displayName: me.username,
+                    diameter: 88)
+                Text(me.username)
+                    .font(.title2.weight(.bold))
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+            .accessibilityElement(children: .combine)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
-        .accessibilityElement(children: .combine)
     }
 
     var signOutRow: some View {
@@ -159,7 +215,12 @@ struct NotificationSettingsView: View {
 
     @ViewBuilder
     func page(_ page: SettingsPage, grouped: Bool) -> some View {
-        if page == .friendRequestPermission {
+        if page == .savedMessages {
+            SavedMessagesView(store: chatStore, onOpenSource: onOpenSource)
+        } else if page == .language {
+            LanguageSettingsView(store: chatStore)
+                .id("\(me.uid)-\(chatStore.sessionRevision)")
+        } else if page == .friendRequestPermission {
             FriendVerificationSettingsView(store: chatStore, grouped: grouped)
                 .id(ObjectIdentifier(chatStore))
         } else if page == .blockedUsers {
@@ -226,18 +287,10 @@ struct NotificationSettingsView: View {
     @ViewBuilder
     private func pageRows(_ page: SettingsPage, showsDividers: Bool) -> some View {
         switch page {
-        case .reactions, .stickerPacks, .presencePrivacy, .readReceiptPrivacy, .notifications,
-            .friendRequestPermission, .blockedUsers:
+        case .language, .reactions, .stickerPacks, .presencePrivacy, .readReceiptPrivacy,
+            .notifications,
+            .friendRequestPermission, .blockedUsers, .savedMessages:
             EmptyView()
-        case .language:
-            LabeledContent("App language") {
-                Picker("App language", selection: $language) {
-                    ForEach(AppLanguage.allCases) { option in
-                        Text(option.localizedTitle).tag(option.rawValue)
-                    }
-                }
-                .labelsHidden()
-            }
         case .appearance:
             Picker("Color scheme", selection: $appearance) {
                 ForEach(AppAppearance.allCases) { option in

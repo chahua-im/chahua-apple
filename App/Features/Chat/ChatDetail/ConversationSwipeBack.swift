@@ -3,11 +3,11 @@
     import UIKit
     import os
 
-    /// Restores swipe-back on iPhone conversation screens, which hide the system
-    /// navigation bar to draw the app header (back button with an unread pill,
-    /// like Messages and Telegram).
+    /// Restores swipe-back on screens that hide the system navigation bar to draw
+    /// the app header. Archived lists allow only edge swipes so horizontal row
+    /// actions do not compete with iOS 26's full-screen pop recognizer.
     ///
-    /// Requirement: edge and full-screen swipe-back must keep working with the bar hidden.
+    /// Requirement: native interactive back navigation must work with the bar hidden.
     /// SwiftUI limitation: hiding the bar leaves UIKit's pop recognizers enabled, but their
     /// UIKit delegate stops accepting touches, and SwiftUI has no API to change that.
     /// Native approach: while the screen is visible, replace that delegate outright on
@@ -21,9 +21,16 @@
     /// after it appears (e.g. a DM title or a thread's parent chat loading), so the delegate
     /// is re-asserted on every SwiftUI update and layout pass while the screen is visible.
     struct ConversationSwipeBack: UIViewControllerRepresentable {
-        func makeUIViewController(context: Context) -> Controller { Controller() }
+        var allowsContentSwipeBack = true
+
+        func makeUIViewController(context: Context) -> Controller {
+            let controller = Controller()
+            controller.allowsContentSwipeBack = allowsContentSwipeBack
+            return controller
+        }
 
         func updateUIViewController(_ controller: Controller, context: Context) {
+            controller.allowsContentSwipeBack = allowsContentSwipeBack
             controller.install()
         }
 
@@ -46,6 +53,7 @@
 
             private var replacements: [ObjectIdentifier: Replacement] = [:]
             private var isVisible = false
+            var allowsContentSwipeBack = true
 
             override func loadView() {
                 view = UIView()
@@ -77,16 +85,17 @@
                     Self.logger.debug("install skipped: no navigation controller")
                     return
                 }
-                var gestures: [UIGestureRecognizer] = []
+                var gestures: [(UIGestureRecognizer, Bool)] = []
                 if let edge = navigationController.interactivePopGestureRecognizer {
-                    gestures.append(edge)
+                    gestures.append((edge, true))
                 }
                 if #available(iOS 26, *),
                     let content = navigationController.interactiveContentPopGestureRecognizer
                 {
-                    gestures.append(content)
+                    gestures.append((content, allowsContentSwipeBack))
                 }
-                for gesture in gestures where gesture.delegate !== self {
+                for (gesture, enabled) in gestures
+                where gesture.delegate !== self || gesture.isEnabled != enabled {
                     let key = ObjectIdentifier(gesture)
                     if replacements[key] == nil {
                         replacements[key] = Replacement(
@@ -97,14 +106,14 @@
                         )
                     } else {
                         // UIKit installed a new delegate; the one remembered earlier is stale.
-                        if let current = gesture.delegate {
+                        if let current = gesture.delegate, current !== self {
                             replacements[key]?.originalDelegate = current
                         }
                         Self.logger.debug(
                             "re-took \(type(of: gesture), privacy: .public) after delegate reset")
                     }
                     gesture.delegate = self
-                    gesture.isEnabled = true
+                    gesture.isEnabled = enabled
                 }
             }
 

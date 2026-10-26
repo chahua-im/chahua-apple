@@ -30,17 +30,26 @@
             if ProcessInfo.processInfo.arguments.contains("-fixture-split") {
                 ChatSplitLayout(hasSelection: hasSelection) { _ in
                     VStack(alignment: .leading, spacing: 0) {
-                        ConversationListHeader(selection: $listScope) {
-                            Menu {
-                                Text(verbatim: "Alex")
-                            } label: {
-                                AvatarView(
-                                    url: ProcessInfo.processInfo.environment[
-                                        "CHAHUA_FIXTURE_AVATAR"
-                                    ].map { URL(fileURLWithPath: $0) },
-                                    displayName: "Alex", diameter: 26)
-                            }
-                        }
+                        ConversationListHeader(
+                            selection: $listScope,
+                            account: {
+                                Menu {
+                                    Text(verbatim: "Alex")
+                                } label: {
+                                    AvatarView(
+                                        url: ProcessInfo.processInfo.environment[
+                                            "CHAHUA_FIXTURE_AVATAR"
+                                        ].map { URL(fileURLWithPath: $0) },
+                                        displayName: "Alex", diameter: 26)
+                                }
+                            },
+                            actions: {
+                                Button {
+                                    event = "New message"
+                                } label: {
+                                    Label("New message", systemImage: "plus")
+                                }
+                            })
                         VStack(alignment: .leading, spacing: 16) {
                             Button {
                                 hasSelection = true

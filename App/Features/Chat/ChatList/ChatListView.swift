@@ -1,4 +1,5 @@
 import ChahuaAPI
+import Combine
 import SwiftUI
 
 struct ChatListView: View {
@@ -11,6 +12,7 @@ struct ChatListView: View {
     var onOpenArchived: (() -> Void)?
     var onOpenFriendRequestHistory: (() -> Void)?
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
+    var presentation: ConversationListPresentation? = nil
     let selectedConversationID: ConversationKey?
     let onSelectConversation: (ConversationListItem) -> Void
     @State private var isPullRefreshing = false
@@ -19,6 +21,11 @@ struct ChatListView: View {
     @State private var listSnapshotCache = ConversationListSnapshotCache()
     @State private var notificationChat: ChatListItem?
     @State private var archiveConfirmation: ArchiveConfirmation?
+    @StateObject private var scrollScope = ConversationListScrollScope()
+    @State private var searchText = ""
+    @State private var isListVisible = false
+    @State private var presentationGeneration = 0
+    @FocusState private var isSearchFocused: Bool
     #if os(macOS)
         @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
@@ -110,11 +117,21 @@ struct ChatListView: View {
         let loadStatus = ConversationListLoadStatus(
             state: store.state, scope: scope, archivedMode: archivedMode,
             showThreadsInMessages: showThreadsInMessages,
-            isPullRefreshing: isPullRefreshing, onRetry: { await refreshScope() }
+            isPullRefreshing: isPullRefreshing, onRetry: { await performManualRefresh() }
         )
         List {
+            if scrollScope.isSearchRevealed && !isSearchPinned {
+                Color.clear
+                    .frame(height: ConversationListScrollScope.drawerHeight)
+                    .background(ConversationListScrollMarker(scope: scrollScope))
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .accessibilityHidden(true)
+            }
             if loadStatus.isVisible {
                 loadStatus
+                    .background(ConversationListScrollMarker(scope: scrollScope))
                     #if os(macOS)
                         .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
                     #endif
@@ -123,6 +140,7 @@ struct ChatListView: View {
                 Button(action: onOpenArchived) { archivedEntry }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("archived-conversations")
+                    .background(ConversationListScrollMarker(scope: scrollScope))
                     #if os(macOS)
                         .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
                         .listRowInsets(EdgeInsets())
@@ -137,6 +155,7 @@ struct ChatListView: View {
                 Button(action: onOpenFriendRequestHistory) { friendRequestHistoryEntry }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("friend-request-records")
+                    .background(ConversationListScrollMarker(scope: scrollScope))
                     #if os(macOS)
                         .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
                         .listRowInsets(EdgeInsets())
@@ -154,12 +173,14 @@ struct ChatListView: View {
                         : "Conversations in this category will appear here.",
                     systemImage: scope == .threads ? "text.bubble" : "bubble.left.and.bubble.right"
                 )
+                .background(ConversationListScrollMarker(scope: scrollScope))
                 #if os(macOS)
                     .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
                 #endif
             }
             ForEach(items) { item in
                 swipeRow(for: item)
+                    .background(ConversationListScrollMarker(scope: scrollScope))
                     #if os(macOS)
                         .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
                     #endif
@@ -176,19 +197,87 @@ struct ChatListView: View {
             #endif
         }
         .listStyle(.plain)
+        .contentMargins(.vertical, 0, for: .scrollContent)
         .contentMargins(.horizontal, 0, for: .scrollContent)
         .scrollContentBackground(.hidden)
+        .background(ConversationListScrollMarker(scope: scrollScope, keepsScopeAlive: true))
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if scrollScope.isSearchRevealed, isSearchPinned {
+                Color.clear.frame(height: searchDrawerHeight)
+            }
+        }
+        .overlay(alignment: .top) {
+            if scrollScope.isSearchRevealed || scrollScope.pullDistance > 0 {
+                searchDrawer
+                    .frame(
+                        height: scrollScope.isSearchRevealed
+                            ? searchDrawerHeight : scrollScope.pullDistance,
+                        alignment: .top
+                    )
+                    .clipped()
+                    .offset(y: isSearchPinned ? 0 : -scrollScope.drawerOffset)
+                    .allowsHitTesting(
+                        scrollScope.isSearchRevealed
+                            && (isSearchPinned
+                                || scrollScope.drawerOffset
+                                    < ConversationListScrollScope.drawerHeight)
+                    )
+            }
+        }
+        .clipped()
+        .preference(key: ConversationListRefreshingKey.self, value: isPullRefreshing)
+        .accessibilityActions {
+            Button("Search conversations") { scrollScope.revealSearch() }
+            Button("Refresh conversations") { Task { await performManualRefresh() } }
+        }
+        .background {
+            HStack(spacing: 0) {
+                Button("Search conversations") {
+                    scrollScope.revealSearch()
+                    isSearchFocused = true
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                Button("Refresh conversations") { Task { await performManualRefresh() } }
+                    .keyboardShortcut("r", modifiers: .command)
+            }
+            .disabled(!isListVisible)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
+        }
+        .onAppear { configureListPresentation() }
+        .onReceive(
+            presentation?.requests.eraseToAnyPublisher()
+                ?? Empty<ConversationListPresentation.Request, Never>().eraseToAnyPublisher()
+        ) { request in
+            switch request {
+            case .reset:
+                isSearchFocused = false
+                searchText = ""
+                presentationGeneration = presentation?.resetGeneration ?? 0
+                scrollScope.reset()
+            case .revealSearch:
+                if isListVisible { scrollScope.revealSearch() }
+            case .dismissSearchKeyboard:
+                isSearchFocused = false
+            }
+        }
+        .onChange(of: isSearchPinned) { _, pinned in scrollScope.isSearchPinned = pinned }
         #if os(macOS)
             .background(
                 ChatListOverlayScrollerMarker(scope: overlayScrollers, keepsScopeAlive: true))
         #endif
-        .onChange(of: scope) { _, _ in revealedConversationID = nil }
-        .onChange(of: archivedMode) { _, _ in revealedConversationID = nil }
+        .onChange(of: scope) { _, _ in resetScopePresentation() }
+        .onChange(of: archivedMode) { _, _ in resetScopePresentation() }
+        .onChange(of: currentUserID) { _, _ in resetScopePresentation(preservingSearch: false) }
         .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
         .onChange(of: archiveConfirmationContext) { _, _ in archiveConfirmation = nil }
         .onDisappear {
+            isListVisible = false
             revealedConversationID = nil
             archiveConfirmation = nil
+            scrollScope.onRefresh = nil
+            scrollScope.detach()
             store.removeConversationStateScope(for: conversationStateConsumer)
         }
         .task(id: snapshot.conversationRefs) {
@@ -200,11 +289,6 @@ struct ChatListView: View {
                 scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages
             )
         ) { await loadScope() }
-        .refreshable {
-            isPullRefreshing = true
-            defer { isPullRefreshing = false }
-            await refreshScope()
-        }
         .sheet(item: $notificationChat) { chat in
             NavigationStack {
                 ChatNotificationSettingsView(store: store, chat: chat)
@@ -232,6 +316,92 @@ struct ChatListView: View {
         } message: { alert in
             if case .failure(let message) = alert { Text(message) }
         }
+    }
+
+    private var isSearchPinned: Bool { isSearchFocused || !searchText.isEmpty }
+
+    private var searchDrawerHeight: CGFloat {
+        ConversationListScrollScope.drawerHeight + (searchText.isEmpty ? 0 : 32)
+    }
+
+    private var searchDrawer: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    TextField("Search chats, messages, people", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .focused($isSearchFocused)
+                        .submitLabel(.search)
+                        .accessibilityHint("Search is not available yet.")
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .background(Color.secondary.opacity(0.1), in: Capsule())
+                if isSearchPinned {
+                    Button("Cancel") {
+                        isSearchFocused = false
+                        searchText = ""
+                        scrollScope.cancelSearch()
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .foregroundStyle(.blue)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: ConversationListScrollScope.drawerHeight)
+            if !searchText.isEmpty {
+                Text("Search is not available yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32, alignment: .topLeading)
+                    .accessibilityIdentifier("conversation-search-unavailable")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background)
+        .accessibilityIdentifier("conversation-search-drawer")
+    }
+
+    private func configureListPresentation() {
+        isListVisible = true
+        if let presentation, presentationGeneration != presentation.resetGeneration {
+            isSearchFocused = false
+            searchText = ""
+            presentationGeneration = presentation.resetGeneration
+        }
+        scrollScope.activate()
+        scrollScope.presentation = presentation
+        scrollScope.select(scope: scope, archived: archivedMode, currentUserID: currentUserID)
+        scrollScope.onRefresh = { Task { await performManualRefresh() } }
+    }
+
+    private func resetScopePresentation(preservingSearch: Bool = true) {
+        revealedConversationID = nil
+        // Scope changes preserve an active query; account changes must discard it.
+        scrollScope.select(
+            scope: scope, archived: archivedMode, currentUserID: currentUserID,
+            preservingSearch: preservingSearch && isSearchPinned)
+        if !preservingSearch {
+            isSearchFocused = false
+            searchText = ""
+        }
+        scrollScope.onRefresh = { Task { await performManualRefresh() } }
+    }
+
+    private func performManualRefresh() async {
+        guard !isPullRefreshing else { return }
+        isPullRefreshing = true
+        scrollScope.isRefreshing = true
+        defer {
+            isPullRefreshing = false
+            scrollScope.isRefreshing = false
+        }
+        await refreshScope()
     }
 
     private var archivedEntry: some View {

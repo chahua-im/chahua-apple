@@ -88,7 +88,7 @@ struct BlockedUsersSettingsLink: View {
         VStack(alignment: .leading, spacing: 8) {
             NavigationLink(value: SettingsPage.blockedUsers) {
                 HStack {
-                    Label("Blocked Users", systemImage: "hand.raised.slash")
+                    SettingsPageLabel(page: .blockedUsers)
                     Spacer()
                     if loading {
                         ProgressView().controlSize(.small)

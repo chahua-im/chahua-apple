@@ -1,279 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Your changes haven’t been saved." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你的更改尚未保存。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你的變更尚未儲存。" } }
-      }
-    },
-    "1 message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "1 条消息" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "1 則訊息" } }
-      }
-    },
-    "Unrestricted" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "不限制" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "不限制" } }
-      }
-    },
-    "Threads Only" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅话题" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅話題" } }
-      }
-    },
-    "Replies Only" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅回复" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅回覆" } }
-      }
-    },
-    "Read Only" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "只读" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "唯讀" } }
-      }
-    },
-    "You can send messages and replies." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你可以发送消息和回复。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你可以傳送訊息和回覆。" } }
-      }
-    },
-    "You can only send messages in threads." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你只能在话题中发送消息。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你只能在話題中傳送訊息。" } }
-      }
-    },
-    "You can only reply in existing threads." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你只能回复已有话题。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你只能回覆現有話題。" } }
-      }
-    },
-    "You cannot send or edit messages in this group." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你不能在此群组中发送或编辑消息。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你不能在此群組中傳送或編輯訊息。" } }
-      }
-    },
-    "All Members" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "所有成员" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "所有成員" } }
-      }
-    },
-    "Admins Only" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅管理员" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅管理員" } }
-      }
-    },
-    "Speaking permissions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发言权限" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "發言權限" } }
-      }
-    },
-    "Save speaking permissions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存发言权限" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "儲存發言權限" } }
-      }
-    },
-    "Group and personal restrictions use the stricter setting. Admins are exempt." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "群组与个人限制以更严格的设置为准。管理员不受限制。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "群組與個人限制以更嚴格的設定為準。管理員不受限制。" } }
-      }
-    },
-    "Speaking permissions are unavailable." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法获取发言权限。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法取得發言權限。" } }
-      }
-    },
-    "Membership messages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "成员变动消息" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "成員變動訊息" } }
-      }
-    },
-    "Who can see membership messages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "谁可以查看成员变动消息" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "誰可以查看成員變動訊息" } }
-      }
-    },
-    "Save membership message policy" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "保存成员消息策略" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "儲存成員訊息策略" } }
-      }
-    },
-    "Applies to past and new membership messages. Account preferences may hide them further." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "适用于历史和新的成员变动消息。账号偏好仍可隐藏这些消息。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "適用於過去和新的成員變動訊息。帳號偏好仍可隱藏這些訊息。" } }
-      }
-    },
-    "Membership message policy is unavailable." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法获取成员消息策略。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法取得成員訊息策略。" } }
-      }
-    },
-    "Your permissions" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你的权限" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你的權限" } }
-      }
-    },
-    "Show group membership messages" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "显示群组成员变动消息" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "顯示群組成員變動訊息" } }
-      }
-    },
-    "Show join and leave messages when the group policy allows them." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "在群组策略允许时显示加入和退出消息。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "在群組策略允許時顯示加入和退出訊息。" } }
-      }
-    },
-    "Membership message preference is unavailable." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法获取成员消息偏好。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法取得成員訊息偏好。" } }
-      }
-    },
-    "Couldn’t verify permission to send. Please try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法验证发送权限，请重试。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法驗證傳送權限，請重試。" } }
-      }
-    },
-    "Could not open this destination. Choose a destination to retry." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法打开此目标，请重新选择目标以重试。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法開啟此目標，請重新選擇目標以重試。" } }
-      }
-    },
-    "Change Destination" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "更改目标" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "更改目標" } }
-      }
-    },
-    "Send Forward" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发送转发" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "傳送轉傳" } }
-      }
-    },
-    "Couldn’t open message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法打开消息" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法開啟訊息" } }
-      }
-    },
-    "View Message" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "查看消息" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "查看訊息" } }
-      }
-    },
-    "Connection is taking longer than usual" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接时间比平时更长" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "連線時間比平時更長" } }
-      }
-    },
-    "Retry to start a new connection attempt." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "点击重试以重新连接。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "點擊重試以重新連線。" } }
-      }
-    },
-    "Chahua is temporarily unavailable" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "茶话暂时不可用" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "茶話暫時無法使用" } }
-      }
-    },
-    "Couldn’t restore your session" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法恢复登录状态" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法恢復登入狀態" } }
-      }
-    },
-    "The service is temporarily unavailable. Try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "服务暂时不可用，请重试。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "服務暫時無法使用，請重試。" } }
-      }
-    },
-    "An unexpected error occurred. Your saved sign-in has been kept; try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发生未知错误。已保留登录信息，请重试。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "發生未知錯誤。已保留登入資訊，請重試。" } }
-      }
-    },
-    "Your session has expired. Sign in again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录状态已失效，请重新登录。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "登入狀態已失效，請重新登入。" } }
-      }
-    },
-    "Sign-in timed out. Try again." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "登录超时，请重试。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "登入逾時，請重試。" } }
-      }
-    },
     "" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1074,6 +801,23 @@
         }
       }
     },
+    "1 message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 条消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 則訊息"
+          }
+        }
+      }
+    },
     "1 reply" : {
       "comment" : "A label displayed in a message thread indicating the number of replies.",
       "isCommentAutoGenerated" : true,
@@ -1145,6 +889,7 @@
       }
     },
     "Account" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1274,6 +1019,23 @@
         }
       }
     },
+    "Admins Only" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅管理员"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅管理員"
+          }
+        }
+      }
+    },
     "All" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1293,6 +1055,57 @@
     "All attachments loaded" : {
       "comment" : "A message displayed when all the user's attachments have been loaded.",
       "isCommentAutoGenerated" : true
+    },
+    "All Members" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有成员"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有成員"
+          }
+        }
+      }
+    },
+    "All participants loaded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已加载全部参与者"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已載入全部參與者"
+          }
+        }
+      }
+    },
+    "All threads loaded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已加载全部话题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已載入全部話題"
+          }
+        }
+      }
     },
     "All, %lld people" : {
       "localizations" : {
@@ -1500,6 +1313,23 @@
       "comment" : "A description of the effect of clicking the \"Save description\" button.",
       "isCommentAutoGenerated" : true
     },
+    "An unexpected error occurred. Your saved sign-in has been kept; try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发生未知错误。已保留登录信息，请重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "發生未知錯誤。已保留登入資訊，請重試。"
+          }
+        }
+      }
+    },
     "Animals & Nature" : {
       "comment" : "Display name for the \"Animals & Nature\" category.",
       "isCommentAutoGenerated" : true
@@ -1573,6 +1403,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "外觀"
+          }
+        }
+      }
+    },
+    "Applies to past and new membership messages. Account preferences may hide them further." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "适用于历史和新的成员变动消息。账号偏好仍可隐藏这些消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "適用於過去和新的成員變動訊息。帳號偏好仍可隱藏這些訊息。"
           }
         }
       }
@@ -2309,6 +2156,40 @@
         }
       }
     },
+    "Chahua is temporarily unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "茶话暂时不可用"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "茶話暫時無法使用"
+          }
+        }
+      }
+    },
+    "Change Destination" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改目标"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改目標"
+          }
+        }
+      }
+    },
     "Change your relationship with this user?" : {
       "comment" : "A confirmation dialog message for the user's profile.",
       "isCommentAutoGenerated" : true
@@ -2705,6 +2586,23 @@
         }
       }
     },
+    "Connection is taking longer than usual" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接时间比平时更长"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線時間比平時更長"
+          }
+        }
+      }
+    },
     "Connection unavailable" : {
       "comment" : "Title of a view displayed when the device is not connected to the internet.",
       "isCommentAutoGenerated" : true,
@@ -2849,6 +2747,14 @@
         }
       }
     },
+    "Copy ID" : {
+      "comment" : "A button that copies the user's ID to the clipboard.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "复制 ID" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "複製 ID" } }
+      }
+    },
     "Copy Link" : {
       "localizations" : {
         "en" : {
@@ -2927,6 +2833,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法載入話題"
+          }
+        }
+      }
+    },
+    "Could not open this destination. Choose a destination to retry." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开此目标，请重新选择目标以重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開啟此目標，請重新選擇目標以重試。"
           }
         }
       }
@@ -3229,13 +3152,6 @@
         }
       }
     },
-    "Couldn’t load threads. Retry" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载话题，重试" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入話題，重試" } }
-      }
-    },
     "Couldn’t load members." : {
       "comment" : "A message displayed when a search fails.",
       "isCommentAutoGenerated" : true
@@ -3380,6 +3296,23 @@
         }
       }
     },
+    "Couldn’t load participants." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载参与者。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入參與者。"
+          }
+        }
+      }
+    },
     "Couldn’t load pinned messages. Please try again." : {
       "localizations" : {
         "zh-Hans" : {
@@ -3487,6 +3420,40 @@
     "Couldn’t load thread root. Retry" : {
       "comment" : "The text of a button that reloads the thread root.",
       "isCommentAutoGenerated" : true
+    },
+    "Couldn’t load threads. Retry" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载话题，重试"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法載入話題，重試"
+          }
+        }
+      }
+    },
+    "Couldn’t open message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法開啟訊息"
+          }
+        }
+      }
     },
     "Couldn’t open notification" : {
       "localizations" : {
@@ -3660,6 +3627,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法要求通知權限，請重試。"
+          }
+        }
+      }
+    },
+    "Couldn’t restore your session" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法恢复登录状态"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法恢復登入狀態"
           }
         }
       }
@@ -4061,6 +4045,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法更新話題"
+          }
+        }
+      }
+    },
+    "Couldn’t verify permission to send. Please try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法验证发送权限，请重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法驗證傳送權限，請重試。"
           }
         }
       }
@@ -5420,10 +5421,6 @@
         }
       }
     },
-    "Forum / Personal Space" : {
-      "comment" : "A link to the forum or personal space of a user.",
-      "isCommentAutoGenerated" : true
-    },
     "Forward" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5690,6 +5687,23 @@
         }
       }
     },
+    "Group and personal restrictions use the stricter setting. Admins are exempt." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "群组与个人限制以更严格的设置为准。管理员不受限制。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "群組與個人限制以更嚴格的設定為準。管理員不受限制。"
+          }
+        }
+      }
+    },
     "Group Info" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5833,6 +5847,14 @@
         }
       }
     },
+    "ID copied" : {
+      "comment" : "Text displayed in a notification when a user ID is copied to the clipboard.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已复制 ID" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已複製 ID" } }
+      }
+    },
     "ID: %d" : {
       "comment" : "A label displaying the user's unique identifier.",
       "isCommentAutoGenerated" : true
@@ -5927,13 +5949,6 @@
         }
       }
     },
-    "All participants loaded" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已加载全部参与者" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已載入全部參與者" } }
-      }
-    },
     "Indigo" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5990,6 +6005,23 @@
     "Join Group" : {
       "comment" : "A button that lets the user join a group.",
       "isCommentAutoGenerated" : true
+    },
+    "Join with Link" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过链接加入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "透過連結加入"
+          }
+        }
+      }
     },
     "Joined Groups" : {
       "comment" : "A section header for the list of groups the user has joined.",
@@ -6658,6 +6690,23 @@
         }
       }
     },
+    "Load More Participants" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加载更多参与者"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "載入更多參與者"
+          }
+        }
+      }
+    },
     "Load Older Attachments" : {
       "comment" : "A button that loads older attachments.",
       "isCommentAutoGenerated" : true
@@ -6981,6 +7030,23 @@
         }
       }
     },
+    "Loading participants…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载参与者…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入參與者…"
+          }
+        }
+      }
+    },
     "Loading pinned messages…" : {
       "localizations" : {
         "zh-Hans" : {
@@ -7184,6 +7250,23 @@
       "comment" : "A placeholder text that appears while loading a thread.",
       "isCommentAutoGenerated" : true
     },
+    "Loading threads…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载话题…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在載入話題…"
+          }
+        }
+      }
+    },
     "Loading video" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -7228,13 +7311,6 @@
             "value" : "定位訊息"
           }
         }
-      }
-    },
-    "Loading threads…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载话题…" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入話題…" } }
       }
     },
     "Manage Invitations" : {
@@ -7440,6 +7516,57 @@
         }
       }
     },
+    "Membership message policy is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法获取成员消息策略。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法取得成員訊息策略。"
+          }
+        }
+      }
+    },
+    "Membership message preference is unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法获取成员消息偏好。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法取得成員訊息偏好。"
+          }
+        }
+      }
+    },
+    "Membership messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "成员变动消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "成員變動訊息"
+          }
+        }
+      }
+    },
     "Mention %@" : {
       "comment" : "A button that mentions a user. The argument is the string “User %arg”.",
       "isCommentAutoGenerated" : true
@@ -7570,6 +7697,7 @@
     },
     "Messages" : {
       "comment" : "A label for a conversation scope.",
+      "extractionState" : "stale",
       "isCommentAutoGenerated" : true,
       "localizations" : {
         "zh-Hans" : {
@@ -7584,6 +7712,14 @@
             "value" : "訊息"
           }
         }
+      }
+    },
+    "Messaging is unavailable for this user." : {
+      "comment" : "A description of why messaging is unavailable for a user.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法向此用户发送消息。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法向此使用者傳送訊息。" } }
       }
     },
     "More" : {
@@ -7954,6 +8090,23 @@
         }
       }
     },
+    "New conversation" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建会话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新增對話"
+          }
+        }
+      }
+    },
     "New message" : {
       "comment" : "A button that opens a new message.",
       "isCommentAutoGenerated" : true,
@@ -8226,8 +8379,18 @@
     "No participants" : {
       "extractionState" : "manual",
       "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "暂无参与者" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "暫無參與者" } }
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无参与者"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暫無參與者"
+          }
+        }
       }
     },
     "No pinned messages" : {
@@ -8334,13 +8497,6 @@
             "value" : "此貼紙包中沒有貼紙"
           }
         }
-      }
-    },
-    "All threads loaded" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已加载全部话题" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已載入全部話題" } }
       }
     },
     "No threads in this chat" : {
@@ -8892,13 +9048,6 @@
     },
     "Parent Chat Attachments" : {
 
-    },
-    "Loading participants…" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在加载参与者…" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "正在載入參與者…" } }
-      }
     },
     "Participants" : {
       "comment" : "A section header for a list of participants in a thread.",
@@ -9925,13 +10074,6 @@
         }
       }
     },
-    "Load More Participants" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加载更多参与者" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "載入更多參與者" } }
-      }
-    },
     "React with: %@" : {
       "localizations" : {
         "en" : {
@@ -10043,6 +10185,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已讀"
+          }
+        }
+      }
+    },
+    "Read Only" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "唯讀"
           }
         }
       }
@@ -10368,6 +10527,23 @@
         }
       }
     },
+    "Refresh conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新会话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新整理對話"
+          }
+        }
+      }
+    },
     "Refreshing group members…" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -10501,9 +10677,13 @@
         }
       }
     },
-    "Relationship" : {
-      "comment" : "A section for the user's relationship.",
-      "isCommentAutoGenerated" : true
+    "Relationship unavailable" : {
+      "comment" : "A message displayed when the relationship between the user and the target user is unavailable.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法获取关系状态" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法取得關係狀態" } }
+      }
     },
     "Release to lock" : {
       "extractionState" : "manual",
@@ -10841,6 +11021,23 @@
         }
       }
     },
+    "Replies Only" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅回复"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅回覆"
+          }
+        }
+      }
+    },
     "Reply" : {
       "localizations" : {
         "en" : {
@@ -11130,6 +11327,23 @@
         }
       }
     },
+    "Retry to start a new connection attempt." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点击重试以重新连接。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "點擊重試以重新連線。"
+          }
+        }
+      }
+    },
     "Revoke" : {
       "comment" : "The text of a button that revokes an invitation.",
       "isCommentAutoGenerated" : true
@@ -11252,9 +11466,43 @@
         }
       }
     },
+    "Save membership message policy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存成员消息策略"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存成員訊息策略"
+          }
+        }
+      }
+    },
     "Save name" : {
       "comment" : "A button that saves the group's name.",
       "isCommentAutoGenerated" : true
+    },
+    "Save speaking permissions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存发言权限"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存發言權限"
+          }
+        }
+      }
     },
     "Save Video" : {
       "extractionState" : "manual",
@@ -11389,6 +11637,40 @@
         }
       }
     },
+    "Search chats, messages, people" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索会话、消息和用户"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋對話、訊息和使用者"
+          }
+        }
+      }
+    },
+    "Search conversations" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索会话"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋對話"
+          }
+        }
+      }
+    },
     "Search emoji" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11408,6 +11690,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "搜尋表情"
+          }
+        }
+      }
+    },
+    "Search is not available yet." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜索功能尚未开放。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搜尋功能尚未開放。"
           }
         }
       }
@@ -11483,13 +11782,6 @@
             "value" : "搜尋此聊天中的訊息"
           }
         }
-      }
-    },
-    "Couldn’t load participants." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载参与者。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入參與者。" } }
       }
     },
     "Search people and groups you have joined. This does not search message history." : {
@@ -11712,6 +12004,23 @@
       "comment" : "A button that sends an invitation card to a group.",
       "isCommentAutoGenerated" : true
     },
+    "Send Forward" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送转发"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "傳送轉傳"
+          }
+        }
+      }
+    },
     "Send invite card" : {
       "comment" : "A button that sends an invitation card to a group.",
       "isCommentAutoGenerated" : true
@@ -11903,6 +12212,40 @@
       "comment" : "A toggle that lets the user choose whether to show avatars and names in direct messages.",
       "isCommentAutoGenerated" : true
     },
+    "Show group membership messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "显示群组成员变动消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "顯示群組成員變動訊息"
+          }
+        }
+      }
+    },
+    "Show join and leave messages when the group policy allows them." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在群组策略允许时显示加入和退出消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在群組策略允許時顯示加入和退出訊息。"
+          }
+        }
+      }
+    },
     "Show member actions" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -11978,6 +12321,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "登出"
+          }
+        }
+      }
+    },
+    "Sign-in timed out. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录超时，请重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入逾時，請重試。"
           }
         }
       }
@@ -12185,6 +12545,48 @@
     "Source unavailable. This is your saved snapshot." : {
       "comment" : "A message displayed when a saved message is not available.",
       "isCommentAutoGenerated" : true
+    },
+    "Space" : {
+      "comment" : "A button that opens a link to a user's space.",
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "个人空间" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "個人空間" } }
+      }
+    },
+    "Speaking permissions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发言权限"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "發言權限"
+          }
+        }
+      }
+    },
+    "Speaking permissions are unavailable." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法获取发言权限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法取得發言權限。"
+          }
+        }
+      }
     },
     "Specific user" : {
       "comment" : "A description of a group invitation type.",
@@ -12692,6 +13094,23 @@
       "comment" : "The body of a confirmation dialog that deletes a sticker pack.",
       "isCommentAutoGenerated" : true
     },
+    "The service is temporarily unavailable. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务暂时不可用，请重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服務暫時無法使用，請重試。"
+          }
+        }
+      }
+    },
     "The source is no longer accessible. Your saved snapshot is still available." : {
 
     },
@@ -12933,6 +13352,23 @@
         }
       }
     },
+    "This thread is no longer available." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此话题已不可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此話題已無法使用。"
+          }
+        }
+      }
+    },
     "This thread no longer has messages that can be forwarded." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -13112,18 +13548,21 @@
         }
       }
     },
-    "This thread is no longer available." : {
+    "Threads Only" : {
       "extractionState" : "manual",
       "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此话题已不可用。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此話題已無法使用。" } }
-      }
-    },
-    "You don’t have access to this thread." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你无权访问此话题。" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你無權存取此話題。" } }
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅话题"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅話題"
+          }
+        }
       }
     },
     "Thumbnail unavailable" : {
@@ -13684,6 +14123,23 @@
         }
       }
     },
+    "Unrestricted" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不限制"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不限制"
+          }
+        }
+      }
+    },
     "Unsubscribe" : {
       "localizations" : {
         "zh-Hans" : {
@@ -13832,6 +14288,23 @@
     "Updating sticker pack…" : {
       "comment" : "A message displayed when a sticker pack is being updated.",
       "isCommentAutoGenerated" : true
+    },
+    "Updating…" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更新…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更新…"
+          }
+        }
+      }
     },
     "Upload avatar" : {
       "comment" : "A button that uploads the selected avatar to the server.",
@@ -14069,6 +14542,23 @@
         }
       }
     },
+    "View Message" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看訊息"
+          }
+        }
+      }
+    },
     "View Profile" : {
       "comment" : "A button that opens a user's profile.",
       "isCommentAutoGenerated" : true
@@ -14232,6 +14722,23 @@
       "comment" : "A section header for the user's friend verification settings.",
       "isCommentAutoGenerated" : true
     },
+    "Who can see membership messages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "谁可以查看成员变动消息"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "誰可以查看成員變動訊息"
+          }
+        }
+      }
+    },
     "Who can see my last seen" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14349,6 +14856,91 @@
         }
       }
     },
+    "You can only reply in existing threads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你只能回复已有话题。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你只能回覆現有話題。"
+          }
+        }
+      }
+    },
+    "You can only send messages in threads." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你只能在话题中发送消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你只能在話題中傳送訊息。"
+          }
+        }
+      }
+    },
+    "You can send messages and replies." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你可以发送消息和回复。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你可以傳送訊息和回覆。"
+          }
+        }
+      }
+    },
+    "You cannot send or edit messages in this group." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你不能在此群组中发送或编辑消息。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你不能在此群組中傳送或編輯訊息。"
+          }
+        }
+      }
+    },
+    "You don’t have access to this thread." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你无权访问此话题。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你無權存取此話題。"
+          }
+        }
+      }
+    },
     "You no longer have permission to manage group members." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14390,6 +14982,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的說明文字和附件仍保留在這裡。 %@"
+          }
+        }
+      }
+    },
+    "Your changes haven’t been saved." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的更改尚未保存。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的變更尚未儲存。"
+          }
+        }
+      }
+    },
+    "Your permissions" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的权限"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的權限"
+          }
+        }
+      }
+    },
+    "Your session has expired. Sign in again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录状态已失效，请重新登录。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登入狀態已失效，請重新登入。"
           }
         }
       }

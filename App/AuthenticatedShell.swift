@@ -1,6 +1,10 @@
 import ChahuaAPI
 import SwiftUI
 
+#if os(iOS)
+    import UIKit
+#endif
+
 /// Authenticated navigation boundary.
 ///
 /// This view owns signed-in navigation state; feature stores own server data.
@@ -32,18 +36,24 @@ struct AuthenticatedShell: View {
     @State private var feature: FeatureDestination?
     @State private var profilePath: [Int32] = []
     @State private var navigationError: String?
+    @State private var isListRefreshing = false
+    @StateObject private var listPresentation = ConversationListPresentation()
 
     private enum FeatureDestination: Hashable, Identifiable {
-        case directory, createGroup
+        case addFriend, createGroup
         case joinGroup(String)
-        case saved
         case profile(Int32)
         var id: Self { self }
+
+        var showsDoneButton: Bool {
+            switch self {
+            case .profile: false
+            default: true
+            }
+        }
     }
+
     @Environment(\.scenePhase) private var scenePhase
-    #if os(iOS)
-        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    #endif
 
     private enum NavigationRoute: Hashable {
         case archive
@@ -188,8 +198,10 @@ struct AuthenticatedShell: View {
                             onOpenChat: openChat)
                     }
                     .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { feature = nil }
+                        if destination.showsDoneButton {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { feature = nil }
+                            }
                         }
                     }
             }
@@ -239,6 +251,8 @@ struct AuthenticatedShell: View {
             listPath.removeAll()
             feature = nil
             profilePath.removeAll()
+            listPresentation.reset()
+            isListRefreshing = false
             VoicePlaybackSession.shared.stop()
             VoicePlaybackController.stopAll()
             archivedScope = .messages
@@ -248,6 +262,8 @@ struct AuthenticatedShell: View {
                 selectConversation(nil)
                 listPath.removeAll()
                 feature = nil
+                listPresentation.reset()
+                isListRefreshing = false
                 VoicePlaybackSession.shared.stop()
                 VoicePlaybackController.stopAll()
             }
@@ -271,7 +287,7 @@ struct AuthenticatedShell: View {
         }
         .sheet(
             isPresented: Binding(
-                get: { showsSettings && !usesFullScreenSettings },
+                get: { showsSettings && !usesAccountHero },
                 set: { showsSettings = $0 }
             )
         ) {
@@ -280,18 +296,18 @@ struct AuthenticatedShell: View {
                     .frame(minWidth: 760, idealWidth: 880, minHeight: 540, idealHeight: 640)
             #else
                 settings
-                    .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
+                    .frame(minWidth: 320, idealWidth: 560, minHeight: 520, idealHeight: 640)
             #endif
         }
         #if os(iOS)
-            .fullScreenCover(
-                isPresented: Binding(
-                    get: { showsSettings && usesFullScreenSettings },
-                    set: { showsSettings = $0 }
-                )
-            ) {
-                settings
-            }
+            .modifier(
+                AccountProfilePresentation(
+                    isPresented: showsSettings && usesAccountHero,
+                    avatarURL: me.avatarUrl.flatMap(URL.init(string:)),
+                    displayName: me.username
+                ) {
+                    settings
+                })
         #endif
     }
 
@@ -367,7 +383,7 @@ struct AuthenticatedShell: View {
                         switch route {
                         case .archive:
                             chatList(archived: true)
-                                .background(ArchiveEdgeBackGesture())
+                                .background(ConversationSwipeBack(allowsContentSwipeBack: false))
                         case .friendRequests(let route):
                             friendRequestDestination(route)
                         case .conversation(let key):
@@ -484,59 +500,24 @@ struct AuthenticatedShell: View {
             onOpenArchived: openArchived,
             onOpenFriendRequestHistory: openFriendRequests,
             badgeColor: unreadBadgeColor,
+            presentation: listPresentation,
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectConversation($0.id) }
         )
+        return VStack(spacing: 0) {
+            ConversationListHeader(
+                selection: scope, badges: badges,
+                badgeColor: unreadBadgeColor, onBack: archived ? { closeArchived() } : nil,
+                isUpdating: isListRefreshing,
+                account: { accountButton },
+                actions: { creationButton })
+            list
+        }
+        .onPreferenceChange(ConversationListRefreshingKey.self) { isListRefreshing = $0 }
         #if os(iOS)
-            return GeometryReader { geometry in
-                // One custom toolbar item owns the avatar/picker spacing. Give the
-                // container an explicit width: UIKit otherwise measures its flexible
-                // segmented control at zero inside the horizontal stack.
-                let picker = ConversationScopePicker(
-                    selection: scope, badges: badges, badgeColor: unreadBadgeColor
-                )
-                .frame(
-                    minWidth: 0,
-                    maxWidth: max(
-                        0, geometry.size.width - (archived ? 96 : accountAvatarDiameter + 40)))
-                let header = HStack(spacing: 8) {
-                    accountButton
-                        .labelStyle(.iconOnly)
-                        .frame(width: 44, height: 44)
-                        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
-                        .accessibilityLabel("Account")
-                    picker
-                }
-                .buttonStyle(.plain)
-                .frame(width: max(0, geometry.size.width - 32))
-                list
-                    .navigationTitle("")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar(.visible, for: .navigationBar)
-                    .toolbarBackground(.hidden, for: .navigationBar)
-                    .toolbar {
-                        // Keep the avatar and picker in one item so native toolbar
-                        // group spacing cannot add an extra gap in split columns.
-                        if #available(iOS 26, *) {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                if archived { picker } else { header }
-                            }
-                            .sharedBackgroundVisibility(.hidden)
-                        } else {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                if archived { picker } else { header }
-                            }
-                        }
-                    }
-            }
-        #else
-            return VStack(spacing: 0) {
-                ConversationListHeader(
-                    selection: scope, badges: badges,
-                    badgeColor: unreadBadgeColor, onBack: archived ? { closeArchived() } : nil
-                ) { accountButton }
-                list
-            }
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .navigationBar)
         #endif
     }
 
@@ -566,10 +547,7 @@ struct AuthenticatedShell: View {
             case .profile(let uid):
                 UserProfileView(
                     uid: uid, currentUserID: me.uid, store: chatStore,
-                    onOpenChat: { chat in
-                        listPath.removeAll()
-                        openChat(chat)
-                    })
+                    onOpenChat: openChat)
             }
         }
         .environment(\.chatHeaderInset, 0)
@@ -799,43 +777,87 @@ struct AuthenticatedShell: View {
     }
 
     private var accountButton: some View {
-        Menu {
-            Button("Settings", systemImage: "gearshape") { showsSettings = true }
-            Button("Directory", systemImage: "magnifyingglass") { feature = .directory }
-            Button("Create Group", systemImage: "person.3") { feature = .createGroup }
-            Button("Join Group", systemImage: "link") { feature = .joinGroup("") }
-            Button("Saved Messages", systemImage: "bookmark") { feature = .saved }
+        Button {
+            setSettingsPresented(true)
         } label: {
-            AvatarView(
-                url: me.avatarUrl.flatMap(URL.init(string:)),
-                displayName: me.username,
-                diameter: accountAvatarDiameter
-            )
-            .accessibilityLabel("Account")
+            accountAvatar
         }
+    }
+
+    @ViewBuilder
+    private var accountAvatar: some View {
+        let avatar = AvatarView(
+            url: me.avatarUrl.flatMap(URL.init(string:)),
+            displayName: me.username,
+            diameter: accountAvatarDiameter
+        )
+        .accessibilityLabel("Settings")
+        #if os(iOS)
+            if usesAccountHero {
+                avatar.modifier(AccountAvatarEndpoint(role: .source))
+            } else {
+                avatar
+            }
+        #else
+            avatar
+        #endif
+    }
+
+    private var creationButton: some View {
+        Menu {
+            if canCreateGroup {
+                Button("Create Group", systemImage: "person.3") {
+                    guard canCreateGroup else { return }
+                    feature = .createGroup
+                }
+            }
+            Button("Add Friend", systemImage: "person.badge.plus") { feature = .addFriend }
+            Button("Join with Link", systemImage: "link") { feature = .joinGroup("") }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 20))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .accessibilityLabel("New conversation")
+        .help("New conversation")
+    }
+
+    private var canCreateGroup: Bool {
+        guard let profile = chatStore.currentUserProfile, profile.uid == me.uid else {
+            return false
+        }
+        return profile.permissions.contains("permission.all")
+            || profile.permissions.contains("chat.create")
     }
 
     @ViewBuilder
     private func featureDestination(_ destination: FeatureDestination) -> some View {
         switch destination {
-        case .directory:
+        case .addFriend:
             SocialDirectoryView(
-                currentUserID: me.uid, store: chatStore, usersOnly: false,
+                currentUserID: me.uid, store: chatStore, usersOnly: true,
                 onOpenChat: openChat, onOpenProfile: openProfile)
         case .createGroup:
             CreateGroupView(store: chatStore, onOpenChat: openChat)
         case .joinGroup(let code):
             JoinGroupView(store: chatStore, initialCode: code, onOpenChat: openChat)
-        case .saved:
-            SavedMessagesView(store: chatStore, onOpenSource: openSourceMessage)
         case .profile(let uid):
             UserProfileView(
-                uid: uid, currentUserID: me.uid, store: chatStore, onOpenChat: openChat)
+                uid: uid, currentUserID: me.uid, store: chatStore,
+                isPresentedAsRoot: true, onOpenChat: openChat)
         }
     }
 
     private func openProfile(_ uid: Int32) {
-        if feature == nil {
+        if feature == .profile(uid) {
+            profilePath.removeAll()
+        } else if let index = profilePath.firstIndex(of: uid) {
+            profilePath = Array(profilePath.prefix(through: index))
+        } else if feature == nil {
+            guard listPath.last != .friendRequests(.profile(uid)) else { return }
             feature = .profile(uid)
         } else {
             profilePath.append(uid)
@@ -845,8 +867,31 @@ struct AuthenticatedShell: View {
     private func openChat(_ chat: ChatListItem) {
         chatStore.retainChatForNavigation(chat)
         feature = nil
+        profilePath.removeAll()
         showsSettings = false
-        selectConversation(.init(chatID: chat.id, threadID: nil))
+        let conversation = ConversationKey(chatID: chat.id, threadID: nil)
+        if selectedConversationID == conversation {
+            // Pop back to the existing main timeline, including its message anchor,
+            // view identity and composer, rather than selecting it again.
+            if isBrowsingFriendRequests {
+                listPath = isBrowsingArchived ? [.archive] : []
+            }
+            groupPath.removeAll()
+            threadPath.removeAll()
+            openedThread = nil
+            return
+        }
+
+        // A different chat (or a standalone thread's parent) belongs above its
+        // own list, not above a stale friend-request/profile sidebar stack.
+        let isArchived = chatStore.state.archivedChats.contains { $0.id == chat.id }
+        if isArchived {
+            if !isBrowsingArchived { archivedScope = selectedScope }
+            listPath = [.archive]
+        } else {
+            listPath.removeAll()
+        }
+        selectConversation(conversation)
     }
 
     /// The picker prepares a draft, not a send. Resolve access before mutating
@@ -925,12 +970,23 @@ struct AuthenticatedShell: View {
         NotificationSettingsView(
             notifications: notifications, chatStore: chatStore,
             me: me, isSigningOut: isSigningOut,
-            onSignOut: onSignOut, onOpenChat: openChat)
+            onSignOut: onSignOut, onOpenChat: openChat,
+            onOpenSource: { message, chat in
+                showsSettings = false
+                openSourceMessage(message, in: chat)
+            },
+            usesHeroLayout: usesAccountHero,
+            onClose: usesAccountHero ? { setSettingsPresented(false) } : nil)
     }
 
-    private var usesFullScreenSettings: Bool {
+    private func setSettingsPresented(_ presented: Bool) {
+        if presented && usesAccountHero { listPresentation.dismissSearchKeyboard() }
+        showsSettings = presented
+    }
+
+    private var usesAccountHero: Bool {
         #if os(iOS)
-            horizontalSizeClass == .compact
+            UIDevice.current.userInterfaceIdiom == .phone
         #else
             false
         #endif
@@ -1077,13 +1133,7 @@ struct AuthenticatedShell: View {
         }
     }
 
-    private var accountAvatarDiameter: CGFloat {
-        #if os(iOS)
-            32
-        #else
-            26
-        #endif
-    }
+    private var accountAvatarDiameter: CGFloat { 32 }
 
     private var selectedConversation: ConversationListItem? {
         guard let selectedConversationID else { return nil }

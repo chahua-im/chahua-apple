@@ -11,12 +11,13 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var localizedTitle: String {
+    /// Language names stay recognizable regardless of the current interface language.
+    var title: String {
         switch self {
         case .system: Self.localized("System Default")
-        case .english: Self.localized("English")
-        case .simplifiedChinese: Self.localized("Simplified Chinese")
-        case .traditionalChinese: Self.localized("Traditional Chinese")
+        case .english: "English"
+        case .simplifiedChinese: "简体中文"
+        case .traditionalChinese: "繁體中文"
         }
     }
 

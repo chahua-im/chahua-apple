@@ -25,6 +25,7 @@ struct GroupInfoView: View {
     @State private var selectedMediaKind: ChatAttachmentKind = .image
     @State private var showsInvitations = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openUserProfile) private var openUserProfile
     @AppStorage(AppLanguage.storageKey) private var languageRawValue = AppLanguage.system.rawValue
     private let sessionRevision: Int
 
@@ -309,16 +310,13 @@ struct GroupInfoView: View {
     private var actions: some View {
         HStack(spacing: 12) {
             if let peerUID {
-                Link(
-                    destination: URL(
-                        string:
-                            "https://www.shireyishunjian.com/main/home.php?mod=space&uid=\(peerUID)"
-                    )!
-                ) {
-                    GroupInfoActionLabel(systemImage: "globe", title: "Forum")
+                Button {
+                    openUserProfile(peerUID)
+                } label: {
+                    GroupInfoActionLabel(systemImage: "person.crop.circle", title: "Profile")
                 }
-                .accessibilityLabel("Forum / Personal Space")
-                .accessibilityIdentifier("chat-forum-button")
+                .accessibilityLabel("Profile")
+                .accessibilityIdentifier("chat-profile-button")
             }
 
             notificationMenu

@@ -1,80 +1,62 @@
 import SwiftUI
 
-struct ConversationListHeader<Account: View>: View {
+struct ConversationListHeader<Account: View, Actions: View>: View {
     @Binding var selection: ConversationListScope
     var badges = ConversationTabBadges()
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
-    var onBack: (() -> Void)?
+    var onBack: (() -> Void)? = nil
+    var isUpdating = false
     @ViewBuilder let account: () -> Account
+    @ViewBuilder let actions: () -> Actions
 
     var body: some View {
-        #if os(iOS)
-            HStack(spacing: 8) {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
                 leadingControl
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .font(.system(size: 22))
                     .frame(width: 44, height: 44)
                     .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
-                    .accessibilityLabel(onBack == nil ? Text("Account") : Text("Back to chats"))
-                ConversationScopePicker(
-                    selection: $selection, badges: badges, badgeColor: badgeColor
-                )
-                .frame(minHeight: 44)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(onBack == nil ? Text("Chats") : Text("Archived"))
-        #else
-            VStack(spacing: 12) {
-                HStack(spacing: 10) {
-                    if let onBack {
-                        Button(action: onBack) {
-                            Image(systemName: "chevron.backward")
-                                .font(.system(size: 16, weight: .semibold))
-                                .frame(width: 26, height: 26)
-                                .contentShape(Rectangle())
-                        }
-                        .help("Back to chats")
-                        .accessibilityLabel("Back to chats")
-                    } else {
-                        account()
-                            .dynamicTypeSize(.medium)
-                            .menuStyle(.button)
-                            .buttonStyle(.plain)
-                            .menuIndicator(.hidden)
-                            .frame(width: 26, height: 26)
-                            .clipShape(Circle())
-                    }
-                    Text(onBack == nil ? "Chats" : "Archived")
-                        .font(.headline)
-                        .accessibilityAddTraits(.isHeader)
-                    Spacer()
-                    // Visual prototype: composing a new message is not connected yet.
-                    Button {
-                    } label: {
-                        Label("New message", systemImage: "square.and.pencil")
-                            .labelStyle(.iconOnly)
-                            .font(.system(size: 18))
-                            .frame(width: 32, height: 32)
-                    }
-                    .help("New message")
-                    .disabled(true)
+                    .frame(width: 52, height: 52)
+                Spacer(minLength: 0)
+                if onBack == nil {
+                    actions()
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 22, weight: .regular))
+                        .frame(width: 44, height: 44)
+                        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                        .frame(width: 52, height: 52)
+                } else {
+                    Color.clear
+                        .frame(width: 52, height: 52)
+                        .accessibilityHidden(true)
                 }
-                ConversationScopePicker(
-                    selection: $selection, badges: badges, badgeColor: badgeColor
-                )
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 16)
-            #if !os(macOS)
-                // macOS already reserves vertical clearance in the window-controls row.
-                .padding(.top, 12)
-            #endif
-            .background(alignment: .bottom) { Divider() }
-        #endif
+            .overlay {
+                HStack(spacing: 7) {
+                    if isUpdating {
+                        ProgressView().controlSize(.small)
+                        Text("Updating…")
+                    } else {
+                        Text(
+                            onBack == nil
+                                ? LocalizedStringKey("Chats") : LocalizedStringKey("Archived"))
+                    }
+                }
+                .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 60)
+                .accessibilityAddTraits(.isHeader)
+                .allowsHitTesting(false)
+            }
+            .padding(.horizontal, 8)
+            ConversationScopePicker(
+                selection: $selection, badges: badges, badgeColor: badgeColor)
+            Divider()
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .background(.background)
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -82,11 +64,23 @@ struct ConversationListHeader<Account: View>: View {
         if let onBack {
             Button(action: onBack) {
                 Image(systemName: "chevron.backward")
+                    .font(.system(size: 20, weight: .medium))
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
+            .accessibilityLabel("Back to chats")
         } else {
             account()
+                .labelStyle(.iconOnly)
+                .accessibilityLabel("Settings")
         }
+    }
+}
+
+struct ConversationListRefreshingKey: PreferenceKey {
+    static let defaultValue = false
+
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
     }
 }

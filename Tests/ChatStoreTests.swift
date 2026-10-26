@@ -3412,3 +3412,65 @@ extension ChatStoreTests {
         XCTAssertNil(drafts.pendingForwards[second.id])
     }
 }
+
+extension ChatStoreTests {
+    func testConversationListPullRevealAndRefreshHaveDistinctThresholds() {
+        let scroll = ConversationListScrollScope()
+        var refreshes = 0
+        scroll.onRefresh = { refreshes += 1 }
+        scroll.beginGesture()
+        scroll.didScroll(offset: -35)
+        XCTAssertEqual(scroll.pullDistance, 35)
+        scroll.endGesture()
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 0)
+        XCTAssertEqual(refreshes, 0)
+
+        scroll.beginGesture()
+        scroll.didScroll(offset: -36)
+        scroll.endGesture()
+        XCTAssertTrue(scroll.isSearchRevealed)
+        XCTAssertEqual(refreshes, 0)
+
+        scroll.cancelSearch()
+        scroll.beginGesture()
+        scroll.didScroll(offset: -150)
+        scroll.endGesture(cancelled: true)
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertEqual(refreshes, 0)
+
+        scroll.beginGesture()
+        scroll.didScroll(offset: -120)
+        scroll.endGesture()
+        XCTAssertTrue(scroll.isSearchRevealed)
+        XCTAssertEqual(refreshes, 1)
+        scroll.isRefreshing = true
+        scroll.beginGesture()
+        scroll.didScroll(offset: -180)
+        scroll.endGesture()
+        XCTAssertEqual(refreshes, 1)
+    }
+
+    func testConversationListActiveSearchSurvivesScopeChangeButNotAccountReset() {
+        let presentation = ConversationListPresentation()
+        let scroll = ConversationListScrollScope()
+        scroll.presentation = presentation
+        scroll.select(scope: .messages, archived: false, currentUserID: 1)
+        scroll.revealSearch()
+        scroll.isSearchPinned = true
+        scroll.select(
+            scope: .groups, archived: false, currentUserID: 1, preservingSearch: true)
+        XCTAssertTrue(scroll.isSearchRevealed)
+        XCTAssertTrue(scroll.isSearchPinned)
+        scroll.cancelSearch()
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertFalse(scroll.isSearchPinned)
+
+        scroll.revealSearch()
+        presentation.reset()
+        scroll.select(scope: .groups, archived: false, currentUserID: 1)
+        XCTAssertFalse(scroll.isSearchRevealed)
+        scroll.select(scope: .dms, archived: false, currentUserID: 2)
+        XCTAssertFalse(scroll.isSearchRevealed)
+    }
+}
