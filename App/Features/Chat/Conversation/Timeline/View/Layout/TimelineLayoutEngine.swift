@@ -74,11 +74,9 @@ struct TimelineLayoutEngine {
         var preferredText: CGFloat = 0
         if hasBody {
             textMeasurer.update(
-                attributedText: MessageTextContent.attributedText(
-                    document: p.markdown!, mentions: row.entry.remoteMessage?.mentions ?? [],
-                    currentUserID: nil, isOutgoing: row.isOutgoing,
-                    font: .systemFont(ofSize: e.bodySize), linksEnabled: false,
-                    mentionsEnabled: false), metadata: metadata)
+                attributedText: p.preparedText!.makeMeasurementText(
+                    mentions: row.entry.remoteMessage?.mentions ?? [], fontSize: e.bodySize),
+                metadata: metadata)
             preferredText = textMeasurer.idealSize.width + 24 - (metadata?.textTrailingOutset ?? 0)
         }
         var labelFont = BubbleNativeFont.systemFont(ofSize: e.bodySize)

@@ -27,7 +27,6 @@ struct UserProfileView: View {
     @State private var confirmation: SafetyAction?
     @State private var loadRevision = 0
     @State private var reloadPending = false
-    @State private var showsFriendPrivacy = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
@@ -47,12 +46,6 @@ struct UserProfileView: View {
                 .toolbar(isPresentedAsRoot ? .hidden : .visible, for: .navigationBar)
                 .background(ConversationSwipeBack())
             #endif
-            .navigationDestination(isPresented: $showsFriendPrivacy) {
-                FriendPrivacySettingsView(store: store, peerUID: uid)
-                    #if os(iOS)
-                        .toolbar(.visible, for: .navigationBar)
-                    #endif
-            }
             .task(id: uid) { await load() }
             .onReceive(store.socialInvalidations) { _ in invalidateProfile() }
             .onChange(of: scenePhase) { _, phase in
@@ -175,10 +168,10 @@ struct UserProfileView: View {
     private var actionCards: some View {
         HStack(alignment: .top, spacing: 10) {
             if uid == currentUserID {
-                spaceCard
+                forumProfileCard
             } else if relationship?.isFriend == true {
-                messageCard(primary: true)
-                spaceCard
+                messageCard
+                forumProfileCard
             } else {
                 Button {
                     Task { await loadPolicy() }
@@ -187,21 +180,12 @@ struct UserProfileView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canRequestFriendship)
-                messageCard(primary: false)
+                forumProfileCard
             }
             Menu {
                 Button("Copy ID", systemImage: "doc.on.doc") { copyID() }
-                if uid != currentUserID, relationship?.isFriend != true {
-                    Link(destination: spaceURL) {
-                        Label("Space", systemImage: "globe")
-                    }
-                }
                 if uid != currentUserID {
                     if relationship?.isFriend == true {
-                        Button("Friend Privacy", systemImage: "hand.raised") {
-                            showsFriendPrivacy = true
-                        }
-                        .disabled(busy || loading)
                         Button(
                             "Remove friend", systemImage: "person.badge.minus", role: .destructive
                         ) {
@@ -253,21 +237,21 @@ struct UserProfileView: View {
         .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private func messageCard(primary: Bool) -> some View {
+    private var messageCard: some View {
         Button {
             if let id = relationship?.dmChatId {
                 Task { await openChat(id) }
             }
         } label: {
-            actionCard("Message", symbol: "message.fill", primary: primary)
+            actionCard("Message", symbol: "message.fill", primary: true)
         }
         .buttonStyle(.plain)
         .disabled(busy || loading || relationship?.dmChatId == nil)
     }
 
-    private var spaceCard: some View {
-        Link(destination: spaceURL) {
-            actionCard("Space", symbol: "globe")
+    private var forumProfileCard: some View {
+        Link(destination: forumProfileURL) {
+            actionCard("Forum Profile", symbol: "globe")
         }
         .buttonStyle(.plain)
     }
@@ -283,7 +267,7 @@ struct UserProfileView: View {
                 } else if relationship.hasPendingOutgoingRequest == true {
                     Text("Friend request sent — awaiting response")
                 }
-                if relationship.dmChatId == nil {
+                if relationship.isFriend == true, relationship.dmChatId == nil {
                     Text("Messaging is unavailable for this user.")
                 }
             } else if !loading {
@@ -303,7 +287,7 @@ struct UserProfileView: View {
             && relationship?.blockedBy == false
     }
 
-    private var spaceURL: URL {
+    private var forumProfileURL: URL {
         URL(string: "https://www.shireyishunjian.com/main/home.php?mod=space&uid=\(uid)")!
     }
 

@@ -1,5 +1,4 @@
 import ChahuaAPI
-import ChahuaMarkdown
 import SwiftUI
 
 struct TitleContent: Hashable {
@@ -38,7 +37,7 @@ struct TimelineRowPresentation {
     let originLabel: String?
     let originalReply: MessagePreview?
     let forwardedCardLines: [String]
-    let markdown: MarkdownDocument?
+    let preparedText: MessageTextContent.PreparedText?
     let metadata: MessageMetadata?
     let metadataIsOverlay: Bool
     let threadLabel: String?
@@ -90,7 +89,7 @@ struct TimelineRowPresentation {
         var originLabel: String?
         var originalReply: MessagePreview?
         var forwardedCardLines: [String] = []
-        var markdown: MarkdownDocument?
+        var preparedText: MessageTextContent.PreparedText?
         var metadata: MessageMetadata?
         var overlay = false
         var threadLabel: String?
@@ -209,7 +208,12 @@ struct TimelineRowPresentation {
                     } else if audio {
                         sections.append(.audio)
                     } else {
-                        if hasBody { markdown = MarkdownDocument(parsing: text) }
+                        if hasBody {
+                            preparedText = MessageTextContent.PreparedText(
+                                text: text, mentions: remote?.mentions ?? [],
+                                currentUserID: currentUserID, isOutgoing: message.isOutgoing,
+                                fontSize: environment.bodySize)
+                        }
                         let names = MessageMentions.names(in: remote?.mentions ?? [])
                         let source = text as NSString
                         let labels = MessageMentions.pattern.matches(
@@ -272,7 +276,7 @@ struct TimelineRowPresentation {
         return .init(
             row: row, environment: environment, title: title, reply: reply,
             originLabel: originLabel, originalReply: originalReply,
-            forwardedCardLines: forwardedCardLines, markdown: markdown,
+            forwardedCardLines: forwardedCardLines, preparedText: preparedText,
             metadata: metadata,
             metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText,
             systemContent: systemContent,

@@ -33,6 +33,9 @@ final class MessageTextLayout {
     private(set) var assignedGeometry: MessageTextGeometry?
     private var cachedGeometry: MessageTextGeometry?
     private var cachedIdealSize: CGSize?
+    private var codeAttachments:
+        [(range: NSRange, attachment: MessageCodeAttachment, inset: CGFloat)] = []
+    private var fittedCodeWidth: CGFloat?
 
     init(
         attributedText: NSAttributedString = NSAttributedString(string: ""),
@@ -52,6 +55,21 @@ final class MessageTextLayout {
         if let attributedText, !storage.isEqual(to: attributedText) {
             storage.setAttributedString(attributedText)
             layoutManager.resetSpoilerParticles()
+            codeAttachments.removeAll(keepingCapacity: true)
+            fittedCodeWidth = nil
+            storage.enumerateAttribute(
+                .bubbleCodeBlock, in: NSRange(location: 0, length: storage.length)
+            ) { value, range, _ in
+                guard let attachment = value as? MessageCodeAttachment else { return }
+                let paragraph =
+                    self.storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                    as? NSParagraphStyle
+                self.codeAttachments.append(
+                    (
+                        range, attachment,
+                        max(paragraph?.headIndent ?? 0, paragraph?.firstLineHeadIndent ?? 0)
+                    ))
+            }
             textChanged = true
         }
         let geometryChanged = textChanged || self.metadata?.size != metadata?.size
@@ -163,19 +181,10 @@ final class MessageTextLayout {
     }
 
     private func fitCodeBlocks(width: CGFloat) {
-        guard storage.length > 0 else { return }
-        storage.enumerateAttribute(
-            .bubbleCodeBlock, in: NSRange(location: 0, length: storage.length)
-        ) { value, range, _ in
-            guard let attachment = value as? MessageCodeAttachment else { return }
-            let paragraph =
-                storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
-                as? NSParagraphStyle
-            guard
-                attachment.fit(
-                    width: width
-                        - max(paragraph?.headIndent ?? 0, paragraph?.firstLineHeadIndent ?? 0))
-            else { return }
+        guard fittedCodeWidth != width else { return }
+        fittedCodeWidth = width
+        for (range, attachment, inset) in codeAttachments {
+            guard attachment.fit(width: width - inset) else { continue }
             layoutManager.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
         }
     }
@@ -260,21 +269,16 @@ final class MessageTextLayout {
             ? layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer) : bodyBounds
         let visibleBounds = metadata == nil ? glyphBounds : glyphBounds.union(metadataFrame)
         var codeBlocks: [MessageCodeGeometry] = []
-        if storage.length > 0 {
-            storage.enumerateAttribute(
-                .bubbleCodeBlock, in: NSRange(location: 0, length: storage.length)
-            ) { value, range, _ in
-                guard let attachment = value as? MessageCodeAttachment else { return }
-                let glyph = layoutManager.glyphRange(
-                    forCharacterRange: range, actualCharacterRange: nil)
-                let rect = layoutManager.boundingRect(forGlyphRange: glyph, in: textContainer)
-                codeBlocks.append(
-                    MessageCodeGeometry(
-                        characterIndex: range.location,
-                        frame: CGRect(
-                            x: rect.minX, y: rect.minY, width: attachment.bounds.width,
-                            height: attachment.bounds.height)))
-            }
+        for (range, attachment, _) in codeAttachments {
+            let glyph = layoutManager.glyphRange(
+                forCharacterRange: range, actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyph, in: textContainer)
+            codeBlocks.append(
+                MessageCodeGeometry(
+                    characterIndex: range.location,
+                    frame: CGRect(
+                        x: rect.minX, y: rect.minY, width: attachment.bounds.width,
+                        height: attachment.bounds.height)))
         }
         let result = MessageTextGeometry(
             size: CGSize(width: width, height: ceil(max(bodyBounds.maxY, metadataFrame.maxY))),

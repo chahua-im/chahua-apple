@@ -19,6 +19,10 @@ public indirect enum MarkdownBlock: Equatable, Sendable {
 }
 
 public struct MarkdownDocument: Equatable, Sendable {
+    private static let inlineNewlinePattern = try! NSRegularExpression(
+        pattern: "[\\r\\n\\u2028\\u2029]+")
+    private static let codeNewlinePattern = try! NSRegularExpression(pattern: "\\s*\\n+\\s*")
+
     public let blocks: [MarkdownBlock]
 
     public init(parsing source: String) {
@@ -42,10 +46,12 @@ public struct MarkdownDocument: Equatable, Sendable {
             case .paragraph(let content):
                 add(singleLine(content))
             case .codeBlock(_, let code):
-                let text = code.replacingOccurrences(
-                    of: "\\s*\\n+\\s*", with: " ", options: .regularExpression
-                )
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+                let flattened =
+                    code.contains("\n")
+                    ? codeNewlinePattern.stringByReplacingMatches(
+                        in: code, range: NSRange(code.startIndex..., in: code), withTemplate: " ")
+                    : code
+                let text = flattened.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !text.isEmpty { add([.code(text)]) }
             case .list(let start, let items):
                 var number = max(start ?? 1, 1)
@@ -64,9 +70,10 @@ public struct MarkdownDocument: Equatable, Sendable {
         content.map { node in
             switch node {
             case .text(let text):
+                guard text.rangeOfCharacter(from: .newlines) != nil else { return node }
                 return .text(
-                    text.replacingOccurrences(
-                        of: "[\\r\\n\\u2028\\u2029]+", with: " ", options: .regularExpression))
+                    inlineNewlinePattern.stringByReplacingMatches(
+                        in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " "))
             case .strong(let children): return .strong(singleLine(children))
             case .emphasis(let children): return .emphasis(singleLine(children))
             case .strikethrough(let children): return .strikethrough(singleLine(children))

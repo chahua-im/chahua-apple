@@ -218,6 +218,23 @@ final class MessageCodeAttachment: NSTextAttachment {
 
     required init?(coder: NSCoder) { nil }
 
+    /// Only bounds belong to a layout graph. Highlighting and no-wrap code
+    /// measurement are immutable and can be shared by prepared rows and previews.
+    func copyForLayout() -> MessageCodeAttachment {
+        MessageCodeAttachment(copying: self)
+    }
+
+    private init(copying source: MessageCodeAttachment) {
+        attributedCode = source.attributedCode
+        backgroundColor = source.backgroundColor
+        naturalSize = source.naturalSize
+        language = source.language
+        code = source.code
+        super.init(data: nil, ofType: nil)
+        bounds = CGRect(origin: .zero, size: naturalSize)
+        image = source.image
+    }
+
     func fit(width: CGFloat) -> Bool {
         let width = max(1, min(naturalSize.width, width))
         guard bounds.width != width else { return false }

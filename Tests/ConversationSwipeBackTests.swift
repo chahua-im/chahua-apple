@@ -1,10 +1,67 @@
 #if os(iOS)
+    import SwiftUI
     import UIKit
     import XCTest
     @testable import chahua_apple
 
     @MainActor
     final class ConversationSwipeBackTests: XCTestCase {
+        func testSwipeOverlayPreservesDynamicSwiftUILayoutAndContentHitTesting() throws {
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                    .first(where: { $0.activationState == .foregroundActive }))
+            let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            let root = AppearanceReportingController()
+            let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 500))
+            root.view.addSubview(scroll)
+            func row(height: CGFloat) -> some View {
+                SwipeRowUIKit(
+                    id: AnyHashable("row"), isRevealed: false,
+                    leadingAction: .init(
+                        action: "read", title: "Read", symbol: "envelope", tint: .blue),
+                    trailingActions: [], isBusy: false,
+                    onRevealChanged: { _ in }, onAction: { _ in },
+                    content: {
+                        Color.clear.frame(height: height)
+                    })
+            }
+            let hosting = UIHostingController(rootView: row(height: 60))
+            hosting.safeAreaRegions = []
+            root.addChild(hosting)
+            scroll.addSubview(hosting.view)
+            hosting.didMove(toParent: root)
+            window.rootViewController = root
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                previousKeyWindow?.makeKey()
+            }
+            window.makeKeyAndVisible()
+            let proposal = CGSize(width: 320, height: 1_000)
+            let initialSize = hosting.sizeThatFits(in: proposal)
+            XCTAssertEqual(initialSize.height, 60, accuracy: 0.5)
+            hosting.view.frame = CGRect(origin: .zero, size: initialSize)
+            hosting.view.layoutIfNeeded()
+            func findOverlay(in view: UIView) -> SwipeRowUIKitContainer? {
+                if let overlay = view as? SwipeRowUIKitContainer { return overlay }
+                return view.subviews.lazy.compactMap { findOverlay(in: $0) }.first
+            }
+            let overlay = try XCTUnwrap(findOverlay(in: hosting.view))
+            XCTAssertNil(overlay.hitTest(CGPoint(x: 160, y: 30), with: nil))
+
+            hosting.rootView = row(height: 148)
+            let resized = hosting.sizeThatFits(in: proposal)
+            XCTAssertEqual(resized.height, 148, accuracy: 0.5)
+            hosting.view.frame.size = resized
+            hosting.view.layoutIfNeeded()
+            let resizedOverlay = try XCTUnwrap(findOverlay(in: hosting.view))
+            XCTAssertEqual(resizedOverlay.bounds.height, 148, accuracy: 0.5)
+            XCTAssertNil(resizedOverlay.hitTest(CGPoint(x: 160, y: 74), with: nil))
+            resizedOverlay.detach()
+            XCTAssertTrue(scroll.panGestureRecognizer.isEnabled)
+        }
+
         func testArchiveEnablesEdgeBackPreservesRowSwipesAndRestoresNativeDelegates() async throws {
             let scene = try XCTUnwrap(
                 UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }

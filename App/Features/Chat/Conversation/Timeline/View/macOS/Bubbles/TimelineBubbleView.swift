@@ -203,7 +203,7 @@
                             ? nil : binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? p.metadata : nil,
                         failureAction: failureAction, geometry: geometry, fontSize: e.bodySize,
-                        document: p.markdown
+                        preparedText: p.preparedText
                     ), resetSelection: resetSelection)
                 view.setVisible(visible)
             } else {

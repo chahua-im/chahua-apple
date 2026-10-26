@@ -3,11 +3,9 @@
     import UIKit
     import UIKit.UIGestureRecognizerSubclass
 
-    /// SwiftUI's swipeActions owns rectangular backgrounds and hides drag progress.
-    /// This iOS-only container is needed for circular controls, continuous capsule
-    /// stretching, release-only commits, and directional arbitration with List's pan.
-    /// The actual row content and its accessibility actions remain SwiftUI.
-    struct SwipeRowUIKit<Content: View>: UIViewRepresentable {
+    /// SwiftUI owns row layout and accessibility. UIKit only draws the exposed
+    /// controls and arbitrates directional touches with the enclosing scroll view.
+    struct SwipeRowUIKit<Content: View>: View {
         let id: AnyHashable
         let isRevealed: Bool
         let leadingAction: SwipeRowAction?
@@ -16,6 +14,38 @@
         let onRevealChanged: (Bool) -> Void
         let onAction: (String) -> Void
         @ViewBuilder let content: () -> Content
+        @State private var contentOffset: CGFloat = 0
+
+        var body: some View {
+            content()
+                .offset(x: contentOffset)
+                .overlay {
+                    SwipeRowUIKitBridge(
+                        id: id, isRevealed: isRevealed,
+                        leadingAction: leadingAction, trailingActions: trailingActions,
+                        isBusy: isBusy, onRevealChanged: onRevealChanged, onAction: onAction,
+                        onOffsetChanged: { offset, animated in
+                            guard contentOffset != offset else { return }
+                            var transaction = Transaction(
+                                animation: animated
+                                    ? .easeOut(duration: SwipeRowMetrics.animationDuration) : nil)
+                            transaction.disablesAnimations = !animated
+                            withTransaction(transaction) { contentOffset = offset }
+                        })
+                }
+                .clipped()
+        }
+    }
+
+    private struct SwipeRowUIKitBridge: UIViewRepresentable {
+        let id: AnyHashable
+        let isRevealed: Bool
+        let leadingAction: SwipeRowAction?
+        let trailingActions: [SwipeRowAction]
+        let isBusy: Bool
+        let onRevealChanged: (Bool) -> Void
+        let onAction: (String) -> Void
+        let onOffsetChanged: (CGFloat, Bool) -> Void
 
         func makeUIView(context: Context) -> SwipeRowUIKitContainer {
             ScrollPerformanceTrace.event("Swipe.Created")
@@ -25,20 +55,13 @@
         func updateUIView(_ view: SwipeRowUIKitContainer, context: Context) {
             let trace = ScrollPerformanceTrace.begin("Swipe.Update")
             defer { ScrollPerformanceTrace.end("Swipe.Update", trace) }
-            view.setContent(content(), environment: context.environment)
             view.configure(
                 id: id, leading: leadingAction, trailing: trailingActions,
                 isBusy: isBusy, isRevealed: isRevealed,
                 reduceMotion: context.environment.accessibilityReduceMotion,
                 isRightToLeft: context.environment.layoutDirection == .rightToLeft,
-                onRevealChanged: onRevealChanged, onAction: onAction)
-        }
-
-        func sizeThatFits(
-            _ proposal: ProposedViewSize, uiView: SwipeRowUIKitContainer, context: Context
-        ) -> CGSize? {
-            guard let width = proposal.width else { return nil }
-            return uiView.contentSize(fitting: width)
+                onRevealChanged: onRevealChanged, onAction: onAction,
+                onOffsetChanged: onOffsetChanged)
         }
 
         static func dismantleUIView(_ view: SwipeRowUIKitContainer, coordinator: ()) {
@@ -53,8 +76,8 @@
         private let trailingClip = UIView()
         private let leadingButton = UIButton(type: .system)
         private var trailingButtons: [UIButton] = []
-        private var hostedContent: (UIView & UIContentView)?
         private weak var observedScrollView: UIScrollView?
+        private weak var gestureHost: UIView?
         private var identity: AnyHashable?
         private var leadingAction: SwipeRowAction?
         private var trailingActions: [SwipeRowAction] = []
@@ -76,6 +99,10 @@
         }
 
         private var appliedOffsetLayout: OffsetLayout?
+        // A newly mounted bridge must reset any SwiftUI offset retained by List.
+        private var publishedOffset: CGFloat?
+        private var isUpdatingView = false
+        private var onOffsetChanged: ((CGFloat, Bool) -> Void)?
         private var onRevealChanged: ((Bool) -> Void)?
         private var onAction: ((String) -> Void)?
         private lazy var feedback = UIImpactFeedbackGenerator(style: .medium)
@@ -110,56 +137,27 @@
             addSubview(trailingClip)
             leadingClip.addSubview(leadingButton)
             leadingButton.addTarget(self, action: #selector(tappedLeading), for: .touchUpInside)
-            addGestureRecognizer(pan)
-            addGestureRecognizer(dismissTap)
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func setContent<Content: View>(_ content: Content, environment: EnvironmentValues) {
-            let trace = ScrollPerformanceTrace.begin("Swipe.HostContent")
-            defer { ScrollPerformanceTrace.end("Swipe.HostContent", trace) }
-            // UIHostingConfiguration supplies native self-sizing without inventing a
-            // child view-controller hierarchy for every SwiftUI List row.
-            let configuration = UIHostingConfiguration {
-                content.environment(\.self, environment)
-            }.margins(.all, 0)
-            if let hostedContent {
-                hostedContent.configuration = configuration
-            } else {
-                let hostedContent = configuration.makeContentView()
-                hostedContent.backgroundColor = .clear
-                hostedContent.clipsToBounds = true
-                addSubview(hostedContent)
-                self.hostedContent = hostedContent
-            }
-        }
-
-        func contentSize(fitting width: CGFloat) -> CGSize {
-            let trace = ScrollPerformanceTrace.begin("Swipe.SizeFit")
-            defer { ScrollPerformanceTrace.end("Swipe.SizeFit", trace) }
-            let height =
-                hostedContent?.systemLayoutSizeFitting(
-                    CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
-                    withHorizontalFittingPriority: .required,
-                    verticalFittingPriority: .fittingSizeLevel
-                ).height ?? 0
-            return CGSize(width: width, height: height)
-        }
-
         func configure(
             id: AnyHashable, leading: SwipeRowAction?, trailing: [SwipeRowAction],
             isBusy: Bool, isRevealed: Bool, reduceMotion: Bool, isRightToLeft: Bool,
-            onRevealChanged: @escaping (Bool) -> Void, onAction: @escaping (String) -> Void
+            onRevealChanged: @escaping (Bool) -> Void, onAction: @escaping (String) -> Void,
+            onOffsetChanged: @escaping (CGFloat, Bool) -> Void
         ) {
             let trace = ScrollPerformanceTrace.begin("Swipe.Controls")
             defer { ScrollPerformanceTrace.end("Swipe.Controls", trace) }
+            isUpdatingView = true
+            defer { isUpdatingView = false }
             let nextDirection: CGFloat = isRightToLeft ? -1 : 1
             let identityChanged = identity != id
             let actionsChanged = leadingAction != leading || trailingActions != trailing
             let directionChanged = direction != nextDirection
             self.onRevealChanged = onRevealChanged
             self.onAction = onAction
+            self.onOffsetChanged = onOffsetChanged
             self.isBusy = isBusy
             self.reduceMotion = reduceMotion
             identity = id
@@ -205,8 +203,7 @@
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            observedScrollView?.panGestureRecognizer.removeTarget(self, action: #selector(scrolled))
-            observedScrollView = nil
+            detachGestures()
             guard window != nil else {
                 close(animated: false, notify: false)
                 return
@@ -216,25 +213,41 @@
                 if let scrollView = view as? UIScrollView {
                     observedScrollView = scrollView
                     scrollView.panGestureRecognizer.addTarget(self, action: #selector(scrolled))
+                    gestureHost = scrollView
                     break
                 }
                 ancestor = view.superview
             }
+            // Observe touches on a public ancestor, not a framework-owned cell.
+            // The overlay passes ordinary content taps through to SwiftUI.
+            if gestureHost == nil { gestureHost = window }
+            gestureHost?.addGestureRecognizer(pan)
+            gestureHost?.addGestureRecognizer(dismissTap)
+        }
+
+        private func detachGestures() {
+            observedScrollView?.panGestureRecognizer.removeTarget(self, action: #selector(scrolled))
+            observedScrollView = nil
+            gestureHost?.removeGestureRecognizer(pan)
+            gestureHost?.removeGestureRecognizer(dismissTap)
+            gestureHost = nil
         }
 
         func detach() {
             ScrollPerformanceTrace.event("Swipe.Detached")
             onRevealChanged = nil
             onAction = nil
+            onOffsetChanged = nil
             close(animated: false, notify: false)
-            observedScrollView?.panGestureRecognizer.removeTarget(self, action: #selector(scrolled))
-            observedScrollView = nil
+            detachGestures()
         }
 
         override func layoutSubviews() {
             super.layoutSubviews()
             let trace = ScrollPerformanceTrace.begin("Swipe.Layout")
             defer { ScrollPerformanceTrace.end("Swipe.Layout", trace) }
+            isUpdatingView = true
+            defer { isUpdatingView = false }
             if previousWidth > 0, previousWidth != bounds.width {
                 close(animated: false, notify: false)
                 // Geometry can change during a SwiftUI update; clear shared reveal
@@ -246,9 +259,31 @@
                 }
             }
             previousWidth = bounds.width
-            hostedContent?.bounds = bounds
-            hostedContent?.center = CGPoint(x: bounds.midX, y: bounds.midY)
             applyOffset()
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            guard let hit = super.hitTest(point, with: event) else { return nil }
+            // Only exposed controls intercept touches. The original SwiftUI
+            // content stays in List's own layout and hit-testing hierarchy.
+            return hit is UIButton ? hit : nil
+        }
+
+        private func publishOffset(animated: Bool) {
+            let physicalOffset = offset * direction
+            guard publishedOffset != physicalOffset else { return }
+            publishedOffset = physicalOffset
+            if isUpdatingView {
+                let updatedIdentity = identity
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, identity == updatedIdentity,
+                        publishedOffset == physicalOffset
+                    else { return }
+                    onOffsetChanged?(physicalOffset, animated)
+                }
+            } else {
+                onOffsetChanged?(physicalOffset, animated)
+            }
         }
 
         private func applyOffset() {
@@ -260,7 +295,6 @@
             // scrolling nor a content refresh needs to rewrite swipe geometry.
             guard appliedOffsetLayout != layout else { return }
             appliedOffsetLayout = layout
-            hostedContent?.transform = CGAffineTransform(translationX: offset * direction, y: 0)
             let leadingWidth = max(0, offset)
             let trailingWidth = max(0, -offset)
             leadingClip.frame = CGRect(
@@ -306,18 +340,21 @@
                 if shouldArm { feedback.impactOccurred() } else { feedback.prepare() }
             }
             applyOffset()
+            publishOffset(animated: false)
         }
 
         private func stopAnimations() {
-            if let presentation = hostedContent?.layer.presentation() {
-                offset = presentation.affineTransform().tx * direction
+            if let leading = leadingClip.layer.presentation(),
+                let trailing = trailingClip.layer.presentation()
+            {
+                offset = leading.bounds.width > 0 ? leading.bounds.width : -trailing.bounds.width
             }
-            hostedContent?.layer.removeAllAnimations()
             leadingClip.layer.removeAllAnimations()
             trailingClip.layer.removeAllAnimations()
             leadingButton.layer.removeAllAnimations()
             for button in trailingButtons { button.layer.removeAllAnimations() }
             applyOffset()
+            publishOffset(animated: false)
         }
 
         private func settle(to target: CGFloat, animated: Bool, notify: Bool) {
@@ -332,6 +369,7 @@
                 offset = target
                 applyOffset()
             }
+            publishOffset(animated: animated && !reduceMotion)
             if notify { onRevealChanged?(target != 0) }
         }
 
@@ -417,6 +455,9 @@
             _ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch
         ) -> Bool {
             guard !UIAccessibility.isVoiceOverRunning else { return false }
+            guard window != nil, !isHidden, bounds.contains(touch.location(in: self)) else {
+                return false
+            }
             if gestureRecognizer === dismissTap {
                 guard offset != 0, let touchedView = touch.view else { return false }
                 return !touchedView.isDescendant(of: leadingClip)

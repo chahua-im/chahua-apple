@@ -2,7 +2,7 @@
 
 Use this convention for settings menus/pages that edit a draft and commit it with **Save**. Instant-apply settings, such as independent preference toggles, are a separate interaction model; do not mix autosave and explicit Save within the same draft.
 
-Applies to the account-wide **Friend Request Permission**, **Read Receipts**, **Last Seen & Online**, and app-wide **Language** pages. Per-friend privacy overrides keep their existing instant-save behavior.
+Applies to the account-wide **Friend Request Permission**, **Read Receipts**, **Last Seen & Online**, and app-wide **Language** pages. **Friend Privacy** is absent from the peer-profile More menu; the shared per-friend page remains reachable from DM Chat Info and retains its existing instant-save behavior.
 
 ## Presentation and draft ownership
 

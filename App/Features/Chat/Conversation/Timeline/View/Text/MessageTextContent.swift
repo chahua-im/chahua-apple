@@ -20,7 +20,7 @@ struct MessageTextContent {
     var failureAction: (() -> Void)? = nil
     let geometry: MessageTextGeometry
     let fontSize: CGFloat
-    var document: MarkdownDocument? = nil
+    var preparedText: PreparedText? = nil
 
     func update(_ layout: MessageTextLayout, coordinator: Coordinator) -> Bool {
         coordinator.openLink = action
@@ -33,14 +33,21 @@ struct MessageTextContent {
         let attributed: NSAttributedString?
         if coordinator.textInput != input {
             if coordinator.textInput?.text != text {
-                coordinator.document = document ?? MarkdownDocument(parsing: text)
+                coordinator.document =
+                    preparedText?.input.text == text
+                    ? preparedText?.document : MarkdownDocument(parsing: text)
                 layout.layoutManager.revealedSpoilers.removeAll()
             }
-            attributed = Self.attributedText(
-                document: coordinator.document ?? MarkdownDocument(parsing: text),
-                mentions: mentions, currentUserID: currentUserID,
-                isOutgoing: isOutgoing, font: .systemFont(ofSize: fontSize),
-                linksEnabled: input.linksEnabled, mentionsEnabled: input.mentionsEnabled)
+            if let preparedText, preparedText.input.hasSameBody(as: input) {
+                attributed = preparedText.makeAttributedText(
+                    linksEnabled: input.linksEnabled, mentionsEnabled: input.mentionsEnabled)
+            } else {
+                attributed = Self.attributedText(
+                    document: coordinator.document ?? MarkdownDocument(parsing: text),
+                    mentions: mentions, currentUserID: currentUserID,
+                    isOutgoing: isOutgoing, font: .systemFont(ofSize: fontSize),
+                    linksEnabled: input.linksEnabled, mentionsEnabled: input.mentionsEnabled)
+            }
             coordinator.textInput = input
         } else {
             attributed = nil
@@ -60,6 +67,90 @@ struct MessageTextContent {
         let fontSize: CGFloat
         let linksEnabled: Bool
         let mentionsEnabled: Bool
+
+        func hasSameBody(as other: Self) -> Bool {
+            text == other.text && mentions == other.mentions
+                && currentUserID == other.currentUserID && isOutgoing == other.isOutgoing
+                && fontSize == other.fontSize
+        }
+    }
+
+    /// The existing prepared-row cache owns immutable text styling, not a TextKit
+    /// graph. Measurement and reused native views share this work while retaining
+    /// independent layout, selection, spoiler state and mutable attachment bounds.
+    final class PreparedText {
+        let input: TextInput
+        let document: MarkdownDocument
+        private var attributed: NSAttributedString?
+        private var codeAttachments: [(NSRange, MessageCodeAttachment)] = []
+        private var links: [(range: NSRange, mention: Bool, enclosingURL: URL?)] = []
+
+        init(
+            text: String, mentions: [MentionInfo], currentUserID: Int32?, isOutgoing: Bool,
+            fontSize: CGFloat
+        ) {
+            input = TextInput(
+                text: text, mentions: mentions, currentUserID: currentUserID,
+                isOutgoing: isOutgoing, fontSize: fontSize,
+                linksEnabled: true, mentionsEnabled: true)
+            document = MarkdownDocument(parsing: text)
+        }
+
+        func makeMeasurementText(mentions: [MentionInfo], fontSize: CGFloat) -> NSAttributedString {
+            guard input.mentions == mentions, input.fontSize == fontSize else {
+                return MessageTextContent.attributedText(
+                    document: document, mentions: mentions, currentUserID: nil,
+                    isOutgoing: input.isOutgoing, font: .systemFont(ofSize: fontSize))
+            }
+            // A scratch layout manager has no link interaction. Keep the same
+            // styled body as native views rather than rebuilding inert attributes.
+            return makeAttributedText(linksEnabled: true, mentionsEnabled: true)
+        }
+
+        func makeAttributedText(linksEnabled: Bool, mentionsEnabled: Bool) -> NSAttributedString {
+            let body: NSAttributedString
+            if let attributed {
+                body = attributed
+            } else {
+                body = MessageTextContent.attributedText(
+                    document: document, mentions: input.mentions,
+                    currentUserID: input.currentUserID, isOutgoing: input.isOutgoing,
+                    font: .systemFont(ofSize: input.fontSize),
+                    linksEnabled: true, mentionsEnabled: true)
+                body.enumerateAttributes(in: NSRange(location: 0, length: body.length)) {
+                    attributes, range, _ in
+                    if let attachment = attributes[.bubbleCodeBlock] as? MessageCodeAttachment {
+                        self.codeAttachments.append((range, attachment))
+                    }
+                    if attributes[.link] != nil {
+                        self.links.append(
+                            (
+                                range, attributes[.bubbleMentionID] != nil,
+                                attributes[.bubbleURL] as? URL
+                            ))
+                    }
+                }
+                attributed = body
+            }
+            let changesLinks = links.contains { $0.mention ? !mentionsEnabled : !linksEnabled }
+            guard !codeAttachments.isEmpty || changesLinks else { return body }
+            let result = NSMutableAttributedString(attributedString: body)
+            for (range, attachment) in codeAttachments {
+                let copy = attachment.copyForLayout()
+                result.addAttributes([.attachment: copy, .bubbleCodeBlock: copy], range: range)
+            }
+            for (range, mention, enclosingURL) in links
+            where mention ? !mentionsEnabled : !linksEnabled {
+                // A mention inside a Markdown link inherits that link when mention
+                // interaction is off, just as the uncached attributed-text builder does.
+                if mention, linksEnabled, let enclosingURL {
+                    result.addAttribute(.link, value: enclosingURL, range: range)
+                } else {
+                    result.removeAttribute(.link, range: range)
+                }
+            }
+            return result
+        }
     }
 
     final class Coordinator: NSObject {

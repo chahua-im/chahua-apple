@@ -161,7 +161,8 @@ final class MessageTextLayoutTests: XCTestCase {
                     text: "Hello https://example.com", mentions: [], currentUserID: 1,
                     isOutgoing: false,
                     action: prefix.map { prefix in { opened.append(prefix + $0.absoluteString) } },
-                    metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
+                    metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14,
+                    preparedText: prepared.preparedText
                 )
             }
             let text = AppKitMessageTextView(geometry: prepared.geometry)
@@ -281,7 +282,8 @@ final class MessageTextLayoutTests: XCTestCase {
                     mentionAction: prefix.map { prefix in
                         { opened.append(prefix + "mention:\($0)") }
                     },
-                    metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14
+                    metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14,
+                    preparedText: prepared.preparedText
                 )
             }
             let host = UIViewController()
@@ -607,7 +609,8 @@ final class MessageTextLayoutTests: XCTestCase {
             MessageTextContent(
                 text: source, mentions: [], currentUserID: 1,
                 isOutgoing: false, action: nil, metadata: prepared.metadata,
-                geometry: prepared.geometry, fontSize: 14), resetSelection: true)
+                geometry: prepared.geometry, fontSize: 14,
+                preparedText: prepared.preparedText), resetSelection: true)
         let coordinator = try XCTUnwrap(text.delegate as? MessageTextContent.Coordinator)
         let full = NSRange(location: 0, length: text.contentLayout.storage.length)
         let hidden = (text.contentLayout.storage.string as NSString).range(of: "secret")
@@ -825,6 +828,104 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(narrow.metadataFrame.minY, narrowCode.frame.maxY)
     }
 
+    func testPreparedTextKeepsEachLayoutsCodeAttachmentBoundsIndependent() throws {
+        let source =
+            "Before @[uid:2] [link](https://example.com) ||secret||\n```swift\n"
+            + String(repeating: "let value = 123; ", count: 30) + "\n```\nAfter"
+        let prepared = try preparedText(source, width: 240)
+        let body = prepared.preparedText
+        let measurement = MessageTextLayout(
+            attributedText: body.makeMeasurementText(mentions: [], fontSize: 14),
+            metadata: prepared.metadata)
+        let narrow = measurement.geometry(for: 140)
+        let wide = measurement.geometry(for: 240)
+        func installed(_ geometry: MessageTextGeometry, enabled: Bool) -> MessageTextLayout {
+            let layout = MessageTextLayout()
+            _ = MessageTextContent(
+                text: source, mentions: [], currentUserID: 1, isOutgoing: false,
+                action: enabled ? { _ in } : nil, mentionAction: enabled ? { _ in } : nil,
+                metadata: prepared.metadata, geometry: geometry, fontSize: 14,
+                preparedText: body
+            ).update(layout, coordinator: .init())
+            return layout
+        }
+        let preview = installed(narrow, enabled: false)
+        let live = installed(wide, enabled: true)
+        let previewCode = try XCTUnwrap(preview.codeBlocks.first?.1)
+        let liveCode = try XCTUnwrap(live.codeBlocks.first?.1)
+        XCTAssertEqual(previewCode.bounds.width, try XCTUnwrap(narrow.codeBlocks.first).frame.width)
+        XCTAssertEqual(liveCode.bounds.width, try XCTUnwrap(wide.codeBlocks.first).frame.width)
+        let previewWidth = previewCode.bounds.width
+        _ = measurement.geometry(for: 320)
+        XCTAssertEqual(previewCode.bounds.width, previewWidth)
+        XCTAssertEqual(liveCode.bounds.width, try XCTUnwrap(wide.codeBlocks.first).frame.width)
+
+        let text = live.storage.string as NSString
+        let link = text.range(of: "link").location
+        let mention = text.range(of: "@User 2").location
+        let spoiler = text.range(of: "secret").location
+        for index in [link, mention] {
+            XCTAssertNotNil(live.storage.attribute(.link, at: index, effectiveRange: nil))
+            XCTAssertNil(preview.storage.attribute(.link, at: index, effectiveRange: nil))
+        }
+        XCTAssertNotNil(preview.storage.attribute(.bubbleURL, at: link, effectiveRange: nil))
+        XCTAssertNotNil(
+            preview.storage.attribute(.bubbleMentionID, at: mention, effectiveRange: nil))
+        XCTAssertTrue(live.layoutManager.isConcealed(at: spoiler))
+        let coordinator = MessageTextContent.Coordinator()
+        coordinator.layout = preview
+        XCTAssertTrue(coordinator.toggleSpoiler(at: spoiler))
+        XCTAssertFalse(preview.layoutManager.isConcealed(at: spoiler))
+        XCTAssertTrue(live.layoutManager.isConcealed(at: spoiler))
+
+        // Replacing a code attachment with identical geometry must still fit its
+        // new bounds; an unchanged installed size is not an unchanged text graph.
+        preview.update(
+            attributedText: body.makeAttributedText(linksEnabled: false, mentionsEnabled: false),
+            metadata: prepared.metadata)
+        preview.install(geometry: narrow)
+        let replacement = try XCTUnwrap(preview.codeBlocks.first?.1)
+        XCTAssertEqual(replacement.bounds.width, previewWidth)
+    }
+
+    func testPreparedTextKeepsIndependentLinkPermissionsAndDynamicColors() throws {
+        let source =
+            "Hello @[uid:1] [link](https://example.com) ||secret|| "
+            + "[nested @[uid:2]](https://example.com/mention)"
+        let prepared = try preparedText(source, width: 240).preparedText
+        for linksEnabled in [false, true] {
+            for mentionsEnabled in [false, true] {
+                let value = prepared.makeAttributedText(
+                    linksEnabled: linksEnabled, mentionsEnabled: mentionsEnabled)
+                let reference = MessageTextContent.attributedText(
+                    text: source, mentions: [], currentUserID: 1, isOutgoing: false,
+                    font: .systemFont(ofSize: 14),
+                    linksEnabled: linksEnabled, mentionsEnabled: mentionsEnabled)
+                let text = value.string as NSString
+                XCTAssertEqual(value.string, reference.string)
+                for word in ["Hello", "@User 1", "link", "secret", "@User 2"] {
+                    let index = text.range(of: word).location
+                    XCTAssertEqual(
+                        value.attribute(.link, at: index, effectiveRange: nil) as? URL,
+                        reference.attribute(.link, at: index, effectiveRange: nil) as? URL)
+                    let color = try XCTUnwrap(
+                        value.attribute(.foregroundColor, at: index, effectiveRange: nil)
+                            as? BubbleNativeColor)
+                    let expected = try XCTUnwrap(
+                        reference.attribute(.foregroundColor, at: index, effectiveRange: nil)
+                            as? BubbleNativeColor)
+                    for dark in [false, true] {
+                        XCTAssertEqual(try rgba(color, dark: dark), try rgba(expected, dark: dark))
+                    }
+                }
+            }
+        }
+        let enlarged = prepared.makeMeasurementText(mentions: [], fontSize: 28)
+        XCTAssertEqual(
+            (enlarged.attribute(.font, at: 0, effectiveRange: nil) as? BubbleNativeFont)?.pointSize,
+            28)
+    }
+
     #if os(macOS)
         func testCodeViewportReceivesHitsAndHorizontalScrolling() throws {
             let source = "```swift\n" + String(repeating: "let value = 123; ", count: 40) + "\n```"
@@ -904,7 +1005,8 @@ final class MessageTextLayoutTests: XCTestCase {
     }
 
     private func preparedText(_ text: String, width: CGFloat) throws -> (
-        geometry: MessageTextGeometry, metadata: MessageMetadata?
+        geometry: MessageTextGeometry, metadata: MessageMetadata?,
+        preparedText: MessageTextContent.PreparedText
     ) {
         let message = try TimelineTestFixtures.message(
             id: 1, senderID: 2, at: 0, hour: 12, minute: 34, fields: ["message": text])
@@ -919,7 +1021,10 @@ final class MessageTextLayoutTests: XCTestCase {
             row: row, currentUserID: 1, isThreadTimeline: false,
             environment: environment)
         let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
-        return (try XCTUnwrap(layout.textGeometry), presentation.metadata)
+        return (
+            try XCTUnwrap(layout.textGeometry), presentation.metadata,
+            try XCTUnwrap(presentation.preparedText)
+        )
     }
 
     private func makeLayout(_ text: String) -> MessageTextLayout {
