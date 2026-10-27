@@ -6,10 +6,12 @@ struct ChatDetailView: View {
     let chat: ChatListItem
     let navigationTitle: String?
     let threadID: String?
-    let initialPosition: TimelineInitialPosition
+    private let requestedInitialPosition: TimelineInitialPosition?
     private let onOpenThread: ((MessageResponse) -> Void)?
     private var conversationKey: ConversationKey { .init(chatID: chat.id, threadID: threadID) }
-    @ObservedObject private var store: ChatStore
+    // Retain the command handle without subscribing to list/presence/read traffic.
+    private let store: ChatStore
+    @StateObject private var observation: ChatDetailObservation
     @StateObject private var model: ConversationTimelineModel
     @ObservedObject private var reactions: MessageReactionController
     @ObservedObject private var pins: ChatPinController
@@ -60,8 +62,9 @@ struct ChatDetailView: View {
     @State private var isDeletingSelection = false
     @State private var forwardingThreadRoot: MessageResponse?
     @State private var forwardingThreadReplyCount: Int64?
+    @State private var forwardingRootRevision = 0
 
-    private struct ForwardSelection: Identifiable {
+    struct ForwardSelection: Identifiable {
         let id = UUID()
         let sources: [MessageResponse]
         var wholeThread = false
@@ -70,16 +73,16 @@ struct ChatDetailView: View {
         var onPrepared: () -> Void = {}
     }
 
-    private struct RecordSelection: Identifiable, Hashable {
+    struct RecordSelection: Identifiable, Hashable {
         let id: MessageID
         let chatID: String
     }
 
-    private struct StickerSelection: Identifiable {
+    struct StickerSelection: Identifiable {
         let id: String
     }
 
-    private struct ReactionDetailsSelection: Identifiable {
+    struct ReactionDetailsSelection: Identifiable {
         let chatID: String
         let id: MessageID
     }
@@ -97,10 +100,11 @@ struct ChatDetailView: View {
         self.navigationTitle = navigationTitle
         self.threadID = threadID
         self.onOpenThread = onOpenThread
-        self.initialPosition =
-            initialPosition
-            ?? (chat.unreadCount > 0 ? .unread(after: chat.lastReadMessageId) : .liveEdge)
+        requestedInitialPosition = initialPosition
         self.store = store
+        _observation = StateObject(
+            wrappedValue: ChatDetailObservation(
+                store: store, chatID: chat.id, threadID: threadID))
         self.reactions = store.reactions
         self.pins = store.pins
         self.savedMessages = store.savedMessages
@@ -144,106 +148,92 @@ struct ChatDetailView: View {
             ))
     }
 
+    private var latestChat: ChatListItem {
+        store.state.chats.first { $0.id == chat.id }
+            ?? store.state.archivedChats.first { $0.id == chat.id } ?? chat
+    }
+
+    private var latestThread: ThreadListItem? {
+        guard let threadID else { return nil }
+        let matches: (ThreadListItem) -> Bool = {
+            $0.chatId == chat.id && $0.threadRootMessage.id.description == threadID
+        }
+        return store.state.threads.first(where: matches)
+            ?? store.state.archivedThreads.first(where: matches)
+    }
+
+    private var openingPosition: TimelineInitialPosition {
+        if let requestedInitialPosition { return requestedInitialPosition }
+        // Row read fields are deliberately outside the route equality boundary.
+        // Resolve automatic positioning at open time, not from a captured list row.
+        if threadID != nil {
+            guard let thread = latestThread else { return .liveEdge }
+            return thread.unreadCount > 0
+                ? .unread(after: thread.lastReadMessageId) : .liveEdge
+        }
+        let current = latestChat
+        return current.unreadCount > 0 ? .unread(after: current.lastReadMessageId) : .liveEdge
+    }
+
     private var initialTimelineSurface: some View {
         forwardingSurface
             .navigationTitle(navigationTitle ?? chat.chatDisplayName)
             .onAppear {
+                guard observation.isCurrentSession else { return }
                 isTimelineVisible = true
                 if threadID == nil {
+                    let current = latestChat
                     model.updateReadState(
-                        unreadCount: chat.unreadCount, lastReadMessageID: chat.lastReadMessageId)
+                        unreadCount: current.unreadCount,
+                        lastReadMessageID: current.lastReadMessageId)
                 }
                 store.registerTimeline(model)
                 model.setReadTrackingActive(scenePhase == .active)
             }
             .task {
+                guard observation.isCurrentSession else { return }
                 if keepsTimelineForPushedDetail, model.state.content == .ready {
                     keepsTimelineForPushedDetail = false
                 } else {
-                    await model.open(position: initialPosition)
+                    await model.open(position: openingPosition)
                 }
             }
             .task(id: threadID) {
-                guard let threadID, let rootID = MessageID(threadID) else { return }
-                forwardingThreadRoot = try? await store.forwardSourceMessage(
+                guard observation.isCurrentSession,
+                    let threadID, let rootID = MessageID(threadID)
+                else { return }
+                let revision = forwardingRootRevision
+                let root = try? await store.forwardSourceMessage(
                     chatID: chat.id, messageID: rootID)
+                guard observation.isCurrentSession, !Task.isCancelled,
+                    revision == forwardingRootRevision
+                else { return }
+                forwardingThreadRoot = root
                 synchronizeSpeakingPermissions()
             }
             .task { await loadInteractionPermissions() }
-            .onChange(of: store.groupInfoByChatID[chat.id]) { _, _ in
+            .onChange(of: observation.permissions) { _, _ in
                 synchronizeSpeakingPermissions()
+            }
+            .onChange(of: observation.threadReplyCount) { _, count in
+                forwardingThreadReplyCount = count
+                synchronizeSpeakingPermissions()
+            }
+            .onChange(of: observation.session) { _, _ in
+                invalidateForSessionChange()
             }
             .task { await savedMessages.ensure(chatID: chat.id) }
     }
 
-    private var attachmentPresentationSurface: some View {
-        initialTimelineSurface
-            .toolbar {
-                if threadID != nil {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button("Thread Info", systemImage: "info.circle") {
-                            showsThreadInfo = true
-                        }
-                    }
-                }
-            }
-            .sheet(isPresented: $showsThreadInfo) {
-                if let threadID {
-                    NavigationStack {
-                        ThreadInfoView(
-                            store: store, chat: chat, threadID: threadID, timeline: model,
-                            onOpenMessage: { infoMessageTarget = $0 }
-                        )
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { showsThreadInfo = false }
-                            }
-                        }
-                        .navigationDestination(item: $infoMessageTarget) { message in
-                            ChatDetailView(
-                                chat: chat, currentUserID: model.currentUserID, store: store,
-                                threadID: message.replyRootId,
-                                initialPosition: .message(message.id))
-                        }
-                        .navigationDestination(item: $infoProfileUID) { uid in
-                            UserProfileView(
-                                uid: uid, currentUserID: model.currentUserID, store: store,
-                                onOpenChat: { infoChatTarget = $0 })
-                        }
-                        .navigationDestination(item: $infoChatTarget) { target in
-                            ChatDetailView(
-                                chat: target, currentUserID: model.currentUserID, store: store)
-                        }
-                    }
-                    .environment(\.openUserProfile, { infoProfileUID = $0 })
-                }
-            }
-            .sheet(
-                isPresented: Binding(
-                    get: { presentedFile != nil },
-                    set: { if !$0 { presentedFile = nil } })
-            ) {
-                if let file = presentedFile {
-                    NavigationStack {
-                        MessageFileAttachmentView(
-                            url: URL(string: file.url), fileName: file.fileName,
-                            contentType: file.kind, byteCount: file.size
-                        )
-                        .padding()
-                        .frame(minWidth: 300, minHeight: 180)
-                        .navigationTitle(file.fileName)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { presentedFile = nil }
-                            }
-                        }
-                    }
-                }
-            }
-    }
-
     private var savedAndPermissionSurface: some View {
-        attachmentPresentationSurface
+        initialTimelineSurface
+            .modifier(
+                ChatDetailAttachmentPresentation(
+                    chat: chat, threadID: threadID, store: store, model: model,
+                    showsThreadInfo: $showsThreadInfo, infoMessageTarget: $infoMessageTarget,
+                    infoProfileUID: $infoProfileUID, infoChatTarget: $infoChatTarget,
+                    presentedFile: $presentedFile)
+            )
             .alert(
                 "Saved Messages",
                 isPresented: Binding(
@@ -273,49 +263,15 @@ struct ChatDetailView: View {
             }
     }
 
-    private var pinPresentationSurface: some View {
-        savedAndPermissionSurface
-            .sheet(item: $stickerToView) { selection in
-                StickerPackSheet(
-                    stickerID: selection.id, library: store.stickers,
-                    currentUserID: model.currentUserID)
-            }
-            .sheet(item: $reactionDetailsMessage) { message in
-                ReactionDetailsView(chatID: message.chatID, messageID: message.id) {
-                    try await store.reactionDetails(chatID: message.chatID, messageID: message.id)
-                }
-            }
-            .alert(
-                "Unpin Message",
-                isPresented: Binding(
-                    get: { pinToUnpin != nil }, set: { if !$0 { pinToUnpin = nil } }
-                )
-            ) {
-                if let pin = pinToUnpin {
-                    Button("Unpin", role: .destructive) {
-                        guard canManagePins else { return }
-                        Task { await pins.unpin(pin) }
-                    }
-                }
-                Button("Cancel", role: .cancel) { pinToUnpin = nil }
-            } message: {
-                Text("Would you like to unpin this message?")
-            }
-            .alert(
-                "Pinned messages",
-                isPresented: Binding(
-                    get: { pins.error != nil && !showsPinnedMessages },
-                    set: { if !$0 { pins.error = nil } }
-                )
-            ) {
-                Button("OK") { pins.error = nil }
-            } message: {
-                Text(pins.error ?? "")
-            }
-    }
-
     private var mutationFeedbackSurface: some View {
-        pinPresentationSurface
+        savedAndPermissionSurface
+            .modifier(
+                PinPresentation(
+                    store: store, currentUserID: model.currentUserID, pins: pins,
+                    canManagePins: { canManagePins }, showsPinnedMessages: $showsPinnedMessages,
+                    stickerToView: $stickerToView, reactionDetailsMessage: $reactionDetailsMessage,
+                    pinToUnpin: $pinToUnpin)
+            )
             .onChange(of: scenePhase) { _, phase in
                 model.setReadTrackingActive(isTimelineVisible && phase == .active)
             }
@@ -348,37 +304,16 @@ struct ChatDetailView: View {
                     Text(mode.restrictionExplanation)
                 }
             }
-            .alert(
-                "Couldn’t open message",
-                isPresented: Binding(
-                    get: { systemTargetError != nil },
-                    set: { if !$0 { systemTargetError = nil } })
-            ) {
-                Button("OK") { systemTargetError = nil }
-            } message: {
-                Text(systemTargetError ?? "")
-            }
-            .alert(
-                "Couldn’t edit message",
-                isPresented: Binding(get: { editError != nil }, set: { if !$0 { editError = nil } })
-            ) {
-                Button("OK") { editError = nil }
-            } message: {
-                Text(editError ?? "")
-            }
-            .alert(
-                "Couldn’t update outbox",
-                isPresented: Binding(
-                    get: { outboxError != nil }, set: { if !$0 { outboxError = nil } })
-            ) {
-                Button("OK") { outboxError = nil }
-            } message: {
-                Text(outboxError ?? "")
-            }
+            .modifier(
+                ChatDetailMutationErrors(
+                    systemTargetError: $systemTargetError, editError: $editError,
+                    outboxError: $outboxError))
     }
 
     var body: some View {
-        mutationFeedbackSurface
+        ScrollPerformanceTrace.event("Detail.Body")
+        return
+            mutationFeedbackSurface
             .onReceive(store.outgoingQueue.events) { _ in
                 guard let failedMessageID else { return }
                 if !store.outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID)
@@ -390,13 +325,7 @@ struct ChatDetailView: View {
                     self.failedMessageID = nil
                 }
             }
-            .onReceive(store.conversationMessages.changes) { change in
-                guard case .realtime(.threadUpdate(let update)) = change,
-                    update.chatId == chat.id, update.threadRootId == threadID
-                else { return }
-                forwardingThreadReplyCount = update.replyCount
-                interactionContext.hasExistingThread = true
-            }
+            .onReceive(store.conversationMessages.changes, perform: receiveThreadMetadata)
             .onDisappear {
                 selectionDeleteTask?.cancel()
                 systemTargetTask?.cancel()
@@ -410,12 +339,58 @@ struct ChatDetailView: View {
                     model.close(acknowledgingActivity: scenePhase == .active)
                 }
                 store.unregisterTimeline(model)
-                Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
+                if isCurrentSession {
+                    Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
+                }
             }
     }
 
+    private func receiveThreadMetadata(_ change: ConversationChange) {
+        guard isCurrentSession, let threadID, case .realtime(let event) = change else { return }
+        switch event {
+        case .threadUpdate(let update)
+        where update.chatId == chat.id && update.threadRootId == threadID:
+            if forwardingThreadReplyCount != update.replyCount {
+                forwardingThreadReplyCount = update.replyCount
+            }
+            if !interactionContext.hasExistingThread {
+                interactionContext.hasExistingThread = true
+            }
+        case .messageUpdated(let message), .messageDeleted(let message):
+            guard message.chatId == chat.id, message.id.description == threadID else { return }
+            // The root can live outside the thread's loaded rows. Keep forwarding
+            // content/deletion current without observing every thread-list field.
+            let root: MessageResponse
+            if case .messageDeleted = event {
+                root = message.redactedForDeletion()
+            } else {
+                root = message
+            }
+            guard forwardingThreadRoot != root else { return }
+            forwardingRootRevision &+= 1
+            forwardingThreadRoot = root
+            synchronizeSpeakingPermissions()
+        default:
+            break
+        }
+    }
+
     private var forwardingSurface: some View {
-        forwardingSheets
+        conversationDropSurface
+            .modifier(
+                ChatDetailDeletionPresentation(
+                    store: store, currentUserID: model.currentUserID,
+                    messageToDelete: $messageToDelete, editingMessage: $editingMessage,
+                    deleteError: $deleteError, canDelete: canDeleteMessage,
+                    cancelEditing: cancelEditing)
+            )
+            .modifier(
+                ForwardingPresentation(
+                    chat: chat, currentUserID: model.currentUserID, store: store,
+                    onOpenThread: onOpenThread, loadWholeThread: loadWholeThreadForForwarding,
+                    forwardRequest: $forwardRequest, systemMessageTarget: $systemMessageTarget,
+                    recordRequest: $recordRequest)
+            )
             .alert(
                 "Delete these messages?",
                 isPresented: Binding(
@@ -451,38 +426,6 @@ struct ChatDetailView: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 showsForwardStarted = false
             }
-    }
-
-    private var forwardingSheets: some View {
-        deletionSurface
-            .sheet(item: $forwardRequest) { request in forwardingPicker(request) }
-            .navigationDestination(item: $systemMessageTarget) { message in
-                ChatDetailView(
-                    chat: chat, currentUserID: model.currentUserID, store: store,
-                    threadID: message.replyRootId, initialPosition: .message(message.id),
-                    onOpenThread: onOpenThread)
-            }
-            .navigationDestination(item: $recordRequest) { request in
-                ForwardedRecordsView(
-                    store: store, chatID: request.chatID, messageID: request.id)
-            }
-    }
-
-    private func forwardingPicker(_ request: ForwardSelection) -> some View {
-        let loader: (@MainActor () async throws -> [MessageResponse])?
-        if request.wholeThread {
-            loader = { @MainActor () async throws -> [MessageResponse] in
-                try await self.loadWholeThreadForForwarding()
-            }
-        } else {
-            loader = nil
-        }
-        return ForwardDestinationPicker(
-            store: store, sources: request.sources, loadSources: loader,
-            moveFrom: request.moveFrom, expectedForwardID: request.expectedForwardID
-        ) {
-            request.onPrepared()
-        }
     }
 
     private func selectionToolbar(actions: TimelineBubbleActions) -> some View {
@@ -522,11 +465,12 @@ struct ChatDetailView: View {
     }
 
     private func canDeleteSelection(_ messages: [MessageResponse]) -> Bool {
-        interactionContext.canWrite && !messages.isEmpty && messages.count <= 100
+        let context = currentInteractionContext
+        return context.canWrite && !messages.isEmpty && messages.count <= 100
             && messages.allSatisfy { $0.chatId == chat.id }
             && messages.allSatisfy {
                 !$0.isDeleted
-                    && ($0.sender.uid == model.currentUserID || interactionContext.isAdmin)
+                    && ($0.sender.uid == model.currentUserID || context.isAdmin)
             }
     }
 
@@ -593,9 +537,6 @@ struct ChatDetailView: View {
 
     private var wholeThreadForwardAction: ForwardThreadAction? {
         guard let threadID else { return nil }
-        let known = (store.state.threads + store.state.archivedThreads).first {
-            $0.chatId == chat.id && $0.threadRootMessage.id.description == threadID
-        }
         let loadedRoot =
             model.rows.compactMap { row -> MessageResponse? in
                 guard case .message(let row) = row,
@@ -605,7 +546,7 @@ struct ChatDetailView: View {
             }.first ?? forwardingThreadRoot
         guard
             let count = forwardingThreadReplyCount.map({ $0 + 1 })
-                ?? known.map({ $0.replyCount + 1 })
+                ?? observation.threadReplyCount.map({ $0 + 1 })
                 ?? loadedRoot.map({ ($0.threadInfo?.replyCount ?? 0) + 1 }),
             count <= 100, let root = loadedRoot, !root.isDeleted,
             !model.knownDeletedMessageIDs.contains(root.id)
@@ -621,40 +562,6 @@ struct ChatDetailView: View {
             chatID: chat.id, query: .init(max: 100, threadID: threadID))
         guard page.olderCursor == nil else { throw ForwardDestinationPicker.SourceError.tooMany }
         return page.messages.filter { !$0.isDeleted && $0.messageType != .system }
-    }
-
-    private var deletionSurface: some View {
-        conversationDropSurface
-            .confirmationDialog(
-                AppLanguage.localized("Delete Message"),
-                isPresented: Binding(
-                    get: { messageToDelete != nil }, set: { if !$0 { messageToDelete = nil } }),
-                titleVisibility: .visible,
-                presenting: messageToDelete
-            ) { message in
-                Button("Delete", role: .destructive) {
-                    Task {
-                        let deleted = await store.deleteMessage(message)
-                        if deleted {
-                            if editingMessage?.id == message.id { cancelEditing() }
-                        } else {
-                            deleteError = true
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { message in
-                if message.sender.uid == model.currentUserID {
-                    Text("Are you sure you want to delete this message?")
-                } else {
-                    Text(
-                        "Are you sure you want to delete this message from \(message.sender.name ?? AppLanguage.localized("this user"))?"
-                    )
-                }
-            }
-            .alert("Failed to delete message", isPresented: $deleteError) {
-                Button("OK") {}
-            }
     }
 
     private var conversationDropSurface: some View {
@@ -673,7 +580,7 @@ struct ChatDetailView: View {
         }
         .contentShape(Rectangle())
         .onDrop(of: [.item, .fileURL], isTargeted: $isMediaDropTargeted) { providers in
-            guard interactionContext.canSend, editingMessage == nil,
+            guard currentInteractionContext.canSend, editingMessage == nil,
                 outgoingQueue.storageState == .ready,
                 !drafts.committingDrafts.contains(conversationKey)
             else { return false }
@@ -696,7 +603,11 @@ struct ChatDetailView: View {
             timelineSurface(actions: interactiveActions)
                 .modifier(
                     ChatPinnedBarOverlay(isVisible: showsPinBar) {
-                        pinnedMessageBar
+                        ChatDetailPinnedMessageBar(
+                            chatID: chat.id, controller: pins, viewport: model.viewport,
+                            canManage: canManagePins, showsPinnedMessages: $showsPinnedMessages,
+                            onJump: jumpToPinnedMessage, onOpenThread: onOpenThread,
+                            onRequestPinChange: requestPinChange)
                     }
                 )
                 .modifier(
@@ -853,6 +764,7 @@ struct ChatDetailView: View {
     }
 
     private func loadInteractionPermissions() async {
+        guard isCurrentSession else { return }
         permissionRequestRevision &+= 1
         let revision = permissionRequestRevision
         do {
@@ -864,14 +776,17 @@ struct ChatDetailView: View {
                 permissions = MessageInteractionContext(
                     isDM: false, canWrite: info.myRole != nil, isAdmin: info.myRole == .admin)
             }
-            guard let permissions, revision == permissionRequestRevision, !Task.isCancelled
+            guard let permissions, revision == permissionRequestRevision,
+                isCurrentSession, !Task.isCancelled
             else { return }
             interactionContext = permissions
             interactionContext.isThreadView = threadID != nil
             hasLoadedInteractionPermissions = true
             synchronizeSpeakingPermissions()
         } catch {
-            guard revision == permissionRequestRevision, !Task.isCancelled else { return }
+            guard revision == permissionRequestRevision, isCurrentSession, !Task.isCancelled else {
+                return
+            }
             reactions.error = AppLanguage.localized(
                 "Couldn’t load message permissions. Please try again.")
         }
@@ -881,14 +796,13 @@ struct ChatDetailView: View {
         interactionContext.hasExistingThread =
             interactionContext.hasExistingThread
             || forwardingThreadRoot?.threadInfo != nil
-            || (store.state.threads + store.state.archivedThreads).contains {
-                $0.chatId == chat.id && $0.threadRootMessage.id.description == threadID
-            }
+            || observation.threadReplyCount != nil
+            || forwardingThreadReplyCount != nil
         guard chat.kind != .dm else { return }
-        let info = store.groupInfoByChatID[chat.id]
-        interactionContext.canWrite = info?.myRole != nil
-        interactionContext.isAdmin = info?.myRole == .admin
-        interactionContext.speakingMode = store.speakingMode(chatID: chat.id)
+        interactionContext.canWrite =
+            observation.isCurrentSession && observation.permissions.role != nil
+        interactionContext.isAdmin = observation.permissions.role == .admin
+        interactionContext.speakingMode = observation.permissions.speakingMode
     }
 
     private func invalidateInteractionPermissions() {
@@ -898,6 +812,53 @@ struct ChatDetailView: View {
         hasLoadedInteractionPermissions = false
         selectionDeleteTask?.cancel()
         Task { await loadInteractionPermissions() }
+    }
+
+    private var isCurrentSession: Bool {
+        observation.isCurrentSession
+            && observation.session.accountID == store.currentUserProfile?.uid
+            && observation.session.revision == store.sessionRevision
+    }
+
+    private var currentInteractionContext: MessageInteractionContext {
+        // Action closures can outlive a rendered menu/composer. Recheck the live
+        // store at invocation, rather than authorizing against that UI snapshot.
+        var context = interactionContext
+        guard isCurrentSession else {
+            context.canWrite = false
+            return context
+        }
+        if chat.kind != .dm {
+            let info = store.groupInfoByChatID[chat.id]
+            context.canWrite = hasLoadedInteractionPermissions && info?.myRole != nil
+            context.isAdmin = info?.myRole == .admin
+            context.speakingMode = info?.effectiveSpeakingMode
+        }
+        return context
+    }
+
+    private func invalidateForSessionChange() {
+        permissionRequestRevision &+= 1
+        interactionContext.canWrite = false
+        hasLoadedInteractionPermissions = false
+        selectionDeleteTask?.cancel()
+        systemTargetTask?.cancel()
+        forwardingThreadRoot = nil
+        forwardingThreadReplyCount = nil
+        cancelEditing()
+        forwardRequest = nil
+        messageToDelete = nil
+        pinToUnpin = nil
+        recordRequest = nil
+        systemMessageTarget = nil
+        showsThreadInfo = false
+        showsPinnedMessages = false
+        infoMessageTarget = nil
+        infoProfileUID = nil
+        infoChatTarget = nil
+        presentedFile = nil
+        stickerToView = nil
+        reactionDetailsMessage = nil
     }
 
     private var bubbleActions: TimelineBubbleActions {
@@ -962,11 +923,13 @@ struct ChatDetailView: View {
         }
         if threadID == nil, onOpenThread != nil {
             actions.openThread = { id in
+                guard isCurrentSession else { return }
                 for case .message(let row) in model.rows {
                     guard let message = row.entry.remoteMessage,
                         message.id == id, !message.isDeleted
                     else { continue }
-                    guard message.threadInfo != nil || interactionContext.canCreateThread else {
+                    guard message.threadInfo != nil || currentInteractionContext.canCreateThread
+                    else {
                         return
                     }
                     onOpenThread?(message)
@@ -976,7 +939,9 @@ struct ChatDetailView: View {
         }
         if interactionContext.canSend {
             actions.replyToMessage = { message in
-                guard !drafts.committingDrafts.contains(conversationKey) else { return }
+                guard currentInteractionContext.canSend,
+                    !drafts.committingDrafts.contains(conversationKey)
+                else { return }
                 drafts.setDraftReply(message.replyPreview, chatID: chat.id, threadID: threadID)
                 replyFocusRequest &+= 1
             }
@@ -984,18 +949,13 @@ struct ChatDetailView: View {
         actions.editMessage = startEditing
         if interactionContext.canWrite {
             actions.deleteMessage = { message in
-                guard !store.deletingMessageIDs.contains(message.id),
-                    MessageActionPolicy(
-                        messageType: message.messageType, isDeleted: message.isDeleted,
-                        isOwn: message.sender.uid == model.currentUserID,
-                        context: interactionContext
-                    ).availability(of: .delete) == .enabled
-                else { return }
+                guard canDeleteMessage(message) else { return }
                 messageToDelete = message
             }
             actions.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage, !message.isDeleted else { return }
                 Task {
+                    guard currentInteractionContext.canWrite else { return }
                     await reactions.toggle(
                         message: message, emoji: emoji, currentUserID: model.currentUserID)
                 }
@@ -1009,55 +969,24 @@ struct ChatDetailView: View {
         return actions
     }
 
+    private func canDeleteMessage(_ message: MessageResponse) -> Bool {
+        let context = currentInteractionContext
+        return context.canWrite && !store.deletingMessageIDs.contains(message.id)
+            && MessageActionPolicy(
+                messageType: message.messageType, isDeleted: message.isDeleted,
+                isOwn: message.sender.uid == model.currentUserID, context: context
+            ).availability(of: .delete) == .enabled
+    }
+
     private var chatPins: [PinResponse] { pins.pinsByChatID[chat.id] ?? [] }
 
     private var canManagePins: Bool {
-        threadID == nil && interactionContext.canWrite
-            && (interactionContext.isDM || interactionContext.isAdmin)
-    }
-
-    private var activePin: PinResponse? {
-        ChatPinSelection.activePin(
-            in: chatPins, bottomVisibleMessageDate: model.bottomVisibleMessageDate)
+        let context = currentInteractionContext
+        return threadID == nil && context.canWrite && (context.isDM || context.isAdmin)
     }
 
     private var showsPinBar: Bool {
-        threadID == nil && (activePin != nil || pins.failedChatIDs.contains(chat.id))
-    }
-
-    @ViewBuilder private var pinnedMessageBar: some View {
-        if let pin = activePin {
-            ChatPinnedMessageBar(
-                pin: pin, count: chatPins.count,
-                onJump: { jumpToPinnedMessage(pin.message) },
-                onShowAll: { showsPinnedMessages = true },
-                onOpenThread: pin.message.threadInfo != nil && onOpenThread != nil
-                    ? { onOpenThread?(pin.message) } : nil,
-                onUnpin: canManagePins && !pins.pendingMessageIDs.contains(pin.message.id)
-                    ? { requestPinChange(pin.message) } : nil
-            )
-            .popover(
-                isPresented: $showsPinnedMessages, attachmentAnchor: .rect(.bounds), arrowEdge: .top
-            ) {
-                ChatPinnedMessagesSheet(
-                    chatID: chat.id, controller: pins,
-                    canManage: canManagePins,
-                    onSelect: jumpToPinnedMessage, onOpenThread: onOpenThread
-                )
-                .frame(width: 420, height: 420)
-            }
-        } else if pins.failedChatIDs.contains(chat.id) {
-            Button {
-                Task { await pins.load(chatID: chat.id, force: true) }
-            } label: {
-                Label("Couldn’t load pinned messages. Retry", systemImage: "arrow.clockwise")
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .padding(.horizontal, 12)
-            }
-            .buttonStyle(.plain)
-            .modifier(ChatGlassSurface(cornerRadius: 24))
-        }
+        threadID == nil && (!chatPins.isEmpty || pins.failedChatIDs.contains(chat.id))
     }
 
     private func jumpToPinnedMessage(_ message: MessageResponse) {
@@ -1111,7 +1040,7 @@ struct ChatDetailView: View {
     }
 
     private func sendSticker(_ sticker: MessageStickerResponse) async -> Bool {
-        guard interactionContext.canSend, editingMessage == nil,
+        guard currentInteractionContext.canSend, editingMessage == nil,
             outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
         else { return false }
         do {
@@ -1125,7 +1054,7 @@ struct ChatDetailView: View {
     }
 
     private func sendVoice(_ fileURL: URL) async -> Bool {
-        guard interactionContext.canSend, editingMessage == nil,
+        guard currentInteractionContext.canSend, editingMessage == nil,
             outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
         else { return false }
         do {
@@ -1140,7 +1069,9 @@ struct ChatDetailView: View {
     }
 
     private func submitComposer(_ text: String) async -> Bool {
-        guard editingMessage.map(isEditable) ?? interactionContext.canSend else { return false }
+        guard editingMessage.map(isEditable) ?? currentInteractionContext.canSend else {
+            return false
+        }
         guard let message = editingMessage else {
             let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID, text: text)
             if sent { model.revealLatestAfterSend() }
@@ -1151,6 +1082,7 @@ struct ChatDetailView: View {
         isUpdatingMessage = true
         let submittedText = text
         let didUpdate = await store.updateMessage(message, text: submittedText)
+        guard isCurrentSession, !Task.isCancelled else { return false }
         isUpdatingMessage = false
         if didUpdate {
             if editText == submittedText {
@@ -1172,7 +1104,7 @@ struct ChatDetailView: View {
             messageType: message.messageType, text: message.message, isDeleted: message.isDeleted,
             isOwn: message.sender.uid == model.currentUserID,
             isForwarded: message.forwardedFrom != nil,
-            isThreadReply: message.replyRootId != nil, context: interactionContext
+            isThreadReply: message.replyRootId != nil, context: currentInteractionContext
         ).availability(of: .edit) == .enabled
     }
 
@@ -1203,7 +1135,7 @@ struct ChatDetailView: View {
     }
 
     private func changePending(_ pending: PendingOutgoingMessage, revoke: Bool) {
-        guard !pending.dispatchClaimed,
+        guard isCurrentSession, !pending.dispatchClaimed,
             revoke
                 || ([.text, .file].contains(pending.messageType) && pending.forwardRequest == nil),
             !drafts.committingDrafts.contains(conversationKey), editingMessage == nil
@@ -1211,6 +1143,7 @@ struct ChatDetailView: View {
         Task {
             do {
                 try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                guard isCurrentSession, !Task.isCancelled else { return }
                 if revoke {
                     try await outgoingQueue.revokeTail(
                         chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID,
@@ -1226,7 +1159,7 @@ struct ChatDetailView: View {
     }
 
     private func retry(_ scope: OutgoingRetryScope) {
-        guard let id = failedMessageID else { return }
+        guard isCurrentSession, let id = failedMessageID else { return }
         failedMessageID = nil
         Task {
             do {
@@ -1237,6 +1170,7 @@ struct ChatDetailView: View {
     }
 
     private func openSystemMessage(_ messageID: MessageID) {
+        guard isCurrentSession else { return }
         systemTargetTask?.cancel()
         let accountID = store.currentUserProfile?.uid
         systemTargetTask = Task {
@@ -1244,13 +1178,17 @@ struct ChatDetailView: View {
                 let (message, _) = try await store.resolveMessageLink(
                     chatID: chat.id, messageID: messageID)
                 try Task.checkCancellation()
-                guard store.currentUserProfile?.uid == accountID, !message.isDeleted else {
+                guard isCurrentSession, store.currentUserProfile?.uid == accountID,
+                    !message.isDeleted
+                else {
                     throw APIError.unexpectedResponse
                 }
                 keepsTimelineForPushedDetail = true
                 systemMessageTarget = message
             } catch {
-                guard !Task.isCancelled, store.currentUserProfile?.uid == accountID else { return }
+                guard isCurrentSession, !Task.isCancelled,
+                    store.currentUserProfile?.uid == accountID
+                else { return }
                 systemTargetError = AppLanguage.localized(
                     "This message is unavailable or you do not have access.")
             }
@@ -1296,7 +1234,7 @@ struct ChatDetailView: View {
                 Button("Send Forward") {
                     Task {
                         do {
-                            guard interactionContext.canSend else { return }
+                            guard currentInteractionContext.canSend else { return }
                             let sent = try await drafts.submitForward(
                                 at: conversationKey, expectedID: selection.id)
                             if sent {

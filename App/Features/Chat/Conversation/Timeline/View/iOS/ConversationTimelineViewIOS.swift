@@ -31,16 +31,8 @@
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                         .overlay { headerBackdrop }
-                    TimelineNavigationControls(
-                        showsJumpToLatest: model.showsJumpToLatest,
-                        unreadMessageCount: model.jumpUnreadCount,
-                        unreadMentionCount: model.unreadMentionJumpCount,
-                        unreadReactionCount: model.unreadReactionJumpCount,
-                        isBusy: model.activityJumpInProgress || isRepositioning,
-                        badgeColor: unreadBadgeColor,
-                        jumpToLatest: { Task { await model.jumpTowardLatest() } },
-                        jumpToMention: { Task { await model.jumpToNextMention() } },
-                        jumpToReaction: { Task { await model.jumpToNextReaction() } }
+                    TimelineViewportNavigationControls(
+                        model: model, viewport: model.viewport, badgeColor: unreadBadgeColor
                     )
                     .padding(ChahuaTheme.Spacing.large)
                     .padding(.bottom, chatComposerInset)
@@ -208,6 +200,33 @@
             ).padding()
         }
 
+    }
+
+    /// Only navigation chrome observes scroll-time presentation. Keeping this a real
+    /// child prevents viewport changes from rebuilding the timeline host or composer.
+    private struct TimelineViewportNavigationControls: View {
+        @ObservedObject var model: ConversationTimelineModel
+        @ObservedObject var viewport: TimelineViewportPresentation
+        let badgeColor: ConversationUnreadBadgeColor
+
+        var body: some View {
+            TimelineNavigationControls(
+                showsJumpToLatest: viewport.value.showsJumpToLatest,
+                unreadMessageCount: model.jumpUnreadCount,
+                unreadMentionCount: model.unreadMentionJumpCount,
+                unreadReactionCount: model.unreadReactionJumpCount,
+                isBusy: model.activityJumpInProgress || isRepositioning,
+                badgeColor: badgeColor,
+                jumpToLatest: { Task { await model.jumpTowardLatest() } },
+                jumpToMention: { Task { await model.jumpToNextMention() } },
+                jumpToReaction: { Task { await model.jumpToNextReaction() } }
+            )
+        }
+
+        private var isRepositioning: Bool {
+            if case .repositioning = model.state.content { return true }
+            return false
+        }
     }
 
 #endif

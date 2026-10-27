@@ -79,7 +79,10 @@ final class ChatStore: ObservableObject {
     private var presenceRequestID: UInt64?
     static let unreadSummaryViews = ConversationTabBadges.unreadViews
     private static let unreadSummaryKeys = Set(unreadSummaryViews.map(\.key))
-    @Published private(set) var conversationStateScope: [ConversationRef] = []
+    // Like presence, viewport/read-watch scope changes notify transport without
+    // invalidating views observing the shared store.
+    private(set) var conversationStateScope: [ConversationRef] = []
+    let conversationStateScopeChanges = PassthroughSubject<Void, Never>()
     let conversationWatchInvalidations = PassthroughSubject<Void, Never>()
     private var conversationConsumers: [UUID: [ConversationRef]] = [:]
     private var unreadRequestID: UInt32?
@@ -829,8 +832,12 @@ final class ChatStore: ObservableObject {
         listStateRevision += 1
         rowRevisions[key, default: 0] += 1
         if !status.subscribed {
-            state.threads.removeAll { $0.conversationKey == key }
-            state.archivedThreads.removeAll { $0.conversationKey == key }
+            if state.threads.contains(where: { $0.conversationKey == key }) {
+                state.threads.removeAll { $0.conversationKey == key }
+            }
+            if state.archivedThreads.contains(where: { $0.conversationKey == key }) {
+                state.archivedThreads.removeAll { $0.conversationKey == key }
+            }
         } else if let threadID = key.threadID,
             let current = thread(chatID: key.chatID, threadID: threadID)
         {
@@ -912,9 +919,13 @@ final class ChatStore: ObservableObject {
             chat.archived ? \.archivedChats : \.chats
         let other: WritableKeyPath<ChatState, [ChatListItem]> =
             chat.archived ? \.chats : \.archivedChats
-        state[keyPath: other].removeAll { $0.id == chat.id }
+        if state[keyPath: other].contains(where: { $0.id == chat.id }) {
+            state[keyPath: other].removeAll { $0.id == chat.id }
+        }
         if let index = state[keyPath: target].firstIndex(where: { $0.id == chat.id }) {
-            state[keyPath: target][index] = chat
+            if state[keyPath: target][index] != chat {
+                state[keyPath: target][index] = chat
+            }
         } else {
             state[keyPath: target].insert(chat, at: 0)
         }
@@ -929,13 +940,15 @@ final class ChatStore: ObservableObject {
             thread.archived ? \.archivedThreads : \.threads
         let other: WritableKeyPath<ChatState, [ThreadListItem]> =
             thread.archived ? \.threads : \.archivedThreads
-        state[keyPath: other].removeAll {
-            $0.chatId == thread.chatId && $0.threadRootMessage.id == thread.threadRootMessage.id
+        if state[keyPath: other].contains(where: { $0.conversationKey == thread.conversationKey }) {
+            state[keyPath: other].removeAll { $0.conversationKey == thread.conversationKey }
         }
         if let index = state[keyPath: target].firstIndex(where: {
             $0.chatId == thread.chatId && $0.threadRootMessage.id == thread.threadRootMessage.id
         }) {
-            state[keyPath: target][index] = thread
+            if state[keyPath: target][index] != thread {
+                state[keyPath: target][index] = thread
+            }
         } else {
             state[keyPath: target].insert(thread, at: 0)
         }
@@ -1990,6 +2003,7 @@ final class ChatStore: ObservableObject {
         statesRequestID = nil
         statesFullRequestID = nil
         conversationStateScope = selected
+        conversationStateScopeChanges.send(())
         fallbackConversationStates()
     }
 
@@ -2042,9 +2056,12 @@ final class ChatStore: ObservableObject {
                 summaries.append(summary)
             }
         }
-        state.conversationUnreadSummaries = summaries
+        if state.conversationUnreadSummaries != summaries {
+            state.conversationUnreadSummaries = summaries
+        }
         if payload.full || payload.appBadgeCount != nil {
-            state.appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
+            let appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
+            if state.appBadgeCount != appBadgeCount { state.appBadgeCount = appBadgeCount }
         }
     }
 
@@ -2085,11 +2102,19 @@ final class ChatStore: ObservableObject {
             if !value.accessible {
                 conversationReadStates.removeValue(forKey: key)
                 if key.threadID == nil {
-                    state.chats.removeAll { $0.id == key.chatID }
-                    state.archivedChats.removeAll { $0.id == key.chatID }
+                    if state.chats.contains(where: { $0.id == key.chatID }) {
+                        state.chats.removeAll { $0.id == key.chatID }
+                    }
+                    if state.archivedChats.contains(where: { $0.id == key.chatID }) {
+                        state.archivedChats.removeAll { $0.id == key.chatID }
+                    }
                 } else {
-                    state.threads.removeAll { $0.conversationKey == key }
-                    state.archivedThreads.removeAll { $0.conversationKey == key }
+                    if state.threads.contains(where: { $0.conversationKey == key }) {
+                        state.threads.removeAll { $0.conversationKey == key }
+                    }
+                    if state.archivedThreads.contains(where: { $0.conversationKey == key }) {
+                        state.archivedThreads.removeAll { $0.conversationKey == key }
+                    }
                 }
                 listStateRevision += 1
             }
@@ -3438,6 +3463,7 @@ final class ChatStore: ObservableObject {
         clearConversationWatches()
         conversationConsumers.removeAll()
         conversationStateScope = []
+        conversationStateScopeChanges.send(())
         conversationReadStates.removeAll()
         localStateWrites.removeAll()
         for acknowledgement in readAcknowledgements.values { acknowledgement.task.cancel() }

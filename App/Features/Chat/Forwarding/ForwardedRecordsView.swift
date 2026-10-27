@@ -57,7 +57,7 @@ struct ForwardedRecordsView: View {
             }
             .navigationDestination(item: $profileChat) { chat in
                 if let uid = session.store.currentUserProfile?.uid {
-                    ChatDetailView(chat: chat, currentUserID: uid, store: session.store)
+                    ChatDetailPresentation(chat: chat, currentUserID: uid, store: session.store)
                 }
             }
             .sheet(

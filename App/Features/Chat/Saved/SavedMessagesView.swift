@@ -207,7 +207,7 @@ private struct SavedMessageDetailView: View {
         }
         .navigationDestination(item: $profileChat) { chat in
             if let currentUserID = store.currentUserProfile?.uid {
-                ChatDetailView(chat: chat, currentUserID: currentUserID, store: store)
+                ChatDetailPresentation(chat: chat, currentUserID: currentUserID, store: store)
             }
         }
         .sheet(

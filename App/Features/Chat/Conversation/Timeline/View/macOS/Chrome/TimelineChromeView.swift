@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import Combine
     import SwiftUI
 
     /// Retained native state controls sit above, rather than inset, the native table.
@@ -21,6 +22,8 @@
         private enum Operation: Hashable { case initial, reconcile, jump, mention, reaction }
         private weak var model: ConversationTimelineModel?
         private var presentation: Presentation?
+        private var viewportSubscription: AnyCancellable?
+        private var viewportShowsJumpToLatest = false
         private var tasks: [Operation: Task<Void, Never>] = [:]
         private let initialLoading = TimelineLoadingPanel(
             label: AppLanguage.localized("Loading messages"))
@@ -66,10 +69,24 @@
                 cancelPendingActions()
                 self.model = model
                 presentation = nil
+                // Coarse model updates still arrive through TimelineViewController's
+                // queued refresh. Viewport-only changes must reach just this chrome,
+                // using the emitted value because @Published fires before assignment.
+                viewportSubscription = model.viewport.$value
+                    .map(\.showsJumpToLatest)
+                    .removeDuplicates()
+                    .sink { [weak self, weak model] showsJumpToLatest in
+                        guard let self, let model else { return }
+                        self.viewportShowsJumpToLatest = showsJumpToLatest
+                        guard let presentation = self.presentation else { return }
+                        self.update(
+                            model: model, headerInset: presentation.headerInset,
+                            composerInset: presentation.composerInset)
+                    }
             }
             let next = Presentation(
                 state: model.state, hasRows: !model.rows.isEmpty,
-                showsJumpToLatest: model.showsJumpToLatest,
+                showsJumpToLatest: viewportShowsJumpToLatest,
                 unreadMessageCount: model.jumpUnreadCount,
                 unreadMentionCount: model.unreadMentionJumpCount,
                 unreadReactionCount: model.unreadReactionJumpCount,
@@ -217,6 +234,8 @@
         }
 
         func cancelPendingActions() {
+            viewportSubscription?.cancel()
+            viewportSubscription = nil
             for task in tasks.values { task.cancel() }
             tasks.removeAll()
         }

@@ -772,11 +772,8 @@ final class RealtimeCoordinatorTests: XCTestCase {
         store.setRealtimeStatus(.reconnecting)
         store.registerTimeline(model)
         XCTAssertEqual(model.state.realtimeStatus, .reconnecting)
-        var observed: [RealtimeConnectionStatus] = []
-        let observation = model.$state.map(\.realtimeStatus).sink { observed.append($0) }
         store.setRealtimeStatus(.unavailable)
         XCTAssertEqual(model.state.realtimeStatus, .unavailable)
-        XCTAssertEqual(observed, [.reconnecting, .unavailable])
         await model.open()
         XCTAssertEqual(model.state.realtimeStatus, .unavailable)
         XCTAssertEqual(model.state.content, .initialLoadFailed)
@@ -787,7 +784,6 @@ final class RealtimeCoordinatorTests: XCTestCase {
         store.setRealtimeStatus(.connected)
         XCTAssertEqual(model.state.realtimeStatus, .idle)
         model.close()
-        withExtendedLifetime(observation) {}
     }
 
     func testReplacementSessionDiscardsLateOpeningSuccess() async {
@@ -1142,6 +1138,57 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await eventually { store.state.unreadBadgeCount() == 4 }
         let requestsAfter = await api.chatRequestCount
         XCTAssertEqual(requestsAfter, requestsBefore, "Healthy resume must not reload list pages.")
+    }
+
+    func testConversationScopeChangesSendWatchFramesWithoutPublishingSharedUI() async throws {
+        let api = RealtimeTestHTTP()
+        let first = RealtimeTestSocket()
+        let second = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [first, second], holdOpen: true)
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {})
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        await eventually { await provider.opens == 1 }
+        let consumer = UUID()
+        let initialScope = [ConversationRef(chatId: "chat")]
+        store.setConversationStateScope(initialScope, for: consumer)
+        await provider.releaseOpen()
+        await eventually { await first.stateWatches.last?.conversations == initialScope }
+        await eventually {
+            store.state.chatListLoadPhase == .loaded
+                && store.state.archivedChatListLoadPhase == .loaded
+                && store.state.threadListLoadPhase == .loaded
+                && store.state.archivedThreadListLoadPhase == .loaded
+        }
+        let initialFrame = await first.stateWatches.last
+        let initial = try XCTUnwrap(initialFrame)
+        var sharedUIChanged = false
+        let observation = store.objectWillChange.sink { sharedUIChanged = true }
+        defer { observation.cancel() }
+        let replacementScope = [ConversationRef(chatId: "chat", threadId: MessageID(42))]
+        store.setConversationStateScope(replacementScope, for: consumer)
+        XCTAssertFalse(sharedUIChanged)
+        await eventually { await first.stateWatches.last?.conversations == replacementScope }
+        let replacementFrame = await first.stateWatches.last
+        let replacement = try XCTUnwrap(replacementFrame)
+        XCTAssertGreaterThan(replacement.requestID, initial.requestID)
+        store.removeConversationStateScope(for: consumer)
+        XCTAssertFalse(sharedUIChanged)
+        await eventually { await first.stateWatches.last?.conversations == [] }
+
+        observation.cancel()
+        store.setConversationStateScope(initialScope, for: consumer)
+        await eventually { await first.stateWatches.last?.conversations == initialScope }
+        coordinator.setSession(uid: 2)
+        await eventually { await provider.opens == 2 }
+        await provider.releaseOpen()
+        await eventually { await second.stateWatches.last?.conversations == [] }
+        XCTAssertTrue(
+            store.conversationStateScope.isEmpty, "Account replacement drops old consumers")
     }
 
     private func eventually(

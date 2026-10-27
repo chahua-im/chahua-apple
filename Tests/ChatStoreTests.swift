@@ -2577,6 +2577,134 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.state.chats.first?.lastReadMessageId, MessageID(9))
     }
 
+    func testIdenticalConversationSnapshotsDoNotPublishSharedUIState() async throws {
+        let chat = ChatListItem(
+            id: "chat", unreadCount: 0, lastReadMessageId: MessageID(9), archived: false,
+            kind: .group)
+        let archivedChat = ChatListItem(
+            id: "archived", unreadCount: 0, lastReadMessageId: MessageID(9), archived: true,
+            kind: .group)
+        let read = ReadStateResponse(lastReadMessageId: MessageID(9), unreadCount: 0)
+        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: 1)
+        let archivedThread = try ScopeTestFixtures.thread(chatID: "chat", id: 2, archived: true)
+        let threadRead = ReadStateResponse(lastReadMessageId: nil, unreadCount: 0)
+        let api = FakeChatAPI(
+            chatResults: [.success(.init(chats: [chat]))],
+            threadResults: [.success(.init(threads: [thread]))],
+            archivedChatResults: [.success(.init(chats: [archivedChat]))],
+            archivedThreadResults: [.success(.init(threads: [archivedThread]))],
+            stateResults: [
+                .success(read), .success(threadRead), .success(read), .success(threadRead),
+            ])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        await store.loadActiveChats()
+        await store.loadArchivedChats()
+        await store.loadActiveThreads()
+        await store.loadArchivedThreads()
+        store.setRealtimeStatus(.connected)
+        var sharedUIChanged = false
+        let observation = store.objectWillChange.sink { sharedUIChanged = true }
+        defer { observation.cancel() }
+        for _ in 0..<2 {
+            let chatResponse = try await store.conversationReadState(chatID: "chat", threadID: nil)
+            let threadResponse = try await store.conversationReadState(
+                chatID: "chat", threadID: "1")
+            XCTAssertEqual(chatResponse, read)
+            XCTAssertEqual(threadResponse, threadRead)
+        }
+        let refs: [ConversationRef] = [
+            .init(chatId: "chat"), .init(chatId: "archived"),
+            .init(chatId: "chat", threadId: MessageID(1)),
+            .init(chatId: "chat", threadId: MessageID(2)),
+        ]
+        store.setConversationStateScope(refs, for: UUID())
+        store.beginConversationStatesWatch(requestID: 5)
+        let values = refs.map {
+            ConversationState(
+                chatId: $0.chatId, threadId: $0.threadId, accessible: true,
+                lastReadMessageId: $0.threadId == nil ? MessageID(9) : nil,
+                unreadCount: 0, unreadMentions: 0,
+                unreadReactions: 0)
+        }
+        for full in [true, false, true] {
+            await store.applyRealtimeEvent(
+                .conversationStates(.init(requestId: 5, full: full, states: values)),
+                currentUserID: 1)
+        }
+        XCTAssertFalse(
+            sharedUIChanged, "Identical HTTP/watch data and watch scope are not UI changes")
+        XCTAssertEqual(store.state.chats, [chat])
+        XCTAssertEqual(store.state.archivedChats, [archivedChat])
+        XCTAssertEqual(store.state.threads, [thread])
+        XCTAssertEqual(store.state.archivedThreads, [archivedThread])
+        XCTAssertTrue(store.conversationStateReady(chatID: "chat", threadID: "2"))
+        let membership = try await store.threadSubscriptionStatus(chatID: "chat", threadID: "2")
+        XCTAssertEqual(membership, .init(subscribed: true, archived: true))
+
+        await store.applyRealtimeEvent(
+            .conversationStates(
+                .init(
+                    requestId: 5, full: false,
+                    states: [
+                        .init(
+                            chatId: "chat", threadId: MessageID(2), accessible: true,
+                            lastReadMessageId: nil, unreadCount: 2, unreadMentions: 1,
+                            unreadReactions: 3)
+                    ])), currentUserID: 1)
+        XCTAssertTrue(sharedUIChanged)
+        XCTAssertEqual(store.state.archivedThreads.first?.unreadCount, 2)
+        XCTAssertEqual(store.state.archivedThreads.first?.unreadReactions, 3)
+        XCTAssertNil(store.state.archivedThreads.first?.lastReadMessageId)
+        XCTAssertEqual(store.state.threads, [thread])
+    }
+
+    func testRepeatedUnreadAndAccessLossSnapshotsDoNotPublishUnchangedUI() async throws {
+        let api = FakeChatAPI()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.setRealtimeStatus(.connected)
+        store.setConversationStateScope([.init(chatId: "missing")], for: UUID())
+        store.beginConversationStatesWatch(requestID: 5)
+        store.beginConversationUnreadWatch(requestID: 7)
+        let summary = ConversationUnreadSummary(
+            key: "groups", unreadAttentionCount: 0, unreadConversationCount: 2,
+            unreadMessageCount: 2, unreadUnmutedAttentionCount: 0,
+            unreadUnmutedConversationCount: 2, unreadUnmutedMessageCount: 2)
+        await store.applyRealtimeEvent(
+            .conversationUnread(
+                .init(requestId: 7, full: true, summaries: [summary], appBadgeCount: 2)),
+            currentUserID: 1)
+        var sharedUIChanged = false
+        let observation = store.objectWillChange.sink { sharedUIChanged = true }
+        defer { observation.cancel() }
+        for full in [true, false, true] {
+            await store.applyRealtimeEvent(
+                .conversationUnread(
+                    .init(requestId: 7, full: full, summaries: [summary], appBadgeCount: 2)),
+                currentUserID: 1)
+            await store.applyRealtimeEvent(
+                .conversationStates(
+                    .init(
+                        requestId: 5, full: full,
+                        states: [
+                            .init(
+                                chatId: "missing", accessible: false, unreadCount: 0,
+                                unreadMentions: 0, unreadReactions: 0)
+                        ])), currentUserID: 1)
+        }
+        XCTAssertFalse(sharedUIChanged)
+        XCTAssertEqual(store.state.appBadgeCount, 2)
+        XCTAssertEqual(store.state.conversationUnreadSummaries, [summary])
+        await store.applyRealtimeEvent(
+            .conversationUnread(.init(requestId: 7, full: true, summaries: [])), currentUserID: 1)
+        XCTAssertTrue(sharedUIChanged)
+        XCTAssertNil(store.state.appBadgeCount)
+        XCTAssertTrue(store.state.conversationUnreadSummaries.isEmpty)
+    }
+
     func testConversationScopeCapsListsAndPrioritizesAnUnlistedTimeline() async throws {
         let api = FakeChatAPI()
         let store = ChatStore(

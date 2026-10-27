@@ -76,7 +76,52 @@ enum TimelineImageMemory {
             UIImage(cgImage: pixels)
         #endif
     }
+
+    #if os(iOS)
+        /// A display boundary, not just CGImage extraction: WebP frame sources can
+        /// return compressed/lazy pixels. Call only on background processing or
+        /// preparation queues, including for originals and animation first frames.
+        nonisolated static func displayReadyFrame(_ image: UIImage, pixels: CGSize?) -> UIImage? {
+            if let source = image.kf.frameSource {
+                guard let frame = source.frame(at: 0, maxSize: pixels) else { return nil }
+                return UIImage(cgImage: frame).preparingForDisplay()
+            }
+            guard let frame = image.cgImage ?? image.images?.first?.cgImage else { return nil }
+            let drawable = UIImage(cgImage: frame)
+            if let pixels {
+                let maximum = max(pixels.width, pixels.height)
+                let factor = min(1, maximum / CGFloat(max(frame.width, frame.height)))
+                if factor < 1 {
+                    // Unlike DownsamplingImageProcessor's .image path, this does
+                    // not encode/decode a full-size PNG just to restore an original.
+                    return drawable.preparingThumbnail(
+                        of: CGSize(
+                            width: CGFloat(frame.width) * factor,
+                            height: CGFloat(frame.height) * factor))
+                }
+            }
+            return drawable.preparingForDisplay()
+        }
+    #endif
 }
+
+#if os(iOS)
+    /// Keep ImageIO downsampling for bytes, but do not use Kingfisher's .image
+    /// downsampling path: it re-encodes the entire original before thumbnailing.
+    nonisolated struct TimelineStaticImageProcessor: ImageProcessor {
+        let size: CGSize
+        var identifier: String { "app.chahua.timeline.native-thumbnail:\(size)" }
+
+        func process(item: ImageProcessItem, options: KingfisherParsedOptionsInfo) -> UIImage? {
+            switch item {
+            case .data:
+                return DownsamplingImageProcessor(size: size).process(item: item, options: options)
+            case .image(let image):
+                return TimelineImageMemory.displayReadyFrame(image, pixels: size)
+            }
+        }
+    }
+#endif
 
 /// Kingfisher's default processor only attaches an animation source for GIF;
 /// WebP otherwise becomes a platform image with no playable frame source. ImageIO

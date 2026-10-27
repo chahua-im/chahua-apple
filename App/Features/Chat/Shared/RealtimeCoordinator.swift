@@ -67,7 +67,7 @@ final class RealtimeCoordinator: ObservableObject {
             self?.schedulePresenceWatch()
         }
         conversationObservation = Publishers.Merge(
-            store.$conversationStateScope.dropFirst().map { _ in false },
+            store.conversationStateScopeChanges.map { false },
             store.conversationWatchInvalidations.map { true }
         ).sink { [weak self] includeUnread in
             self?.scheduleConversationWatches(includeUnread: includeUnread)

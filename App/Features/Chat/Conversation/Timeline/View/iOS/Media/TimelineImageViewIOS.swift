@@ -10,7 +10,7 @@
     final class TimelineImageView: UIView {
         enum ScalingMode { case fit, fill }
 
-        private struct RequestKey: Equatable {
+        private struct RequestKey: Equatable, Sendable {
             let url: URL?
             let pixels: CGSize
             let context: ObjectIdentifier?
@@ -33,6 +33,14 @@
         private var generation: UInt64 = 0
         private var imageTask: DownloadTask?
         private var posterProvider: VideoPoster?
+        private var imagePreparation: DispatchWorkItem?
+        private var preparationGeneration: UInt64 = 0
+        // Bound preparation across rows, including warm originals. Cancellation
+        // removes queued work rather than spawning a decoder for every reused row.
+        nonisolated private static let preparationQueue = DispatchQueue(
+            label: "app.chahua.timeline.display-preparation", qos: .userInitiated)
+        // A running native preparation cannot be interrupted; request and
+        // preparation fences also reject its result after cancellation or reuse.
         private var requestCacheKey: String?
         private var loading = false
         private var failed = false
@@ -40,6 +48,7 @@
         private var isLocal = false
         private var decodedImage: UIImage?
         private var decodedCGImage: CGImage?
+        private var attemptedMemoryFallback = false
         private var backdropSize = CGSize.zero
         private var backdropScale: CGFloat = 0
         private var backdropGeneration: UInt64 = 0
@@ -93,6 +102,7 @@
             backdropCompletion?.cancel()
             NotificationCenter.default.removeObserver(self)
             MainActor.assumeIsolated {
+                imagePreparation?.cancel()
                 imageTask?.cancel()
                 posterProvider?.cancel()
                 animatedForeground?.stopAnimating()
@@ -159,7 +169,9 @@
             scalingMode = contentMode
             loading = isLoading
             failed = image == nil && !isLoading
-            if let image { installStatic(UIImage(cgImage: image)) }
+            if let image {
+                prepareImage(UIImage(cgImage: image), for: nil, completesRequest: false)
+            }
             setBackdropEnabled(showsBlurredBackdrop)
             setNeedsLayout()
             refreshVisibility()
@@ -274,26 +286,52 @@
                 let processor = TimelineAnimatedImageProcessor()
                 options += [.processor(processor), .cacheSerializer(processor)]
             } else {
-                options += [.processor(DownsamplingImageProcessor(size: key.pixels))]
+                options += [.processor(TimelineStaticImageProcessor(size: key.pixels))]
             }
             return options
         }
 
+        private func displayFrameKey(for key: RequestKey, sized: Bool) -> String {
+            let source = requestCacheKey ?? key.url?.absoluteString ?? ""
+            let base = "app.chahua.timeline.ios-display-ready:\(source)"
+            return sized
+                ? "\(base):\(key.pixels):\(key.animates):\(key.isVideoPoster)" : base
+        }
+
         private func restoreFromMemory() {
-            guard let key = requestKey, let url = key.url, let cacheKey = requestCacheKey else {
-                return
-            }
+            guard let key = requestKey, let url = key.url, let cacheKey = requestCacheKey,
+                imagePreparation == nil
+            else { return }
             let cache = mediaContext?.cache ?? .default
+            let ready = cache.retrieveImageInMemoryCache(
+                forKey: displayFrameKey(for: key, sized: true))
+            if decodedCGImage == nil,
+                let firstFrame = ready
+                    ?? cache.retrieveImageInMemoryCache(
+                        forKey: displayFrameKey(for: key, sized: false))
+            {
+                installStatic(firstFrame)
+            }
             if !requestFinished,
                 let image = cache.retrieveImageInMemoryCache(
-                    forKey: cacheKey, options: imageOptions(for: key)
-                ), installImage(image, animates: key.animates)
+                    forKey: cacheKey, options: imageOptions(for: key))
             {
-                requestFinished = true
+                if let ready {
+                    requestFinished = installImage(image, firstFrame: ready, animates: key.animates)
+                } else {
+                    prepareImage(image, for: key, completesRequest: true)
+                }
+                return
             }
-            guard !key.isVideoPoster, decodedCGImage == nil else { return }
-            // A different thumbnail size still has useful pixels. Never ask the
-            // network or wait for disk just to restore a warm first frame.
+            if ready != nil && !key.animates {
+                requestFinished = true
+                return
+            }
+            guard !key.isVideoPoster, decodedCGImage == nil, !attemptedMemoryFallback else {
+                return
+            }
+            // Legacy/other-size/original cache entries are not necessarily decoded.
+            // Keep them warm without drawing or re-encoding a full original on main.
             if let image = cache.retrieveImageInMemoryCache(
                 forKey: TimelineImageMemory.firstFrameKey(for: url))
                 ?? cache.retrieveImageInMemoryCache(
@@ -303,7 +341,8 @@
                     ])
                 ?? cache.retrieveImageInMemoryCache(forKey: url.absoluteString)
             {
-                installStatic(image)
+                attemptedMemoryFallback = true
+                prepareImage(image, for: key, completesRequest: !key.animates)
             }
         }
 
@@ -312,7 +351,7 @@
                 let key = requestKey, let url = key.url
             else { return }
             restoreFromMemory()
-            guard !requestFinished else { return }
+            guard !requestFinished, imagePreparation == nil else { return }
             let source: Source
             if key.isVideoPoster {
                 let provider = posterProvider ?? VideoPoster(url: url)
@@ -346,12 +385,13 @@
                         }
                         self.imageTask = nil
                         self.posterProvider = nil
-                        self.loading = false
-                        self.requestFinished = true
                         switch result {
                         case .success(let value):
-                            self.failed = !self.installImage(value.image, animates: key.animates)
+                            self.prepareImage(value.image, for: key, completesRequest: true)
+                            return
                         case .failure:
+                            self.loading = false
+                            self.requestFinished = true
                             self.failed = true
                         }
                         if self.failed && self.decodedCGImage == nil {
@@ -367,8 +407,8 @@
         }
 
         @discardableResult
-        private func installImage(_ image: UIImage, animates: Bool) -> Bool {
-            guard installStatic(image) else { return false }
+        private func installImage(_ image: UIImage, firstFrame: UIImage, animates: Bool) -> Bool {
+            guard installStatic(firstFrame) else { return false }
             if animates, let source = image.kf.frameSource, source.frameCount > 1 {
                 let animated = makeAnimatedForeground()
                 animated.image = image
@@ -400,21 +440,67 @@
             return view
         }
 
+        private func prepareImage(
+            _ image: UIImage, for key: RequestKey?, completesRequest: Bool
+        ) {
+            imagePreparation?.cancel()
+            preparationGeneration &+= 1
+            let preparation = preparationGeneration
+            let current = generation
+            if key != nil { loading = true }
+            let work = DispatchWorkItem { [weak self] in
+                let frame = TimelineImageMemory.displayReadyFrame(image, pixels: key?.pixels)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.generation == current, self.requestKey == key,
+                        self.preparationGeneration == preparation
+                    else { return }
+                    self.imagePreparation = nil
+                    if key != nil { self.loading = false }
+                    if let frame {
+                        if let key {
+                            let cache = self.mediaContext?.cache ?? .default
+                            cache.store(
+                                frame, forKey: self.displayFrameKey(for: key, sized: true),
+                                toDisk: false)
+                            cache.store(
+                                frame, forKey: self.displayFrameKey(for: key, sized: false),
+                                toDisk: false)
+                            if completesRequest {
+                                self.requestFinished = true
+                                self.failed = !self.installImage(
+                                    image, firstFrame: frame, animates: key.animates)
+                            } else {
+                                self.installStatic(frame)
+                            }
+                        } else {
+                            self.installStatic(frame)
+                        }
+                    } else if completesRequest {
+                        self.requestFinished = true
+                        self.failed = true
+                        if self.decodedCGImage == nil {
+                            self.onLoadFailure?(
+                                AppLanguage.localized("Image download or decoding failed."))
+                        }
+                    }
+                    self.setNeedsLayout()
+                    self.refreshVisibility()
+                }
+            }
+            imagePreparation = work
+            Self.preparationQueue.async(execute: work)
+        }
+
         @discardableResult
         private func installStatic(_ image: UIImage) -> Bool {
-            guard let pixels = TimelineImageMemory.cgImage(image) else { return false }
-            // An animation container is not itself a drawable UIImage. Retain a
-            // plain first frame for immediate reuse and animation-buffer startup.
-            let firstFrame = TimelineImageMemory.image(pixels)
+            // Only displayReadyFrame output (or its memory-cache entries) reaches
+            // this boundary; never ask a lazy frame source for pixels on main.
+            guard let pixels = image.cgImage else { return false }
+            let firstFrame = image
             decodedImage = firstFrame
             foreground.image = firstFrame
             decodedCGImage = pixels
             failed = false
-            if let key = requestKey, !key.isVideoPoster, let url = key.url {
-                (mediaContext?.cache ?? .default).store(
-                    firstFrame, forKey: TimelineImageMemory.firstFrameKey(for: url), toDisk: false
-                )
-            }
             cancelBackdrop()
             backdrop.contents = nil
             backdropSize = .zero
@@ -454,6 +540,10 @@
 
         private func cancelRequests(preservingImages: Bool) {
             generation &+= 1
+            preparationGeneration &+= 1
+            imagePreparation?.cancel()
+            imagePreparation = nil
+            attemptedMemoryFallback = false
             imageTask?.cancel()
             imageTask = nil
             posterProvider?.cancel()

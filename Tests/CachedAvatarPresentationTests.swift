@@ -256,6 +256,88 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 1)
     }
 
+    #if os(iOS)
+        func testOriginalMemoryWebPPreparesWithoutRefetching() async throws {
+            let data = try makeMediaWebPCheckerboard()
+            let fixture = MediaImageFixture(data: data, contentType: "image/webp")
+            let context = try makeContext(fixture: fixture)
+            try await context.cache.store(
+                try XCTUnwrap(UIImage(data: data)), forKey: fixture.url.absoluteString,
+                toDisk: false)
+            let (image, host) = try makeTimelineHost(
+                context: context, fixture: fixture, animates: false)
+            defer { host.close() }
+            try await waitUntil("The cached WebP did not become a sharp prepared foreground") {
+                try self.hasSharpBlackAndWhitePixels(host.snapshot())
+            }
+            XCTAssertFalse(hasVisibleSpinner(in: image))
+            XCTAssertEqual(fixture.requestCount, 0)
+        }
+
+        func testOriginalMemoryFrameIsPreparedAtRequestedSizeAndRemountsWithoutDownload()
+            async throws
+        {
+            let fixture = MediaImageFixture(
+                data: try makeMediaPNG(red: 255, green: 0, blue: 255, width: 128, height: 512))
+            let context = try makeContext(fixture: fixture)
+            let original = try XCTUnwrap(
+                UIImage(data: makeMediaPNG(red: 255, green: 0, blue: 255, width: 128, height: 512)))
+            try await context.cache.store(
+                original, forKey: fixture.url.absoluteString, toDisk: false)
+
+            let (image, host) = try makeTimelineHost(
+                context: context, fixture: fixture, animates: false)
+            defer { host.close() }
+            let foreground = try XCTUnwrap(image.subviews.compactMap { $0 as? UIImageView }.first)
+            try await waitUntil("The original memory frame was not asynchronously restored") {
+                try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+            }
+            let pixels = try XCTUnwrap(foreground.image?.cgImage)
+            XCTAssertLessThanOrEqual(max(pixels.width, pixels.height), 32)
+            let cachedOriginal = try XCTUnwrap(
+                context.cache.retrieveImageInMemoryCache(forKey: fixture.url.absoluteString))
+            XCTAssertEqual(
+                cachedOriginal.size, original.size,
+                "Preparing a thumbnail must preserve the original's full resolution.")
+            XCTAssertEqual(fixture.requestCount, 0)
+
+            image.clear()
+            image.configure(
+                url: fixture.url, contentMode: .fit, animates: false, showsBlurredBackdrop: false,
+                thumbnailPixelSize: thumbnailSize, mediaContext: context)
+            image.setVisible(true)
+            XCTAssertTrue(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255))
+            XCTAssertFalse(hasVisibleSpinner(in: image))
+            XCTAssertEqual(fixture.requestCount, 0)
+        }
+
+        func testPendingMemoryPreparationCannotReplaceReusedAccountImage() async throws {
+            let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
+            let firstContext = try makeContext(fixture: fixture)
+            let secondContext = try makeContext(fixture: fixture)
+            try await firstContext.cache.store(
+                try XCTUnwrap(UIImage(data: makeMediaPNG(red: 255, green: 0, blue: 255))),
+                forKey: fixture.url.absoluteString, toDisk: false)
+            try await secondContext.cache.store(
+                try XCTUnwrap(UIImage(data: makeMediaPNG(red: 0, green: 255, blue: 0))),
+                forKey: fixture.url.absoluteString, toDisk: false)
+            let (image, host) = try makeTimelineHost(
+                context: firstContext, fixture: fixture, animates: false)
+            defer { host.close() }
+            // Both completions must cross the main queue. Reuse before yielding
+            // makes even an already-running first preparation stale.
+            image.configure(
+                url: fixture.url, contentMode: .fit, animates: false, showsBlurredBackdrop: false,
+                thumbnailPixelSize: thumbnailSize, mediaContext: secondContext)
+            try await waitUntil("The reused row never installed its own account's prepared frame") {
+                try self.containsColor(host.snapshot(), red: 0, green: 255, blue: 0)
+            }
+            XCTAssertFalse(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255))
+            XCTAssertFalse(hasVisibleSpinner(in: image))
+            XCTAssertEqual(fixture.requestCount, 0)
+        }
+    #endif
+
     private func makeTimelineHost(
         context: AppMediaContext, fixture: MediaImageFixture, animates: Bool = true,
         pixels: CGSize = CGSize(width: 32, height: 32)

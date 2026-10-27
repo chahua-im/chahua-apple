@@ -26,9 +26,23 @@ final class ConversationTimelineModel: ObservableObject {
     let currentUserID: Int32
     /// The thread root is a message; parsed once for per-message acceptance checks.
     private let threadRootID: MessageID?
-    @Published private(set) var state = ConversationTimelineState()
+    // Viewport-only changes belong to narrow chrome observers, not every observer
+    // of this model (notably the conversation's composer and presentation tree).
+    private(set) var state = ConversationTimelineState() {
+        willSet {
+            var previous = state
+            previous.live.isPinnedToBottom = newValue.live.isPinnedToBottom
+            previous.live.followsLatest = newValue.live.followsLatest
+            previous.live.scrollsTowardNewer = newValue.live.scrollsTowardNewer
+            if previous != newValue { objectWillChange.send() }
+        }
+        didSet { synchronizeViewportPresentation() }
+    }
     @Published private(set) var rows: [TimelineRow] = []
-    @Published private(set) var bottomVisibleMessageDate: Date?
+    let viewport = TimelineViewportPresentation()
+    private(set) var bottomVisibleMessageDate: Date? {
+        didSet { synchronizeViewportPresentation() }
+    }
     @Published private(set) var unreadMentionJumpCount = 0
     @Published private(set) var unreadReactionJumpCount = 0
     @Published private(set) var activityJumpInProgress = false
@@ -40,6 +54,12 @@ final class ConversationTimelineModel: ObservableObject {
         state.content == .ready
             && (!isAtLiveEdge
                 || (viewportRevision == snapshotRevision && !state.live.isPinnedToBottom))
+    }
+
+    private func synchronizeViewportPresentation() {
+        viewport.update(
+            bottomVisibleMessageDate: bottomVisibleMessageDate,
+            showsJumpToLatest: showsJumpToLatest)
     }
     let updates = CurrentValueSubject<TimelineHostSnapshot, Never>(
         .init(revision: 0, windowRevision: 0, rows: [], animateFollowing: false, pendingScroll: nil)
@@ -70,7 +90,9 @@ final class ConversationTimelineModel: ObservableObject {
     private var pendingScroll: TimelineScrollRequest?
     private var lastEntries: [ConversationTimelineEntry]?
     private var lastViewport = TimelineViewport.empty
-    @Published private(set) var viewportRevision: Int?
+    private(set) var viewportRevision: Int? {
+        didSet { synchronizeViewportPresentation() }
+    }
     private var visibleAnchorID: MessageID?
     private var lastInitialPosition: TimelineInitialPosition = .liveEdge
     private var initialTask: Task<Void, Never>?
@@ -1502,6 +1524,7 @@ final class ConversationTimelineModel: ObservableObject {
     private func publish(
         animateFollowing: Bool = false, position: TimelineScrollIntent? = nil, reset: Bool = false
     ) {
+        defer { synchronizeViewportPresentation() }
         if state.live.pendingLiveCount != deferredCreates.count {
             state.live.pendingLiveCount = deferredCreates.count
         }

@@ -38,6 +38,7 @@ struct AuthenticatedShell: View {
     @State private var navigationError: String?
     @State private var isListRefreshing = false
     @StateObject private var listPresentation = ConversationListPresentation()
+    @State private var navigationActions = ShellNavigationActions()
 
     private enum FeatureDestination: Hashable, Identifiable {
         case addFriend, createGroup
@@ -173,7 +174,8 @@ struct AuthenticatedShell: View {
     @State private var threadSubscription: ThreadSubscriptionModel?
 
     var body: some View {
-        GeometryReader { geometry in
+        bindNavigationActions()
+        return GeometryReader { geometry in
             #if os(macOS)
                 adaptiveLayout
             #else
@@ -186,9 +188,9 @@ struct AuthenticatedShell: View {
         }
         .onPreferenceChange(ForwardThreadActionKey.self) { forwardThreadAction = $0 }
         .onPreferenceChange(ThreadInfoActionKey.self) { threadInfoAction = $0 }
-        .environment(\.openUserProfile, openProfile)
-        .environment(\.openGroupInvite) { feature = .joinGroup($0) }
-        .environment(\.openForwardDestination, openForwardDestination)
+        .environment(\.openUserProfile, navigationActions.openProfile)
+        .environment(\.openGroupInvite, navigationActions.openInvite)
+        .environment(\.openForwardDestination, navigationActions.openForward)
         .sheet(item: $feature, onDismiss: { profilePath.removeAll() }) { destination in
             NavigationStack(path: $profilePath) {
                 featureDestination(destination)
@@ -205,9 +207,9 @@ struct AuthenticatedShell: View {
                         }
                     }
             }
-            .environment(\.openUserProfile, openProfile)
-            .environment(\.openGroupInvite) { feature = .joinGroup($0) }
-            .environment(\.openForwardDestination, openForwardDestination)
+            .environment(\.openUserProfile, navigationActions.openProfile)
+            .environment(\.openGroupInvite, navigationActions.openInvite)
+            .environment(\.openForwardDestination, navigationActions.openForward)
             .frame(minWidth: 320, minHeight: 420)
         }
         .task(id: pendingURL.wrappedValue) {
@@ -269,6 +271,7 @@ struct AuthenticatedShell: View {
             }
         }
         .onAppear {
+            bindNavigationActions()
             isVisible = true
             reportVisibleConversation()
         }
@@ -282,6 +285,7 @@ struct AuthenticatedShell: View {
             }
         }
         .onDisappear {
+            navigationActions.clear()
             isVisible = false
             notifications.setVisibleConversation(sceneID: notificationSceneID, conversation: nil)
         }
@@ -309,6 +313,16 @@ struct AuthenticatedShell: View {
                     settings
                 })
         #endif
+    }
+
+    private func bindNavigationActions() {
+        guard !isSigningOut else {
+            navigationActions.clear()
+            return
+        }
+        navigationActions.profileHandler = openProfile
+        navigationActions.inviteHandler = { feature = .joinGroup($0) }
+        navigationActions.forwardHandler = openForwardDestination
     }
 
     private var adaptiveLayout: some View {
@@ -562,12 +576,12 @@ struct AuthenticatedShell: View {
             navigation.conversation == selectedConversationID
         {
             if let chat = navigation.chat {
-                ChatDetailView(
+                ChatDetailPresentation(
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     navigationTitle: selectedTitle,
                     threadID: navigation.conversation.threadID,
                     initialPosition: .message(navigation.messageID),
-                    onOpenThread: { openThread($0, in: chat) }
+                    onOpenThread: isSigningOut ? nil : { openThread($0, in: chat) }
                 )
                 .id(navigation.id)
             } else if navigation.failed {
@@ -594,9 +608,9 @@ struct AuthenticatedShell: View {
     @ViewBuilder private func detailView(_ conversation: ConversationListItem) -> some View {
         switch conversation {
         case .chat(let chat):
-            ChatDetailView(
+            ChatDetailPresentation(
                 chat: chat, currentUserID: me.uid, store: chatStore,
-                onOpenThread: { openThread($0, in: chat) }
+                onOpenThread: isSigningOut ? nil : { openThread($0, in: chat) }
             )
             .id(conversation.id)
         case .thread(let thread):
@@ -607,7 +621,7 @@ struct AuthenticatedShell: View {
 
     @ViewBuilder private func threadDestination(_ key: ConversationKey) -> some View {
         if let thread = openedThread, thread.key == key {
-            ChatDetailView(
+            ChatDetailPresentation(
                 chat: thread.chat, currentUserID: me.uid, store: chatStore,
                 navigationTitle: thread.title, threadID: thread.rootID,
                 initialPosition: thread.initialMessageID.map(TimelineInitialPosition.message)
@@ -619,12 +633,20 @@ struct AuthenticatedShell: View {
 
     private func openThread(_ message: MessageResponse, in chat: ChatListItem) {
         guard !isSigningOut, !message.isDeleted, message.chatId == chat.id else { return }
+        let chat = currentChatForRouting(chat)
         let preview = messagePreview(message.replyPreview)
         pushThread(
             ThreadNavigation(
                 chat: chat, rootID: message.id.description,
                 title: preview.isEmpty ? AppLanguage.localized("Thread") : preview,
                 root: message))
+    }
+
+    private func currentChatForRouting(_ chat: ChatListItem) -> ChatListItem {
+        // Equality-filtered detail routes need not refresh their captured unread
+        // row on every publication. Navigation commands resolve it when invoked.
+        chatStore.state.chats.first { $0.id == chat.id }
+            ?? chatStore.state.archivedChats.first { $0.id == chat.id } ?? chat
     }
 
     private func pushThread(_ thread: ThreadNavigation) {
@@ -756,16 +778,18 @@ struct AuthenticatedShell: View {
                     MessageSearchView(model: session.model, onSelect: openSearchResult)
                 }
             case .source(let chat, let message):
-                ChatDetailView(
+                ChatDetailPresentation(
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     threadID: message.replyRootId, initialPosition: .message(message.id),
-                    onOpenThread: { groupPath.append(.thread(chat, $0)) })
+                    onOpenThread: isSigningOut
+                        ? nil : { groupPath.append(.thread(currentChatForRouting(chat), $0)) })
             case .thread(let chat, let root):
-                ChatDetailView(
+                ChatDetailPresentation(
                     chat: chat, currentUserID: me.uid, store: chatStore,
                     navigationTitle: AppLanguage.localized("Thread"),
                     threadID: root.id.description, initialPosition: .liveEdge,
-                    onOpenThread: { groupPath.append(.thread(chat, $0)) })
+                    onOpenThread: isSigningOut
+                        ? nil : { groupPath.append(.thread(currentChatForRouting(chat), $0)) })
             }
         }
         // Native destinations must not inherit the timeline's floating-header inset.
@@ -897,7 +921,7 @@ struct AuthenticatedShell: View {
     /// The picker prepares a draft, not a send. Resolve access before mutating
     /// navigation so a failed destination leaves both conversations' drafts intact.
     private func openForwardDestination(_ target: ConversationListItem) async throws -> Bool {
-        guard !isSigningOut else { return false }
+        guard !isSigningOut, navigationActions.forwardHandler != nil else { return false }
         let accountID = me.uid
         let info = try await chatStore.groupInfo(chatID: target.id.chatID)
         let parent = chatStore.groupChatSnapshot(info)
@@ -909,7 +933,7 @@ struct AuthenticatedShell: View {
             root = nil
         }
         try Task.checkCancellation()
-        guard !isSigningOut, me.uid == accountID,
+        guard !isSigningOut, navigationActions.forwardHandler != nil, me.uid == accountID,
             chatStore.currentUserProfile?.uid == accountID
         else { return false }
         if visibleConversation == target.id, groupPath.isEmpty, feature == nil {
