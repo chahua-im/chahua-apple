@@ -2,8 +2,6 @@ import ChahuaAPI
 import SwiftUI
 
 struct ConversationListRow: View {
-    static let avatarDiameter: CGFloat = 48
-
     let item: ConversationListItem
     let draft: String
     var pending: LocalOutgoingMessage? = nil
@@ -12,6 +10,7 @@ struct ConversationListRow: View {
     let currentUserID: Int32
     let isSelected: Bool
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
     @Environment(\.locale) private var locale
     @Environment(\.calendar) private var calendar
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -24,6 +23,12 @@ struct ConversationListRow: View {
         formatter.dateTimeStyle = .numeric
         return formatter
     }()
+
+    private var usesDesktopDensity: Bool {
+        ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
+    }
+
+    private var previewFontSize: CGFloat { usesDesktopDensity ? 13 : 17 }
 
     private var titleLayout: AnyLayout {
         dynamicTypeSize.isAccessibilitySize
@@ -47,20 +52,29 @@ struct ConversationListRow: View {
 
     var body: some View {
         let pendingPreview = item.pendingPreview(pending)
-        HStack(alignment: .center, spacing: ChahuaTheme.Spacing.medium) {
+        HStack(
+            alignment: .center,
+            spacing: usesDesktopDensity ? 10 : (isWideChatLayout ? 8 : ChahuaTheme.Spacing.medium)
+        ) {
             ConversationAvatarView(
                 item: item, store: store, currentUserID: currentUserID,
-                diameter: Self.avatarDiameter, isSelected: isSelected)
-            VStack(alignment: .leading, spacing: 4) {
+                diameter: ConversationListMetrics.avatarDiameter(isWide: isWideChatLayout),
+                isSelected: isSelected)
+            VStack(alignment: .leading, spacing: usesDesktopDensity ? 3 : 4) {
                 titleLayout {
                     Group {
                         if case .thread(let thread) = item {
                             MessageSummaryText(
-                                thread.threadRootMessage, fontSize: 17,
+                                thread.threadRootMessage, fontSize: usesDesktopDensity ? 14 : 17,
                                 color: isSelected ? .white : .primary, weight: .semibold,
                                 fallback: AppLanguage.localized("Message"))
                         } else {
-                            Text(item.title).font(.headline).lineLimit(1)
+                            Text(item.title)
+                                .font(
+                                    usesDesktopDensity
+                                        ? .system(size: 14, weight: .semibold) : .headline
+                                )
+                                .lineLimit(1)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -70,29 +84,34 @@ struct ConversationListRow: View {
                             currentUserID: currentUserID, receipts: store.listReadReceipts)
                         TimelineView(.periodic(from: .now, by: 60)) { context in
                             Text(activityLabel(now: context.date))
-                                .font(.footnote)
+                                .font(usesDesktopDensity ? .system(size: 11) : .footnote)
                                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                         }
                     }
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.8) : Color.primary)
+                    .foregroundStyle(
+                        isSelected
+                            ? Color.white.opacity(usesDesktopDensity ? 0.88 : 0.8)
+                            : (usesDesktopDensity ? Color.secondary : Color.primary)
+                    )
                     .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
                 }
                 HStack(spacing: ChahuaTheme.Spacing.medium) {
                     Group {
                         if !draft.isEmpty {
                             MessageSummaryText(
-                                source: draft, color: subtitleColor,
+                                source: draft, fontSize: previewFontSize, color: subtitleColor,
                                 prefix: AppLanguage.localized("Draft") + ": ")
                         } else if let pendingPreview {
                             MessageSummaryText(
-                                pending: pendingPreview, color: subtitleColor,
+                                pending: pendingPreview, fontSize: previewFontSize,
+                                color: subtitleColor,
                                 prefix: item.isDirectMessage
                                     ? ""
                                     : (store.currentUserProfile?.asSender.name
                                         ?? AppLanguage.localized("User \(currentUserID)")) + ": ")
                         } else if let preview = item.previewMessage {
                             MessageSummaryText(
-                                preview, fontSize: 17, color: subtitleColor,
+                                preview, fontSize: previewFontSize, color: subtitleColor,
                                 prefix: item.previewSenderName(parentKind: threadParentKind)
                                     .map { $0 + ": " } ?? "",
                                 boldPrefix: true, fallback: AppLanguage.localized("Message"))
@@ -128,7 +147,7 @@ struct ConversationListRow: View {
                             .accessibilityLabel("Muted")
                     }
                 }
-                .frame(minHeight: subtitleHeight)
+                .frame(minHeight: usesDesktopDensity ? 16 : subtitleHeight)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -144,10 +163,14 @@ struct ConversationListRow: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .font(.caption.weight(.semibold))
+            .font(
+                usesDesktopDensity
+                    ? .system(size: 11, weight: .semibold) : .caption.weight(.semibold)
+            )
             .foregroundStyle(usesMutedBadges ? Color.primary : Color.white)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, usesDesktopDensity ? 5 : 8)
             .padding(.vertical, 2)
+            .frame(minHeight: usesDesktopDensity ? 18 : nil)
             .background {
                 if usesMutedBadges {
                     Capsule().fill(.quaternary)
@@ -196,11 +219,16 @@ private struct ConversationListDeliveryIndicator: View {
 
 /// Keep archive and conversation rows aligned without clipping scaled content.
 struct ConversationListRowLayout: ViewModifier {
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
+
     func body(content: Content) -> some View {
+        let desktop = ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
         content
-            .padding(.horizontal, ChatSplitMetrics.outerInset)
+            .padding(
+                .horizontal, desktop ? 10 : (isWideChatLayout ? 8 : ChatSplitMetrics.outerInset)
+            )
             .padding(.vertical, 10)
-            .frame(minHeight: 68)
+            .frame(minHeight: desktop ? 60 : 68)
     }
 }
 
@@ -208,13 +236,33 @@ struct ConversationListRowLayout: ViewModifier {
 /// typography even though their navigation and trailing metadata differ.
 struct ConversationListSubtitleStyle: ViewModifier {
     let isSelected: Bool
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
 
     func body(content: Content) -> some View {
         content
-            .font(.body)
+            .font(
+                ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
+                    ? .system(size: 13) : .body
+            )
             .foregroundStyle(isSelected ? Color.white.opacity(0.88) : Color.secondary)
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+enum ConversationListMetrics {
+    // Pointer-driven macOS sidebars use the reference's denser typography and
+    // 40-point avatars; wide iPad sidebars retain iPhone-sized touch targets.
+    static func usesDesktopDensity(isWide: Bool) -> Bool {
+        #if os(macOS)
+            isWide
+        #else
+            false
+        #endif
+    }
+
+    static func avatarDiameter(isWide: Bool) -> CGFloat {
+        usesDesktopDensity(isWide: isWide) ? 40 : 48
     }
 }
 

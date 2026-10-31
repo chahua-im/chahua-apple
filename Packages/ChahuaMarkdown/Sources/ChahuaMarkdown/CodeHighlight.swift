@@ -101,8 +101,7 @@ private final class HighlightEngine: @unchecked Sendable {
 
     private func makeContext() -> JSContext {
         guard let context = JSContext(),
-            let source = Bundle.module.url(
-                forResource: "highlight", withExtension: "js", subdirectory: "Resources")
+            let source = Bundle.module.url(forResource: "highlight", withExtension: "js")
         else { preconditionFailure("Bundled Markdown highlighter is unavailable") }
         do {
             let script = try String(contentsOf: source, encoding: .utf8)

@@ -1602,8 +1602,8 @@ final class ChatStoreTests: XCTestCase {
                     appLanguage: AppLanguage.selected.rawValue,
                     showAllAvatars: ConversationTimelinePreferences.defaultShowAllAvatars,
                     showDmDetails: ConversationTimelinePreferences.defaultShowDmDetails,
-                    unreadBadgeColor: .default, headerInset: 0, composerInset: 0,
-                    isSplitResizing: false)
+                    unreadBadgeColor: .default, composerInset: 0,
+                    isSplitResizing: false, isWideChatLayout: false)
             }
             refreshActions()
             let window = NSWindow(

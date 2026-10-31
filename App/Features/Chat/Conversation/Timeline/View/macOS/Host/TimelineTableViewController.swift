@@ -103,11 +103,11 @@
                 requestDisplayUpdate()
             }
         }
-        var headerInset: CGFloat = 0 {
+        var isWideChatLayout = false {
             didSet {
-                guard headerInset != oldValue, isViewLoaded else { return }
-                scrollView.contentInsets.top = headerInset
-                view.needsLayout = true
+                guard isWideChatLayout != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
             }
         }
         var composerInset: CGFloat = 0 {
@@ -178,9 +178,9 @@
             scrollView.horizontalScrollElasticity = .none
             scrollView.drawsBackground = false
             scrollView.automaticallyAdjustsContentInsets = false
-            // AppKit already insets the scroller by contentInsets. Setting
-            // scrollerInsets too would count the header and composer padding twice.
-            scrollView.contentInsets.top = headerInset
+            // The header and pins are outside this scroll view, not scrollable
+            // content padding. AppKit insets the scroller for the floating composer;
+            // setting scrollerInsets as well would count that clearance twice.
             scrollView.contentInsets.bottom = composerInset
             scrollView.contentView.postsBoundsChangedNotifications = true
             scrollView.wheelWillScroll = { [weak self] in
@@ -368,7 +368,8 @@
                 layoutDirection: view.userInterfaceLayoutDirection == .rightToLeft
                     ? .rightToLeft : .leftToRight, language: appLanguage,
                 showAllAvatars: showAllAvatars,
-                showsMessageDetails: model.isGroupChat || showDmDetails)
+                showsMessageDetails: model.isGroupChat || showDmDetails,
+                isWideChatLayout: isWideChatLayout)
         }
 
         private func exactLayout(for row: TimelineRow, allowingStaleOffscreen: Bool = false)
@@ -1096,8 +1097,8 @@
             let range = tableView.rows(in: visible)
             let hasVisibleRows =
                 range.location != NSNotFound && range.length > 0 && range.location < rows.count
-            // AppKit's documentVisibleRect includes content underneath the floating chrome.
-            // Preserve the existing pagination/anchor geometry, but never count obscured rows as read.
+            // The structural header/pin viewport is already excluded. Only the
+            // floating composer can obscure rows inside documentVisibleRect.
             let insets = scrollView.contentInsets
             let unobscured = NSRect(
                 x: visible.minX + insets.left,

@@ -38,7 +38,7 @@ final class TimelineRowsBuilderTests: XCTestCase {
         XCTAssertEqual(messages.map(\.showsSenderName), [true, false, false, false])
     }
 
-    func testSameSenderBubblesUseFourPointGapAndOneAvatar() throws {
+    func testSenderRunSpacingMatchesLayoutDensityAndOneAvatar() throws {
         for body in ["Hi", String(repeating: "A longer message for row geometry. ", count: 8)] {
             let rows = builder().build([
                 try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0, text: body),
@@ -49,28 +49,31 @@ final class TimelineRowsBuilderTests: XCTestCase {
             ]).compactMap(messageRow)
             XCTAssertEqual(rows.map(\.groupPosition), [.first, .last, .single])
             XCTAssertEqual(rows.map(\.showsSenderName), [true, false, true])
-            let environment = TimelineLayoutEnvironment.current(timelineWidth: 320)
             let engine = TimelineLayoutEngine()
-            let layouts = rows.map { row in
-                engine.layout(
-                    TimelineRowPresentation.make(
-                        row: .message(row), currentUserID: 1, isThreadTimeline: false,
-                        environment: environment),
-                    environment: environment)
-            }
-            XCTAssertNil(layouts[0].frames[.avatar])
-            for index in 1..<3 {
-                let bubble = try XCTUnwrap(layouts[index].frames[.bubble])
-                let avatar = try XCTUnwrap(layouts[index].frames[.avatar])
-                XCTAssertEqual(avatar.maxY, bubble.maxY, accuracy: 0.5)
-                XCTAssertGreaterThanOrEqual(bubble.height, environment.avatarSize)
-            }
-            for index in 0..<2 {
-                let current = try XCTUnwrap(layouts[index].frames[.bubble])
-                let next = try XCTUnwrap(layouts[index + 1].frames[.bubble])
-                XCTAssertEqual(
-                    layouts[index].size.height - current.maxY + next.minY,
-                    index == 0 ? 4 : 8, accuracy: 0.5)
+            for isWide in [false, true] {
+                let environment = TimelineLayoutEnvironment.current(
+                    timelineWidth: isWide ? 900 : 320, isWideChatLayout: isWide)
+                let layouts = rows.map { row in
+                    engine.layout(
+                        TimelineRowPresentation.make(
+                            row: .message(row), currentUserID: 1, isThreadTimeline: false,
+                            environment: environment),
+                        environment: environment)
+                }
+                XCTAssertNil(layouts[0].frames[.avatar])
+                for index in 1..<3 {
+                    let bubble = try XCTUnwrap(layouts[index].frames[.bubble])
+                    let avatar = try XCTUnwrap(layouts[index].frames[.avatar])
+                    XCTAssertEqual(avatar.maxY, bubble.maxY, accuracy: 0.5)
+                    XCTAssertGreaterThanOrEqual(bubble.height, environment.avatarSize)
+                }
+                for index in 0..<2 {
+                    let current = try XCTUnwrap(layouts[index].frames[.bubble])
+                    let next = try XCTUnwrap(layouts[index + 1].frames[.bubble])
+                    XCTAssertEqual(
+                        layouts[index].size.height - current.maxY + next.minY,
+                        index == 0 ? (isWide ? 2 : 4) : (isWide ? 12 : 8), accuracy: 0.5)
+                }
             }
         }
     }
@@ -194,6 +197,50 @@ final class TimelineRowsBuilderTests: XCTestCase {
                 XCTAssertLessThanOrEqual(
                     bubble.maxX,
                     hiddenEnvironment.timelineWidth - TimelineRowMetrics.rowHorizontalInset)
+            }
+        }
+    }
+
+    func testWideLayoutCapsBubblesAndInvalidatesCachedWidthAndDensity() throws {
+        for senderID in [Int32(1), Int32(2)] {
+            let message = try TimelineTestFixtures.message(
+                id: 1, senderID: senderID, at: 0,
+                text: String(
+                    repeating: "A longer message for native width measurement. ", count: 30))
+            let row = try XCTUnwrap(builder().build([message]).first { $0.messageID != nil })
+            let cache = TimelineLayoutCache()
+            let compact = TimelineLayoutEnvironment.current(
+                timelineWidth: 1200, bodySize: 23, showsMessageDetails: false)
+            let wide = TimelineLayoutEnvironment.current(
+                timelineWidth: 1200, bodySize: 23, showsMessageDetails: false,
+                isWideChatLayout: true)
+            let narrowPane = TimelineLayoutEnvironment.current(
+                timelineWidth: 420, bodySize: 23, showsMessageDetails: false, isWideChatLayout: true
+            )
+            var layouts: [TimelineRowLayout] = []
+            for environment in [compact, wide, narrowPane] {
+                let presentation = TimelineRowPresentation.make(
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
+                XCTAssertEqual(presentation.environment.bodySize, 23)
+                layouts.append(cache.layout(for: presentation, environment: environment))
+                // An identical environment reuses geometry, not another measurement.
+                _ = cache.layout(for: presentation, environment: environment)
+            }
+            XCTAssertEqual(cache.missCount, 3)
+            XCTAssertNotEqual(compact, wide)
+            let compactBubble = try XCTUnwrap(layouts[0].frames[.bubble])
+            let wideBubble = try XCTUnwrap(layouts[1].frames[.bubble])
+            let narrowBubble = try XCTUnwrap(layouts[2].frames[.bubble])
+            XCTAssertGreaterThan(compactBubble.width, 620)
+            XCTAssertEqual(wideBubble.width, 620, accuracy: 0.5)
+            XCTAssertLessThanOrEqual(narrowBubble.width, 420 - 48)
+            XCTAssertGreaterThan(layouts[2].size.height, layouts[1].size.height)
+            if senderID == 1 {
+                XCTAssertEqual(wideBubble.maxX, 1200 - 24, accuracy: 0.5)
+                XCTAssertEqual(narrowBubble.maxX, 420 - 24, accuracy: 0.5)
+            } else {
+                XCTAssertEqual(wideBubble.minX, 24, accuracy: 0.5)
+                XCTAssertEqual(narrowBubble.minX, 24, accuracy: 0.5)
             }
         }
     }

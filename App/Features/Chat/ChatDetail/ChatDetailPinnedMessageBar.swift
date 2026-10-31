@@ -21,6 +21,9 @@ struct ChatDetailPinnedMessageBar: View {
         {
             ChatPinnedMessageBar(
                 pin: pin, count: pins.count,
+                position: pins.firstIndex(where: { $0.message.id == pin.message.id }).map {
+                    $0 + 1
+                },
                 onJump: { onJump(pin.message) },
                 onShowAll: { showsPinnedMessages = true },
                 onOpenThread: pin.message.threadInfo != nil && onOpenThread != nil

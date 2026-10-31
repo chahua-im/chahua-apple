@@ -12,26 +12,58 @@ enum ChatPinSelection {
 struct ChatPinnedMessageBar: View {
     let pin: PinResponse
     let count: Int
+    var position: Int? = nil
     let onJump: () -> Void
     let onShowAll: () -> Void
     var onOpenThread: (() -> Void)?
     var onUnpin: (() -> Void)?
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
+
+    private var controlHeight: CGFloat {
+        #if os(macOS)
+            36
+        #else
+            44
+        #endif
+    }
+
+    private var barCornerRadius: CGFloat {
+        #if os(macOS)
+            18
+        #else
+            isWideChatLayout ? 22 : 24
+        #endif
+    }
 
     var body: some View {
         HStack(spacing: 8) {
             Button(action: onJump) {
                 HStack(spacing: 10) {
-                    Capsule()
-                        .fill(Color.accentColor)
-                        .frame(width: 3, height: 34)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Pinned Message")
-                            .font(.subheadline.weight(.semibold))
+                    if isWideChatLayout {
+                        Image(systemName: "pin")
                             .foregroundStyle(Color.accentColor)
+                        Text("Pinned")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Color.accentColor)
+                            .fixedSize()
+                        Text("·")
+                            .foregroundStyle(.secondary)
                         pinPreview(pin.message)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Capsule()
+                            .fill(Color.accentColor)
+                            .frame(width: 3, height: 34)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Pinned Message")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                            pinPreview(pin.message)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(minHeight: isWideChatLayout ? controlHeight : 0)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -40,28 +72,43 @@ struct ChatPinnedMessageBar: View {
             if let onOpenThread {
                 Button(action: onOpenThread) {
                     Image(systemName: "bubble.left.and.bubble.right")
-                        .frame(width: 36, height: 44)
+                        .frame(width: 36, height: controlHeight)
                 }
                 .accessibilityLabel("Open thread")
             }
             Button(action: onShowAll) {
                 HStack(spacing: 4) {
-                    Image(systemName: "list.dash")
-                    Text(count, format: .number).font(.caption.monospacedDigit())
+                    if isWideChatLayout, let position {
+                        Text("\(position) of \(count)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        #if os(macOS)
+                            Image(systemName: "list.dash")
+                                .frame(width: 26, height: 26)
+                                .accessibilityHidden(true)
+                        #endif
+                    } else {
+                        Image(systemName: "list.dash")
+                        Text(count, format: .number).font(.caption.monospacedDigit())
+                    }
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 6)
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: 44, minHeight: controlHeight)
                 .contentShape(Rectangle())
             }
             .accessibilityLabel("View all pinned messages")
             .accessibilityValue(Text(count, format: .number))
         }
         .buttonStyle(.plain)
-        .padding(.leading, 14)
+        .font(isWideChatLayout ? .subheadline : nil)
+        #if os(macOS)
+            .font(.system(size: 13))
+        #endif
+        .padding(.leading, isWideChatLayout ? 16 : 14)
         .padding(.trailing, 8)
-        .padding(.vertical, 6)
-        .modifier(ChatGlassSurface(cornerRadius: 24))
+        .padding(.vertical, isWideChatLayout ? 0 : 6)
+        .modifier(ChatGlassSurface(cornerRadius: barCornerRadius))
         .contextMenu {
             Button("View all pinned messages", action: onShowAll)
             if let onUnpin {
@@ -71,33 +118,51 @@ struct ChatPinnedMessageBar: View {
     }
 }
 
-/// The shell supplies the title inset. Add the pin bar's measured height rather
-/// than changing the native navigation bar or covering the timeline's first row.
+/// macOS reserves the pin bar above the native viewport. iOS keeps the floating
+/// presentation and supplies its measured occlusion to the timeline.
 struct ChatPinnedBarOverlay<Bar: View>: ViewModifier {
     let isVisible: Bool
     @ViewBuilder let bar: () -> Bar
-    @Environment(\.chatHeaderInset) private var titleInset
-    @State private var barHeight: CGFloat = 0
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
+    #if !os(macOS)
+        @Environment(\.chatHeaderInset) private var titleInset
+        @State private var barHeight: CGFloat = 0
+    #endif
 
     func body(content: Content) -> some View {
-        content
-            .environment(\.chatHeaderInset, titleInset + (isVisible ? barHeight + 12 : 0))
-            .overlay(alignment: .top) {
+        #if os(macOS)
+            // Content insets only affect scroll limits; they cannot stop AppKit rows
+            // drawing behind glass. Reserve the bar in SwiftUI so the native clip
+            // view starts below it, including on the first layout before measurement.
+            VStack(spacing: 0) {
                 if isVisible {
                     bar()
-                        .background {
-                            GeometryReader { geometry in
-                                Color.clear
-                                    .onAppear { barHeight = geometry.size.height }
-                                    .onChange(of: geometry.size.height) { _, height in
-                                        barHeight = height
-                                    }
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.top, titleInset)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, isWideChatLayout ? 16 : 12)
+                        .padding(.bottom, 12)
                 }
+                content
             }
+        #else
+            content
+                .environment(\.chatHeaderInset, titleInset + (isVisible ? barHeight + 12 : 0))
+                .overlay(alignment: .top) {
+                    if isVisible {
+                        bar()
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear
+                                        .onAppear { barHeight = geometry.size.height }
+                                        .onChange(of: geometry.size.height) { _, height in
+                                            barHeight = height
+                                        }
+                                }
+                            }
+                            .padding(.horizontal, isWideChatLayout ? 20 : 12)
+                            .padding(.top, titleInset)
+                    }
+                }
+        #endif
     }
 }
 

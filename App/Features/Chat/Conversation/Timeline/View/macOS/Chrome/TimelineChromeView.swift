@@ -15,7 +15,6 @@
             let unreadReactionCount: Int
             let activityJumpInProgress: Bool
             let badgeColor: ConversationUnreadBadgeColor
-            let headerInset: CGFloat
             let composerInset: CGFloat
         }
 
@@ -63,8 +62,7 @@
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func update(model: ConversationTimelineModel, headerInset: CGFloat, composerInset: CGFloat)
-        {
+        func update(model: ConversationTimelineModel, composerInset: CGFloat) {
             if self.model !== model {
                 cancelPendingActions()
                 self.model = model
@@ -79,9 +77,7 @@
                         guard let self, let model else { return }
                         self.viewportShowsJumpToLatest = showsJumpToLatest
                         guard let presentation = self.presentation else { return }
-                        self.update(
-                            model: model, headerInset: presentation.headerInset,
-                            composerInset: presentation.composerInset)
+                        self.update(model: model, composerInset: presentation.composerInset)
                     }
             }
             let next = Presentation(
@@ -91,8 +87,7 @@
                 unreadMentionCount: model.unreadMentionJumpCount,
                 unreadReactionCount: model.unreadReactionJumpCount,
                 activityJumpInProgress: model.activityJumpInProgress,
-                badgeColor: badgeColor,
-                headerInset: headerInset, composerInset: composerInset)
+                badgeColor: badgeColor, composerInset: composerInset)
             guard presentation != next else { return }
             presentation = next
             let state = next.state
@@ -177,7 +172,7 @@
             let height = bounds.height
             initialLoading.frame = bounds
             initialFailure.frame = bounds
-            var top = max(0, presentation.headerInset)
+            var top: CGFloat = 0
             if !initialBanner.isHidden {
                 initialBanner.frame = NSRect(x: 0, y: top, width: width, height: 36)
                 top += 36
@@ -187,7 +182,7 @@
                 x: 0, y: max(0, height - presentation.composerInset - 48), width: width, height: 48)
             // Failures remain non-blocking overlays; they never change row geometry.
             // Keep simultaneous failures individually reachable rather than overlapping.
-            var failureTop = max(0, presentation.headerInset) + ChahuaTheme.Spacing.large
+            var failureTop = ChahuaTheme.Spacing.large
             for banner in [repositionFailure, reconciliationFailure] where !banner.isHidden {
                 banner.frame = NSRect(x: 16, y: failureTop, width: max(0, width - 32), height: 36)
                 failureTop += 44

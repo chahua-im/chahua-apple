@@ -14,6 +14,12 @@ struct TimelineLayoutEnvironment: Hashable {
     let language: String
     let showAllAvatars: Bool
     let showsMessageDetails: Bool
+    /// Part of the native measurement/cache identity, independent of the pane width.
+    let isWideChatLayout: Bool
+
+    var rowHorizontalInset: CGFloat {
+        isWideChatLayout ? 24 : TimelineRowMetrics.rowHorizontalInset
+    }
 
     /// Hidden DM identities reclaim both avatar lanes, including their gaps.
     var identityLaneWidth: CGFloat {
@@ -23,7 +29,11 @@ struct TimelineLayoutEnvironment: Hashable {
     var centralWidth: CGFloat {
         max(
             0,
-            timelineWidth - 2 * TimelineRowMetrics.rowHorizontalInset - 2 * identityLaneWidth)
+            timelineWidth - 2 * rowHorizontalInset - 2 * identityLaneWidth)
+    }
+
+    var maximumBubbleWidth: CGFloat {
+        isWideChatLayout ? min(620, centralWidth) : centralWidth
     }
 
     static func current(
@@ -33,13 +43,15 @@ struct TimelineLayoutEnvironment: Hashable {
         layoutDirection: LayoutDirection = .leftToRight,
         language: String = AppLanguage.selected.rawValue,
         showAllAvatars: Bool = ConversationTimelinePreferences.defaultShowAllAvatars,
-        showsMessageDetails: Bool = true
+        showsMessageDetails: Bool = true,
+        isWideChatLayout: Bool = false
     ) -> Self {
         .init(
             timelineWidth: timelineWidth, displayScale: displayScale, bodySize: bodySize,
             captionSize: captionSize, caption2Size: caption2Size, avatarSize: avatarSize,
             localeIdentifier: locale.identifier, timeZoneIdentifier: timeZone.identifier,
             layoutDirection: layoutDirection, language: language,
-            showAllAvatars: showAllAvatars, showsMessageDetails: showsMessageDetails)
+            showAllAvatars: showAllAvatars, showsMessageDetails: showsMessageDetails,
+            isWideChatLayout: isWideChatLayout)
     }
 }

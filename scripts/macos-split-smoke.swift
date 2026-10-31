@@ -113,15 +113,15 @@ Thread.sleep(forTimeInterval: 0.2)
 try mouse(.leftMouseUp, at: CGPoint(x: start.x - 200, y: start.y))
 Thread.sleep(forTimeInterval: 0.2)
 let minimum = try dividerPosition().x
-// The fixture must have enough space for a 400pt sidebar and 440pt detail.
+// Leave enough detail space to exercise the full 300–340pt sidebar range.
 var windowSize = CGSize.zero
 if let value = attribute(window, "AXSize"), CFGetTypeID(value) == AXValueGetTypeID() {
     AXValueGetValue(value as! AXValue, .cgSize, &windowSize)
 }
 try require(windowSize.width >= 900, "Use a diagnostic window at least 900 points wide")
-try drag([(40, 40)], label: "restart from minimum clamp")
-try drag([8, 16, 24, 32, 48, 64, 52, 36, 20, 0].map { ($0, $0) }, label: "successive movement and reversal")
-try drag([(100, 80), (140, 80), (60, 60), (-60, -40), (-100, -40), (-20, -20)], label: "both clamps and reversal")
-try drag([(12, 12), (24, 24), (-12, -12)], label: "new gesture uses rendered origin")
-try waitForDivider(x: minimum + 8, label: "final width")
+try drag([(20, 20)], label: "restart from minimum clamp")
+try drag([(8, 8), (16, 16), (20, 20), (12, 12), (0, 0), (-12, -12), (0, 0)], label: "successive movement and reversal")
+try drag([(100, 20), (140, 20), (12, 12), (-60, -20), (-100, -20), (-12, -12)], label: "both clamps and reversal")
+try drag([(8, 8), (16, 16), (-4, -4)], label: "new gesture uses rendered origin")
+try waitForDivider(x: minimum + 4, label: "final width")
 print("All physical splitter checks passed (1pt screen-rounding tolerance). This is a correctness check, not an FPS benchmark.")

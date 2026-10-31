@@ -48,6 +48,7 @@ struct MessageComposerView: View {
     @StateObject private var input = ComposerInputState()
     @StateObject private var voiceRecorder = ComposerVoiceRecorder()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
     @AppStorage(MessageTextSizePreference.storageKey)
     private var messageTextSize = MessageTextSizePreference.defaultValue
     #if os(iOS)
@@ -164,6 +165,38 @@ struct MessageComposerView: View {
         #endif
     }
 
+    private var controlSpacing: CGFloat {
+        #if os(macOS)
+            10
+        #else
+            8
+        #endif
+    }
+
+    private var horizontalInset: CGFloat {
+        #if os(macOS)
+            16
+        #else
+            isWideChatLayout ? 20 : 12
+        #endif
+    }
+
+    private var editorLeadingInset: CGFloat {
+        #if os(macOS)
+            16
+        #else
+            12
+        #endif
+    }
+
+    private var stickerControlSize: CGFloat {
+        #if os(macOS)
+            32
+        #else
+            44
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ComposerMentionSuggestions(
@@ -172,7 +205,7 @@ struct MessageComposerView: View {
                     && !voiceRecorder.isActive && !showsAttachmentDialog && !showsStickerPicker,
                 search: onSearchMembers
             )
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: controlSpacing) {
                 if voiceRecorder.previewURL != nil {
                     Button {
                         voiceRecorder.discard()
@@ -216,6 +249,15 @@ struct MessageComposerView: View {
                     }
                     // Preserve Camera → Photos → Files even when the menu opens upward.
                     .menuOrder(.fixed)
+                    #if os(macOS)
+                        // macOS menus have their own style and indicator defaults;
+                        // inherited plain button styling alone does not control them.
+                        // Reserve the attachment column with explicit button-menu chrome.
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
+                        .frame(width: 44, height: 44)
+                    #endif
                     .disabled(!canAcquire)
                     .accessibilityLabel(
                         editingMessage == nil
@@ -241,7 +283,13 @@ struct MessageComposerView: View {
                                 .lineLimit(1...6)
                                 .frame(maxHeight: max(20, maxHeight - 24))
                                 .fixedSize(horizontal: false, vertical: true)
-                                .padding(.leading, 12)
+                                #if os(macOS)
+                                    // The native scrolling editor must take only the width
+                                    // left after the trailing sticker button is laid out.
+                                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                                    .padding(.trailing, 4)
+                                #endif
+                                .padding(.leading, editorLeadingInset)
                                 .padding(.vertical, 12)
                                 .disabled(!isEnabled || isAcquiring || voiceRecorder.isActive)
                                 .modifier(ComposerFormattingShortcuts(input: input))
@@ -289,15 +337,27 @@ struct MessageComposerView: View {
                                     .foregroundStyle(
                                         showsStickerPicker ? ChahuaTheme.accent : .secondary
                                     )
-                                    .frame(width: 44, height: 44)
+                                    .frame(width: stickerControlSize, height: stickerControlSize)
                                     .contentShape(Rectangle())
                             }
+                            #if os(macOS)
+                                .padding(.vertical, 6)
+                                .padding(.trailing, 6)
+                            #endif
                             .disabled(!showsStickerPicker && !canPickSticker)
                             .accessibilityLabel(showsStickerPicker ? "Close stickers" : "Stickers")
                             .modifier(ComposerSendFocus())
                         }
+                        #if os(macOS)
+                            .frame(minHeight: 44)
+                        #endif
                     }
                 }
+                #if os(macOS)
+                    // Only the input column expands; the attachment and voice/send
+                    // columns retain their own non-overlapping 44-point hit regions.
+                    .frame(minWidth: 0, maxWidth: .infinity)
+                #endif
                 .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .modifier(ChatGlassSurface(cornerRadius: 22))
 
@@ -352,7 +412,13 @@ struct MessageComposerView: View {
                 .zIndex(1)
             }
             .buttonStyle(.plain)
-            .padding(12)
+            .padding(.horizontal, horizontalInset)
+            #if os(macOS)
+                .padding(.top, 12)
+                .padding(.bottom, 16)
+            #else
+                .padding(.vertical, 12)
+            #endif
             if showsStickerPicker, let stickerLibrary {
                 StickerPickerView(
                     library: stickerLibrary, isEnabled: canPickSticker, onSelect: sendSticker)

@@ -30,7 +30,8 @@
                     showAllAvatars: ConversationTimelinePreferences.defaultShowAllAvatars,
                     showDmDetails: ConversationTimelinePreferences.defaultShowDmDetails,
                     unreadBadgeColor: .default,
-                    headerInset: 0, composerInset: 0, isSplitResizing: false)
+                    composerInset: 0, isSplitResizing: false,
+                    isWideChatLayout: false)
                 let size = CGSize(width: width, height: 650)
                 let window = NSWindow(
                     contentRect: CGRect(origin: .zero, size: size),

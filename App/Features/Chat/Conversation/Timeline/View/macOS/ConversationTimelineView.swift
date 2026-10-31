@@ -6,9 +6,9 @@
     struct ConversationTimelineView: NSViewControllerRepresentable {
         @Environment(\.mediaContext) private var mediaContext
         @Environment(\.colorScheme) private var colorScheme
-        @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
         @Environment(\.isChatSplitResizing) private var isSplitResizing
+        @Environment(\.isWideChatLayout) private var isWideChatLayout
         @AppStorage(MessageTextSizePreference.storageKey)
         private var messageTextSize = MessageTextSizePreference.defaultValue
         @AppStorage(AppLanguage.storageKey) private var appLanguage = AppLanguage.system.rawValue
@@ -51,9 +51,9 @@
                 showAllAvatars: showAllAvatars,
                 showDmDetails: showDmDetails,
                 unreadBadgeColor: unreadBadgeColor,
-                headerInset: chatHeaderInset,
                 composerInset: chatComposerInset,
-                isSplitResizing: isSplitResizing
+                isSplitResizing: isSplitResizing,
+                isWideChatLayout: isWideChatLayout
             )
             if loadsInitialAutomatically {
                 controller.loadInitialIfNeeded(position: initialPosition)

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ConversationListHeader<Account: View, Actions: View>: View {
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
     @Binding var selection: ConversationListScope
     var badges = ConversationTabBadges()
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
@@ -10,6 +11,57 @@ struct ConversationListHeader<Account: View, Actions: View>: View {
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
+        Group {
+            if isWideChatLayout {
+                #if os(macOS)
+                    MacConversationListHeader(
+                        onBack: onBack, isUpdating: isUpdating, account: account, actions: actions)
+                #else
+                    wideHeader
+                #endif
+            } else {
+                compactHeader
+            }
+        }
+    }
+
+    private var wideHeader: some View {
+        HStack(spacing: 8) {
+            leadingControl
+                .frame(width: 44, height: 44)
+            HStack(spacing: 7) {
+                if isUpdating {
+                    ProgressView().controlSize(.small)
+                    Text("Updating…")
+                } else {
+                    Text(
+                        onBack == nil
+                            ? LocalizedStringKey("Chats") : LocalizedStringKey("Archived"))
+                }
+            }
+            .font(
+                ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
+                    ? .system(size: 14, weight: .semibold) : .title3.bold()
+            )
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 0)
+            if onBack == nil {
+                actions()
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 20))
+                    .frame(width: 44, height: 44)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 52)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var compactHeader: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 leadingControl
