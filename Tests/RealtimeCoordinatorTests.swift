@@ -1113,6 +1113,9 @@ final class RealtimeCoordinatorTests: XCTestCase {
                 && store.state.threadListLoadPhase == .loaded
                 && store.state.archivedThreadListLoadPhase == .loaded
         }
+        // List snapshots publish before the recovery task joins its child requests.
+        // A healthy resume starts only after that initial recovery has completed.
+        await eventually { !coordinator.needsRecovery }
         await eventually { await socket.unreadWatches.last?.appBadge == true }
         let initialWatch = await socket.unreadWatches.last
         let initial = try XCTUnwrap(initialWatch)

@@ -2,6 +2,20 @@ import ChahuaAPI
 import Combine
 import SwiftUI
 
+#if os(iOS)
+    private struct ConversationListBottomSafeAreaKey: EnvironmentKey {
+        static let defaultValue: CGFloat? = nil
+    }
+
+    extension EnvironmentValues {
+        /// NavigationStack resets inherited insets; preserve shell playback clearance.
+        var conversationListBottomSafeArea: CGFloat? {
+            get { self[ConversationListBottomSafeAreaKey.self] }
+            set { self[ConversationListBottomSafeAreaKey.self] = newValue }
+        }
+    }
+#endif
+
 struct ChatListView: View {
     @ObservedObject var store: ChatStore
     @ObservedObject var drafts: ChatDraftStore
@@ -26,6 +40,9 @@ struct ChatListView: View {
     @State private var isListVisible = false
     @State private var presentationGeneration = 0
     @FocusState private var isSearchFocused: Bool
+    #if os(iOS)
+        @Environment(\.conversationListBottomSafeArea) private var bottomSafeArea
+    #endif
     #if os(macOS)
         @StateObject private var overlayScrollers = ChatListOverlayScrollerScope()
     #endif
@@ -108,6 +125,17 @@ struct ChatListView: View {
     }
 
     var body: some View {
+        #if os(iOS)
+            GeometryReader { geometry in
+                listContent(bottomInset: bottomSafeArea ?? geometry.safeAreaInsets.bottom)
+            }
+        #else
+            listContent(bottomInset: 0)
+        #endif
+    }
+
+    @ViewBuilder
+    private func listContent(bottomInset: CGFloat) -> some View {
         let snapshot = listSnapshotCache.snapshot(
             chats: archivedMode ? store.state.archivedChats : store.state.chats,
             threads: archivedMode ? store.state.archivedThreads : store.state.threads,
@@ -197,8 +225,9 @@ struct ChatListView: View {
             #endif
         }
         .listStyle(.plain)
-        .contentMargins(.vertical, 0, for: .scrollContent)
+        .contentMargins(.top, 0, for: .scrollContent)
         .contentMargins(.horizontal, 0, for: .scrollContent)
+        .safeAreaPadding(.bottom, bottomInset)
         .scrollContentBackground(.hidden)
         .background(ConversationListScrollMarker(scope: scrollScope, keepsScopeAlive: true))
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -225,6 +254,11 @@ struct ChatListView: View {
             }
         }
         .clipped()
+        #if os(iOS)
+            // Keep the viewport edge-to-edge, but reserve the original safe area
+            // (including playback chrome) inside the scrollable content.
+            .ignoresSafeArea(.container, edges: .bottom)
+        #endif
         .preference(key: ConversationListRefreshingKey.self, value: isPullRefreshing)
         .accessibilityActions {
             Button("Search conversations") { scrollScope.revealSearch() }

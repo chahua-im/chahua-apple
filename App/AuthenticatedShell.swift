@@ -179,11 +179,14 @@ struct AuthenticatedShell: View {
             #if os(macOS)
                 adaptiveLayout
             #else
-                if geometry.size.width >= ChatSplitMetrics.splitThreshold {
-                    adaptiveLayout
-                } else {
-                    listNavigation(includesDetail: true)
+                Group {
+                    if geometry.size.width >= ChatSplitMetrics.splitThreshold {
+                        adaptiveLayout
+                    } else {
+                        listNavigation(includesDetail: true)
+                    }
                 }
+                .environment(\.conversationListBottomSafeArea, geometry.safeAreaInsets.bottom)
             #endif
         }
         .onPreferenceChange(ForwardThreadActionKey.self) { forwardThreadAction = $0 }
@@ -276,6 +279,9 @@ struct AuthenticatedShell: View {
             reportVisibleConversation()
         }
         .onChange(of: visibleConversation) { _, _ in reportVisibleConversation() }
+        .onChange(of: backBadgeExclusionChatID) { _, chatID in
+            chatStore.setBackBadgeExclusion(chatID: chatID, for: notificationSceneID)
+        }
         .onChange(of: headerThreadKey, initial: true) { _, key in
             guard threadSubscription?.key != key else { return }
             threadSubscription = key.flatMap { key in
@@ -288,6 +294,7 @@ struct AuthenticatedShell: View {
             navigationActions.clear()
             isVisible = false
             notifications.setVisibleConversation(sceneID: notificationSceneID, conversation: nil)
+            chatStore.removeBackBadgeExclusion(for: notificationSceneID)
         }
         .sheet(
             isPresented: Binding(
@@ -428,7 +435,8 @@ struct AuthenticatedShell: View {
                                         onForward: forwardThreadAction?.conversation == key
                                             ? forwardThreadAction?.perform : nil,
                                         trailingIsControl: key.threadID != nil,
-                                        backBadgeCount: backBadgeCount,
+                                        backBadgeCount: chatStore.backBadgeCount(
+                                            excludingChatID: key.chatID),
                                         leadingAvatar: headerLeading(for: key)
                                     ) {
                                         headerTrailing(for: key)
@@ -1069,9 +1077,21 @@ struct AuthenticatedShell: View {
         }
     }
 
-    /// The app-icon badge minus the chat on screen (or a thread's parent chat).
+    /// A route-local approximation; independently delivered app/read snapshots
+    /// must never be subtracted on every render.
     private var backBadgeCount: Int {
-        chatStore.state.unreadBadgeCount(excludingChatID: selectedConversationID?.chatID)
+        chatStore.backBadgeCount(excludingChatID: backBadgeChatID)
+    }
+
+    private var backBadgeChatID: String? {
+        threadPath.last?.chatID
+            ?? messageNavigation?.conversation.chatID
+            ?? selectedConversationID?.chatID
+    }
+
+    private var backBadgeExclusionChatID: String? {
+        guard isVisible, scenePhase == .active, !isSigningOut else { return nil }
+        return backBadgeChatID
     }
 
     private var headerSubtitle: String? {
@@ -1098,6 +1118,8 @@ struct AuthenticatedShell: View {
     private func reportVisibleConversation() {
         notifications.setVisibleConversation(
             sceneID: notificationSceneID, conversation: visibleConversation)
+        chatStore.setBackBadgeExclusion(
+            chatID: backBadgeExclusionChatID, for: notificationSceneID)
     }
 
     private func claimNotification() {

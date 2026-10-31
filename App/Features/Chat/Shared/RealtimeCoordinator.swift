@@ -46,7 +46,9 @@ final class RealtimeCoordinator: ObservableObject {
     private var conversationWatchTask: Task<Void, Never>?
     private var nextConversationRequestID: UInt32 = 0
     private var unreadWatchPending = false
-    private var needsRecovery = false
+    // Lists publish their rows before the recovery task joins all work. Expose
+    // readiness read-only so lifecycle consumers can distinguish those boundaries.
+    private(set) var needsRecovery = false
 
     init(
         provider: any RealtimeConnectionProviding,
@@ -66,9 +68,10 @@ final class RealtimeCoordinator: ObservableObject {
         ).sink { [weak self] _ in
             self?.schedulePresenceWatch()
         }
-        conversationObservation = Publishers.Merge(
+        conversationObservation = Publishers.Merge3(
             store.conversationStateScopeChanges.map { false },
-            store.conversationWatchInvalidations.map { true }
+            store.conversationWatchInvalidations.map { true },
+            store.backBadgeWatchChanges.map { true }
         ).sink { [weak self] includeUnread in
             self?.scheduleConversationWatches(includeUnread: includeUnread)
         }
@@ -257,7 +260,7 @@ final class RealtimeCoordinator: ObservableObject {
                 let requestID = self.nextConversationRequestID
                 self.store.beginConversationUnreadWatch(requestID: requestID)
                 self.enqueuePresence(
-                    .unread(requestID, active ? ChatStore.unreadSummaryViews : [], active),
+                    .unread(requestID, active ? self.store.conversationUnreadViews : [], active),
                     on: socket, generation: self.generation, attempt: self.attempt)
             }
             self.nextConversationRequestID &+= 1
