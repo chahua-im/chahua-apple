@@ -7,12 +7,22 @@ import SwiftUI
 /// Shared geometry for the adaptive chat shell and its macOS window minimum.
 enum ChatSplitMetrics {
     static let splitThreshold: CGFloat = 768
-    static let initialSidebarWidth: CGFloat = 380
-    static let minimumSidebarWidth: CGFloat = 380
-    static let maximumSidebarWidth: CGFloat = 500
+    #if os(macOS)
+        static let initialSidebarWidth: CGFloat = 300
+        static let minimumSidebarWidth: CGFloat = 300
+        static let maximumSidebarWidth: CGFloat = 340
+        static let dividerWidth: CGFloat = 0
+        static let outerInset: CGFloat = 8
+        static let sidebarOuterInset: CGFloat = 0
+    #else
+        static let initialSidebarWidth: CGFloat = 320
+        static let minimumSidebarWidth: CGFloat = 300
+        static let maximumSidebarWidth: CGFloat = 340
+        static let dividerWidth: CGFloat = 12
+        static let outerInset: CGFloat = 12
+        static let sidebarOuterInset: CGFloat = 12
+    #endif
     static let minimumDetailWidth: CGFloat = 440
-    static let dividerWidth: CGFloat = 1
-    static let outerInset: CGFloat = 12
     static let accessibilityStep: CGFloat = 20
 }
 
@@ -60,16 +70,16 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
 
             HStack(spacing: 0) {
                 pane(
-                    VStack(spacing: 0) {
+                    sidebar(isSplit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         #if os(macOS)
-                            // Keep the native title-bar controls in AppKit's ownership.
-                            // The sidebar only reserves space beneath their overlay.
-                            Color.clear.frame(height: 52)
+                            .modifier(MacChatSidebarSurface(isSplit: isSplit))
+                        #else
+                            .background(.regularMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: isSplit ? 20 : 0))
                         #endif
-                        sidebar(isSplit)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.regularMaterial),
+                        .padding(.leading, isSplit ? ChatSplitMetrics.sidebarOuterInset : 0)
+                        .padding(.vertical, isSplit ? ChatSplitMetrics.sidebarOuterInset : 0),
                     width: isSplit ? sidebarWidth : (hasSelection ? 0 : proxy.size.width),
                     isVisible: isSplit || !hasSelection
                 )
@@ -87,6 +97,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
                     isVisible: isSplit || hasSelection
                 )
             }
+            .environment(\.isWideChatLayout, isSplit)
             #if os(macOS)
                 .environment(\.isChatSplitResizing, isSplit && isResizing)
                 .onChange(of: isResizing) { _, resizing in
@@ -116,7 +127,7 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
     }
 
     private func splitDivider(isSplit: Bool, availableWidth: CGFloat) -> some View {
-        Color.primary.opacity(0.12)
+        Color.clear
             .overlay {
                 Color.clear
                     .frame(width: 24)
@@ -192,6 +203,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
     var onOpenInfo: (() -> Void)?
     /// Search lives on the info page; the header only binds ⌘F, with no visible button.
     var onSearch: (() -> Void)?
+    var onToggleMute: (() -> Void)?
+    var isUpdatingMute = false
+    var isInspectorPresented = false
     var onForward: (() -> Void)?
     /// The trailing slot holds its own control (e.g. the thread subscription menu)
     /// rather than a decorative avatar.
@@ -201,18 +215,28 @@ struct ChatFloatingHeader<Avatar: View>: View {
     /// Thread identity shares one glass capsule with its avatar; navigation stays separate.
     var leadingAvatar: ThreadHeaderAvatar? = nil
     @ScaledMetric(relativeTo: .body) private var avatarScale: CGFloat = 1
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
     @ViewBuilder var avatar: () -> Avatar
 
-    var body: some View {
+    private var usesDesktopChrome: Bool {
         #if os(macOS)
-            HStack(spacing: 8) {
+            true
+        #else
+            false
+        #endif
+    }
+
+    var body: some View {
+        if isWideChatLayout {
+            HStack(spacing: usesDesktopChrome ? 10 : 8) {
                 navigationControl
                 identity
-                trailingControls
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                wideControls
             }
             .frame(maxWidth: .infinity)
             .background { searchShortcut }
-        #else
+        } else {
             ZStack {
                 // Symmetric edge slots keep the whole identity capsule centered on phones.
                 identity
@@ -230,7 +254,50 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 }
             }
             .background { searchShortcut }
-        #endif
+        }
+    }
+
+    private var wideControls: some View {
+        HStack(spacing: usesDesktopChrome ? 2 : 0) {
+            if let onSearch {
+                wideControl("Search messages", systemImage: "magnifyingglass", action: onSearch)
+            }
+            if let onToggleMute {
+                wideControl(
+                    isMuted ? "Unmute" : "Mute",
+                    systemImage: isMuted ? "bell.slash" : "bell",
+                    action: onToggleMute
+                )
+                .disabled(isUpdatingMute)
+            }
+            if let onOpenInfo {
+                wideControl(
+                    "Chat information", systemImage: "sidebar.right", action: onOpenInfo
+                )
+                .foregroundStyle(isInspectorPresented ? Color.accentColor : Color.primary)
+                .accessibilityValue(isInspectorPresented ? "Open" : "Closed")
+                .accessibilityIdentifier("chat-inspector-toggle")
+            }
+            if onForward != nil || trailingIsControl {
+                trailingControls
+            }
+        }
+        .padding(.horizontal, usesDesktopChrome ? 8 : 4)
+        .padding(.vertical, usesDesktopChrome ? 8 : 4)
+        .modifier(ChatGlassSurface(cornerRadius: usesDesktopChrome ? 24 : 26, isInteractive: true))
+    }
+
+    private func wideControl(
+        _ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18))
+                .frame(width: usesDesktopChrome ? 32 : 40, height: usesDesktopChrome ? 32 : 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 
     @ViewBuilder
@@ -246,15 +313,18 @@ struct ChatFloatingHeader<Avatar: View>: View {
     }
 
     private var identityLabel: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: usesDesktopChrome ? 10 : 8) {
             if let leadingAvatar {
                 // Let the avatar keep its Dynamic Type size, including its author badge.
                 leadingAvatar.fixedSize()
+            } else if isWideChatLayout && !trailingIsControl {
+                avatar()
+                    .frame(width: usesDesktopChrome ? 34 : 36, height: usesDesktopChrome ? 34 : 36)
             }
-            VStack(spacing: 0) {
+            VStack(alignment: isWideChatLayout ? .leading : .center, spacing: 0) {
                 HStack(spacing: 4) {
                     Text(title)
-                        .font(.headline)
+                        .font(usesDesktopChrome ? .system(size: 14, weight: .semibold) : .headline)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .accessibilityAddTraits(.isHeader)
@@ -267,19 +337,19 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 }
                 if let subtitle {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(usesDesktopChrome ? .system(size: 11) : .caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
         }
-        .padding(.leading, leadingAvatar == nil ? 18 : 8)
-        .padding(.trailing, leadingAvatar == nil ? 18 : 12)
+        .padding(
+            .leading, usesDesktopChrome ? 7 : (isWideChatLayout || leadingAvatar != nil ? 8 : 18)
+        )
+        .padding(.trailing, usesDesktopChrome ? 16 : (leadingAvatar == nil ? 18 : 12))
         .padding(.vertical, 4)
-        .frame(minHeight: 44)
-        #if os(macOS)
-            .frame(maxWidth: .infinity)
-        #endif
+        .frame(minHeight: usesDesktopChrome ? 48 : 44)
+        .frame(maxWidth: isWideChatLayout ? .infinity : nil, alignment: .leading)
         .contentShape(Capsule())
         .modifier(ChatGlassSurface(cornerRadius: 24, isInteractive: onOpenInfo != nil))
     }
@@ -336,7 +406,13 @@ struct ChatFloatingHeader<Avatar: View>: View {
     }
 
     /// Base avatar diameter; trailing controls stay 44 pt while avatars scale independently.
-    static var avatarDiameter: CGFloat { 38 }
+    static var avatarDiameter: CGFloat {
+        #if os(macOS)
+            34
+        #else
+            38
+        #endif
+    }
 
     /// ⌘F stays available even when search has no visible header button.
     @ViewBuilder
@@ -448,16 +524,20 @@ struct ChatGlassSurface: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        if #available(macOS 26, iOS 26, *) {
-            content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
-        } else {
-            // TODO: Design dedicated title-bar/tab chrome for iOS versions without
-            // Liquid Glass. Retain this functional material fallback until then.
-            content
-                .background(.regularMaterial, in: shape)
-                .overlay { shape.strokeBorder(.primary.opacity(0.08)) }
-        }
+        #if os(macOS)
+            content.modifier(MacChatGlassSurface(cornerRadius: cornerRadius))
+        #else
+            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            if #available(macOS 26, iOS 26, *) {
+                content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
+            } else {
+                // TODO: Design dedicated title-bar/tab chrome for iOS versions without
+                // Liquid Glass. Retain this functional material fallback until then.
+                content
+                    .background(.regularMaterial, in: shape)
+                    .overlay { shape.strokeBorder(.primary.opacity(0.08)) }
+            }
+        #endif
     }
 }
 
@@ -472,11 +552,8 @@ extension EnvironmentValues {
     }
 }
 
-/// Reserve scrollable breathing room, not layout space: rows travel behind the glass.
-///
-/// On iOS the content also extends under the status bar (like Telegram and Messages),
-/// and the header inset is measured from the screen top so the first rows still clear
-/// the header. macOS keeps the content below the window's title-bar safe area.
+/// iOS reserves scrollable breathing room beneath floating chrome. macOS instead
+/// reserves a structural header row so no timeline row can render behind the glass.
 struct ChatHeaderOverlay<Header: View>: ViewModifier {
     var isVisible = true
     @ViewBuilder let header: () -> Header
@@ -515,25 +592,15 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
                     }
                 }
         #else
-            GeometryReader { geometry in
+            VStack(spacing: isVisible ? 8 : 0) {
+                if isVisible {
+                    header()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 12)
+                }
                 content
-                    .environment(\.chatHeaderInset, isVisible ? headerFrame.height + 12 : 0)
-                    .overlay(alignment: .top) {
-                        if isVisible {
-                            header()
-                                .frame(maxWidth: .infinity)
-                                .background { measuredHeader(in: .named(Self.space)) }
-                                .background(alignment: .top) {
-                                    ChatHeaderBackdrop(edge: .top, strength: .light)
-                                        .frame(
-                                            height: headerFrame.height
-                                                + geometry.safeAreaInsets.top + 32
-                                        )
-                                        .offset(y: -geometry.safeAreaInsets.top)
-                                }
-                        }
-                    }
-                    .coordinateSpace(.named(Self.space))
+                    .environment(\.chatHeaderInset, 0)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         #endif
     }

@@ -5,6 +5,7 @@
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
+        @Environment(\.isWideChatLayout) private var isWideChatLayout
         @AppStorage(MessageTextSizePreference.storageKey)
         private var messageTextSize = MessageTextSizePreference.defaultValue
         @AppStorage(AppLanguage.storageKey) private var appLanguage = AppLanguage.system.rawValue
@@ -24,6 +25,7 @@
             controller.appLanguage = appLanguage
             controller.showAllAvatars = showAllAvatars
             controller.showDmDetails = showDmDetails
+            controller.isWideChatLayout = isWideChatLayout
             controller.headerInset = chatHeaderInset
             controller.composerInset = chatComposerInset
             return controller
@@ -39,6 +41,7 @@
             controller.appLanguage = appLanguage
             controller.showAllAvatars = showAllAvatars
             controller.showDmDetails = showDmDetails
+            controller.isWideChatLayout = isWideChatLayout
             controller.headerInset = chatHeaderInset
             controller.composerInset = chatComposerInset
         }

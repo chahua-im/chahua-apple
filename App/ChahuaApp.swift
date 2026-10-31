@@ -44,21 +44,28 @@ struct ChahuaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            #if DEBUG
-                if ProcessInfo.processInfo.arguments.contains("-fixture-gallery") {
-                    FixtureGalleryView()
-                } else if ProcessInfo.processInfo.arguments.contains("-message-status-preview") {
-                    MessageDeliveryStatusPreview()
-                } else {
+            Group {
+                #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-fixture-gallery") {
+                        FixtureGalleryView()
+                    } else if ProcessInfo.processInfo.arguments.contains("-message-status-preview")
+                    {
+                        MessageDeliveryStatusPreview()
+                    } else {
+                        appRoot
+                    }
+                #else
                     appRoot
-                }
-            #else
-                appRoot
+                #endif
+            }
+            #if os(macOS)
+                .modifier(MacConversationWindowChrome())
             #endif
         }
         .environment(\.locale, appLanguage.locale)
         #if os(macOS)
             .windowStyle(.hiddenTitleBar)
+            .windowToolbarStyle(.unified)
             .windowResizability(.contentMinSize)
         #endif
     }

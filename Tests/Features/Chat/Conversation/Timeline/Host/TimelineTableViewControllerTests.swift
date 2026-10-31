@@ -17,7 +17,67 @@
             TimelineDisplayScheduler.tickSource = .display
         }
 
-        func testOpeningWithFloatingHeaderLandsAtLatestMessage() async throws {
+        func testInspectorContractsTimelineWithoutResizingWindowAndRestoresItsWidth() async throws {
+            let state = InspectorState()
+            let host = NSHostingController(rootView: InspectorHarness(state: state))
+            host.sizingOptions = []
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1200, height: 600),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.setContentSize(NSSize(width: 1200, height: 600))
+            window.orderFront(nil)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(200))
+            let originalFrame = window.frame
+            let originalWidth = state.detailWidth
+            XCTAssertEqual(originalWidth, 1200, accuracy: 1)
+
+            state.isPresented = true
+            try await Task.sleep(for: .milliseconds(200))
+            host.view.layoutSubtreeIfNeeded()
+            XCTAssertEqual(window.frame, originalFrame)
+            XCTAssertLessThan(state.detailWidth, originalWidth)
+            XCTAssertEqual(state.inspectorWidth, 340, accuracy: 1)
+
+            state.isPresented = false
+            try await Task.sleep(for: .milliseconds(200))
+            host.view.layoutSubtreeIfNeeded()
+            XCTAssertEqual(window.frame, originalFrame)
+            XCTAssertEqual(state.detailWidth, originalWidth, accuracy: 1)
+        }
+
+        private final class InspectorState: ObservableObject {
+            @Published var isPresented = false
+            var detailWidth: CGFloat = 0
+            var inspectorWidth: CGFloat = 0
+        }
+
+        private struct InspectorHarness: View {
+            @ObservedObject var state: InspectorState
+
+            var body: some View {
+                ChatInspectorLayout(isPresented: $state.isPresented) {
+                    Color.clear
+                        .onGeometryChange(for: CGFloat.self) {
+                            $0.size.width
+                        } action: {
+                            state.detailWidth = $0
+                        }
+                } inspector: {
+                    Text("Chat Info")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .onGeometryChange(for: CGFloat.self) {
+                            $0.size.width
+                        } action: {
+                            state.inspectorWidth = $0
+                        }
+                }
+            }
+        }
+
+        func testOpeningWithStructuralHeaderAndPinLandsAtLatestMessage() async throws {
             let page = try TimelineTestFixtures.page(
                 (0..<80).map {
                     try TimelineTestFixtures.message(
@@ -30,10 +90,34 @@
                 source: HistorySource(initial: page, older: page),
                 messageStore: ConversationMessageStore()
             )
+            let pin = PinResponse(
+                id: "pin", chatId: "chat",
+                message: try TimelineTestFixtures.message(id: 20, at: 20, text: "Pinned message"),
+                pinnedBy: 1, pinnedAt: TimelineTestFixtures.date(second: 40))
+            var headerFrame = CGRect.zero
+            var pinFrame = CGRect.zero
+            var timelineFrame = CGRect.zero
             let root = ChatSplitLayout(hasSelection: true) { _ in
                 Text("Chats")
             } detail: { _ in
                 ConversationTimelineView(model: model, loadsInitialAutomatically: false)
+                    .onGeometryChange(for: CGRect.self) {
+                        $0.frame(in: .global)
+                    } action: {
+                        timelineFrame = $0
+                    }
+                    .modifier(
+                        ChatPinnedBarOverlay(isVisible: true) {
+                            ChatPinnedMessageBar(
+                                pin: pin, count: 1, onJump: {}, onShowAll: {}
+                            )
+                            .onGeometryChange(for: CGRect.self) {
+                                $0.frame(in: .global)
+                            } action: {
+                                pinFrame = $0
+                            }
+                        }
+                    )
                     .modifier(
                         ChatComposerOverlay {
                             MessageComposerView(
@@ -47,7 +131,11 @@
                             ChatFloatingHeader(title: "Conversation") {
                                 AvatarView(url: nil, displayName: "Conversation", diameter: 32)
                             }
-                            .padding(.top, ChatSplitMetrics.outerInset)
+                            .onGeometryChange(for: CGRect.self) {
+                                $0.frame(in: .global)
+                            } action: {
+                                headerFrame = $0
+                            }
                         })
             }
             let host = NSHostingController(rootView: root)
@@ -63,13 +151,20 @@
             defer { window.close() }
             host.view.layoutSubtreeIfNeeded()
             await model.loadInitial()
-            // Allow SwiftUI to mount the host and deliver both measured chrome insets.
+            // Allow SwiftUI to mount the structurally reserved chrome and composer inset.
             try await Task.sleep(for: .milliseconds(200))
             host.view.layoutSubtreeIfNeeded()
             let scroll = try XCTUnwrap(timelineScrollView(in: host.view))
             let table = try XCTUnwrap(scroll.documentView as? NSTableView)
             XCTAssertEqual(table.numberOfRows, model.rows.count)
             XCTAssertGreaterThan(scroll.documentVisibleRect.height, 0)
+            XCTAssertEqual(scroll.contentInsets.top, 0)
+            XCTAssertEqual(pinFrame.height, 36, accuracy: 1)
+            XCTAssertGreaterThanOrEqual(pinFrame.minY, headerFrame.maxY)
+            XCTAssertGreaterThanOrEqual(timelineFrame.minY, pinFrame.maxY + 12)
+            XCTAssertEqual(
+                scroll.bounds.height, timelineFrame.height, accuracy: 1,
+                "The native scroll viewport must occupy only the space below header and pin.")
             XCTAssertEqual(
                 table.bounds.maxY, scroll.documentVisibleRect.maxY - scroll.contentInsets.bottom,
                 accuracy: 1,
@@ -88,7 +183,7 @@
                 scroll.isFlipped ? scroll.bounds.maxY - track.maxY : track.minY - scroll.bounds.minY
             XCTAssertEqual(
                 topGap, scroll.contentInsets.top, accuracy: 1,
-                "The indicator track must start below the header, without counting its inset twice."
+                "The indicator must start at the unobscured viewport top, without a second header inset."
             )
             XCTAssertEqual(
                 bottomGap, scroll.contentInsets.bottom, accuracy: 1,
@@ -170,7 +265,7 @@
             XCTAssertEqual(pasteboard.string(forType: .string), "second")
         }
 
-        func testUnreadMarkerAndReadTrackingRespectFloatingOverlays() async throws {
+        func testUnreadMarkerAndReadTrackingRespectViewportAndFloatingComposer() async throws {
             let messages = try (0..<16).map {
                 try TimelineTestFixtures.message(
                     id: UInt64($0 + 1), senderID: 2, at: $0, text: "Visible message \($0)")
@@ -191,7 +286,6 @@
                 markRead: { reads.append($0) }
             )
             let controller = TimelineTableViewController(model: model)
-            controller.headerInset = 64
             controller.composerInset = 80
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
@@ -218,7 +312,7 @@
             marker.layoutSubtreeIfNeeded()
             XCTAssertEqual(
                 table.rect(ofRow: markerIndex).minY,
-                scroll.documentVisibleRect.minY + controller.headerInset, accuracy: 1)
+                scroll.documentVisibleRect.minY, accuracy: 1)
 
             model.updateReadState(unreadCount: 5, lastReadMessageID: messages[10].id)
             await model.jumpTowardLatest()
@@ -249,13 +343,13 @@
                 window.setContentSize(
                     NSSize(
                         width: 400,
-                        height: bottom - top + controller.headerInset + controller.composerInset))
+                        height: bottom - top + controller.composerInset))
                 controller.view.layoutSubtreeIfNeeded()
                 controller.viewDidLayout()
                 try await waitForDisplay(controller, model: model)
                 NotificationCenter.default.post(
                     name: NSScrollView.willStartLiveScrollNotification, object: scroll)
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: top - controller.headerInset))
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: top))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 NotificationCenter.default.post(
                     name: NSScrollView.didLiveScrollNotification, object: scroll)
@@ -270,7 +364,7 @@
             try await Task.sleep(for: .milliseconds(650))
             XCTAssertEqual(
                 reads, [messages[6].id],
-                "A message visible between the overlays is read even when the row is clipped.")
+                "A message in the unobscured viewport is read even when the row is clipped.")
 
             try await show(top: try frame(5).midY, bottom: try frame(8).midY)
             try await Task.sleep(for: .milliseconds(650))

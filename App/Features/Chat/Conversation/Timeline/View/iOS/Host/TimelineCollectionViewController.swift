@@ -115,6 +115,13 @@
                 requestDisplayUpdate()
             }
         }
+        var isWideChatLayout = false {
+            didSet {
+                guard isWideChatLayout != oldValue, isViewLoaded else { return }
+                preparation = nil
+                requestDisplayUpdate()
+            }
+        }
         private lazy var rowCache = TimelineRowCache(
             currentUserID: model.currentUserID, isThreadTimeline: model.threadID != nil)
         /// Prepared rows backing `rows`; on-demand measurement may refresh individual entries.
@@ -349,7 +356,8 @@
                 layoutDirection: view.effectiveUserInterfaceLayoutDirection == .rightToLeft
                     ? .rightToLeft : .leftToRight, language: appLanguage,
                 showAllAvatars: showAllAvatars,
-                showsMessageDetails: model.isGroupChat || showDmDetails)
+                showsMessageDetails: model.isGroupChat || showDmDetails,
+                isWideChatLayout: isWideChatLayout)
         }
 
         private func exactLayout(for row: TimelineRow) -> TimelineRowLayout {

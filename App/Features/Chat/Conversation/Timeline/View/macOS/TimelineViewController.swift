@@ -17,7 +17,6 @@
         private var initialLoadTask: Task<Void, Never>?
         private var didRequestInitialLoad = false
         private var isTornDown = false
-        private var headerInset: CGFloat = 0
         private var composerInset: CGFloat = 0
         private var colorScheme: ColorScheme = .light
 
@@ -77,12 +76,11 @@
             showAllAvatars: Bool,
             showDmDetails: Bool,
             unreadBadgeColor: ConversationUnreadBadgeColor,
-            headerInset: CGFloat,
             composerInset: CGFloat,
-            isSplitResizing: Bool
+            isSplitResizing: Bool,
+            isWideChatLayout: Bool
         ) {
             guard !isTornDown else { return }
-            self.headerInset = headerInset
             self.composerInset = composerInset
             let appearanceChanged = self.colorScheme != colorScheme
             self.colorScheme = colorScheme
@@ -93,9 +91,9 @@
             tableController.appLanguage = appLanguage
             tableController.showAllAvatars = showAllAvatars
             tableController.showDmDetails = showDmDetails
-            // The table applies these as contentInsets. Chrome only positions itself;
-            // neither this controller nor its representable adds another safe area.
-            tableController.headerInset = headerInset
+            tableController.isWideChatLayout = isWideChatLayout
+            // Header and pins are structural SwiftUI siblings above this viewport.
+            // Only the floating composer contributes a native content inset.
             tableController.composerInset = composerInset
             interactionController.configure(actions: actions, context: interactionContext)
             tableController.actions = interactionController.routedActions
@@ -147,7 +145,7 @@
             guard isViewLoaded, !isTornDown else { return }
             // @Published emits before assignment. Read the current model here, on the
             // queued display turn; isAtLiveEdge is computed, not a publisher.
-            chromeView.update(model: model, headerInset: headerInset, composerInset: composerInset)
+            chromeView.update(model: model, composerInset: composerInset)
             let hidesTable = !chromeView.showsTable
             if tableController.view.isHidden != hidesTable {
                 tableController.view.isHidden = hidesTable

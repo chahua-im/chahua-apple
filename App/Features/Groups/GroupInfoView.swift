@@ -10,6 +10,8 @@ struct GroupInfoView: View {
     let onSearch: () -> Void
     let onOpenMessage: (MessageResponse) -> Void
     let onOpenThread: (MessageResponse) -> Void
+    let isInspector: Bool
+    let onClose: (() -> Void)?
 
     @State private var groupInfo: GroupInfoResponse?
     @State private var isUpdatingNotifications = false
@@ -36,7 +38,9 @@ struct GroupInfoView: View {
         onLeave: @escaping () -> Void,
         onSearch: @escaping () -> Void,
         onOpenMessage: @escaping (MessageResponse) -> Void = { _ in },
-        onOpenThread: @escaping (MessageResponse) -> Void = { _ in }
+        onOpenThread: @escaping (MessageResponse) -> Void = { _ in },
+        isInspector: Bool = false,
+        onClose: (() -> Void)? = nil
     ) {
         self.chat = chat
         self.currentUserID = currentUserID
@@ -45,16 +49,37 @@ struct GroupInfoView: View {
         self.onSearch = onSearch
         self.onOpenMessage = onOpenMessage
         self.onOpenThread = onOpenThread
+        self.isInspector = isInspector
+        self.onClose = onClose
         sessionRevision = store.sessionRevision
+    }
+
+    private var pageBackground: Color {
+        #if os(macOS)
+            // The floating inspector container owns the M6 material and tint.
+            isInspector ? .clear : ChahuaTheme.conversationBackground(for: colorScheme)
+        #else
+            ChahuaTheme.conversationBackground(for: colorScheme)
+        #endif
     }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: isInspector ? 12 : 20) {
                 hero
                 actions
                 if let description {
                     descriptionCard(description)
+                }
+                if isInspector, hasPermissionRows {
+                    permissionRows
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+                            in: RoundedRectangle(cornerRadius: 14)
+                        )
                 }
                 if isLoadingInfo, groupInfo == nil {
                     ProgressView()
@@ -71,6 +96,7 @@ struct GroupInfoView: View {
                     NavigationLink {
                         FriendPrivacySettingsView(store: store, peerUID: peer.uid)
                             .id(peer.uid)
+                            .modifier(GroupInfoDestinationNavigation(isInspector: isInspector))
                     } label: {
                         HStack {
                             Image(systemName: "hand.raised.fill")
@@ -104,32 +130,33 @@ struct GroupInfoView: View {
                 sectionContent
             }
             .frame(maxWidth: 760)
-            .padding(.horizontal, 20)
-            .padding(.top, 24)
+            .padding(.horizontal, isInspector ? 16 : 20)
+            .padding(.top, isInspector ? 12 : 24)
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity)
         }
-        .background(ChahuaTheme.conversationBackground(for: colorScheme))
-        .navigationTitle(isDM ? "Chat Info" : "Group Info")
+        .background(pageBackground)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if isInspector {
+                inspectorHeader
+            }
+        }
+        .navigationTitle(isInspector ? "" : (isDM ? "Chat Info" : "Group Info"))
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            // Only the inspector root hides native chrome. Pushed destinations restore it.
+            .toolbar(isInspector ? .hidden : .automatic, for: .navigationBar)
         #endif
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if isCurrentSession, !isDM, let info = groupInfo, info.myRole == .admin {
-                    NavigationLink("Edit") {
-                        GroupEditingView(store: store, info: info) { updated in
-                            groupInfo = updated
-                            infoRevision += 1
-                        }
-                    }
-                    .accessibilityIdentifier("group-edit-button")
-                    .disabled(isLeaving)
+            if !isInspector {
+                ToolbarItem(placement: .primaryAction) {
+                    editLink
                 }
             }
         }
         .navigationDestination(isPresented: $showsInvitations) {
             GroupInvitesView(store: store, chatID: chat.id)
+                .modifier(GroupInfoDestinationNavigation(isInspector: isInspector))
         }
         .task(id: chat.id) { await loadInfo() }
         .onReceive(store.$groupInfoByChatID) { infos in
@@ -180,6 +207,51 @@ struct GroupInfoView: View {
         }
     }
 
+    private var inspectorHeader: some View {
+        HStack(spacing: 8) {
+            Text(isDM ? "Chat Info" : "Group Info")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            editLink
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: 44)
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+                .accessibilityIdentifier("group-info-close-button")
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 16)
+        .padding(.trailing, 4)
+        .frame(minHeight: 52)
+        .background(pageBackground)
+    }
+
+    @ViewBuilder
+    private var editLink: some View {
+        if isCurrentSession, !isDM, let info = groupInfo, info.myRole == .admin {
+            NavigationLink("Edit") {
+                GroupEditingView(store: store, info: info) { updated in
+                    groupInfo = updated
+                    infoRevision += 1
+                }
+                .modifier(GroupInfoDestinationNavigation(isInspector: isInspector))
+            }
+            .foregroundStyle(Color.accentColor)
+            .accessibilityIdentifier("group-edit-button")
+            .disabled(isLeaving)
+        }
+    }
+
     private var hero: some View {
         VStack(spacing: 6) {
             AvatarView(
@@ -196,34 +268,46 @@ struct GroupInfoView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            if isCurrentSession, !isDM, let groupInfo {
-                VStack(spacing: 4) {
-                    if groupInfo.myRole == .admin {
-                        if let mode = groupInfo.speakingMode {
-                            LabeledContent("Speaking permissions", value: mode.localizedTitle)
-                        }
-                        if let mode = groupInfo.effectiveSpeakingMode,
-                            mode != .unrestricted
-                        {
-                            LabeledContent("Your permissions", value: mode.localizedTitle)
-                            Text(mode.restrictionExplanation)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                    if let policy = groupInfo.membershipMessagePolicy {
-                        LabeledContent(
-                            "Membership messages", value: policy.visibility.localizedTitle)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: 420)
-                .padding(.top, 6)
+            if !isInspector, isCurrentSession, !isDM, groupInfo != nil {
+                permissionRows
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 420)
+                    .padding(.top, 6)
             }
         }
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
+    }
+
+    private var hasPermissionRows: Bool {
+        guard isCurrentSession, !isDM, let groupInfo else { return false }
+        return groupInfo.membershipMessagePolicy != nil
+            || (groupInfo.myRole == .admin
+                && (groupInfo.speakingMode != nil
+                    || (groupInfo.effectiveSpeakingMode != nil
+                        && groupInfo.effectiveSpeakingMode != .unrestricted)))
+    }
+
+    private var permissionRows: some View {
+        VStack(spacing: isInspector ? 12 : 4) {
+            if let groupInfo {
+                if groupInfo.myRole == .admin {
+                    if let mode = groupInfo.speakingMode {
+                        LabeledContent("Speaking permissions", value: mode.localizedTitle)
+                    }
+                    if let mode = groupInfo.effectiveSpeakingMode, mode != .unrestricted {
+                        LabeledContent("Your permissions", value: mode.localizedTitle)
+                        Text(mode.restrictionExplanation)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                if let policy = groupInfo.membershipMessagePolicy {
+                    LabeledContent("Membership messages", value: policy.visibility.localizedTitle)
+                }
+            }
+        }
     }
 
     private func descriptionCard(_ description: String) -> some View {
@@ -308,15 +392,9 @@ struct GroupInfoView: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 12) {
-            if let peerUID {
-                Button {
-                    openUserProfile(peerUID)
-                } label: {
-                    GroupInfoActionLabel(systemImage: "person.crop.circle", title: "Profile")
-                }
-                .accessibilityLabel("Profile")
-                .accessibilityIdentifier("chat-profile-button")
+        HStack(spacing: isInspector ? 8 : 12) {
+            if !isInspector {
+                profileButton
             }
 
             notificationMenu
@@ -329,6 +407,10 @@ struct GroupInfoView: View {
             .disabled(isLeaving)
 
             Menu {
+                if isInspector, peerUID != nil {
+                    profileButton
+                    Divider()
+                }
                 if isDM {
                     if relationship?.isFriend == true {
                         Button(
@@ -374,6 +456,23 @@ struct GroupInfoView: View {
         .buttonStyle(.plain)
         .frame(maxWidth: 560)
         .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var profileButton: some View {
+        if let peerUID {
+            Button {
+                openUserProfile(peerUID)
+            } label: {
+                if isInspector {
+                    Label("Profile", systemImage: "person.crop.circle")
+                } else {
+                    GroupInfoActionLabel(systemImage: "person.crop.circle", title: "Profile")
+                }
+            }
+            .accessibilityLabel("Profile")
+            .accessibilityIdentifier("chat-profile-button")
+        }
     }
 
     private var isDM: Bool { chat.kind == .dm }
@@ -637,6 +736,24 @@ struct GroupInfoView: View {
     }
 }
 
+/// Navigation-bar visibility is scoped to each pushed page, never the parent stack.
+private struct GroupInfoDestinationNavigation: ViewModifier {
+    let isInspector: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        #if os(iOS)
+            if isInspector {
+                content.toolbar(.visible, for: .navigationBar)
+            } else {
+                content
+            }
+        #else
+            content
+        #endif
+    }
+}
+
 private enum GroupInfoSection: CaseIterable {
     case members, media, files, threads
 
@@ -668,29 +785,30 @@ private struct GroupInfoActionLabel: View {
     let title: LocalizedStringKey
     var isProgressing = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
 
     var body: some View {
         VStack(spacing: 6) {
             if isProgressing {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(height: 24)
+                    .frame(height: isWideChatLayout ? 22 : 24)
             } else {
                 Image(systemName: systemImage)
-                    .font(.system(size: 22, weight: .medium))
-                    .frame(height: 24)
+                    .font(.system(size: isWideChatLayout ? 18 : 22, weight: .medium))
+                    .frame(height: isWideChatLayout ? 22 : 24)
             }
             Text(title)
-                .font(.subheadline.weight(.medium))
+                .font(isWideChatLayout ? .caption.weight(.medium) : .subheadline.weight(.medium))
         }
         .foregroundStyle(Color.accentColor)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .contentShape(RoundedRectangle(cornerRadius: 18))
-        // Flat tiles on every platform, matching the Flutter group detail actions.
+        .padding(.vertical, isWideChatLayout ? 10 : 12)
+        .contentShape(RoundedRectangle(cornerRadius: isWideChatLayout ? 12 : 18))
+        // The wide pane uses denser tiles; compact presentation retains its original sizing.
         .background(
             ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: 18))
+            in: RoundedRectangle(cornerRadius: isWideChatLayout ? 12 : 18))
     }
 }
 

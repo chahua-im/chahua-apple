@@ -115,7 +115,13 @@ Native binding counts remain 362/358/357 across the respective phases in both va
 
 Both variants use optimized Profile builds with existing fixture support and testability on the same iPhone simulator. A compiler VFS overlay uses preserved pre-iteration working-tree sources, not Git HEAD or a checkout/reset; only the same `Detail.Body` marker was added to the baseline. Duplicate exported signpost tables are deduplicated. Test-bundle phase names are unresolved in the export, so the three ordered begin/end pairs are matched by signpost ID; app body markers and publication counts resolve. The temporary display driver requests 60–120 Hz only for this workload; the shipped scheduler policy is unchanged. Phase durations are not delivered FPS, physical gestures or device power measurements.
 
-Initial harness failures from a nonnumeric notification ID, inactive scene gating and missing connected-watch setup are not passing evidence. A prior capture with ignored synthetic snapshots is excluded. The successful updated unprofiled smoke is `.ci/Iter2-aftercheck2-native.xcresult`; accepted paired runs validate the final synthetic state changes. The isolated fixture's saved-message-status error is not production backend evidence. Post-iteration device pacing still requires the next 13 Pro Max recording.
+Initial harness failures from a nonnumeric notification ID, inactive scene gating and missing connected-watch setup are not passing evidence. A prior capture with ignored synthetic snapshots is excluded. The successful updated unprofiled smoke is `.ci/Iter2-aftercheck2-native.xcresult`; accepted paired runs validate the final synthetic state changes. The isolated fixture's saved-message-status error is not production backend evidence.
+
+On 2026-10-26 the user verified that scrolling in the updated client is “a lot lot better.” This confirms qualitative interactive improvement; the feedback does not specify measured FPS or power. Further physical tracing is optional for residual hitches, not a prerequisite for accepting that observation. Keep unrelated functional acceptance checks separate.
+
+Final interaction smoke `.ci/Iter2-after6-interactions.xcresult` passed: genuine permission events disabled and restored the native composer, and a message's profile action opened the native peer-profile sheet through the stable environment callback. The profile API fixture is unsupported; this verifies routing, not live profile data.
+
+Final integration: `.ci/Iter2-iOS-final.xcresult` passed 430 tests after temporary workload removal; `.ci/Iter2-macOS2-final.xcresult` passed 469. Both report zero failures/skips/runtime warnings. The final macOS build also succeeded after explicitly matching the async environment callback's MainActor/Sendable contract. Formatting/lint passed; existing compiler warnings remain. Temporary workload source, local recording gate and compiler-overlay inputs were removed.
 
 
 

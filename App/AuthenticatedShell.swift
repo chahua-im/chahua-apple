@@ -31,6 +31,8 @@ struct AuthenticatedShell: View {
     @State private var messageNavigation: MessageNavigation?
     @State private var messageSearch: MessageSearchSession?
     @State private var groupPath: [GroupRoute] = []
+    @State private var showsInspector = false
+    @State private var isUpdatingHeaderMute = false
     @State private var forwardThreadAction: ForwardThreadAction?
     @State private var threadInfoAction: ThreadInfoAction?
     @State private var feature: FeatureDestination?
@@ -339,51 +341,93 @@ struct AuthenticatedShell: View {
                 }
             #endif
         } detail: { isSplit in
-            NavigationStack(path: $groupPath) {
-                Group {
-                    if let key = threadPath.last {
-                        threadDestination(key)
-                    } else {
-                        detailContent
-                    }
-                }
-                .modifier(
-                    ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
-                        ChatFloatingHeader(
-                            title: threadPath.isEmpty
-                                ? selectedTitle
-                                : openedThread?.title ?? AppLanguage.localized("Thread"),
-                            subtitle: threadPath.isEmpty ? headerSubtitle : nil,
-                            isMuted: threadPath.isEmpty && headerChatIsMuted,
-                            onBack: !threadPath.isEmpty
-                                ? popThread : isSplit ? nil : { selectConversation(nil) },
-                            onClose: isSplit && threadPath.isEmpty
-                                ? { selectConversation(nil) } : nil,
-                            onOpenInfo: infoAction,
-                            onSearch: searchAction,
-                            onForward: forwardThreadAction?.conversation == headerThreadKey
-                                ? forwardThreadAction?.perform : nil,
-                            trailingIsControl: headerThreadKey != nil,
-                            backBadgeCount: backBadgeCount,
-                            leadingAvatar: headerLeading(for: headerThreadKey)
-                        ) {
-                            headerTrailing(for: headerThreadKey)
+            ChatInspectorLayout(isPresented: $showsInspector) {
+                NavigationStack(path: $groupPath) {
+                    Group {
+                        if let key = threadPath.last {
+                            threadDestination(key)
+                        } else {
+                            detailContent
                         }
-                        .presenceScope(
-                            ChatPresenceDisplay.scope(
-                                for: threadPath.isEmpty ? selectedInfoChat : nil),
-                            store: chatStore
-                        )
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 12)
                     }
-                )
-                #if os(iOS)
-                    .toolbar(.hidden, for: .navigationBar)
-                #endif
-                .navigationDestination(for: GroupRoute.self) { route in
-                    groupDestination(route)
+                    .modifier(
+                        ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
+                            ChatFloatingHeader(
+                                title: threadPath.isEmpty
+                                    ? selectedTitle
+                                    : openedThread?.title ?? AppLanguage.localized("Thread"),
+                                subtitle: threadPath.isEmpty ? headerSubtitle : nil,
+                                isMuted: threadPath.isEmpty && headerChatIsMuted,
+                                onBack: !threadPath.isEmpty
+                                    ? popThread : isSplit ? nil : { selectConversation(nil) },
+                                onClose: nil,
+                                onOpenInfo: isSplit && selectedInfoChat != nil
+                                    ? {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            showsInspector.toggle()
+                                        }
+                                    }
+                                    : infoAction,
+                                onSearch: searchAction,
+                                onToggleMute: threadPath.isEmpty && selectedInfoChat != nil
+                                    ? { Task { await toggleHeaderMute() } } : nil,
+                                isUpdatingMute: isUpdatingHeaderMute,
+                                isInspectorPresented: showsInspector,
+                                onForward: forwardThreadAction?.conversation == headerThreadKey
+                                    ? forwardThreadAction?.perform : nil,
+                                trailingIsControl: headerThreadKey != nil,
+                                backBadgeCount: backBadgeCount,
+                                leadingAvatar: headerLeading(for: headerThreadKey)
+                            ) {
+                                headerTrailing(for: headerThreadKey)
+                            }
+                            .presenceScope(
+                                ChatPresenceDisplay.scope(
+                                    for: threadPath.isEmpty ? selectedInfoChat : nil),
+                                store: chatStore
+                            )
+                            .padding(.horizontal, chatHeaderHorizontalInset)
+                            #if os(iOS)
+                                .padding(.vertical, 12)
+                            #endif
+                        }
+                    )
+                    #if os(iOS)
+                        .toolbar(.hidden, for: .navigationBar)
+                    #endif
+                    .navigationDestination(for: GroupRoute.self) { route in
+                        groupDestination(route)
+                    }
                 }
+            } inspector: {
+                NavigationStack {
+                    if let chat = selectedInfoChat {
+                        GroupInfoView(
+                            chat: chat, currentUserID: me.uid, store: chatStore,
+                            onLeave: {
+                                if selectedConversationID?.chatID == chat.id {
+                                    selectConversation(nil)
+                                }
+                            },
+                            onSearch: { openMessageSearch(in: chat) },
+                            onOpenMessage: { openMessageTarget($0, in: chat) },
+                            onOpenThread: {
+                                showsInspector = false
+                                openThread($0, in: chat)
+                            },
+                            isInspector: true,
+                            onClose: {
+                                withAnimation(.easeInOut(duration: 0.2)) { showsInspector = false }
+                            }
+                        )
+                        .id(chat.id)
+                    }
+                }
+                .environment(\.chatHeaderInset, 0)
+            }
+            .onChange(of: selectedConversationID) { _, _ in showsInspector = false }
+            .onChange(of: threadPath) { _, path in
+                if !path.isEmpty { showsInspector = false }
             }
         }
     }
@@ -438,8 +482,10 @@ struct AuthenticatedShell: View {
                                             for: key.threadID == nil ? selectedInfoChat : nil),
                                         store: chatStore
                                     )
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, chatHeaderHorizontalInset)
+                                    #if os(iOS)
+                                        .padding(.vertical, 8)
+                                    #endif
                                 }
                             )
                             .toolbar(.hidden, for: .navigationBar)
@@ -508,7 +554,7 @@ struct AuthenticatedShell: View {
             store: chatStore,
             drafts: chatStore.drafts,
             currentUserID: me.uid,
-            scope: scope.wrappedValue,
+            scope: scope,
             archivedMode: archived,
             showThreadsInMessages: showThreadsInMessages,
             onOpenArchived: openArchived,
@@ -677,6 +723,31 @@ struct AuthenticatedShell: View {
         }
     }
 
+    private func toggleHeaderMute() async {
+        guard !isUpdatingHeaderMute, !isSigningOut, let chat = selectedInfoChat,
+            chatStore.currentUserProfile?.uid == me.uid
+        else { return }
+        isUpdatingHeaderMute = true
+        defer { isUpdatingHeaderMute = false }
+        do {
+            let wasMuted = headerChatIsMuted
+            try await chatStore.loadNotificationDefaults()
+            guard !isSigningOut, chatStore.currentUserProfile?.uid == me.uid,
+                let defaults = chatStore.state.notificationDefaults
+            else { return }
+            let mode: NotificationSettingMode
+            if wasMuted {
+                mode = defaults.mutedByDefault(kind: chat.kind) ? .alwaysUnmuted : .inherit
+            } else {
+                mode = .alwaysMuted
+            }
+            try await chatStore.setNotificationSetting(chatID: chat.id, request: .init(mode: mode))
+        } catch is CancellationError {
+        } catch {
+            navigationError = error.localizedDescription
+        }
+    }
+
     /// The selected group or DM, whose info page the header opens; threads have none.
     private var selectedInfoChat: ChatListItem? {
         guard selectedConversationID?.threadID == nil else { return nil }
@@ -839,8 +910,13 @@ struct AuthenticatedShell: View {
             Button("Join with Link", systemImage: "link") { feature = .joinGroup("") }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 20))
-                .frame(width: 44, height: 44)
+                #if os(macOS)
+                    .font(.system(size: 18))
+                    .frame(width: 32, height: 32)
+                #else
+                    .font(.system(size: 20))
+                    .frame(width: 44, height: 44)
+                #endif
                 .contentShape(Circle())
         }
         .menuIndicator(.hidden)
@@ -1157,7 +1233,21 @@ struct AuthenticatedShell: View {
         }
     }
 
-    private var accountAvatarDiameter: CGFloat { 32 }
+    private var accountAvatarDiameter: CGFloat {
+        #if os(macOS)
+            26
+        #else
+            32
+        #endif
+    }
+
+    private var chatHeaderHorizontalInset: CGFloat {
+        #if os(macOS)
+            16
+        #else
+            12
+        #endif
+    }
 
     private var selectedConversation: ConversationListItem? {
         guard let selectedConversationID else { return nil }

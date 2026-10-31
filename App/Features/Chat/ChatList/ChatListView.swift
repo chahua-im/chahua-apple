@@ -3,10 +3,12 @@ import Combine
 import SwiftUI
 
 struct ChatListView: View {
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
+    @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: ChatStore
     @ObservedObject var drafts: ChatDraftStore
     let currentUserID: Int32
-    let scope: ConversationListScope
+    @Binding var scope: ConversationListScope
     var archivedMode = false
     var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
     var onOpenArchived: (() -> Void)?
@@ -108,6 +110,38 @@ struct ChatListView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+            // Native List scroll-offset restoration must not compete with header
+            // safe-area insets. Give macOS chrome its own space above the viewport.
+            VStack(spacing: 0) {
+                if isWideChatLayout {
+                    wideSearchHeader
+                }
+                conversationList
+            }
+        #else
+            conversationList
+        #endif
+    }
+
+    private var wideSearchHeader: some View {
+        VStack(spacing: 0) {
+            searchDrawer
+            ConversationScopePicker(
+                selection: $scope,
+                badges: ConversationTabBadges(
+                    summaries: store.state.conversationUnreadSummaries,
+                    archived: archivedMode,
+                    showThreadsInMessages: showThreadsInMessages),
+                badgeColor: badgeColor
+            )
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var conversationList: some View {
         let snapshot = listSnapshotCache.snapshot(
             chats: archivedMode ? store.state.archivedChats : store.state.chats,
             threads: archivedMode ? store.state.archivedThreads : store.state.threads,
@@ -120,7 +154,7 @@ struct ChatListView: View {
             isPullRefreshing: isPullRefreshing, onRetry: { await performManualRefresh() }
         )
         List {
-            if scrollScope.isSearchRevealed && !isSearchPinned {
+            if !isWideChatLayout, scrollScope.isSearchRevealed && !isSearchPinned {
                 Color.clear
                     .frame(height: ConversationListScrollScope.drawerHeight)
                     .background(ConversationListScrollMarker(scope: scrollScope))
@@ -143,7 +177,11 @@ struct ChatListView: View {
                     .background(ConversationListScrollMarker(scope: scrollScope))
                     #if os(macOS)
                         .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                        .listRowInsets(EdgeInsets())
+                        .listRowInsets(
+                            EdgeInsets(
+                                top: 0, leading: usesDesktopDensity ? 8 : 0,
+                                bottom: usesDesktopDensity ? 2 : 0,
+                                trailing: usesDesktopDensity ? 8 : 0))
                     #else
                         .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     #endif
@@ -158,7 +196,11 @@ struct ChatListView: View {
                     .background(ConversationListScrollMarker(scope: scrollScope))
                     #if os(macOS)
                         .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                        .listRowInsets(EdgeInsets())
+                        .listRowInsets(
+                            EdgeInsets(
+                                top: 0, leading: usesDesktopDensity ? 8 : 0,
+                                bottom: usesDesktopDensity ? 2 : 0,
+                                trailing: usesDesktopDensity ? 8 : 0))
                     #else
                         .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     #endif
@@ -187,7 +229,11 @@ struct ChatListView: View {
                     #if os(iOS)
                         .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     #else
-                        .listRowInsets(EdgeInsets())
+                        .listRowInsets(
+                            EdgeInsets(
+                                top: 0, leading: usesDesktopDensity ? 8 : 0,
+                                bottom: usesDesktopDensity ? 2 : 0,
+                                trailing: usesDesktopDensity ? 8 : 0))
                     #endif
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -197,17 +243,36 @@ struct ChatListView: View {
             #endif
         }
         .listStyle(.plain)
-        .contentMargins(.vertical, 0, for: .scrollContent)
+        #if os(macOS)
+            // Row insets provide spacing without the iOS-only listRowSpacing API.
+            // Keep the existing native scroll driver and teardown behavior.
+            .contentMargins(.top, usesDesktopDensity ? 2 : 0, for: .scrollContent)
+            .contentMargins(.bottom, 0, for: .scrollContent)
+        #else
+            .contentMargins(.vertical, 0, for: .scrollContent)
+        #endif
         .contentMargins(.horizontal, 0, for: .scrollContent)
         .scrollContentBackground(.hidden)
         .background(ConversationListScrollMarker(scope: scrollScope, keepsScopeAlive: true))
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if scrollScope.isSearchRevealed, isSearchPinned {
-                Color.clear.frame(height: searchDrawerHeight)
+        #if os(iOS)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if isWideChatLayout {
+                    wideSearchHeader
+                } else if scrollScope.isSearchRevealed, isSearchPinned {
+                    Color.clear.frame(height: searchDrawerHeight)
+                }
             }
-        }
+        #else
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !isWideChatLayout, scrollScope.isSearchRevealed, isSearchPinned {
+                    Color.clear.frame(height: searchDrawerHeight)
+                }
+            }
+        #endif
         .overlay(alignment: .top) {
-            if scrollScope.isSearchRevealed || scrollScope.pullDistance > 0 {
+            if !isWideChatLayout,
+                scrollScope.isSearchRevealed || scrollScope.pullDistance > 0
+            {
                 searchDrawer
                     .frame(
                         height: scrollScope.isSearchRevealed
@@ -227,13 +292,13 @@ struct ChatListView: View {
         .clipped()
         .preference(key: ConversationListRefreshingKey.self, value: isPullRefreshing)
         .accessibilityActions {
-            Button("Search conversations") { scrollScope.revealSearch() }
+            Button("Search conversations") { revealSearch() }
             Button("Refresh conversations") { Task { await performManualRefresh() } }
         }
         .background {
             HStack(spacing: 0) {
                 Button("Search conversations") {
-                    scrollScope.revealSearch()
+                    revealSearch()
                     isSearchFocused = true
                 }
                 .keyboardShortcut("f", modifiers: .command)
@@ -256,8 +321,9 @@ struct ChatListView: View {
                 searchText = ""
                 presentationGeneration = presentation?.resetGeneration ?? 0
                 scrollScope.reset()
+                scrollScope.isSearchPinned = isSearchPinned
             case .revealSearch:
-                if isListVisible { scrollScope.revealSearch() }
+                if isListVisible { revealSearch() }
             case .dismissSearchKeyboard:
                 isSearchFocused = false
             }
@@ -318,7 +384,26 @@ struct ChatListView: View {
         }
     }
 
-    private var isSearchPinned: Bool { isSearchFocused || !searchText.isEmpty }
+    private var isSearchPinned: Bool {
+        isWideChatLayout || isSearchFocused || !searchText.isEmpty
+    }
+
+    private var usesDesktopDensity: Bool {
+        ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
+    }
+
+    private var searchControlHeight: CGFloat { usesDesktopDensity ? 28 : 40 }
+
+    private var searchRowHeight: CGFloat {
+        if usesDesktopDensity { return searchControlHeight + 10 }
+        return isWideChatLayout
+            ? searchControlHeight + 16 : ConversationListScrollScope.drawerHeight
+    }
+
+    private func revealSearch() {
+        // Wide search is already visible; revealing a pull drawer would reset the list offset.
+        if !isWideChatLayout { scrollScope.revealSearch() }
+    }
 
     private var searchDrawerHeight: CGFloat {
         ConversationListScrollScope.drawerHeight + (searchText.isEmpty ? 0 : 32)
@@ -327,24 +412,38 @@ struct ChatListView: View {
     private var searchDrawer: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                HStack(spacing: 8) {
+                HStack(spacing: usesDesktopDensity ? 6 : 8) {
                     Image(systemName: "magnifyingglass")
+                        .font(usesDesktopDensity ? .system(size: 14) : .body)
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
-                    TextField("Search chats, messages, people", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .focused($isSearchFocused)
-                        .submitLabel(.search)
-                        .accessibilityHint("Search is not available yet.")
+                    TextField(
+                        isWideChatLayout
+                            ? LocalizedStringKey(usesDesktopDensity ? "Search (⌘K)" : "Search")
+                            : LocalizedStringKey("Search chats, messages, people"),
+                        text: $searchText
+                    )
+                    .textFieldStyle(.plain)
+                    .focused($isSearchFocused)
+                    .submitLabel(.search)
+                    .accessibilityHint("Search is not available yet.")
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 40)
-                .background(Color.secondary.opacity(0.1), in: Capsule())
-                if isSearchPinned {
+                .font(usesDesktopDensity ? .system(size: 13) : .body)
+                .padding(.horizontal, usesDesktopDensity ? 8 : 12)
+                .frame(height: searchControlHeight)
+                .background {
+                    if isWideChatLayout {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.secondary.opacity(0.1))
+                    } else {
+                        Capsule().fill(Color.secondary.opacity(0.1))
+                    }
+                }
+                if isSearchFocused || !searchText.isEmpty {
                     Button("Cancel") {
                         isSearchFocused = false
                         searchText = ""
-                        scrollScope.cancelSearch()
+                        if !isWideChatLayout { scrollScope.cancelSearch() }
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut(.cancelAction)
@@ -352,7 +451,7 @@ struct ChatListView: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(height: ConversationListScrollScope.drawerHeight)
+            .frame(height: searchRowHeight, alignment: usesDesktopDensity ? .top : .center)
             if !searchText.isEmpty {
                 Text("Search is not available yet.")
                     .font(.caption)
@@ -363,7 +462,9 @@ struct ChatListView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background)
+        .background {
+            if !isWideChatLayout { Rectangle().fill(.background) }
+        }
         .accessibilityIdentifier("conversation-search-drawer")
     }
 
@@ -377,6 +478,7 @@ struct ChatListView: View {
         scrollScope.activate()
         scrollScope.presentation = presentation
         scrollScope.select(scope: scope, archived: archivedMode, currentUserID: currentUserID)
+        scrollScope.isSearchPinned = isSearchPinned
         scrollScope.onRefresh = { Task { await performManualRefresh() } }
     }
 
@@ -390,6 +492,7 @@ struct ChatListView: View {
             isSearchFocused = false
             searchText = ""
         }
+        scrollScope.isSearchPinned = isSearchPinned
         scrollScope.onRefresh = { Task { await performManualRefresh() } }
     }
 
@@ -408,18 +511,25 @@ struct ChatListView: View {
         let badges = ConversationTabBadges(
             summaries: store.state.conversationUnreadSummaries,
             archived: true, showThreadsInMessages: showThreadsInMessages)
-        return HStack(spacing: ChahuaTheme.Spacing.medium) {
-            AvatarFrame(diameter: ConversationListRow.avatarDiameter) { _ in
-                ChahuaTheme.ChatList.primary
+        return HStack(
+            spacing: usesDesktopDensity ? 10 : (isWideChatLayout ? 8 : ChahuaTheme.Spacing.medium)
+        ) {
+            AvatarFrame(
+                diameter: ConversationListMetrics.avatarDiameter(isWide: isWideChatLayout)
+            ) { _ in
+                (usesDesktopDensity
+                    ? Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255)
+                    : ChahuaTheme.ChatList.primary)
                     .overlay {
                         Image(systemName: "archivebox")
-                            .font(.title2)
+                            .font(usesDesktopDensity ? .system(size: 20) : .title2)
                             .foregroundStyle(.white)
                     }
             }
             .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Archived").font(.headline)
+            VStack(alignment: .leading, spacing: usesDesktopDensity ? 3 : 4) {
+                Text("Archived")
+                    .font(usesDesktopDensity ? .system(size: 14, weight: .semibold) : .headline)
                 Text("View archived chats and threads")
                     .modifier(ConversationListSubtitleStyle(isSelected: false))
             }
@@ -438,8 +548,12 @@ struct ChatListView: View {
     }
 
     private var friendRequestHistoryEntry: some View {
-        HStack(spacing: ChahuaTheme.Spacing.medium) {
-            AvatarFrame(diameter: ConversationListRow.avatarDiameter) { _ in
+        HStack(
+            spacing: usesDesktopDensity ? 10 : (isWideChatLayout ? 8 : ChahuaTheme.Spacing.medium)
+        ) {
+            AvatarFrame(
+                diameter: ConversationListMetrics.avatarDiameter(isWide: isWideChatLayout)
+            ) { _ in
                 ChahuaTheme.ChatList.primary
                     .overlay {
                         Image(systemName: "person.crop.circle.badge.clock")
@@ -448,8 +562,9 @@ struct ChatListView: View {
                     }
             }
             .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Friend Requests").font(.headline)
+            VStack(alignment: .leading, spacing: usesDesktopDensity ? 3 : 4) {
+                Text("Friend Requests")
+                    .font(usesDesktopDensity ? .system(size: 14, weight: .semibold) : .headline)
                 Text("View friend request records")
                     .modifier(ConversationListSubtitleStyle(isSelected: false))
             }
@@ -457,6 +572,14 @@ struct ChatListView: View {
         }
         .modifier(ConversationListRowLayout())
         .contentShape(Rectangle())
+    }
+
+    private var selectionColor: Color {
+        guard usesDesktopDensity else { return ChahuaTheme.ChatList.primary }
+        // Reference blue in light mode; a lighter blue retains contrast on dark glass.
+        return colorScheme == .dark
+            ? Color(red: 10 / 255, green: 106 / 255, blue: 225 / 255)
+            : Color(red: 0, green: 98 / 255, blue: 209 / 255)
     }
 
     private func selectionButton(for item: ConversationListItem) -> some View {
@@ -503,7 +626,8 @@ struct ChatListView: View {
         ) {
             selectionButton(for: item)
                 .background(
-                    selectedConversationID == item.id ? ChahuaTheme.ChatList.primary : Color.clear
+                    selectedConversationID == item.id ? selectionColor : Color.clear,
+                    in: RoundedRectangle(cornerRadius: isWideChatLayout ? 10 : 0)
                 )
                 .accessibilityActions {
                     if !isBusy {

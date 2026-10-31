@@ -64,7 +64,12 @@
         func detach(_ host: ChatListOverlayScrollerMarkerView) {
             guard lifetimeHost === host else { return }
             lifetimeHost = nil
-            restore()
+            // SwiftUI may already have invalidated List's row tree during dismantle.
+            // Even restoring native spacing/scroller properties can trigger tiling and
+            // ask that dying tree for rows. These views belong to the departing List;
+            // release them without mutation. Restore only when switching live owners.
+            tableView = nil
+            scrollView = nil
         }
 
         func reconcile() {
@@ -101,8 +106,8 @@
         private func restore() {
             restoreTableSpacing()
             guard let scrollView else { return }
-            // Row markers never restore independently. Only their List's lifetime host can
-            // release the shared configuration, and settings changed by someone else win.
+            // Only restore when replacing a live native view, never during dismantling.
+            // Settings changed by someone else win.
             if scrollView.scrollerStyle == .overlay { scrollView.scrollerStyle = originalStyle }
             if scrollView.autohidesScrollers { scrollView.autohidesScrollers = originalAutohides }
             self.scrollView = nil

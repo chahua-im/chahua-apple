@@ -36,12 +36,13 @@ struct TimelineLayoutEngine {
     ) -> TimelineRowLayout {
         let scale = e.displayScale.isFinite && e.displayScale > 0 ? e.displayScale : 1
         let c = floor(e.centralWidth * scale) / scale
+        let bubbleWidthLimit = floor(e.maximumBubbleWidth * scale) / scale
         guard c >= 1 else {
             return .init(
                 size: CGSize(width: e.timelineWidth, height: pixel(e.avatarSize + 8, e)),
                 frames: [:], textGeometry: nil, mediaFrames: [], reactionFrames: [])
         }
-        let centralX = pixel(TimelineRowMetrics.rowHorizontalInset + e.identityLaneWidth, e)
+        let centralX = pixel(e.rowHorizontalInset + e.identityLaneWidth, e)
         let placeholder = row.entry.messageType == .placeholder
         let text =
             placeholder
@@ -65,10 +66,10 @@ struct TimelineLayoutEngine {
         let fileMessage = row.entry.messageType == .file
         let preferredMedia =
             fileMessage && mediaCount > 0
-            ? CGSize(width: min(284, c), height: CGFloat(mediaCount) * 82 - 2)
+            ? CGSize(width: min(284, bubbleWidthLimit), height: CGFloat(mediaCount) * 82 - 2)
             : local.isEmpty
-                ? BubbleMediaLayout.size(for: remote, availableWidth: c)
-                : BubbleMediaLayout.size(for: local, availableWidth: c)
+                ? BubbleMediaLayout.size(for: remote, availableWidth: bubbleWidthLimit)
+                : BubbleMediaLayout.size(for: local, availableWidth: bubbleWidthLimit)
         let hasMedia = preferredMedia != nil
         let metadata = p.metadata
         var preferredText: CGFloat = 0
@@ -101,7 +102,10 @@ struct TimelineLayoutEngine {
                 + (unsupported ? symbolSize.width + 8 : 0)
         }
         let preferredTitle =
-            p.title.map { titleGeometry($0, width: max(0, c - 24), environment: e).size.width + 24 }
+            p.title.map {
+                titleGeometry($0, width: max(0, bubbleWidthLimit - 24), environment: e).size.width
+                    + 24
+            }
             ?? 0
         func quoteSizes(_ reply: MessagePreview) -> (author: CGSize, preview: CGSize) {
             let author = MessageSummaryContent.author(reply)
@@ -148,7 +152,9 @@ struct TimelineLayoutEngine {
         let preferred = max(
             preferredMedia?.width ?? 0, preferredAudio, preferredText,
             metadata.map { $0.size.width + 24 } ?? 0, preferredTitle)
-        var b = min(c, pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
+        var b = min(
+            bubbleWidthLimit,
+            pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
         if hasBody, !hasMedia, let metadata, p.originLabel == nil, p.originalReply == nil {
             let bodyWidth = min(b, max(1, b - 24))
             let footerOutset = min(metadata.textTrailingOutset, max(0, (b - bodyWidth) / 2))
@@ -181,10 +187,10 @@ struct TimelineLayoutEngine {
         var titleFrames: [CGRect] = []
         var replyContentFrames: [CGRect] = []
         var originalReplyContentFrames: [CGRect] = []
-        // The preceding row contributes 4pt below its bubble. Only a new
-        // sender run adds another 4pt above this bubble.
-        var y: CGFloat =
-            row.groupPosition == .middle || row.groupPosition == .last ? 0 : 4
+        // Keep spacing inside measured rows: wide runs have 2pt between bubbles
+        // and 12pt between senders. Compact retains its existing 4pt/8pt rhythm.
+        let continuesRun = row.groupPosition == .middle || row.groupPosition == .last
+        var y: CGFloat = continuesRun ? 0 : (e.isWideChatLayout ? 10 : 4)
         let bubbleY = y
         var height: CGFloat = 0
         if let title = p.title {
@@ -431,7 +437,8 @@ struct TimelineLayoutEngine {
         let mainBottom = bubbleY + rowHeight
         if showsAvatar {
             frames[.avatar] = CGRect(
-                x: row.isOutgoing ? e.timelineWidth - 12 - e.avatarSize : 12,
+                x: row.isOutgoing
+                    ? e.timelineWidth - e.rowHorizontalInset - e.avatarSize : e.rowHorizontalInset,
                 y: mainBottom - e.avatarSize, width: e.avatarSize, height: e.avatarSize)
         }
         y = mainBottom
@@ -448,7 +455,8 @@ struct TimelineLayoutEngine {
             y += result.size.height + 8
         }
         return .init(
-            size: CGSize(width: e.timelineWidth, height: pixel(y + 4, e)),
+            size: CGSize(
+                width: e.timelineWidth, height: pixel(y + (e.isWideChatLayout ? 2 : 4), e)),
             frames: frames.mapValues { rounded($0, e) }, textGeometry: geometry,
             mediaFrames: mediaFrames, reactionFrames: reactionFrames,
             reactionContentFrames: reactionContentFrames, titleFrames: titleFrames,

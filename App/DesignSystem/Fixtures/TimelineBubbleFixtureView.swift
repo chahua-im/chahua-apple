@@ -24,6 +24,7 @@
         @State private var replyFocusRequest = 0
         @State private var scrollExperiment: TimelineDisplayScheduler?
         @State private var hasSelection = true
+        @State private var showsInspector = false
         @State private var reactionDetailsMessage: MessageResponse?
 
         var body: some View {
@@ -63,32 +64,53 @@
                             Text(verbatim: "Drag the divider to resize the sidebar.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            diagnosticControls
+                            Button("Chat information") { showsInspector.toggle() }
                             Spacer()
                         }
                         .padding(16)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 } detail: { _ in
-                    Group {
-                        if hasSelection {
-                            timelineContent
-                        } else {
-                            Text("Select a conversation")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    }
-                    .modifier(
-                        ChatHeaderOverlay(isVisible: hasSelection) {
-                            ChatFloatingHeader(
-                                title: "Native bubble timeline", onClose: { hasSelection = false }
-                            ) {
-                                AvatarView(
-                                    url: nil, displayName: "Native bubble timeline", diameter: 32)
+                    ChatInspectorLayout(isPresented: $showsInspector) {
+                        Group {
+                            if hasSelection {
+                                timelineContent
+                            } else {
+                                Text("Select a conversation")
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.top, ChatSplitMetrics.outerInset)
-                        })
+                        }
+                        .modifier(
+                            ChatHeaderOverlay(isVisible: hasSelection) {
+                                ChatFloatingHeader(
+                                    title: "Native bubble timeline",
+                                    onClose: { hasSelection = false },
+                                    onOpenInfo: { showsInspector.toggle() },
+                                    isInspectorPresented: showsInspector
+                                ) {
+                                    AvatarView(
+                                        url: nil, displayName: "Native bubble timeline",
+                                        diameter: ChatFloatingHeader<EmptyView>.avatarDiameter)
+                                }
+                                #if os(macOS)
+                                    .padding(.horizontal, 16)
+                                #else
+                                    .padding(.horizontal, 12)
+                                    .padding(.top, ChatSplitMetrics.outerInset)
+                                #endif
+                            })
+                    } inspector: {
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                Text("Chat Info").font(.headline)
+                                Spacer()
+                                Button("Close") { showsInspector = false }
+                            }
+                            diagnosticControls
+                            Spacer()
+                        }
+                        .padding(20)
+                    }
                 }
                 .frame(minWidth: 900, minHeight: 600)
                 .preferredColorScheme(dark ? .dark : .light)
