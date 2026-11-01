@@ -5,6 +5,10 @@ import XCTest
 
 @testable import chahua_apple
 
+#if os(macOS)
+    import AppKit
+#endif
+
 @MainActor
 final class RealtimeCoordinatorTests: XCTestCase {
     func testLanguageDraftSelectionAndRevertNeverWritePreferences() throws {
@@ -916,6 +920,155 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await eventually { await socket.closed }
     }
 
+    func testForegroundIdleRetainsWatchesAndOrdersPresenceAndHeartbeatsWithoutReconnect()
+        async throws
+    {
+        let clock = RealtimeTestClock()
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [socket])
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        store.setPresenceScope(PresenceScope(userIDs: [2]), for: UUID())
+        await eventually { !coordinator.needsRecovery && store.state.realtimeStatus == .connected }
+        await eventually { await socket.latestWatch?.userIDs == [2] }
+        await eventually { await socket.unreadWatches.last?.appBadge == true }
+        let presenceWatch = await socket.latestWatch
+        let presenceID = try XCTUnwrap(presenceWatch?.requestID)
+        let unreadWatch = await socket.unreadWatches.last
+        let unreadID = try XCTUnwrap(unreadWatch?.requestID)
+        let initialFrames = await socket.frames
+        let initialUnreadCount = await socket.unreadWatches.count
+        let initialRequests = await api.chatRequestCount
+
+        coordinator.setUserActive(false)
+        coordinator.setUserActive(false)
+        await eventually { await socket.frames == initialFrames + [.appState(.inactive)] }
+        await socket.emit(
+            .presenceSnapshot(
+                PresenceSnapshotPayload(
+                    requestId: presenceID, users: [UserPresenceResponse(uid: 2, online: true)],
+                    groups: [])))
+        await eventually { store.state.userPresence[2]?.online == true }
+        await eventually { await clock.hasSleep(seconds: 10) }
+        await clock.advance(seconds: 10)
+        await eventually { await socket.frames.last == .ping(.inactive) }
+        await eventually { await clock.sleepCount(seconds: 10) == 2 }
+        await socket.emit(.pong)
+        await eventually { await clock.sleepCount(seconds: 10) == 1 }
+
+        coordinator.setUserActive(true)
+        await eventually { await socket.frames.last == .appState(.active) }
+        // A suspended transport write must not let the following resume overtake idle.
+        await socket.holdNextAppState()
+        coordinator.setUserActive(false)
+        await eventually { await socket.isHoldingAppState }
+        coordinator.setUserActive(true)
+        await socket.releaseAppState()
+        let expectedFrames =
+            initialFrames + [
+                .appState(.inactive), .ping(.inactive), .appState(.active),
+                .appState(.inactive), .appState(.active),
+            ]
+        await eventually { await socket.frames == expectedFrames }
+        await socket.emit(
+            .conversationUnread(
+                .init(requestId: unreadID, full: true, summaries: [], appBadgeCount: 7)))
+        await eventually { store.state.unreadBadgeCount() == 7 }
+        let finalPresenceWatch = await socket.latestWatch
+        let finalUnreadCount = await socket.unreadWatches.count
+        let finalRequests = await api.chatRequestCount
+        let opens = await provider.opens
+        let closed = await socket.closed
+        XCTAssertEqual(finalPresenceWatch?.requestID, presenceID)
+        XCTAssertEqual(finalUnreadCount, initialUnreadCount)
+        XCTAssertEqual(finalRequests, initialRequests)
+        XCTAssertEqual(opens, 1)
+        XCTAssertFalse(closed)
+    }
+
+    func testIdleDuringOpeningUsesInactiveInitialStateWithoutDeferringForegroundRecovery() async {
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [socket], holdOpen: true)
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {})
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        await eventually { await provider.opens == 1 }
+        coordinator.setUserActive(false)
+        await provider.releaseOpen()
+        await eventually { await socket.frames == [.appState(.inactive)] }
+        await eventually { await api.chatRequestStarted }
+    }
+
+    func testUserActivityWithoutForegroundSceneDoesNotAdvertiseActive() async {
+        let clock = RealtimeTestClock()
+        let socket = RealtimeTestSocket()
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]),
+            store: ChatStore(
+                apiClient: RealtimeTestHTTP(),
+                outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
+            onInvalidToken: {}, sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        let scene = UUID()
+        coordinator.setUserActive(false)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        await eventually { await socket.frames == [.appState(.inactive)] }
+        // Foreground changes while idle must not redundantly advertise inactive.
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.removeScene(id: scene)
+        coordinator.setUserActive(true)
+        await eventually { await clock.hasSleep(seconds: 10) }
+        await clock.advance(seconds: 10)
+        await eventually { await socket.frames.last == .ping(.inactive) }
+        let frames = await socket.frames
+        XCTAssertEqual(frames, [.appState(.inactive), .ping(.inactive)])
+    }
+
+    func testAccountReplacementAndReconnectPreserveIdlePresenceWithForegroundScene() async {
+        let clock = RealtimeTestClock()
+        let first = RealtimeTestSocket()
+        let replacement = RealtimeTestSocket()
+        let reconnected = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [first, replacement, reconnected])
+        let coordinator = RealtimeCoordinator(
+            provider: provider,
+            store: ChatStore(
+                apiClient: RealtimeTestHTTP(),
+                outgoingQueue: testOutgoingQueue(apiClient: RealtimeTestHTTP()), onInvalidToken: {}),
+            onInvalidToken: {}, sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+        defer { coordinator.setSession(uid: nil) }
+        await eventually { await first.frames == [.appState(.active)] }
+        coordinator.setUserActive(false)
+        await eventually { await first.frames.last == .appState(.inactive) }
+        coordinator.setSession(uid: 2)
+        await eventually { await first.closed }
+        await eventually { await replacement.frames == [.appState(.inactive)] }
+        await replacement.close()
+        await eventually { await clock.hasSleep(seconds: 1) }
+        await clock.advance(seconds: 1)
+        await eventually { await reconnected.frames == [.appState(.inactive)] }
+        coordinator.setUserActive(true)
+        await eventually {
+            await reconnected.frames == [.appState(.inactive), .appState(.active)]
+        }
+        let opens = await provider.opens
+        XCTAssertEqual(opens, 3)
+    }
+
     func testMissingPongReconnectsWhileInactiveWithoutAdvertisingActive() async {
         let clock = RealtimeTestClock()
         let first = RealtimeTestSocket()
@@ -1193,6 +1346,45 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertTrue(
             store.conversationStateScope.isEmpty, "Account replacement drops old consumers")
     }
+
+    #if os(macOS)
+        func testNativeWindowAttachmentDoesNotPublishInsideViewUpdate() async {
+            let api = RealtimeTestHTTP()
+            let socket = RealtimeTestSocket()
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            let coordinator = RealtimeCoordinator(
+                provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {})
+            let scene = UUID()
+            coordinator.setSceneActive(id: scene, active: true)
+            coordinator.setSession(uid: 1)
+            defer {
+                coordinator.macActivityMonitor.stop()
+                coordinator.setSession(uid: nil)
+            }
+            await eventually { await socket.frames == [.appState(.active)] }
+            await eventually { !coordinator.needsRecovery }
+            var isUpdatingView = true
+            var publishedDuringViewUpdate = false
+            let observation = store.objectWillChange.sink {
+                if isUpdatingView { publishedDuringViewUpdate = true }
+            }
+            defer { observation.cancel() }
+            let window = NSWindow(
+                contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            // Like make/update/dismantleNSView, attachment is synchronous in the
+            // view transaction. An invisible native window removes scene eligibility.
+            coordinator.macActivityMonitor.attach(window: window, id: scene)
+            isUpdatingView = false
+            await eventually { await socket.frames.last == .appState(.inactive) }
+            XCTAssertFalse(
+                publishedDuringViewUpdate,
+                "Native lifecycle callbacks must not synchronously mutate SwiftUI-observed state.")
+        }
+    #endif
 
     private func eventually(
         _ condition: () async -> Bool, file: StaticString = #filePath, line: UInt = #line

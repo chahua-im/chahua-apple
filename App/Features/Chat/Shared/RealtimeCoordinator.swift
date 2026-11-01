@@ -22,6 +22,7 @@ final class RealtimeCoordinator: ObservableObject {
     private let jitter: @Sendable () -> Double
     private var uid: Int32?
     private var activeScenes = Set<UUID>()
+    private var userIsActive = true
     private var generation = 0
     private var attempt = 0
     private var runner: Task<Void, Never>?
@@ -31,7 +32,9 @@ final class RealtimeCoordinator: ObservableObject {
     private var pongDeadline: Task<Void, Never>?
     private var recovery: Task<Void, Never>?
     private var connection: (any RealtimeConnection)?
-    private var appState: RealtimeAppState { activeScenes.isEmpty ? .inactive : .active }
+    private var appState: RealtimeAppState {
+        !activeScenes.isEmpty && userIsActive ? .active : .inactive
+    }
     private var awaitingPong = false
     private var failures = 0
     private var presentationFailures = 0
@@ -49,6 +52,22 @@ final class RealtimeCoordinator: ObservableObject {
     // Lists publish their rows before the recovery task joins all work. Expose
     // readiness read-only so lifecycle consumers can distinguish those boundaries.
     private(set) var needsRecovery = false
+
+    #if os(macOS)
+        lazy var macActivityMonitor = MacAppActivityMonitor(
+            // Native attachment/detachment can run during SwiftUI reconciliation.
+            // Defer model publication one main-queue turn, preserving activity/frame order.
+            onForegroundChanged: { [weak self] id, active in
+                DispatchQueue.main.async { [weak self] in
+                    self?.setSceneActive(id: id, active: active)
+                }
+            },
+            onUserActivityChanged: { [weak self] active in
+                DispatchQueue.main.async { [weak self] in
+                    self?.setUserActive(active)
+                }
+            })
+    #endif
 
     init(
         provider: any RealtimeConnectionProviding,
@@ -88,12 +107,13 @@ final class RealtimeCoordinator: ObservableObject {
     }
 
     func setSceneActive(id: UUID, active: Bool) {
+        let previousAppState = appState
         let wasActive = !activeScenes.isEmpty
         if active { activeScenes.insert(id) } else { activeScenes.remove(id) }
         let isActive = !activeScenes.isEmpty
         guard wasActive != isActive else { return }
         store.setForegroundActive(isActive)
-        if let connection {
+        if previousAppState != appState, let connection {
             enqueuePresence(
                 .appState(appState), on: connection, generation: generation, attempt: attempt)
         }
@@ -116,6 +136,14 @@ final class RealtimeCoordinator: ObservableObject {
             recovery = nil
             store.cancelRealtimeRecovery()
         }
+    }
+
+    func setUserActive(_ active: Bool) {
+        let previousAppState = appState
+        userIsActive = active
+        guard previousAppState != appState, let connection else { return }
+        enqueuePresence(
+            .appState(appState), on: connection, generation: generation, attempt: attempt)
     }
 
     func removeScene(id: UUID) { setSceneActive(id: id, active: false) }

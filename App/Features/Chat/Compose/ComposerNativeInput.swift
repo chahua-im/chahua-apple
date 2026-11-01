@@ -202,8 +202,38 @@ protocol ComposerNativeInput: AnyObject {
     }
 
     final class ComposerMediaTextView: NSTextView {
-        var onPasteMedia: (([NSItemProvider]) -> Void)?
+        var onPasteMedia: (([NSItemProvider]) -> Void)? {
+            didSet {
+                if (oldValue == nil) != (onPasteMedia == nil) { updateDragTypeRegistration() }
+            }
+        }
         var onFocusChanged: ((Bool) -> Void)?
+
+        private static let attachmentPasteboardTypes: [NSPasteboard.PasteboardType] = [
+            .fileURL, .png, .tiff,
+            .init(UTType.image.identifier), .init(UTType.movie.identifier),
+            .init(UTType.pdf.identifier), .init(UTType.archive.identifier),
+        ]
+
+        // Native exception: NSTextView consumes a drag before the enclosing SwiftUI
+        // onDrop, inserting Finder's filename instead of opening the caption sheet.
+        // Advertise media to AppKit and use its native read hook for both drop and paste.
+        override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+            guard isEditable, onPasteMedia != nil else { return super.readablePasteboardTypes }
+            return Self.attachmentPasteboardTypes + super.readablePasteboardTypes
+        }
+
+        override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+            guard isEditable, onPasteMedia != nil else { return super.acceptableDragTypes }
+            return Self.attachmentPasteboardTypes + super.acceptableDragTypes
+        }
+
+        override func readSelection(
+            from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType
+        ) -> Bool {
+            if importMedia(from: pasteboard) { return true }
+            return super.readSelection(from: pasteboard, type: type)
+        }
 
         // Plain NSTextView disables Paste for image-only clipboards. Enable the
         // same media path for menu/context-menu Paste as for Command-V; keep
@@ -233,11 +263,12 @@ protocol ComposerNativeInput: AnyObject {
         }
 
         override func paste(_ sender: Any?) {
-            guard isEditable, let onPasteMedia else {
-                super.paste(sender)
-                return
-            }
-            let providers = (NSPasteboard.general.pasteboardItems ?? []).compactMap {
+            if !importMedia(from: .general) { super.paste(sender) }
+        }
+
+        private func importMedia(from pasteboard: NSPasteboard) -> Bool {
+            guard isEditable, let onPasteMedia else { return false }
+            let providers = (pasteboard.pasteboardItems ?? []).compactMap {
                 item -> NSItemProvider? in
                 // Finder also supplies plain text. Keep the file URL ahead of
                 // image previews so acquisition imports the original file.
@@ -272,11 +303,9 @@ protocol ComposerNativeInput: AnyObject {
                 }
                 return provider
             }
-            guard !providers.isEmpty else {
-                super.paste(sender)
-                return
-            }
+            guard !providers.isEmpty else { return false }
             onPasteMedia(providers)
+            return true
         }
     }
 

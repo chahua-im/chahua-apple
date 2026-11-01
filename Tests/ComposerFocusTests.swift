@@ -50,6 +50,41 @@ final class ComposerFocusTests: XCTestCase {
     }
 
     #if os(macOS)
+        func testDroppedImagePresentsCaptionSheetWithoutChangingDraft() async throws {
+            let h = try await mount(text: "Keep this caption")
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+            let data = try makeMediaPNG(red: 40, green: 120, blue: 200, width: 16, height: 12)
+            try data.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            h.state.onImportImages = { urls in
+                let imported = try XCTUnwrap(urls.first)
+                XCTAssertEqual(try Data(contentsOf: imported), data)
+                h.state.media = [
+                    LocalOutgoingAttachment(
+                        id: "dropped-image", generation: "original", position: 0,
+                        sourcePath: url.path, previewPath: url.path,
+                        fileName: url.lastPathComponent,
+                        mimeType: "image/png", width: 16, height: 12, byteCount: Int64(data.count))
+                ]
+            }
+            try await pause()
+            let board = NSPasteboard.withUniqueName()
+            defer { board.releaseGlobally() }
+            let item = NSPasteboardItem()
+            item.setString(url.absoluteString, forType: .fileURL)
+            item.setString(url.lastPathComponent, forType: .string)
+            board.writeObjects([item])
+            // NSTextView uses readSelection to ingest a native drop's pasteboard.
+            XCTAssertTrue(try h.focusedEditor().readSelection(from: board))
+            try await waitUntil {
+                h.window.attachedSheet != nil || h.state.attachments.error != nil
+            }
+            XCTAssertNil(h.state.attachments.error)
+            XCTAssertNotNil(h.window.attachedSheet)
+            XCTAssertEqual(h.state.text, "Keep this caption")
+        }
+
         func testFinderImagePasteImportsOriginalWithoutInsertingFilename() async throws {
             let h = try await mount(text: "caption")
             let image = NSImage(size: NSSize(width: 16, height: 12), flipped: false) { rect in

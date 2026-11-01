@@ -38,6 +38,10 @@ For manual verification, open a group on macOS or a wide iPad window, toggle the
 
 The macOS conversation-list scroller bridge must release native references without restoring spacing or scroller settings during representable dismantling. AppKit setters and column fitting can synchronously query SwiftUI rows after their view tree has been invalidated. Restoration is reserved for switching live native views, not closing the owning List/window.
 
+macOS composer and caption editors route native media drops through the same attachment importer as Paste. `NSTextView` advertises attachment pasteboard types and overrides `readSelection(from:type:)`; relying only on the enclosing SwiftUI `onDrop` lets AppKit insert Finder's filename into the draft instead. Plain-text drops retain native text editing.
+
+For manual verification, type a draft and drag an image from Finder onto the message editor: the attachment caption sheet should open with the draft intact and no filename inserted. Drop another image onto the open caption editor and confirm it appends without replacing the caption. Also check a drop onto the conversation timeline and ordinary text drag-and-drop. `ComposerFocusTests.testDroppedImagePresentsCaptionSheetWithoutChangingDraft` covers native pasteboard ingestion through actual caption-sheet presentation; physical WindowServer drag targeting still requires a manual check.
+
 
 ## Local checks and formatting
 

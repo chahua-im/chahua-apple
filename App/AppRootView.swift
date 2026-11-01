@@ -44,20 +44,34 @@ struct AppRootView: View {
                     retryTitle: "Retry", onRetry: model.retry)
             }
         }
+        #if os(macOS)
+            .background {
+                MacActivityWindowMarker(
+                    monitor: realtimeCoordinator.macActivityMonitor, sceneID: sceneID
+                )
+                .frame(width: 0, height: 0)
+            }
+        #endif
         .onOpenURL { pendingURL = $0 }
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
             pendingURL = activity.webpageURL
         }
         .onAppear {
-            realtimeCoordinator.setSceneActive(id: sceneID, active: scenePhase == .active)
+            #if os(iOS)
+                realtimeCoordinator.setSceneActive(id: sceneID, active: scenePhase == .active)
+            #endif
             notifications.setSceneActive(id: sceneID, active: scenePhase == .active)
         }
         .onChange(of: scenePhase) { _, phase in
-            realtimeCoordinator.setSceneActive(id: sceneID, active: phase == .active)
+            #if os(iOS)
+                realtimeCoordinator.setSceneActive(id: sceneID, active: phase == .active)
+            #endif
             notifications.setSceneActive(id: sceneID, active: phase == .active)
         }
         .onDisappear {
-            realtimeCoordinator.removeScene(id: sceneID)
+            #if os(iOS)
+                realtimeCoordinator.removeScene(id: sceneID)
+            #endif
             notifications.removeScene(id: sceneID)
         }
     }
