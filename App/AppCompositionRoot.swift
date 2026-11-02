@@ -10,7 +10,6 @@ final class AppCompositionRoot {
     let realtimeCoordinator: RealtimeCoordinator
     let notifications: PushNotificationCoordinator
     private var chatObservation: AnyCancellable?
-    private var sessionObservation: AnyCancellable?
 
     convenience init(apiConfiguration: ChahuaConfiguration) {
         let client = ChahuaClient(configuration: apiConfiguration)
@@ -85,7 +84,7 @@ final class AppCompositionRoot {
         chatObservation = chatStore.$state.sink { [weak notifications] state in
             notifications?.synchronizeReadState(state)
         }
-        sessionObservation = sessionModel.$state.sink { [weak self] state in
+        sessionModel.willTransitionSession = { [weak self] state in
             guard let self else { return }
             self.mediaContext.clearMemoryCache()
             if case .authenticated(let me) = state {

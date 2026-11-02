@@ -7,6 +7,7 @@ struct ReadReceiptPrivacySettingsView: View {
     @State private var loadRetryTask: Task<Void, Never>?
     @State private var saveTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
     let grouped: Bool
     private let onFinish: (() -> Void)?
     @Environment(\.colorScheme) private var colorScheme
@@ -20,7 +21,7 @@ struct ReadReceiptPrivacySettingsView: View {
 
     var body: some View {
         Group {
-            if grouped {
+            if grouped && !usesSplitLayout {
                 Form {
                     Section {
                         ReadReceiptPrivacyOptions(
@@ -42,47 +43,54 @@ struct ReadReceiptPrivacySettingsView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        Label("Read Receipts", systemImage: "checkmark.message")
-                            .font(.title2.weight(.semibold))
-                        Text("Who can see my read receipts")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 16) {
-                            ReadReceiptPrivacyOptions(
-                                model: model, onRetryLoad: retryLoad, onRetrySave: beginSave)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
-                        .background(
-                            colorScheme == .dark ? Color.white.opacity(0.07) : Color.white,
-                            in: RoundedRectangle(cornerRadius: 18))
-                        ReadReceiptPrivacyNote()
-                            .foregroundStyle(.secondary)
-                        Text("Exceptions")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        exceptionsPlaceholder
+                        VStack(alignment: .leading, spacing: 8) {
+                            sectionLabel("Who can see my read receipts")
+                            VStack(alignment: .leading, spacing: usesSplitLayout ? 0 : 16) {
+                                ReadReceiptPrivacyOptions(
+                                    model: model, onRetryLoad: retryLoad, onRetrySave: beginSave,
+                                    usesCardRows: usesSplitLayout)
+                            }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(20)
-                            .background(
-                                colorScheme == .dark ? Color.white.opacity(0.07) : Color.white,
-                                in: RoundedRectangle(cornerRadius: 18))
-                        exceptionsNote
-                            .foregroundStyle(.secondary)
+                            .padding(usesSplitLayout ? 0 : 20)
+                            .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
+                            ReadReceiptPrivacyNote()
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, usesSplitLayout ? 4 : 0)
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            sectionLabel("Exceptions")
+                            exceptionsPlaceholder
+                                .frame(
+                                    maxWidth: .infinity, minHeight: optionRowHeight,
+                                    alignment: .leading
+                                )
+                                .padding(.horizontal, 14)
+                                .background(cardBackground, in: RoundedRectangle(cornerRadius: 12))
+                            exceptionsNote
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, usesSplitLayout ? 4 : 0)
+                        }
                     }
                     .frame(maxWidth: 620)
-                    .padding(32)
+                    .padding(.horizontal, usesSplitLayout ? 28 : 32)
+                    .padding(.top, usesSplitLayout ? 4 : 32)
+                    .padding(.bottom, 28)
                     .frame(maxWidth: .infinity)
                 }
-                .background(ChahuaTheme.conversationBackground(for: colorScheme))
+                .background(
+                    usesSplitLayout
+                        ? (colorScheme == .dark ? Color(white: 0.11) : Color.white)
+                        : ChahuaTheme.conversationBackground(for: colorScheme))
             }
         }
         .navigationTitle("Read Receipts")
         .settingsEditorControls(
+            title: "Read Receipts",
             isDirty: model.isDirty, canSave: model.canSave, isSaving: model.isSaving,
-            accountID: store.currentUserProfile?.uid, onSave: beginSave, onFinish: finish
+            accountID: store.currentUserProfile?.uid, onSave: beginSave,
+            onRevert: model.revert, onFinish: finish
         )
-        .task(id: store.currentUserProfile?.uid) {
+        .task(id: "\(store.currentUserProfile?.uid ?? 0)-\(store.sessionRevision)") {
             loadRetryTask?.cancel()
             saveTask?.cancel()
             await model.load()
@@ -95,8 +103,29 @@ struct ReadReceiptPrivacySettingsView: View {
         }
     }
 
+    private var cardBackground: Color {
+        colorScheme == .dark ? Color.white.opacity(0.07) : Color(white: 0.96)
+    }
+
+    private var optionRowHeight: CGFloat {
+        #if os(macOS)
+            40
+        #else
+            50
+        #endif
+    }
+
+    private func sectionLabel(_ title: LocalizedStringKey) -> some View {
+        Text(title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+    }
+
     private var exceptionsPlaceholder: some View {
-        LabeledContent("Never Share With") {
+        HStack {
+            Text("Never Share With")
+            Spacer()
             Text("Coming soon")
         }
         .foregroundStyle(.secondary)
@@ -124,7 +153,7 @@ struct ReadReceiptPrivacySettingsView: View {
             guard await model.save(), !Task.isCancelled,
                 store.currentUserProfile?.uid == uid, store.sessionRevision == sessionRevision
             else { return }
-            finish()
+            if !usesSplitLayout { finish() }
         }
     }
 
@@ -282,6 +311,7 @@ private struct ReadReceiptPrivacyOptions: View {
     @ObservedObject var model: ReadReceiptPrivacySettingsModel
     let onRetryLoad: () -> Void
     var onRetrySave: (() -> Void)? = nil
+    var usesCardRows = false
 
     @ViewBuilder
     var body: some View {
@@ -303,34 +333,28 @@ private struct ReadReceiptPrivacyOptions: View {
                 Button("Retry", action: onRetryLoad)
             }
         case .loaded:
-            ForEach(model.choices, id: \.self) { choice in
+            let choices = model.choices
+            ForEach(choices, id: \.self) { choice in
                 Button {
                     Task { await model.choose(choice) }
                 } label: {
                     HStack(spacing: 12) {
-                        ZStack {
-                            if model.selection == choice {
-                                if model.isSaving && model.scope != .account {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .accessibilityLabel("Saving…")
-                                } else {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.tint)
-                                        .accessibilityHidden(true)
-                                }
-                            }
-                        }
-                        .frame(width: 24)
+                        choiceIndicator(for: choice)
                         Text(title(for: choice))
                         Spacer()
                     }
+                    .font(usesCardRows ? .system(size: optionFontSize) : .body)
+                    .padding(.horizontal, usesCardRows ? 14 : 0)
+                    .frame(minHeight: usesCardRows ? optionRowHeight : nil)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(model.isSaving)
                 .accessibilityAddTraits(model.selection == choice ? .isSelected : [])
+                if usesCardRows && choice != choices.last {
+                    Divider().padding(.horizontal, 14)
+                }
             }
             if model.saveError != nil {
                 HStack {
@@ -351,9 +375,59 @@ private struct ReadReceiptPrivacyOptions: View {
         }
     }
 
+    private var optionFontSize: CGFloat {
+        #if os(macOS)
+            13
+        #else
+            16
+        #endif
+    }
+
+    private var optionRowHeight: CGFloat {
+        #if os(macOS)
+            40
+        #else
+            50
+        #endif
+    }
+
+    @ViewBuilder
+    private func choiceIndicator(for choice: ReadReceiptPrivacySettingsModel.Choice) -> some View {
+        #if os(macOS)
+            if usesCardRows {
+                // macOS uses radio choices; iPad keeps the touch-sized checkmark rows.
+                Image(systemName: model.selection == choice ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(model.selection == choice ? Color.blue : Color.secondary)
+                    .accessibilityHidden(true)
+            } else {
+                checkmark(for: choice)
+            }
+        #else
+            checkmark(for: choice)
+        #endif
+    }
+
+    private func checkmark(for choice: ReadReceiptPrivacySettingsModel.Choice) -> some View {
+        ZStack {
+            if model.selection == choice {
+                if model.isSaving && model.scope != .account {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Saving…")
+                } else {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                }
+            }
+        }
+        .frame(width: 24)
+    }
+
     private func title(for choice: ReadReceiptPrivacySettingsModel.Choice) -> LocalizedStringKey {
         switch choice {
-        case .visibility(.friends): "Friends"
+        case .visibility(.friends): "Friends only"
         case .visibility(.nobody): "Nobody"
         case .friendOverride(.inherit): "Use global setting"
         case .friendOverride(.share): "Share with this friend"

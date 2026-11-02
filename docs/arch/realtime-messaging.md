@@ -38,7 +38,7 @@ The diagram separates connection lifecycle, event routing, message reconciliatio
 
 | Component | Lifetime | Owns | Does not own |
 |---|---|---|---|
-| `AppCompositionRoot` | App | Shared dependencies, one auth subscription/bootstrap | Per-window selection |
+| `AppCompositionRoot` | App | Shared dependencies, one auth transition handoff/bootstrap | Per-window selection |
 | `ChahuaClient` | App/session | HTTP transport, bearer credential and refresh, opening a WS connection | Retry scheduling or feature state |
 | `URLSessionRealtimeConnection` | Connection attempt | Socket operations and typed frame decoding | App lifecycle or UI |
 | `RealtimeCoordinator` | App | One desired connection, receive loop, heartbeat, backoff, scene aggregation, connection generation | Message merge or scroll policy |
@@ -54,9 +54,15 @@ All app state reduction runs on the main actor. Package network actors perform a
 
 One connection is shared by all windows for the authenticated account, including when no scene is active. iOS aggregates per-window `scenePhase == .active`. macOS uses native app focus and registered window visibility: the app must be active and not hidden, with at least one visible, nonminiaturized, nonoccluded window in the active, awake desktop session. Closing, minimizing, hiding, backgrounding, or losing the last eligible window promptly reports `inactive` without cancelling the socket, heartbeat, or reconnect runner. Closing one of two eligible windows does not inactivate the other.
 
+On macOS, closing the last window does not terminate the app; explicit Quit/sign-out still tears down the session. The unread watch keeps `appBadge: true` even with no active scenes, while its list `views` and conversation-state watches become empty. A background connection/reconnection therefore receives the server's absolute account-wide `appBadgeCount` without foreground HTTP recovery or loaded chat lists. iOS retains foreground-only unread/badge watching and APNs while suspended.
+
+`AppCompositionRoot` already forwards published chat state to `PushNotificationCoordinator.synchronizeReadState`, which applies authorized WebSocket badge counts through `UNUserNotificationCenter.setBadgeCount`. This is the same system badge used by APNs, not a second incrementing counter; zero clears it and account/session replacement resets its state. Notification permission/system badge settings still apply. APNs remains responsible for remote alerts and for badging when the process is not running; socket processing cannot run while the Mac sleeps, and this does not impose ordering on delayed APNs delivery.
+
 macOS also requires computer-wide mouse/keyboard activity within the last five minutes. `MacAppActivityMonitor` samples CoreGraphics' aggregate idle duration once per second while any window is foreground-eligible; it does not record input or require Accessibility/Input Monitoring permission. At 300 seconds it reports inactive, including while the app stays foreground. New system input restores active on the next sample. Launch/window opening, visibility restoration, and genuine key-focus gains restore active immediately and establish a fresh activation timestamp, so an old OS idle sample cannot immediately undo that transition. Routine view updates and repeated notifications do not extend the deadline. Reopening a retained native window is an activation, not a permanently closed registration.
 
 Native callbacks reach `RealtimeCoordinator` on the next main-queue turn, preserving activity-before-foreground ordering without waiting for a heartbeat. AppKit attachment/detachment can occur inside SwiftUI representable updates; synchronously publishing `ChatStore` recovery changes there is invalid. Computer idle changes presence only: visible-window watches, outbox work, and foreground recovery retain their existing eligibility.
+
+The same boundary applies to native timeline layout/viewport callbacks, conversation-list observation, composer attachment/composition settlement, swipe-row teardown, media autoplay and interaction-overlay geometry. Native teardown happens immediately; observable-model handoffs leave the current SwiftUI update and validate ownership/generation before publishing. Preserve FIFO gesture transitions and immediate private IME submission gates; do not defer ordinary user actions or blanket-wrap `ChatStore` setters.
 
 Inactive is a wire state, not an immediate offline assertion: the server exposes **Away** for five minutes after the active-to-inactive transition, then offline/last seen. Another active device or PWA tab takes precedence; repeated inactive heartbeats do not restart the server's away grace.
 
@@ -73,6 +79,8 @@ Each aggregate activity transition promptly sends `{"type":"appState","state":"<
 The PWA's `src/app/api/rpc-transport.ts` requires a visible document and window focus for active status, sends `session.setAppState` immediately on authentication and visibility/focus changes, and includes state in ten-second `session.ping` calls. It does not detect idle input. Apple keeps the backend-supported legacy `appState`/`ping` wire controls and adds the macOS computer-idle gate above; transport migration is separate. Apple retains its pong timeout and session-generation protections. iOS may suspend network/timer execution while backgrounded; this does not authorize intentional focus-loss closure or a background-execution entitlement, and resumed work uses the same timeout/reconnect path with current presence.
 
 App/session and connection generations invalidate old asynchronous results. Sign-out/account replacement cancels old work before new state can be accepted. The HTTP client's credential generation also prevents a late refresh from account A overwriting account B's token. Authentication bootstrap runs once per app owner, not once per window; credential refresh remains owned by the shared HTTP client. Each WS reconnect reads the current shared JWT, including any credential installed by normal HTTP refresh; it neither retains a stale credential nor introduces WS-specific refresh. Never log JWTs or raw frames.
+
+`AuthSessionModel.willTransitionSession` prepares dependent stores and realtime/session ownership before authentication publishes its next state. A `$state` subscriber runs after observable invalidation has begun and can reenter an updating view through `ChatStore`; it is not the session-reset hook. iOS scene activity/removal also hands off on the next main-queue turn.
 
 ### Connection feedback
 

@@ -134,11 +134,15 @@ struct NotificationSettingsView: View {
                 if let uid = profileUserID {
                     UserProfileView(
                         uid: uid, currentUserID: me.uid, store: chatStore,
-                        isPresentedAsRoot: true, onOpenChat: onOpenChat
+                        onClose: { profileUserID = nil },
+                        onOpenChat: { chat in
+                            profileUserID = nil
+                            onOpenChat(chat)
+                        }
                     )
                 }
             }
-            .frame(minWidth: 320, minHeight: 420)
+            .modifier(ProfileModalSizing())
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -194,11 +198,39 @@ struct NotificationSettingsView: View {
             .accessibilityElement(children: .combine)
         }
     }
+    func sidebarAccountSummary(compact: Bool) -> some View {
+        Button {
+            profileUserID = me.uid
+        } label: {
+            HStack(spacing: 10) {
+                AvatarView(
+                    url: me.avatarUrl.flatMap(URL.init(string:)),
+                    displayName: me.username, diameter: compact ? 44 : 52)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(me.username)
+                        .font(.system(size: compact ? 15 : 18, weight: .bold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text("View profile")
+                        .font(.system(size: compact ? 12 : 14))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 
     var signOutRow: some View {
-        Button("Sign out", role: .destructive) { onSignOut() }
-            .foregroundStyle(.red)
-            .disabled(isSigningOut || notifications.isUnregistering)
+        SettingsSignOutButton(
+            accountID: me.uid,
+            username: me.username,
+            sessionRevision: chatStore.sessionRevision,
+            isBusy: isSigningOut || notifications.isUnregistering,
+            onSignOut: onSignOut
+        )
     }
 
     var autoSortPacksRow: some View {
@@ -588,5 +620,60 @@ private struct MembershipMessagePreferenceRow: View {
             failedChoice = value
             saveError = error.localizedDescription
         }
+    }
+}
+
+private struct SettingsSignOutButton: View {
+    let accountID: Int32
+    let username: String
+    let sessionRevision: Int
+    let isBusy: Bool
+    let onSignOut: () -> Void
+
+    private struct Request {
+        let accountID: Int32
+        let sessionRevision: Int
+    }
+    @State private var request: Request?
+
+    var body: some View {
+        Button(role: .destructive) {
+            guard !isBusy else { return }
+            request = Request(accountID: accountID, sessionRevision: sessionRevision)
+        } label: {
+            Label("Sign out…", systemImage: "rectangle.portrait.and.arrow.right")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                #if os(macOS)
+                    .frame(minHeight: 32)
+                #else
+                    .frame(minHeight: 44)
+                #endif
+                .contentShape(Rectangle())
+        }
+        .foregroundStyle(.red)
+        .disabled(isBusy)
+        .alert(
+            "Sign out of \(username)?",
+            isPresented: Binding(
+                get: { request != nil },
+                set: { if !$0 { request = nil } }),
+            presenting: request
+        ) { pending in
+            Button("Cancel", role: .cancel) {}
+            Button("Sign out", role: .destructive) {
+                guard pending.accountID == accountID,
+                    pending.sessionRevision == sessionRevision, !isBusy
+                else { return }
+                onSignOut()
+            }
+        } message: { _ in
+            #if os(macOS)
+                Text("You’ll need to sign in again to see your chats on this Mac.")
+            #else
+                Text("You’ll need to sign in again to see your chats on this device.")
+            #endif
+        }
+        .onChange(of: accountID) { _, _ in request = nil }
+        .onChange(of: sessionRevision) { _, _ in request = nil }
     }
 }

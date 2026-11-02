@@ -2,6 +2,10 @@ import ChahuaAPI
 import Kingfisher
 import SwiftUI
 
+#if os(iOS)
+    import UIKit
+#endif
+
 /// Each mounted browser owns its cursor; media kinds never share a page.
 struct ChatAttachmentsView: View {
     @ObservedObject var store: ChatStore
@@ -12,6 +16,9 @@ struct ChatAttachmentsView: View {
     var isActive = true
     @Environment(\.imageDetailPresenter) private var imagePresenter
     @Environment(\.colorScheme) private var colorScheme
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @State private var items: [ChatAttachmentResponse] = []
     @State private var cursor: MessageID?
     @State private var loaded = false
@@ -25,6 +32,32 @@ struct ChatAttachmentsView: View {
         case .image: AppLanguage.localized("Images")
         case .video: AppLanguage.localized("Videos")
         case .other: AppLanguage.localized("Files")
+        }
+    }
+
+    private var usesInfoDesign: Bool {
+        #if os(macOS)
+            embedded
+        #else
+            // iPad modal cards can have a compact size class but retain the info design.
+            embedded
+                && (horizontalSizeClass == .regular || UIDevice.current.userInterfaceIdiom == .pad)
+        #endif
+    }
+
+    private var emptyTitle: LocalizedStringKey {
+        switch kind {
+        case .image: "No images yet"
+        case .video: "No videos yet"
+        case .other: "No files yet"
+        }
+    }
+
+    private var emptySymbol: String {
+        switch kind {
+        case .image: "photo"
+        case .video: "video"
+        case .other: "doc"
         }
     }
 
@@ -61,7 +94,8 @@ struct ChatAttachmentsView: View {
     @ViewBuilder
     private var rows: some View {
         Text("Attachments from the whole chat, including its threads.")
-            .font(.footnote).foregroundStyle(.secondary)
+            .font(usesInfoDesign ? .caption : .footnote)
+            .foregroundStyle(.secondary)
         if kind == .other {
             ForEach(items, id: \.id) { item in
                 fileRow(item)
@@ -86,7 +120,22 @@ struct ChatAttachmentsView: View {
         } else if failed {
             Button("Couldn’t load attachments. Retry") { Task { await load() } }
         } else if loaded && items.isEmpty {
-            Text("No attachments in this section").foregroundStyle(.secondary)
+            if usesInfoDesign {
+                VStack(spacing: 8) {
+                    Image(systemName: emptySymbol)
+                        .font(.system(size: 20, weight: .regular))
+                        .accessibilityHidden(true)
+                    Text(emptyTitle)
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 16)
+                .padding(.bottom, 24)
+                .accessibilityElement(children: .combine)
+            } else {
+                Text("No attachments in this section").foregroundStyle(.secondary)
+            }
         }
         if loaded && cursor != nil && !loading && !failed {
             Button("Load Older Attachments") { Task { await load() } }

@@ -153,6 +153,144 @@ final class MessageTextLayoutTests: XCTestCase {
     }
 
     #if os(macOS)
+        func testStaticNativeDeliveryKeepsCanonicalInkAcrossAppearanceAndFittedSizes() throws {
+            func inkBounds(_ bitmap: NSBitmapImageRep) -> CGRect {
+                var ink = CGRect.null
+                for y in 0..<bitmap.pixelsHigh {
+                    for x in 0..<bitmap.pixelsWide
+                    where (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                        ink = ink.union(CGRect(x: CGFloat(x), y: CGFloat(y), width: 1, height: 1))
+                    }
+                }
+                return ink
+            }
+            let view = TimelineDeliveryStatusView(frame: .zero)
+            for appearanceName in [
+                NSAppearance.Name.aqua, .darkAqua, .accessibilityHighContrastAqua,
+            ] {
+                view.appearance = try XCTUnwrap(NSAppearance(named: appearanceName))
+                for fontSize in [CGFloat(11), CGFloat(28)] {
+                    for (state, read) in [
+                        (ConversationMessageDisplayState.queued, false),
+                        (.failed, false), (.delivered, false), (.delivered, true),
+                    ] {
+                        let metadata = MessageMetadata(
+                            time: "12:34", state: state, isOutgoing: true, isRead: read,
+                            fontSize: fontSize)
+                        let nominal = metadata.statusFrame(
+                            in: CGRect(origin: .zero, size: metadata.size)
+                        ).size
+                        // Include a compressed slot: the shared content scales around
+                        // its center rather than simply resizing the check path.
+                        for fit in [CGFloat(1), CGFloat(0.65)] {
+                            view.frame = CGRect(
+                                origin: .zero,
+                                size: CGSize(
+                                    width: ceil(nominal.width * fit),
+                                    height: ceil(nominal.height * fit)))
+                            view.configure(metadata)
+                            view.layoutSubtreeIfNeeded()
+                            let bitmap = try XCTUnwrap(
+                                view.bitmapImageRepForCachingDisplay(in: view.bounds))
+                            view.cacheDisplay(in: view.bounds, to: bitmap)
+                            let canonical = NSHostingView(
+                                rootView: try XCTUnwrap(metadata.statusContent)
+                                    .environment(
+                                        \.displayScale,
+                                        CGFloat(bitmap.pixelsWide) / view.bounds.width))
+                            canonical.sizingOptions = []
+                            canonical.appearance = view.appearance
+                            canonical.frame = view.bounds
+                            canonical.layoutSubtreeIfNeeded()
+                            let reference = try XCTUnwrap(
+                                canonical.bitmapImageRepForCachingDisplay(in: canonical.bounds))
+                            canonical.cacheDisplay(in: canonical.bounds, to: reference)
+                            let actualInk = inkBounds(bitmap)
+                            let expectedInk = inkBounds(reference)
+                            XCTAssertFalse(actualInk.isNull)
+                            XCTAssertEqual(actualInk.minX, expectedInk.minX, accuracy: 1)
+                            XCTAssertEqual(actualInk.maxX, expectedInk.maxX, accuracy: 1)
+                            XCTAssertEqual(actualInk.minY, expectedInk.minY, accuracy: 1)
+                            XCTAssertEqual(actualInk.maxY, expectedInk.maxY, accuracy: 1)
+                            // Bounds alone would allow a vertically mirrored check.
+                            // Permit edge antialiasing differences from the cached
+                            // backing scale, but require the same glyph coverage.
+                            var difference: CGFloat = 0
+                            var coverage: CGFloat = 0
+                            for y in 0..<min(bitmap.pixelsHigh, reference.pixelsHigh) {
+                                for x in 0..<min(bitmap.pixelsWide, reference.pixelsWide) {
+                                    let actual = bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0
+                                    let expected =
+                                        reference.colorAt(x: x, y: y)?.alphaComponent ?? 0
+                                    difference += abs(actual - expected)
+                                    coverage += expected
+                                }
+                            }
+                            XCTAssertLessThan(difference / max(coverage, 1), 0.65)
+                        }
+                    }
+                }
+            }
+            view.configure(nil)
+            XCTAssertTrue(view.isHidden)
+        }
+
+        func testNativeCodeSelectionAndScrollResetAcrossMessageIdentity() throws {
+            let source = "```swift\n" + String(repeating: "let value = 123; ", count: 40) + "\n```"
+            let prepared = try preparedText(source, width: 180)
+            let content = MessageTextContent(
+                text: source, mentions: [], currentUserID: 1, isOutgoing: false, action: nil,
+                metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14,
+                preparedText: prepared.preparedText)
+            let text = AppKitMessageTextView(geometry: prepared.geometry)
+            text.frame = CGRect(origin: .zero, size: prepared.geometry.size)
+            text.apply(content, resetSelection: true)
+            text.layoutSubtreeIfNeeded()
+            var code = try XCTUnwrap(
+                text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
+            var document = try XCTUnwrap(code.documentView as? NSTextView)
+            document.setSelectedRange(NSRange(location: 0, length: 3))
+            code.contentView.scroll(to: CGPoint(x: 50, y: 0))
+            XCTAssertGreaterThan(code.contentView.bounds.minX, 0)
+            text.apply(content, resetSelection: false)
+            XCTAssertEqual(document.selectedRange().length, 3)
+            XCTAssertGreaterThan(code.contentView.bounds.minX, 0)
+
+            // Identical prepared text retains the attachment identity. A different
+            // message must still reset both selection and the horizontal position.
+            text.apply(content, resetSelection: true)
+            code = try XCTUnwrap(
+                text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
+            document = try XCTUnwrap(code.documentView as? NSTextView)
+            XCTAssertEqual(document.selectedRange(), NSRange(location: 0, length: 0))
+            XCTAssertEqual(code.contentView.bounds.origin, .zero)
+            document.setSelectedRange(NSRange(location: 0, length: 3))
+            code.contentView.scroll(to: CGPoint(x: 50, y: 0))
+            text.clear()
+            text.apply(content, resetSelection: true)
+            code = try XCTUnwrap(
+                text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
+            document = try XCTUnwrap(code.documentView as? NSTextView)
+            XCTAssertEqual(document.selectedRange(), NSRange(location: 0, length: 0))
+            XCTAssertEqual(code.contentView.bounds.origin, .zero)
+
+            document.setSelectedRange(NSRange(location: 0, length: 3))
+            code.contentView.scroll(to: CGPoint(x: 50, y: 0))
+            let shiftedSource = "A new prefix\n" + source
+            let shifted = try preparedText(shiftedSource, width: 180)
+            text.apply(
+                MessageTextContent(
+                    text: shiftedSource, mentions: [], currentUserID: 1, isOutgoing: false,
+                    action: nil, metadata: shifted.metadata, geometry: shifted.geometry,
+                    fontSize: 14, preparedText: shifted.preparedText),
+                resetSelection: true)
+            code = try XCTUnwrap(
+                text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
+            document = try XCTUnwrap(code.documentView as? NSTextView)
+            XCTAssertEqual(document.selectedRange(), NSRange(location: 0, length: 0))
+            XCTAssertEqual(code.contentView.bounds.origin, .zero)
+        }
+
         func testNativeTextPreservesSelectionAndUsesCurrentLinkActions() throws {
             var opened: [String] = []
             let prepared = try preparedText("Hello https://example.com", width: 340)
@@ -334,6 +472,51 @@ final class MessageTextLayoutTests: XCTestCase {
             XCTAssertEqual(text.text, expectedText)
         }
     #endif
+
+    func testWidthOnlyMeasurementPreservesFinalGeometryAcrossReuseAndCodeFitting() {
+        let measurement = MessageTextLayout()
+        let sources = [
+            "", "Hello", "现在基本内部都有大规模的 AI 扫 bug 👨‍👩‍👧‍👦",
+            "First line\nLast line\n", "**Bold** and ||concealed||",
+            "Before\n```swift\n" + String(repeating: "let value = 123; ", count: 30)
+                + "\n```\nAfter",
+        ]
+        for fontSize: CGFloat in [13, 28] {
+            for source in sources {
+                for metadata: MessageMetadata? in [
+                    nil,
+                    MessageMetadata(
+                        time: "12:34", state: nil, isOutgoing: false, fontSize: fontSize),
+                    MessageMetadata(
+                        time: "12:34", state: .delivered, isOutgoing: true, isRead: true,
+                        fontSize: fontSize),
+                ] {
+                    func text() -> NSAttributedString {
+                        MessageTextContent.attributedText(
+                            text: source, mentions: [], currentUserID: 1, isOutgoing: false,
+                            font: .systemFont(ofSize: fontSize))
+                    }
+                    // The reference performs the old intrinsic-width *and height*
+                    // measurement, including its intermediate code-attachment fit.
+                    let reference = MessageTextLayout(attributedText: text(), metadata: metadata)
+                    let expectedSize = reference.idealSize
+                    measurement.update(attributedText: text(), metadata: metadata)
+                    XCTAssertEqual(measurement.idealWidth, expectedSize.width)
+                    for width in [CGFloat(80), CGFloat(240), expectedSize.width] {
+                        XCTAssertEqual(
+                            measurement.geometry(for: width), reference.geometry(for: width),
+                            "Width-only sizing must preserve line breaks, footer and code frames.")
+                    }
+                    XCTAssertEqual(measurement.idealSize, expectedSize)
+                    measurement.install(geometry: measurement.geometry(for: 120))
+                    XCTAssertEqual(measurement.idealWidth, expectedSize.width)
+                    XCTAssertEqual(
+                        measurement.fittingSize(width: nil),
+                        reference.geometry(for: expectedSize.width).size)
+                }
+            }
+        }
+    }
 
     func testShortTextHasCompactIdealWidthWithInlineMetadata() {
         let layout = makeLayout("Hello")
@@ -528,6 +711,45 @@ final class MessageTextLayoutTests: XCTestCase {
             "Pixel alignment must not shorten the native timestamp drawing surface.")
     }
     #if os(macOS)
+        func testInlineTimestampRetainsTrailingDigitOutsideBodyContainer() throws {
+            let metadata = MessageMetadata(time: "00:48", state: nil, isOutgoing: false)
+            let layout = MessageTextLayout(
+                attributedText: MessageTextContent.attributedText(
+                    text: "那你老婆是美国人🤔？", mentions: [], currentUserID: 1,
+                    isOutgoing: false, font: .systemFont(ofSize: 17)),
+                metadata: metadata)
+            let geometry = layout.geometry(for: layout.idealSize.width)
+            let view = AppKitMessageTextView(geometry: geometry)
+            view.contentLayout.update(attributedText: layout.storage, metadata: metadata)
+            view.contentLayout.install(geometry: geometry)
+            view.frame = CGRect(origin: .zero, size: geometry.size)
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+            let firstColumn = Int(ceil(geometry.containerWidth * scale))
+            var trailingInk = 0
+            for y in 0..<bitmap.pixelsHigh {
+                for x in firstColumn..<bitmap.pixelsWide {
+                    if (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                        trailingInk += 1
+                    }
+                }
+            }
+            XCTAssertGreaterThan(
+                trailingInk, 0,
+                "The final timestamp digit must draw beyond the body's narrower TextKit container.")
+            let image = NSImage(size: view.bounds.size)
+            image.lockFocus()
+            NSColor.white.setFill()
+            view.bounds.fill()
+            bitmap.draw(in: view.bounds)
+            image.unlockFocus()
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Inline timestamp trailing digit"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
         func testMetadataAdoptsDarkAppearanceRatherThanItsCreationAppearance() throws {
             var metadata: MessageMetadata?
             NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {

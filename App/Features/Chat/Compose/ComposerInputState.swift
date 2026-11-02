@@ -10,7 +10,11 @@ final class ComposerInputState: ObservableObject {
     @Published private(set) var isComposing = false
     @Published private(set) var mentionQuery: ComposerMentionQuery?
     var onMentionKey: ((ComposerMentionKey) -> Bool)?
-    weak var nativeInput: (any ComposerNativeInput)?
+    weak var nativeInput: (any ComposerNativeInput)? {
+        didSet {
+            if oldValue !== nativeInput { attachmentRevision &+= 1 }
+        }
+    }
     private(set) var mentionText = NSAttributedString(string: "")
 
     private var mentionNames: [Int32: String] = [:]
@@ -26,8 +30,10 @@ final class ComposerInputState: ObservableObject {
     // the settled native snapshot.
     private var mentionQueryToClearAfterEditingEnd: ComposerMentionQuery?
     private var hasPendingComposition = false
+    private var attachmentRevision = 0
 
     func configure(draft: Binding<String>, onCompositionChanged: ((Bool) -> Void)?) {
+        attachmentRevision &+= 1
         self.draft = draft
         compositionChanged = onCompositionChanged
     }
@@ -77,7 +83,9 @@ final class ComposerInputState: ObservableObject {
 
     func nativeInputChanged(isEdit: Bool = false) {
         hasPendingEdit = hasPendingEdit || isEdit
-        if case .marked = nativeInput?.snapshot() { beginComposition() }
+        // Focus/selection notifications can be emitted by representable updates.
+        // Keep the IME submission gate synchronous, but publish at settlement.
+        if case .marked = nativeInput?.snapshot() { hasPendingComposition = true }
         scheduleSettlement()
     }
 
@@ -216,9 +224,19 @@ final class ComposerInputState: ObservableObject {
         mentionQuery = nil
     }
 
-    func detachAfterViewUpdate(finalSnapshot: ComposerInputSnapshot? = nil) {
+    func detachAfterViewUpdate(
+        from source: any ComposerNativeInput, finalSnapshot: ComposerInputSnapshot? = nil
+    ) {
+        guard nativeInput === source else { return }
         stopObserving()
-        DispatchQueue.main.async { self.detach(finalSnapshot: finalSnapshot) }
+        nativeInput = nil
+        let revision = attachmentRevision
+        // Retain the retiring state for this bounded handoff: its composition
+        // callback must still release the parent's IME gate after view removal.
+        DispatchQueue.main.async {
+            guard self.attachmentRevision == revision, self.nativeInput == nil else { return }
+            self.detach(finalSnapshot: finalSnapshot)
+        }
     }
 
     private func finishEditing(snapshot: ComposerInputSnapshot) {

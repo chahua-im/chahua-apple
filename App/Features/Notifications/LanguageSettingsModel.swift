@@ -34,6 +34,10 @@ final class LanguageSettingsModel: ObservableObject {
         selection = language
     }
 
+    func revert() {
+        selection = baseline
+    }
+
     func discardChanges() {
         let persisted =
             AppLanguage(

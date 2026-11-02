@@ -141,6 +141,10 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
 
 #else
     extension PushAppDelegate: NSApplicationDelegate {
+        func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+            // The app-scoped websocket continues to receive badge updates until Quit.
+            false
+        }
         func application(
             _ application: NSApplication,
             didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data

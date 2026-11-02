@@ -33,10 +33,29 @@
             var rowWidth: CGFloat { max(0, size.width - left - right) }
         }
 
+        private struct EnvironmentKey: Equatable {
+            let geometry: Geometry
+            let textSize: Int
+            let language: String
+            let showAllAvatars: Bool
+            let showsMessageDetails: Bool
+            let isWideChatLayout: Bool
+            let isSelectingMessages: Bool
+            let direction: LayoutDirection
+        }
+
         private struct Position {
             let messageID: TimelineRowID?
             let offset: CGFloat
             let originY: CGFloat
+        }
+
+        private struct ScrollAnimation {
+            let start: NSPoint
+            let target: NSPoint
+            let startedAt: TimeInterval
+            let generation: Int
+            let requestID: Int?
         }
 
         private let model: ConversationTimelineModel
@@ -123,7 +142,9 @@
         private var preparedRows: [TimelineRowID: PreparedRow] = [:]
         private var preparation: TimelineLayoutPreparation?
         private var layoutEnvironment: TimelineLayoutEnvironment?
+        private var environmentCache: (key: EnvironmentKey, value: TimelineLayoutEnvironment)?
         private var displayScheduler: TimelineDisplayScheduler!
+        private var scrollDisplayScheduler: TimelineDisplayScheduler?
         private var cancellable: AnyCancellable?
         private var highlightedRowID: TimelineRowID?
         private var highlightTask: Task<Void, Never>?
@@ -137,6 +158,7 @@
         private var settingScrollOrigin = false
         private var handlingWheel = false
         private var liveScrolling = false
+        private var isTornDown = false
         private var windowLiveResizing = false
         private var liveResizing: Bool { windowLiveResizing || isSplitResizing || settlingHeights }
         private var needsFullHeightRefresh = false
@@ -150,7 +172,7 @@
         private var exposedHeightChanges = IndexSet()
         private var activeRequest: TimelineScrollRequest?
         private var lastStartedRequestID: Int?
-        private var scrollTask: Task<Void, Never>?
+        private var scrollAnimation: ScrollAnimation?
         private var scrollGeneration = 0
         private let scrollView = TimelineScrollView()
         private let tableView = NSTableView()
@@ -175,6 +197,10 @@
             applyConversationBackground()
             scrollView.translatesAutoresizingMaskIntoConstraints = false
             scrollView.hasVerticalScroller = true
+            // Use the native compact overlay thumb rather than a persistent legacy gutter.
+            scrollView.scrollerStyle = .overlay
+            scrollView.autohidesScrollers = true
+            scrollView.verticalScroller?.controlSize = .small
             scrollView.horizontalScrollElasticity = .none
             scrollView.drawsBackground = false
             scrollView.automaticallyAdjustsContentInsets = false
@@ -212,6 +238,8 @@
                 scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             ])
             displayScheduler = TimelineDisplayScheduler(view: view)
+            // Scrolling must not replace a pending table/height transaction, or vice versa.
+            scrollDisplayScheduler = TimelineDisplayScheduler(view: view)
             cancellable = model.updates.sink { [weak self] in self?.receive($0) }
             let notifications = NotificationCenter.default
             notifications.addObserver(
@@ -250,13 +278,41 @@
             tableView.backgroundColor = backgroundColor
         }
 
+        func tearDown() {
+            guard !isTornDown else { return }
+            isTornDown = true
+            cancellable = nil
+            displayScheduler?.cancel()
+            displayScheduler = nil
+            scrollDisplayScheduler?.cancel()
+            scrollDisplayScheduler = nil
+            stopScrolling()
+            highlightTask?.cancel()
+            highlightTask = nil
+            contextSource.stop()
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        // Insets, native layout, synchronous notifications and scheduler.flush()
+        // can all run inside a SwiftUI representable update. Keep physical table
+        // work synchronous, but hand model changes off in their original FIFO order.
+        private func enqueueModelChange(
+            _ change: @escaping @MainActor (TimelineTableViewController) -> Void
+        ) {
+            guard !isTornDown else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isTornDown else { return }
+                change(self)
+            }
+        }
+
         deinit {
-            scrollTask?.cancel()
             highlightTask?.cancel()
             NotificationCenter.default.removeObserver(self)
         }
 
         override func viewDidLayout() {
+            guard !isTornDown else { return }
             contextSource.start()
             super.viewDidLayout()
             requestDisplayUpdate()
@@ -349,8 +405,21 @@
 
         private var currentEnvironment: TimelineLayoutEnvironment {
             let geometry = currentGeometry
-            let bodySize = MessageTextSizePreference.scaledBodySize(messageTextSize)
-            return .current(
+            let key = EnvironmentKey(
+                geometry: geometry, textSize: messageTextSize, language: appLanguage,
+                showAllAvatars: showAllAvatars,
+                showsMessageDetails: model.isGroupChat || showDmDetails,
+                isWideChatLayout: isWideChatLayout,
+                isSelectingMessages: actions.isSelectingMessages,
+                direction: view.userInterfaceLayoutDirection == .rightToLeft
+                    ? .rightToLeft : .leftToRight)
+            if let cached = environmentCache, cached.key == key { return cached.value }
+            // Scroll callbacks and their deferred viewport handoffs ask for the same
+            // environment repeatedly. Resolve preferred fonts/locale only when its
+            // inputs change, without delaying read or visible-media reporting.
+            let bodySize = MessageTextSizePreference.scaledSize(
+                messageTextSize, systemSize: geometry.fontSize, defaultSize: NSFont.systemFontSize)
+            let environment = TimelineLayoutEnvironment.current(
                 timelineWidth: max(
                     1,
                     geometry.rowWidth
@@ -365,11 +434,12 @@
                     messageTextSize,
                     systemSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize,
                     defaultSize: 10),
-                layoutDirection: view.userInterfaceLayoutDirection == .rightToLeft
-                    ? .rightToLeft : .leftToRight, language: appLanguage,
+                layoutDirection: key.direction, language: appLanguage,
                 showAllAvatars: showAllAvatars,
-                showsMessageDetails: model.isGroupChat || showDmDetails,
+                showsMessageDetails: key.showsMessageDetails,
                 isWideChatLayout: isWideChatLayout)
+            environmentCache = (key, environment)
+            return environment
         }
 
         private func exactLayout(for row: TimelineRow, allowingStaleOffscreen: Bool = false)
@@ -409,6 +479,7 @@
         }
 
         private func requestDisplayUpdate() {
+            guard !isTornDown else { return }
             displayScheduler?.request { [weak self] in
                 guard let self else { return }
                 self.installIfPossible()
@@ -419,6 +490,7 @@
         }
 
         @objc private func environmentChanged() {
+            environmentCache = nil
             preparation = nil
             requestDisplayUpdate()
         }
@@ -605,7 +677,7 @@
                     }
                 }
                 settleExposedRows(preserving: capturePosition())
-                if scrollTask == nil { settledPosition = capturePosition() }
+                if scrollAnimation == nil { settledPosition = capturePosition() }
                 didWork = true
                 if latestSnapshot != nil { requestDisplayUpdate() }
                 break
@@ -752,42 +824,47 @@
                 if let requestID { finishRequest(id: requestID) }
                 return
             }
-            let generation = scrollGeneration
-            let startedAt = ProcessInfo.processInfo.systemUptime
-            // Direct clip-view steps are cancellable without assuming AppKit's animator uses
-            // a backing layer. Cancellation prevents all remaining physical scroll writes.
-            scrollTask = Task { [weak self] in
-                while !Task.isCancelled {
-                    do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-                    guard let self, self.scrollGeneration == generation else { return }
+            let animation = ScrollAnimation(
+                start: start, target: target, startedAt: ProcessInfo.processInfo.systemUptime,
+                generation: scrollGeneration, requestID: requestID)
+            scrollAnimation = animation
+            scheduleScrollFrame(animation)
+        }
+
+        private func scheduleScrollFrame(_ animation: ScrollAnimation) {
+            // Follow the view's actual display cadence instead of waking every 16 ms
+            // between refreshes. Elapsed time still owns duration and cancellation
+            // fences every physical write, including reentrant snapshot installation.
+            scrollDisplayScheduler?.request { [weak self] in
+                guard let self, self.scrollGeneration == animation.generation else { return }
+                self.installIfPossible()
+                guard self.scrollGeneration == animation.generation else { return }
+                let progress = CGFloat(
+                    min(1, (ProcessInfo.processInfo.systemUptime - animation.startedAt) / 0.25))
+                let eased = progress * progress * (3 - 2 * progress)
+                self.setScrollOrigin(
+                    NSPoint(
+                        x: animation.start.x + (animation.target.x - animation.start.x) * eased,
+                        y: animation.start.y + (animation.target.y - animation.start.y) * eased))
+                guard self.scrollGeneration == animation.generation else { return }
+                if progress >= 1 {
+                    self.scrollAnimation = nil
+                    self.applying = true
+                    self.settleExposedRows(preserving: self.capturePosition())
+                    self.applying = false
+                    if let requestID = animation.requestID { self.finishRequest(id: requestID) }
                     self.installIfPossible()
-                    guard self.scrollGeneration == generation else { return }
-                    let progress = CGFloat(
-                        min(1, (ProcessInfo.processInfo.systemUptime - startedAt) / 0.25))
-                    let eased = progress * progress * (3 - 2 * progress)
-                    self.setScrollOrigin(
-                        NSPoint(
-                            x: start.x + (target.x - start.x) * eased,
-                            y: start.y + (target.y - start.y) * eased))
-                    guard self.scrollGeneration == generation else { return }
-                    if progress >= 1 {
-                        self.scrollTask = nil
-                        self.applying = true
-                        self.settleExposedRows(preserving: self.capturePosition())
-                        self.applying = false
-                        if let requestID { self.finishRequest(id: requestID) }
-                        self.installIfPossible()
-                        self.reportViewport(reason: .programmatic)
-                        return
-                    }
+                    self.reportViewport(reason: .programmatic)
+                } else {
+                    self.scheduleScrollFrame(animation)
                 }
             }
         }
 
         private func stopScrolling() {
             scrollGeneration &+= 1
-            scrollTask?.cancel()
-            scrollTask = nil
+            scrollAnimation = nil
+            scrollDisplayScheduler?.cancel()
         }
 
         private func finishRequest(id: Int) {
@@ -795,7 +872,7 @@
                 return
             }
             activeRequest = nil
-            model.scrollRequestDidFinish(id: id)
+            enqueueModelChange { host in host.model.scrollRequestDidFinish(id: id) }
         }
 
         private func highlightRow(_ id: TimelineRowID) {
@@ -860,7 +937,7 @@
                 layoutEnvironment == currentEnvironment
             else { return false }
             // Do not repeatedly interrupt an owned scroll animation with corrections.
-            guard scrollTask == nil else { return true }
+            guard scrollAnimation == nil else { return true }
             if heightSettlementRevision != installedRevision
                 || heightSettlementGeometry != installedGeometry
             {
@@ -1062,7 +1139,7 @@
             stopScrolling()
             activeRequest = nil
             settledPosition = capturePosition()
-            model.userScrollBegan()
+            enqueueModelChange { host in host.model.userScrollBegan() }
         }
 
         @objc private func userWillScroll() {
@@ -1086,7 +1163,7 @@
 
         private func reportViewport(reason: TimelineViewportChangeReason) {
             updateVisibleMedia()
-            guard !applying, !settingScrollOrigin, !handlingWheel, scrollTask == nil,
+            guard !applying, !settingScrollOrigin, !handlingWheel, scrollAnimation == nil,
                 latestSnapshot == nil, installedRevision >= 0,
                 installedRevision == model.updates.value.revision,
                 installedGeometry == currentGeometry, layoutEnvironment == currentEnvironment,
@@ -1116,16 +1193,27 @@
                 }
             }
             settledPosition = capturePosition()
-            model.viewportDidChange(
-                .init(
-                    firstVisibleIndex: hasVisibleRows ? range.location : nil,
-                    lastVisibleIndex: hasVisibleRows ? min(NSMaxRange(range), rows.count) - 1 : nil,
-                    distanceToTop: max(0, visible.minY + scrollView.contentInsets.top),
-                    distanceToBottom: max(
-                        0, tableView.bounds.maxY + scrollView.contentInsets.bottom - visible.maxY),
-                    height: visible.height,
-                    visibleMessageIDs: visibleMessageIDs
-                ), reason: reason, revision: installedRevision)
+            let viewport = TimelineViewport(
+                firstVisibleIndex: hasVisibleRows ? range.location : nil,
+                lastVisibleIndex: hasVisibleRows ? min(NSMaxRange(range), rows.count) - 1 : nil,
+                distanceToTop: max(0, visible.minY + scrollView.contentInsets.top),
+                distanceToBottom: max(
+                    0, tableView.bounds.maxY + scrollView.contentInsets.bottom - visible.maxY),
+                height: visible.height,
+                visibleMessageIDs: visibleMessageIDs)
+            let revision = installedRevision
+            let geometry = installedGeometry
+            let environment = layoutEnvironment
+            enqueueModelChange { host in
+                // A new snapshot/resize can supersede a measured native viewport
+                // before the handoff; never publish its old indices or geometry.
+                guard host.installedRevision == revision,
+                    host.model.updates.value.revision == revision,
+                    host.currentGeometry == geometry,
+                    host.currentEnvironment == environment
+                else { return }
+                host.model.viewportDidChange(viewport, reason: reason, revision: revision)
+            }
         }
     }
 #endif

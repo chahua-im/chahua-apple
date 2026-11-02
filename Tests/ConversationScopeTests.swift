@@ -325,6 +325,125 @@ final class ConversationScopeTests: XCTestCase {
             [.init(chatID: "archived-dm")])
     }
 
+    func testSwipeLabelsFollowSelectedLanguageAcrossChanges() {
+        let cache = ConversationListSwipeActionCache()
+        let chat = ConversationListItem.chat(
+            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
+        let english = cache.actions(language: .english, locale: Locale(identifier: "en_US"))
+        let chinese = cache.actions(
+            language: .simplifiedChinese, locale: Locale(identifier: "zh_Hans"))
+        XCTAssertNotEqual(
+            english.trailing(for: chat, archived: false).first?.title,
+            chinese.trailing(for: chat, archived: false).first?.title)
+        let restored = cache.actions(language: .english, locale: Locale(identifier: "en_US"))
+        XCTAssertEqual(
+            restored.trailing(for: chat, archived: false).first?.title,
+            english.trailing(for: chat, archived: false).first?.title)
+    }
+
+    func testSwipeActionsKeepUnreadThreadAndArchiveEligibilityLive() throws {
+        let cache = ConversationListSwipeActionCache()
+        let actions = cache.actions(language: .english, locale: Locale(identifier: "en"))
+        let root = try ScopeTestFixtures.thread(id: 1).threadRootMessage
+        let empty = ConversationListItem.chat(
+            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
+        XCTAssertNil(actions.leading(for: empty))
+        for unreadCount in [Int64(0), 3] {
+            let chat = ConversationListItem.chat(
+                .init(
+                    id: "chat", unreadCount: unreadCount, lastMessage: root,
+                    archived: false, kind: .group))
+            XCTAssertEqual(
+                actions.leading(for: chat)?.action,
+                (unreadCount > 0 ? ConversationListAction.markRead : .markUnread).rawValue)
+            XCTAssertEqual(
+                actions.trailing(for: chat, archived: false).map(\.action),
+                [
+                    ConversationListAction.archive.rawValue,
+                    ConversationListAction.notificationSettings.rawValue,
+                ])
+            XCTAssertEqual(
+                actions.trailing(for: chat, archived: true).first?.action,
+                ConversationListAction.unarchive.rawValue)
+            let thread = ConversationListItem.thread(
+                .init(
+                    chatId: "chat", chatName: "Parent", threadRootMessage: root,
+                    participants: [], lastReply: root, replyCount: 1,
+                    lastReplyAt: Date(timeIntervalSince1970: 40), unreadCount: unreadCount,
+                    subscribedAt: .distantPast, archived: false))
+            XCTAssertEqual(
+                actions.leading(for: thread)?.action,
+                unreadCount > 0 ? ConversationListAction.markRead.rawValue : nil)
+            XCTAssertEqual(
+                actions.trailing(for: thread, archived: false).map(\.action),
+                [ConversationListAction.archive.rawValue])
+            XCTAssertEqual(
+                actions.trailing(for: thread, archived: true).map(\.action),
+                [ConversationListAction.unarchive.rawValue])
+        }
+    }
+
+    func testRowEqualitySnapshotsDefaultsAndSenderWithoutIgnoringVisualChanges() async throws {
+        let api = FakeChatAPI()
+        await api.suspendNotificationPreferences()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        let chat = ChatListItem(
+            id: "chat", name: "Original", unreadCount: 0, archived: false, kind: .group)
+        func row(draft: String = "", selected: Bool = false) -> ConversationListRow {
+            ConversationListRow(
+                item: .chat(chat), draft: draft, store: store,
+                currentUserID: 1, isSelected: selected)
+        }
+        let original = row()
+        XCTAssertEqual(original, row())
+        XCTAssertNotEqual(original, row(draft: "Draft"))
+        XCTAssertNotEqual(original, row(selected: true))
+        let localization = ConversationListSwipeActionCache()
+            .actions(language: .english, locale: Locale(identifier: "en"))
+        XCTAssertNotEqual(
+            original,
+            ConversationListRow(
+                item: .chat(chat), draft: "", store: store, currentUserID: 1, isSelected: false,
+                localization: localization))
+        XCTAssertNotEqual(
+            original,
+            ConversationListRow(
+                item: .chat(chat), draft: "", store: store, currentUserID: 1,
+                isSelected: false, badgeColor: .pink))
+        let changed = ChatListItem(
+            id: "chat", name: "Renamed", unreadCount: 2, mutedUntil: .distantFuture,
+            archived: true, kind: .group)
+        XCTAssertNotEqual(
+            original,
+            ConversationListRow(
+                item: .chat(changed), draft: "", store: store,
+                currentUserID: 1, isSelected: false))
+        let restricted = chat.withMembershipMessagePolicy(
+            .init(visibility: .nobody, canView: false))
+        XCTAssertNotEqual(
+            original,
+            ConversationListRow(
+                item: .chat(restricted), draft: "", store: store,
+                currentUserID: 1, isSelected: false))
+        let loading = Task { try await store.loadNotificationDefaults() }
+        await api.waitForNotificationPreferenceRequest(saving: false)
+        await api.resumeNotificationPreferenceRequest(
+            saving: false,
+            response: .init(muteGroupChatsByDefault: true, muteDirectChatsByDefault: false))
+        try await loading.value
+        let muted = row()
+        XCTAssertNotEqual(original, muted, "Same store identity cannot hide changed mute defaults.")
+        XCTAssertEqual(muted, row())
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        XCTAssertNotEqual(muted, row(), "A pending preview must see the current sender name.")
+    }
+
     func testListSnapshotRefreshesPayloadsWithStableConversationIDs() throws {
         let cache = ConversationListSnapshotCache()
         let original = ChatListItem(
@@ -748,3 +867,50 @@ enum ScopeTestFixtures {
             archived: archived)
     }
 }
+
+#if os(macOS)
+    extension ConversationScopeTests {
+        func testScrollerDetachStopsReconciliationWithoutLosingReplacementPolicy() async throws {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = try XCTUnwrap(window.contentView)
+            let originalHost = NSView(frame: root.bounds)
+            let replacementHost = NSView(frame: root.bounds)
+            let scroll = NSScrollView(frame: root.bounds)
+            let nextScroll = NSScrollView(frame: root.bounds)
+            for view in [originalHost, replacementHost, scroll, nextScroll] {
+                root.addSubview(view)
+            }
+            scroll.scrollerStyle = .legacy
+            scroll.autohidesScrollers = false
+            let policy = ChatListOverlayScrollerScope()
+            defer { policy.detach(replacementHost) }
+            policy.attach(scroll, from: originalHost)
+            policy.detach(originalHost)
+
+            // A departing tree must no longer receive native layout mutations,
+            // even if its previously queued reconciliation has not run.
+            scroll.scrollerStyle = .legacy
+            scroll.autohidesScrollers = false
+            policy.reconcile()
+            XCTAssertEqual(scroll.scrollerStyle, .legacy)
+            XCTAssertFalse(scroll.autohidesScrollers)
+
+            policy.attach(scroll, from: replacementHost)
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+            XCTAssertEqual(scroll.scrollerStyle, .overlay)
+            XCTAssertTrue(scroll.autohidesScrollers)
+
+            // The stale detach must not clear the replacement's original policy.
+            // Switching live native view restores that policy, not overlay defaults.
+            policy.attach(nextScroll, from: replacementHost)
+            XCTAssertEqual(scroll.scrollerStyle, .legacy)
+            XCTAssertFalse(scroll.autohidesScrollers)
+        }
+    }
+#endif

@@ -1531,6 +1531,20 @@
             }
         }
 
+        private func assertAfterNativeModelHandoff(
+            _ assertions: @escaping @MainActor () -> Void
+        ) async {
+            // Native notifications hand model changes off FIFO to the main queue.
+            // Assert in that queue, not after resuming this task: an immediate
+            // history response could already have advanced .loading to .idle.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async {
+                    assertions()
+                    continuation.resume()
+                }
+            }
+        }
+
         private func checkHistoryScroll(legacyMouse: Bool) async throws {
             let messages = try (10...59).map {
                 try TimelineTestFixtures.message(id: UInt64($0), at: $0)
@@ -1563,8 +1577,10 @@
             scrollView.reflectScrolledClipView(scrollView.contentView)
             NotificationCenter.default.post(
                 name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
-            XCTAssertEqual(model.state.older, .idle)
-            XCTAssertEqual(source.queries.count, 1)
+            await assertAfterNativeModelHandoff {
+                XCTAssertEqual(model.state.older, .idle)
+                XCTAssertEqual(source.queries.count, 1)
+            }
 
             let loaded = expectation(description: "older message is rendered")
             let subscription = model.updates.sink { snapshot in
@@ -1577,11 +1593,15 @@
             if !legacyMouse {
                 NotificationCenter.default.post(
                     name: NSScrollView.willStartLiveScrollNotification, object: scrollView)
-                XCTAssertFalse(model.state.live.followsLatest)
+                await assertAfterNativeModelHandoff {
+                    XCTAssertFalse(model.state.live.followsLatest)
+                }
             }
             NotificationCenter.default.post(
                 name: NSScrollView.didLiveScrollNotification, object: scrollView)
-            XCTAssertEqual(model.state.older, .loading)
+            await assertAfterNativeModelHandoff {
+                XCTAssertEqual(model.state.older, .loading)
+            }
             await fulfillment(of: [loaded], timeout: 2)
             XCTAssertEqual(source.queries.count, 2)
             XCTAssertEqual(source.queries.last?.before, MessageID(10))

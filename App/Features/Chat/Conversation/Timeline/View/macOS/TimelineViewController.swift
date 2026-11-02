@@ -190,6 +190,7 @@
             interactionController.dismiss()
             interactionController.timelineView = nil
             tableController.isSplitResizing = false
+            tableController.tearDown()
             NotificationCenter.default.removeObserver(self)
         }
 

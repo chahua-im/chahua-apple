@@ -2,15 +2,24 @@
     import ChahuaAPI
     import SwiftUI
 
-    // iOS uses a pushed settings hierarchy so phones and iPads retain native back navigation.
-    // A single SwiftUI settings form cannot provide the separate category destinations.
+    // Regular-width iPad settings use the shared category/detail modal. Compact widths
+    // retain the phone hierarchy, including its profile hero and native back navigation.
     struct IOSSettingsNavigationView: View {
         let settings: NotificationSettingsView
         @State private var protectsEditorEdits = false
         @State private var compactTitleOpacity: Double = 0
         @Environment(\.dismiss) private var dismiss
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
         var body: some View {
+            if horizontalSizeClass == .regular && !settings.usesHeroLayout {
+                SettingsSplitNavigationView(settings: settings, compact: false)
+            } else {
+                phoneNavigation
+            }
+        }
+
+        private var phoneNavigation: some View {
             NavigationStack {
                 List {
                     settings.accountSummary(transitionTarget: compactTitleOpacity < 0.5)

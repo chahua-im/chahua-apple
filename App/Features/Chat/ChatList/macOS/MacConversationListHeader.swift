@@ -7,11 +7,18 @@
         @ViewBuilder var account: () -> Account
         @ViewBuilder var actions: () -> Actions
         @State private var sidebarWidth: CGFloat = 300
+        @FocusState private var isHeaderFocused: Bool
 
         var body: some View {
             // The docked title row is 52pt, followed by an 8pt search margin.
             // AppKit still owns the toolbar controls centered at native y26.
             Color.clear.frame(height: 60)
+                // Keep automatic window-entry focus off Search. Explicit search
+                // clicks/shortcuts and the conversation editor retain their own focus.
+                .focusable()
+                .focusEffectDisabled()
+                .focused($isHeaderFocused)
+                .defaultFocus($isHeaderFocused, true)
                 .onGeometryChange(for: CGFloat.self) {
                     $0.size.width
                 } action: {

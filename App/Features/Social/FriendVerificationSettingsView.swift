@@ -8,6 +8,7 @@ struct FriendVerificationSettingsView: View {
     var onFinish: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
     @State private var mode: FriendVerificationMode = .direct
     @State private var question = ""
     @State private var originalMode: FriendVerificationMode = .direct
@@ -18,6 +19,7 @@ struct FriendVerificationSettingsView: View {
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var accountID: Int32?
+    @State private var accountSessionRevision: Int?
     @State private var revision = 0
     @State private var retryTask: Task<Void, Never>?
     @State private var saveTask: Task<Void, Never>?
@@ -46,11 +48,6 @@ struct FriendVerificationSettingsView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        Label(
-                            "Friend Request Permission",
-                            systemImage: "person.badge.shield.checkmark"
-                        )
-                        .font(.title2.weight(.semibold))
                         Text("Who can add me")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -72,10 +69,12 @@ struct FriendVerificationSettingsView: View {
         }
         .navigationTitle("Friend Request Permission")
         .settingsEditorControls(
+            title: "Friend Request Permission",
             isDirty: isDirty, canSave: canSave, isSaving: saving,
-            accountID: store.currentUserProfile?.uid, onSave: beginSave, onFinish: finish
+            accountID: store.currentUserProfile?.uid, onSave: beginSave,
+            onRevert: revert, onFinish: finish
         )
-        .task(id: store.currentUserProfile?.uid) {
+        .task(id: "\(store.currentUserProfile?.uid ?? 0)-\(store.sessionRevision)") {
             retryTask?.cancel()
             await load()
         }
@@ -157,13 +156,23 @@ struct FriendVerificationSettingsView: View {
     }
 
     private var canSave: Bool {
-        loaded && !loading && !saving && accountID != nil
+        isDirty && !loading && !saving && accountID != nil
             && accountID == store.currentUserProfile?.uid
+            && accountSessionRevision == store.sessionRevision
             && (mode != .question || validQuestion)
     }
 
     private func finish() {
         if let onFinish { onFinish() } else { dismiss() }
+    }
+
+    private func revert() {
+        guard loaded, !saving, accountID == store.currentUserProfile?.uid,
+            accountSessionRevision == store.sessionRevision
+        else { return }
+        mode = originalMode
+        question = originalQuestion
+        saveError = nil
     }
 
     private func beginSave() {
@@ -174,8 +183,13 @@ struct FriendVerificationSettingsView: View {
             question: mode == .question
                 ? question.trimmingCharacters(in: .whitespacesAndNewlines) : nil)
         let requestRevision = revision
+        let sessionRevision = store.sessionRevision
         saving = true
-        saveTask = Task { await save(settings, uid: uid, requestRevision: requestRevision) }
+        saveTask = Task {
+            await save(
+                settings, uid: uid, sessionRevision: sessionRevision,
+                requestRevision: requestRevision)
+        }
     }
 
     private var validQuestion: Bool {
@@ -196,6 +210,8 @@ struct FriendVerificationSettingsView: View {
         let requestRevision = revision
         saveTask?.cancel()
         let uid = store.currentUserProfile?.uid
+        let sessionRevision = store.sessionRevision
+        accountSessionRevision = sessionRevision
         accountID = uid
         loaded = false
         loading = false
@@ -208,23 +224,27 @@ struct FriendVerificationSettingsView: View {
         do {
             let settings = try await store.friendVerificationSettings()
             try Task.checkCancellation()
-            guard revision == requestRevision, store.currentUserProfile?.uid == uid else { return }
+            guard revision == requestRevision, store.currentUserProfile?.uid == uid,
+                store.sessionRevision == sessionRevision
+            else { return }
             mode = settings.mode
             question = settings.question ?? ""
             originalMode = mode
             originalQuestion = question
             loaded = true
         } catch is CancellationError {} catch {
-            guard revision == requestRevision, store.currentUserProfile?.uid == uid else { return }
+            guard revision == requestRevision, store.currentUserProfile?.uid == uid,
+                store.sessionRevision == sessionRevision
+            else { return }
             loadError = error.localizedDescription
         }
     }
 
     private func save(
-        _ draft: FriendVerificationSettings, uid: Int32, requestRevision: Int
+        _ draft: FriendVerificationSettings, uid: Int32, sessionRevision: Int, requestRevision: Int
     ) async {
         guard revision == requestRevision, loaded, saving,
-            store.currentUserProfile?.uid == uid
+            store.currentUserProfile?.uid == uid, store.sessionRevision == sessionRevision
         else { return }
         saveError = nil
         defer { if revision == requestRevision { saving = false } }
@@ -232,14 +252,18 @@ struct FriendVerificationSettingsView: View {
             try Task.checkCancellation()
             let settings = try await store.updateFriendVerificationSettings(draft)
             try Task.checkCancellation()
-            guard revision == requestRevision, store.currentUserProfile?.uid == uid else { return }
+            guard revision == requestRevision, store.currentUserProfile?.uid == uid,
+                store.sessionRevision == sessionRevision
+            else { return }
             mode = settings.mode
             question = settings.question ?? ""
             originalMode = mode
             originalQuestion = question
-            finish()
+            if !usesSplitLayout { finish() }
         } catch is CancellationError {} catch {
-            guard revision == requestRevision, store.currentUserProfile?.uid == uid else { return }
+            guard revision == requestRevision, store.currentUserProfile?.uid == uid,
+                store.sessionRevision == sessionRevision
+            else { return }
             saveError = error.localizedDescription
         }
     }

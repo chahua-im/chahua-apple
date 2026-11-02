@@ -19,6 +19,8 @@ import SwiftUI
 struct ChatListView: View {
     @Environment(\.isWideChatLayout) private var isWideChatLayout
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.locale) private var locale
+    @AppStorage(AppLanguage.storageKey) private var languageRawValue = AppLanguage.system.rawValue
     @ObservedObject var store: ChatStore
     @ObservedObject var drafts: ChatDraftStore
     let currentUserID: Int32
@@ -35,6 +37,7 @@ struct ChatListView: View {
     @State private var revealedConversationID: ConversationKey?
     @State private var conversationStateConsumer = UUID()
     @State private var listSnapshotCache = ConversationListSnapshotCache()
+    @State private var swipeActionCache = ConversationListSwipeActionCache()
     @State private var notificationChat: ChatListItem?
     @State private var archiveConfirmation: ArchiveConfirmation?
     @StateObject private var scrollScope = ConversationListScrollScope()
@@ -176,16 +179,20 @@ struct ChatListView: View {
             scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages,
             draftUpdatedAt: drafts.draftUpdatedAt, pendingPreviews: store.pendingListPreviews)
         let items = snapshot.items
+        let language = AppLanguage(rawValue: languageRawValue) ?? .system
+        let swipeActions = swipeActionCache.actions(language: language, locale: locale)
         let loadStatus = ConversationListLoadStatus(
             state: store.state, scope: scope, archivedMode: archivedMode,
             showThreadsInMessages: showThreadsInMessages,
             isPullRefreshing: isPullRefreshing, onRetry: { await performManualRefresh() }
         )
-        List {
+        ConversationListViewport {
             if !isWideChatLayout, scrollScope.isSearchRevealed && !isSearchPinned {
                 Color.clear
                     .frame(height: ConversationListScrollScope.drawerHeight)
-                    .background(ConversationListScrollMarker(scope: scrollScope))
+                    #if os(iOS)
+                        .background(ConversationListScrollMarker(scope: scrollScope))
+                    #endif
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
@@ -193,23 +200,20 @@ struct ChatListView: View {
             }
             if loadStatus.isVisible {
                 loadStatus
-                    .background(ConversationListScrollMarker(scope: scrollScope))
-                    #if os(macOS)
-                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                    #if os(iOS)
+                        .background(ConversationListScrollMarker(scope: scrollScope))
                     #endif
             }
             if !archivedMode, let onOpenArchived, hasArchivedConversations {
                 Button(action: onOpenArchived) { archivedEntry }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("archived-conversations")
-                    .background(ConversationListScrollMarker(scope: scrollScope))
+                    #if os(iOS)
+                        .background(ConversationListScrollMarker(scope: scrollScope))
+                    #endif
                     #if os(macOS)
-                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                        .listRowInsets(
-                            EdgeInsets(
-                                top: 0, leading: usesDesktopDensity ? 8 : 0,
-                                bottom: usesDesktopDensity ? 2 : 0,
-                                trailing: usesDesktopDensity ? 8 : 0))
+                        .padding(.horizontal, usesDesktopDensity ? 8 : 0)
+                        .padding(.bottom, usesDesktopDensity ? 2 : 0)
                     #else
                         .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     #endif
@@ -221,14 +225,12 @@ struct ChatListView: View {
                 Button(action: onOpenFriendRequestHistory) { friendRequestHistoryEntry }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("friend-request-records")
-                    .background(ConversationListScrollMarker(scope: scrollScope))
+                    #if os(iOS)
+                        .background(ConversationListScrollMarker(scope: scrollScope))
+                    #endif
                     #if os(macOS)
-                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                        .listRowInsets(
-                            EdgeInsets(
-                                top: 0, leading: usesDesktopDensity ? 8 : 0,
-                                bottom: usesDesktopDensity ? 2 : 0,
-                                trailing: usesDesktopDensity ? 8 : 0))
+                        .padding(.horizontal, usesDesktopDensity ? 8 : 0)
+                        .padding(.bottom, usesDesktopDensity ? 2 : 0)
                     #else
                         .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                     #endif
@@ -243,37 +245,41 @@ struct ChatListView: View {
                         : "Conversations in this category will appear here.",
                     systemImage: scope == .threads ? "text.bubble" : "bubble.left.and.bubble.right"
                 )
-                .background(ConversationListScrollMarker(scope: scrollScope))
-                #if os(macOS)
-                    .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
+                #if os(iOS)
+                    .background(ConversationListScrollMarker(scope: scrollScope))
                 #endif
             }
             ForEach(items) { item in
-                swipeRow(for: item)
+                ConversationListSwipeRow(
+                    row: ConversationListRow(
+                        item: item,
+                        draft: drafts.draftText(chatID: item.id.chatID, threadID: item.id.threadID),
+                        pending: store.pendingListPreviews[item.id],
+                        store: store, currentUserID: currentUserID,
+                        isSelected: selectedConversationID == item.id, badgeColor: badgeColor,
+                        localization: swipeActions),
+                    selectionColor: selectionColor, archived: archivedMode,
+                    pendingAction: store.pendingListAction(for: item.id),
+                    actions: swipeActions, revealedID: $revealedConversationID,
+                    onSelect: { onSelectConversation(item) },
+                    onAction: { performSwipeAction($0, on: item) }
+                )
+                #if os(iOS)
                     .background(ConversationListScrollMarker(scope: scrollScope))
-                    #if os(macOS)
-                        .background(ChatListOverlayScrollerMarker(scope: overlayScrollers))
-                    #endif
-                    #if os(iOS)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-                    #else
-                        .listRowInsets(
-                            EdgeInsets(
-                                top: 0, leading: usesDesktopDensity ? 8 : 0,
-                                bottom: usesDesktopDensity ? 2 : 0,
-                                trailing: usesDesktopDensity ? 8 : 0))
-                    #endif
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+                #else
+                    .padding(.horizontal, usesDesktopDensity ? 8 : 0)
+                    .padding(.bottom, usesDesktopDensity ? 2 : 0)
+                #endif
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             }
             #if os(iOS)
                 .listSectionSeparator(.hidden, edges: .top)
             #endif
         }
-        .listStyle(.plain)
         #if os(macOS)
-            // Row insets provide spacing without the iOS-only listRowSpacing API.
-            // Keep the existing native scroll driver and teardown behavior.
+            // Preserve sidebar spacing without List's per-cell hosting/sizing.
             .contentMargins(.top, usesDesktopDensity ? 2 : 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
         #else
@@ -281,8 +287,16 @@ struct ChatListView: View {
         #endif
         .contentMargins(.horizontal, 0, for: .scrollContent)
         .safeAreaPadding(.bottom, bottomInset)
-        .scrollContentBackground(.hidden)
-        .background(ConversationListScrollMarker(scope: scrollScope, keepsScopeAlive: true))
+        #if os(iOS)
+            .scrollContentBackground(.hidden)
+        #endif
+        #if os(macOS)
+            .background(
+                ConversationListViewportMarker(
+                    scrollScope: scrollScope, scrollerScope: overlayScrollers))
+        #else
+            .background(ConversationListScrollMarker(scope: scrollScope, keepsScopeAlive: true))
+        #endif
         #if os(iOS)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if isWideChatLayout {
@@ -363,10 +377,6 @@ struct ChatListView: View {
             }
         }
         .onChange(of: isSearchPinned) { _, pinned in scrollScope.isSearchPinned = pinned }
-        #if os(macOS)
-            .background(
-                ChatListOverlayScrollerMarker(scope: overlayScrollers, keepsScopeAlive: true))
-        #endif
         .onChange(of: scope) { _, _ in resetScopePresentation() }
         .onChange(of: archivedMode) { _, _ in resetScopePresentation() }
         .onChange(of: currentUserID) { _, _ in resetScopePresentation(preservingSearch: false) }
@@ -616,111 +626,6 @@ struct ChatListView: View {
             : Color(red: 0, green: 98 / 255, blue: 209 / 255)
     }
 
-    private func selectionButton(for item: ConversationListItem) -> some View {
-        Button {
-            // A tap dismisses any open controls before it can navigate.
-            guard revealedConversationID == nil else {
-                revealedConversationID = nil
-                return
-            }
-            guard selectedConversationID != item.id else { return }
-            onSelectConversation(item)
-        } label: {
-            ConversationListRow(
-                item: item,
-                draft: drafts.draftText(chatID: item.id.chatID, threadID: item.id.threadID),
-                pending: store.pendingListPreviews[item.id],
-                store: store, currentUserID: currentUserID,
-                isSelected: selectedConversationID == item.id, badgeColor: badgeColor
-            )
-            .contentShape(Rectangle())
-            .overlay {
-                if isBlockingListAction(for: item) {
-                    ProgressView()
-                        .padding(10)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .accessibilityLabel("Updating conversation")
-                        .allowsHitTesting(false)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selectedConversationID == item.id ? .isSelected : [])
-    }
-
-    private func swipeRow(for item: ConversationListItem) -> some View {
-        let leading = leadingSwipeAction(for: item)
-        let trailing = trailingSwipeActions(for: item)
-        let isBusy = store.pendingListAction(for: item.id) != nil
-        let blocksInteraction = isBlockingListAction(for: item)
-        return SwipeRow(
-            id: item.id, revealedID: $revealedConversationID,
-            leadingAction: leading, trailingActions: trailing, isBusy: blocksInteraction,
-            onAction: { performSwipeAction($0, on: item) }
-        ) {
-            selectionButton(for: item)
-                .background(
-                    selectedConversationID == item.id ? selectionColor : Color.clear,
-                    in: RoundedRectangle(cornerRadius: isWideChatLayout ? 10 : 0)
-                )
-                .accessibilityActions {
-                    if !isBusy {
-                        if let leading {
-                            Button(leading.title) { performSwipeAction(leading.action, on: item) }
-                        }
-                        ForEach(trailing, id: \.symbol) { action in
-                            Button(action.title) { performSwipeAction(action.action, on: item) }
-                        }
-                    }
-                }
-        }
-        .onChange(of: blocksInteraction) { _, blocksInteraction in
-            if blocksInteraction, revealedConversationID == item.id { revealedConversationID = nil }
-        }
-        .onDisappear {
-            if revealedConversationID == item.id { revealedConversationID = nil }
-        }
-    }
-
-    private func isBlockingListAction(for item: ConversationListItem) -> Bool {
-        guard let action = store.pendingListAction(for: item.id) else { return false }
-        return action != .markRead && action != .markUnread
-    }
-
-    private func leadingSwipeAction(for item: ConversationListItem) -> SwipeRowAction? {
-        guard item.readThroughMessageID != nil else { return nil }
-        if item.unreadCount > 0 {
-            return .init(
-                action: ConversationListAction.markRead.rawValue,
-                title: AppLanguage.localized("Mark as Read"), symbol: "checkmark.message",
-                tint: .blue)
-        }
-        if case .chat = item {
-            return .init(
-                action: ConversationListAction.markUnread.rawValue,
-                title: AppLanguage.localized("Mark as Unread"), symbol: "message.badge", tint: .blue
-            )
-        }
-        // Threads have no mark-unread endpoint; do not offer a local-only badge.
-        return nil
-    }
-
-    private func trailingSwipeActions(for item: ConversationListItem) -> [SwipeRowAction] {
-        let archive = SwipeRowAction(
-            action: (archivedMode ? ConversationListAction.unarchive : .archive).rawValue,
-            title: archivedMode
-                ? AppLanguage.localized("Unarchive") : AppLanguage.localized("Archive"),
-            symbol: archivedMode ? "tray" : "archivebox", tint: .indigo)
-        guard case .chat = item else { return [archive] }
-        return [
-            archive,
-            .init(
-                action: ConversationListAction.notificationSettings.rawValue,
-                title: AppLanguage.localized("Notification settings"),
-                symbol: "bell", tint: .orange),
-        ]
-    }
-
     private func performSwipeAction(_ action: String, on item: ConversationListItem) {
         guard let action = ConversationListAction(rawValue: action) else { return }
         perform(action, on: item)
@@ -900,5 +805,23 @@ struct ConversationListLoadStatus: View {
             }
             .listRowSeparator(.hidden)
         }
+    }
+}
+
+/// macOS List installs a hosting graph and automatic table-height machinery per
+/// cell. A lazy SwiftUI scroll stack keeps the same variable-height row content
+/// in one scrolling tree. iOS retains List's platform interaction and safe areas.
+private struct ConversationListViewport<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        #if os(macOS)
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0, content: content)
+            }
+        #else
+            List(content: content)
+                .listStyle(.plain)
+        #endif
     }
 }

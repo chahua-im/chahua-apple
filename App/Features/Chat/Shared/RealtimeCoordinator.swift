@@ -287,8 +287,15 @@ final class RealtimeCoordinator: ObservableObject {
                 self.nextConversationRequestID &+= 1
                 let requestID = self.nextConversationRequestID
                 self.store.beginConversationUnreadWatch(requestID: requestID)
+                #if os(macOS)
+                    // Dock badges stay live with no windows; only visible-list views
+                    // and per-conversation state watches depend on foreground activity.
+                    let appBadge = true
+                #else
+                    let appBadge = active
+                #endif
                 self.enqueuePresence(
-                    .unread(requestID, active ? self.store.conversationUnreadViews : [], active),
+                    .unread(requestID, active ? self.store.conversationUnreadViews : [], appBadge),
                     on: socket, generation: self.generation, attempt: self.attempt)
             }
             self.nextConversationRequestID &+= 1

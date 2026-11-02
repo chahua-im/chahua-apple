@@ -7,6 +7,49 @@ import XCTest
 
 @MainActor
 final class AuthSessionModelTests: XCTestCase {
+    func testSessionStoresArePreparedBeforeAuthenticationInvalidatesViews() async throws {
+        let api = FakeChatAPI()
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        await api.setAuthenticatedProfile(profile)
+        let model = AuthSessionModel(
+            apiClient: api, credentialLoginClient: PrototypeCredentialLoginClient(),
+            tokenStorage: InMemorySessionTokenStorage(token: "isolated-session"))
+        var preparedUID: Int32?
+        var publicationCount = 0
+        var preparedAtPublication = -1
+        var observedPreparedAuthentication = false
+        var observedPreparedSignOut = false
+        model.willTransitionSession = { state in
+            preparedAtPublication = publicationCount
+            if case .authenticated(let me) = state {
+                preparedUID = me.uid
+            } else {
+                preparedUID = nil
+            }
+        }
+        let observation = model.objectWillChange.sink { publicationCount += 1 }
+        let stateObservation = model.$state.dropFirst().sink { state in
+            if case .authenticated(let me) = state {
+                observedPreparedAuthentication =
+                    preparedUID == me.uid && publicationCount > preparedAtPublication
+            } else if case .signedOut = state {
+                observedPreparedSignOut =
+                    preparedUID == nil && publicationCount > preparedAtPublication
+            }
+        }
+        defer { stateObservation.cancel() }
+        defer { observation.cancel() }
+        await restore(model)
+        XCTAssertTrue(observedPreparedAuthentication)
+        await model.logout()
+        XCTAssertTrue(observedPreparedSignOut)
+        XCTAssertNil(preparedUID)
+    }
+
     func testRetryableRestoreFailuresRetainCredentialAndRetryAuthenticates() async throws {
         let failures: [(APIError, AuthStartupFailure)] = [
             (.transport(URLError(.notConnectedToInternet)), .network),

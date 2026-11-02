@@ -20,13 +20,24 @@ For Instruments capture steps and marker definitions, see [Scrolling performance
 
 Chat presentation follows available window width, not device identity. Below 768pt, iOS retains its compact navigation stack. At wider sizes the conversation list and timeline appear together; desktop rows use a denser presentation while iPad keeps touch-sized controls.
 
-Chat information opens inward: a 340pt inspector and its gutters consume timeline space without changing the window size or minimum. When the detail area cannot retain a 440pt timeline alongside the inspector, information uses a sheet. An open inspector adapts between these presentations as the window changes width. Compact iPhone information keeps its existing navigation route.
+The macOS main scene defaults to 800×600pt. This is a launch default, not a forced resize: native restoration can retain a user's existing window size.
+
+Chat information opens inward: a 340pt inspector and its gutters consume timeline space without changing the window size or minimum. When the detail area cannot retain a 440pt timeline alongside the inspector, information uses a fitted modal card. This also applies in compact-width iPad windows. Resizing between modal and sidebar retains the open-info intent; a sheet dismissal caused by widening is not a user Close action. Compact iPhone information keeps its existing navigation route.
 On macOS, M6 retains a floating info panel: 16pt corners, tinted material, subtle outline/shadow and 8pt top/bottom/right margins. It consumes 348pt without an additional inter-column gutter; the conversation bars provide their own 16pt clearance from the panel. The docked sidebar does not move or resize when information opens. Existing info-page content and actions are retained.
+
+The Chat Info root shares its neutral surface, close/title header, identity, action tiles, privacy row and attachment/thread controls between sidebar and modal. Native Back remains available on pushed privacy, edit and invitation pages. macOS toolbar suppression is scoped to the modal environment only: an inline inspector must never hide the main window toolbar or traffic lights.
+
+User profiles are always independent modal cards on macOS and iPad, including when opened from Chat Info, member lists, friend requests, saved/forwarded messages or settings. A profile opened from a Chat Info modal layers above that modal instead of replacing its page. The compact profile retains its avatar/name/handle/group badge and Message, Forum Profile and More actions; nonfriend requests, errors and disclosures remain scrollable. Compact iPhone retains pushed profile navigation where it was previously used.
+
+Profile Close clears the selection owned by its presenter, including profiles layered above Chat Info or settings. The card receives an explicit close action rather than asking its nested navigation stack to dismiss. Its compact Close label owns the full 44pt hit region; pushed iPhone profiles retain native Back navigation.
+
+For verification, open Chat Info wide, narrow until it becomes modal, open a profile above it, close the profile, and widen again. Info should return to the sidebar without closing; a profile opened wide must still be modal. Check Close, native nested-page Back, privacy, mute/search, member navigation, attachment kinds, threads, Message, Forum Profile and safety actions. Repeat in an iPad narrow window and verify the macOS native toolbar remains intact.
 
 Wide timelines cap bubbles at 620pt, use 24pt side padding, and retain the user's message text size. Wide conversation-list search is always visible but remains explicitly unavailable; in-chat message search is a separate working feature.
 
 On macOS, a persistent unified native window toolbar owns the 52pt native title band. AppKit keeps its original traffic lights in their original parent; no view moves, replaces, hides, or asynchronously repositions them. On the verified configuration their centers are (26, 26), (49, 26), and (72, 26), in logical points from the window's top-left, excluding its shadow.
 Account and creation actions use 32pt frames centered at y26, with a 26pt account avatar and no shared toolbar glass capsule. M5/M6 dock the sidebar at (0, 0), reserving a 52pt title row followed by an 8pt search margin. The 28pt search starts at y60 and 28pt scope controls at y98; both remain outside the List viewport. iPhone and iPad retain their existing header presentation.
+The sidebar's inert title spacer is the macOS default focus target, so opening or reopening a window does not automatically edit Search. Explicit search clicks/shortcuts and conversation-editor focus remain independent; no native first-responder reset steals user-initiated focus.
 
 The macOS sidebar is full-height and defaults to 300pt wide, resizable to 340pt. It has no outer gaps, card corners, outline or drop shadow: a tinted material and a 0.5pt trailing divider separate it from the conversation canvas.
 Its native List rows retain 8pt outer horizontal insets, 10pt inner horizontal padding, 40pt avatars, a 10pt avatar/text gap, a 60pt minimum height and 2pt trailing vertical spacing. Native row insets supply spacing rather than the iOS-only `listRowSpacing` API; accessibility content may increase row height.
@@ -38,9 +49,16 @@ For manual verification, open a group on macOS or a wide iPad window, toggle the
 
 The macOS conversation-list scroller bridge must release native references without restoring spacing or scroller settings during representable dismantling. AppKit setters and column fitting can synchronously query SwiftUI rows after their view tree has been invalidated. Restoration is reserved for switching live native views, not closing the owning List/window.
 
+The macOS chat timeline uses a small, auto-hiding native overlay scroller rather than a persistent scrollbar gutter. The sticker-pack strip suppresses its scrollbar with `.scrollIndicators(.never)`, including when macOS is set to always show scrollbars, so its 44pt tabs retain their full height. Over that strip only, discrete vertical mouse-wheel input scrolls horizontally; precise trackpad/Magic Mouse events and native horizontal wheel input retain AppKit handling. Input outside the strip is untouched.
+The synchronous AppKit wheel monitor returns only a Boolean consumed/not-consumed decision from `MainActor.assumeIsolated`. Its `NSEvent` return stays outside that closure because AppKit explicitly marks events non-Sendable under Swift 6.
+
+For manual verification, use both a wheel mouse and a trackpad with enough sticker packs to overflow the strip. Wheel vertically over the pack tabs, swipe horizontally on the trackpad, and check the first/last pack boundaries. Repeat with “Show scroll bars: Always”; tab previews should stay centered with no horizontal scrollbar. Scroll and drag the chat timeline's overlay thumb and confirm it does not reserve a gutter.
+
 macOS composer and caption editors route native media drops through the same attachment importer as Paste. `NSTextView` advertises attachment pasteboard types and overrides `readSelection(from:type:)`; relying only on the enclosing SwiftUI `onDrop` lets AppKit insert Finder's filename into the draft instead. Plain-text drops retain native text editing.
 
 For manual verification, type a draft and drag an image from Finder onto the message editor: the attachment caption sheet should open with the draft intact and no filename inserted. Drop another image onto the open caption editor and confirm it appends without replacing the caption. Also check a drop onto the conversation timeline and ordinary text drag-and-drop. `ComposerFocusTests.testDroppedImagePresentsCaptionSheetWithoutChangingDraft` covers native pasteboard ingestion through actual caption-sheet presentation; physical WindowServer drag targeting still requires a manual check.
+
+macOS Settings uses an 880×680pt ideal sheet with a dense sidebar and dirty-only bottom Revert/Save bar. Regular-width iPad uses a 940×720pt ideal sheet with touch-sized sidebar rows and a persistent top-right Save that becomes blue only with changes. Compact iPhone keeps native pushed editors. Read Receipts uses macOS radio rows and iPad checkmarks; saving split-layout settings stays on the selected page. Sign out requires native confirmation on both platforms. See [Settings editing](arch/settings-editing.md) for draft protection and verification.
 
 
 ## Local checks and formatting

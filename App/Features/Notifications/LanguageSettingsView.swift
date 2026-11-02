@@ -5,6 +5,7 @@ struct LanguageSettingsView: View {
     @ObservedObject private var store: ChatStore
     @StateObject private var model: LanguageSettingsModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
     private let onFinish: (() -> Void)?
 
     init(store: ChatStore, onFinish: (() -> Void)? = nil) {
@@ -43,15 +44,17 @@ struct LanguageSettingsView: View {
         .formStyle(.grouped)
         .navigationTitle("Language")
         .settingsEditorControls(
+            title: "Language",
             isDirty: model.isDirty, canSave: model.isDirty, isSaving: false,
-            accountID: store.currentUserProfile?.uid, onSave: save, onFinish: finish
+            accountID: store.currentUserProfile?.uid, onSave: save,
+            onRevert: model.revert, onFinish: finish
         )
         .onDisappear { model.discardChanges() }
     }
 
     private func save() {
         guard model.save() else { return }
-        finish()
+        if !usesSplitLayout { finish() }
     }
 
     private func finish() {

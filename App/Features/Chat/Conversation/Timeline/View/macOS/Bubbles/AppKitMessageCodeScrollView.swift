@@ -46,14 +46,32 @@
         required init?(coder: NSCoder) { nil }
 
         func apply(_ attachment: MessageCodeAttachment) {
-            backgroundColor = attachment.backgroundColor
+            if backgroundColor != attachment.backgroundColor {
+                backgroundColor = attachment.backgroundColor
+            }
             if self.attachment !== attachment {
                 codeView.textStorage?.setAttributedString(attachment.attributedCode)
                 self.attachment = attachment
+                resetInteraction()
+            }
+            let frame = CGRect(origin: .zero, size: attachment.naturalSize)
+            if codeView.frame != frame { codeView.frame = frame }
+        }
+
+        func resetInteraction() {
+            let empty = NSRange(location: 0, length: 0)
+            if codeView.selectedRange() != empty { codeView.setSelectedRange(empty) }
+            if contentView.bounds.origin != .zero {
                 contentView.scroll(to: .zero)
                 reflectScrolledClipView(contentView)
             }
-            codeView.frame = CGRect(origin: .zero, size: attachment.naturalSize)
+        }
+
+        func clear() {
+            resetInteraction()
+            attachment = nil
+            codeView.textStorage?.setAttributedString(NSAttributedString(string: ""))
+            codeView.frame = .zero
         }
     }
 #endif

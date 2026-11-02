@@ -383,9 +383,14 @@
             controller.viewDidLayoutSubviews()
             try await Task.sleep(for: .milliseconds(100))
             await model.jumpToLiveEdge()
+            XCTAssertNotNil(
+                model.updates.value.pendingScroll,
+                "Native arrival must not synchronously acknowledge a SwiftUI update")
+            await drainNativeHandoffs()
             XCTAssertNil(
                 model.updates.value.pendingScroll,
-                "A jump already at its destination must finish without an animation callback")
+                "A jump already at its destination must finish after the safe handoff, without an animation callback"
+            )
 
             controller.scrollViewWillBeginDragging(collection)
             collection.setContentOffset(
@@ -417,8 +422,8 @@
             controller.scrollViewWillBeginDragging(collection)
             collection.setContentOffset(.zero, animated: false)
             XCTAssertEqual(
-                model.state.older, .loading,
-                "Prefetch must start during the gesture, not only at its end")
+                model.state.older, .idle,
+                "Native offset changes must not publish model state inside UIKit layout")
             let messageID = try XCTUnwrap(model.rows.first { $0.messageID == MessageID(20) }).id
             func messageOffset() throws -> CGFloat {
                 let index = try XCTUnwrap(model.rows.firstIndex { $0.id == messageID })
@@ -428,6 +433,11 @@
                 return frame.minY - collection.contentOffset.y - collection.adjustedContentInset.top
             }
             let offset = try messageOffset()
+            await assertAfterNativeModelHandoff {
+                XCTAssertEqual(
+                    model.state.older, .loading,
+                    "Prefetch must start during the gesture, not only at its end")
+            }
             for _ in 0..<50 {
                 if model.rows.contains(where: { $0.messageID == MessageID(0) }),
                     collection.numberOfItems(inSection: 0) == model.rows.count
@@ -1090,6 +1100,29 @@
                 XCTAssertEqual(
                     collapsed[index].height, initial[index].height, accuracy: 0.5,
                     "Removing the final reaction must reclaim the extra row height.")
+            }
+        }
+
+        /// Arrival acknowledgments can enqueue a fresh viewport handoff. Drain
+        /// both main-queue turns without waiting for an animation or display tick.
+        private func drainNativeHandoffs() async {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async {
+                    DispatchQueue.main.async { continuation.resume() }
+                }
+            }
+        }
+
+        private func assertAfterNativeModelHandoff(
+            _ assertions: @escaping @MainActor () -> Void
+        ) async {
+            // Match the AppKit host tests: inspect state in FIFO queue order,
+            // before an immediate history task can finish loading and resume us.
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async {
+                    assertions()
+                    continuation.resume()
+                }
             }
         }
 

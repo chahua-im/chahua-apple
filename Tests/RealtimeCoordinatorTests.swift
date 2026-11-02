@@ -26,7 +26,8 @@ final class RealtimeCoordinatorTests: XCTestCase {
             XCTAssertEqual(model.selection, language)
             XCTAssertNil(defaults.string(forKey: AppLanguage.storageKey))
         }
-        model.choose(.system)
+        model.revert()
+        XCTAssertEqual(model.selection, .system)
         XCTAssertFalse(model.isDirty)
         XCTAssertFalse(model.save())
         XCTAssertTrue(defaults.persistentDomain(forName: namespace)?.isEmpty ?? true)
@@ -84,12 +85,17 @@ final class RealtimeCoordinatorTests: XCTestCase {
         model.chooseVisibility(.nobody)
         XCTAssertNil(model.visibility)
         await model.load()
-        XCTAssertTrue(model.canSave)
+        XCTAssertFalse(model.canSave)
         XCTAssertFalse(model.isDirty)
         model.chooseVisibility(.nobody)
         XCTAssertTrue(model.isDirty)
-        model.chooseVisibility(.everyone)
+        XCTAssertTrue(model.canSave)
+        model.revert()
+        XCTAssertEqual(model.visibility, .everyone)
         XCTAssertFalse(model.isDirty)
+        XCTAssertFalse(model.canSave)
+        let cleanSave = await model.save()
+        XCTAssertFalse(cleanSave)
         let writes = await api.presenceUpdateCount
         XCTAssertEqual(writes, 0)
     }
@@ -106,6 +112,8 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await eventually { await api.hasHeldPresenceUpdate }
         XCTAssertTrue(model.isSaving)
         XCTAssertFalse(model.canSave)
+        model.revert()
+        XCTAssertEqual(model.visibility, .nobody)
         let repeatedSave = await model.save()
         XCTAssertFalse(repeatedSave)
         await model.load()
@@ -116,6 +124,9 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertFalse(model.isSaving)
         XCTAssertFalse(model.isDirty)
         XCTAssertNil(model.saveError)
+        XCTAssertFalse(model.canSave)
+        let cleanSave = await model.save()
+        XCTAssertFalse(cleanSave)
         let writes = await api.presenceUpdateCount
         XCTAssertEqual(writes, 1)
     }
@@ -152,6 +163,29 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertNil(model.saveError)
         XCTAssertFalse(model.isSaving)
         XCTAssertNil(store.state.userPresence[2])
+    }
+
+    func testPresenceRevertClearsFailedDraftWithoutWriting() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let model = PresencePrivacySettingsModel(store: store)
+        await model.load()
+        model.chooseVisibility(.nobody)
+        await api.setPresenceUpdateError(.unavailable)
+        let saved = await model.save()
+        XCTAssertFalse(saved)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertNotNil(model.saveError)
+        model.revert()
+        XCTAssertEqual(model.visibility, .everyone)
+        XCTAssertFalse(model.isDirty)
+        XCTAssertFalse(model.canSave)
+        XCTAssertNil(model.saveError)
+        let cleanSave = await model.save()
+        XCTAssertFalse(cleanSave)
+        let writes = await api.presenceUpdateCount
+        XCTAssertEqual(writes, 1)
     }
 
     func testPresenceCancelledSaveCannotReportSuccessOrAdoptBaseline() async {
@@ -194,7 +228,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertNil(model.visibility)
         XCTAssertFalse(model.isSaving)
         await model.load()
-        XCTAssertTrue(model.canSave)
+        XCTAssertFalse(model.canSave)
         XCTAssertFalse(model.isDirty)
     }
 
@@ -209,11 +243,16 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await model.choose(.visibility(.nobody))
         XCTAssertNil(model.selection)
         await model.load()
-        XCTAssertTrue(model.canSave)
+        XCTAssertFalse(model.canSave)
         await model.choose(.visibility(.nobody))
         XCTAssertTrue(model.isDirty)
-        await model.choose(.visibility(.friends))
+        XCTAssertTrue(model.canSave)
+        model.revert()
+        XCTAssertEqual(model.selection, .visibility(.friends))
         XCTAssertFalse(model.isDirty)
+        XCTAssertFalse(model.canSave)
+        let cleanSave = await model.save()
+        XCTAssertFalse(cleanSave)
         let writes = await api.receiptUpdateCount
         XCTAssertEqual(writes, 0)
     }
@@ -232,7 +271,10 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertEqual(model.selection, .visibility(.nobody))
         XCTAssertNotNil(model.saveError)
         XCTAssertFalse(model.isSaving)
-        await model.choose(.visibility(.friends))
+        model.revert()
+        XCTAssertEqual(model.selection, .visibility(.friends))
+        let failedWrites = await api.receiptUpdateCount
+        XCTAssertEqual(failedWrites, 1)
         XCTAssertNil(model.saveError)
         XCTAssertFalse(model.isDirty)
         await model.choose(.visibility(.nobody))
@@ -242,6 +284,11 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertFalse(model.isDirty)
         XCTAssertEqual(model.selection, .visibility(.nobody))
         XCTAssertNil(model.saveError)
+        XCTAssertFalse(model.canSave)
+        let cleanSave = await model.save()
+        XCTAssertFalse(cleanSave)
+        let writes = await api.receiptUpdateCount
+        XCTAssertEqual(writes, 2)
     }
 
     func testReadReceiptCancelledSaveCannotReportSuccessOrAdoptBaseline() async {
@@ -254,6 +301,8 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await api.holdNextReceiptUpdate()
         let saving = Task { await model.save() }
         await eventually { await api.hasHeldReceiptUpdate }
+        model.revert()
+        XCTAssertEqual(model.selection, .visibility(.nobody))
         let repeatedSave = await model.save()
         XCTAssertFalse(repeatedSave)
         saving.cancel()
@@ -286,7 +335,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertEqual(model.loadPhase, .idle)
         XCTAssertFalse(model.isSaving)
         await model.load()
-        XCTAssertTrue(model.canSave)
+        XCTAssertFalse(model.canSave)
         XCTAssertFalse(model.isDirty)
     }
 
@@ -1279,9 +1328,11 @@ final class RealtimeCoordinatorTests: XCTestCase {
         let requestsBefore = await api.chatRequestCount
 
         coordinator.setSceneActive(id: scene, active: false)
-        await eventually { await socket.unreadWatches.last?.appBadge == false }
+        await eventually { await socket.unreadWatches.last?.requestID != initial.requestID }
+        let backgroundWatch = await socket.unreadWatches.last
+        let backgroundID = try XCTUnwrap(backgroundWatch?.requestID)
         coordinator.setSceneActive(id: scene, active: true)
-        await eventually { await socket.unreadWatches.last?.appBadge == true }
+        await eventually { await socket.unreadWatches.last?.requestID != backgroundID }
         let resumedWatch = await socket.unreadWatches.last
         let resumed = try XCTUnwrap(resumedWatch)
         XCTAssertGreaterThan(resumed.requestID, initial.requestID)
@@ -1295,6 +1346,68 @@ final class RealtimeCoordinatorTests: XCTestCase {
         let requestsAfter = await api.chatRequestCount
         XCTAssertEqual(requestsAfter, requestsBefore, "Healthy resume must not reload list pages.")
     }
+
+    #if os(macOS)
+        func testBackgroundBadgeWatchWorksWithoutAnyWindows() async throws {
+            let api = RealtimeTestHTTP()
+            let socket = RealtimeTestSocket()
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            let coordinator = RealtimeCoordinator(
+                provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {})
+            coordinator.setSession(uid: 1)
+            defer { coordinator.setSession(uid: nil) }
+            await eventually { await socket.unreadWatches.last?.appBadge == true }
+            let latestWatch = await socket.unreadWatches.last
+            let watch = try XCTUnwrap(latestWatch)
+            XCTAssertTrue(watch.views.isEmpty)
+            await socket.emit(
+                .conversationUnread(
+                    .init(requestId: watch.requestID, full: true, summaries: [], appBadgeCount: 7)))
+            await eventually { store.state.appBadgeCount == 7 }
+            await socket.emit(
+                .conversationUnread(
+                    .init(requestId: watch.requestID, full: false, summaries: [], appBadgeCount: 0))
+            )
+            await eventually { store.state.appBadgeCount == 0 }
+        }
+
+        func testClosingLastWindowKeepsBadgeUpdatesWithoutForegroundWatches() async throws {
+            let api = RealtimeTestHTTP()
+            let socket = RealtimeTestSocket()
+            let provider = RealtimeTestProvider(sockets: [socket])
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            let coordinator = RealtimeCoordinator(
+                provider: provider, store: store, onInvalidToken: {})
+            let scene = UUID()
+            coordinator.setSceneActive(id: scene, active: true)
+            coordinator.setSession(uid: 1)
+            defer { coordinator.setSession(uid: nil) }
+            await eventually { await socket.unreadWatches.last?.appBadge == true }
+            let initialWatch = await socket.unreadWatches.last
+            let initial = try XCTUnwrap(initialWatch)
+            coordinator.removeScene(id: scene)
+            await eventually { await socket.unreadWatches.last?.requestID != initial.requestID }
+            let backgroundWatch = await socket.unreadWatches.last
+            let background = try XCTUnwrap(backgroundWatch)
+            XCTAssertTrue(background.appBadge)
+            XCTAssertTrue(background.views.isEmpty)
+            await eventually { await socket.stateWatches.last?.conversations.isEmpty == true }
+            await socket.emit(
+                .conversationUnread(
+                    .init(
+                        requestId: background.requestID, full: true, summaries: [], appBadgeCount: 9
+                    )))
+            await eventually { store.state.appBadgeCount == 9 }
+            let opens = await provider.opens
+            let closed = await socket.closed
+            XCTAssertEqual(opens, 1)
+            XCTAssertFalse(closed)
+        }
+    #endif
 
     func testConversationScopeChangesSendWatchFramesWithoutPublishingSharedUI() async throws {
         let api = RealtimeTestHTTP()

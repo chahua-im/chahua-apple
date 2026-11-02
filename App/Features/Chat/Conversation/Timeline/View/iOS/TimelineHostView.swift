@@ -45,6 +45,12 @@
             controller.headerInset = chatHeaderInset
             controller.composerInset = chatComposerInset
         }
+
+        static func dismantleUIViewController(
+            _ controller: TimelineCollectionViewController, coordinator: ()
+        ) {
+            controller.tearDown()
+        }
     }
 
 #endif

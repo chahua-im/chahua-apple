@@ -271,7 +271,7 @@
         }
 
         static func dismantleUIView(_ view: TouchView, coordinator: ()) {
-            view.cancelTracking()
+            view.detach()
         }
 
         final class TouchView: UIView {
@@ -284,6 +284,7 @@
             private var trackedTouch: UITouch?
             private var trackedAction = ComposerVoiceTouchAction.disabled
             private var origin = CGPoint.zero
+            private var trackingGeneration = 0
 
             init() {
                 super.init(frame: .zero)
@@ -299,6 +300,7 @@
                 guard trackedTouch == nil, action != .disabled,
                     let touch = touches.first, let window
                 else { return }
+                trackingGeneration += 1
                 trackedTouch = touch
                 trackedAction = action
                 origin = touch.location(in: window)
@@ -335,10 +337,28 @@
                 if window == nil { cancelTracking() }
             }
 
-            func cancelTracking() {
+            private func cancelTracking() {
                 let wasHolding = trackedAction == .hold
+                let cancelled = onCancelled
+                let generation = trackingGeneration
                 clearTracking()
-                if wasHolding { onCancelled?() }
+                guard wasHolding else { return }
+                // Removing the touch surface can happen in SwiftUI's native
+                // teardown. Retain this one-turn cancellation even if the view
+                // is released, but do not stop a newly begun touch session.
+                DispatchQueue.main.async { [self] in
+                    guard trackingGeneration == generation else { return }
+                    cancelled?()
+                }
+            }
+
+            func detach() {
+                cancelTracking()
+                onBegan = nil
+                onMoved = nil
+                onEnded = nil
+                onCancelled = nil
+                onActivate = nil
             }
 
             private func clearTracking() {

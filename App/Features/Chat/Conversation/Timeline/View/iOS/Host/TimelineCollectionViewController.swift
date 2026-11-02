@@ -151,6 +151,14 @@
         private var userScrolling = false
         private var applying = false
         private var draining = false
+        private var isTornDown = false
+        private var viewportHandoffGeneration = 0
+        private var pendingViewportContext:
+            (
+                revision: Int, windowRevision: Int, requestID: Int?,
+                reason: TimelineViewportChangeReason
+            )?
+        private var pendingCompletionID: Int?
 
         private let collectionView: UICollectionView = {
             let layout = TimelineFlowLayout()
@@ -423,8 +431,9 @@
         }
 
         private func requestDisplayUpdate() {
+            guard !isTornDown else { return }
             displayScheduler?.request { [weak self] in
-                guard let self, !self.applying else { return }
+                guard let self, !self.isTornDown, !self.applying else { return }
                 self.updateGeometryIfNeeded()
                 self.installIfPossible()
                 self.settleNextHeightBatch()
@@ -484,6 +493,26 @@
         deinit {
             highlightTask?.cancel()
             NotificationCenter.default.removeObserver(self)
+        }
+
+        func tearDown() {
+            isTornDown = true
+            viewportHandoffGeneration += 1
+            pendingViewportContext = nil
+            pendingCompletionID = nil
+            activeRequest = nil
+            desiredRequest = nil
+            cancellable?.cancel()
+            cancellable = nil
+            displayScheduler?.cancel()
+            highlightTask?.cancel()
+            NotificationCenter.default.removeObserver(self)
+            if isViewLoaded {
+                collectionView.delegate = nil
+                for case let cell as TimelineCollectionViewCell in collectionView.visibleCells {
+                    cell.rowView.clear()
+                }
+            }
         }
 
         private func settleNextHeightBatch() {
@@ -603,6 +632,8 @@
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            viewportHandoffGeneration += 1
+            pendingCompletionID = nil
             userScrolling = true
             activeRequest = nil
             desiredRequest = nil
@@ -662,6 +693,7 @@
         }
 
         private func receive(_ snapshot: TimelineHostSnapshot) {
+            guard !isTornDown else { return }
             // A subscriber can synchronously publish another snapshot before this subscriber
             // receives the outer send. The subject's current value also resolves same-revision
             // acknowledgement/cancellation ordering without resurrecting the outer intent.
@@ -684,7 +716,7 @@
         }
 
         private func installIfPossible(reason: TimelineViewportChangeReason = .programmatic) {
-            guard !applying, !draining, displayScheduler != nil,
+            guard !isTornDown, !applying, !draining, displayScheduler != nil,
                 availableRowWidth.isFinite, availableRowWidth > 0, collectionView.bounds.height > 0
             else { return }
             draining = true
@@ -1022,15 +1054,44 @@
         }
 
         private func finishRequest(id: Int) {
-            guard activeRequest?.id == id, installedRevision == model.updates.value.revision,
+            guard !isTornDown, pendingCompletionID != id, activeRequest?.id == id,
+                installedRevision == model.updates.value.revision,
                 model.updates.value.pendingScroll?.id == id
             else { return }
-            // Acknowledgement can synchronously change SwiftUI's header/composer geometry.
-            // Save the reached target before publishing so that relayout cannot restore
-            // the position from before this navigation.
             position = capturePosition()
-            activeRequest = nil
-            model.scrollRequestDidFinish(id: id)
+            pendingCompletionID = id
+            let revision = installedRevision
+            let windowRevision = installedWindowRevision
+            let reachedGeometry = currentGeometry
+            let environment = currentEnvironment
+            // Initial placement can finish inside viewDidLayoutSubviews or a
+            // synchronous model subscriber. Acknowledge only after that update.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !isTornDown, pendingCompletionID == id else { return }
+                pendingCompletionID = nil
+                guard activeRequest?.id == id, model.updates.value.pendingScroll?.id == id,
+                    !userScrolling, !collectionView.isDragging, !collectionView.isDecelerating
+                else { return }
+                guard revision == installedRevision, revision == model.updates.value.revision,
+                    windowRevision == installedWindowRevision,
+                    windowRevision == model.updates.value.windowRevision,
+                    reachedGeometry == currentGeometry, environment == currentEnvironment,
+                    !applying, !draining
+                else {
+                    needsPlacement = true
+                    requestDisplayUpdate()
+                    return
+                }
+                position = capturePosition()
+                activeRequest = nil
+                model.scrollRequestDidFinish(id: id)
+                // The acknowledgment schedules its pending=nil snapshot. We are
+                // already outside SwiftUI/native layout: drain that snapshot now
+                // so the arrived viewport is handed back on the next main turn,
+                // not after another display tick. A following send can then reuse
+                // the live window rather than starting a history navigation.
+                displayScheduler?.flush()
+            }
         }
 
         private func highlightRow(_ id: TimelineRowID) {
@@ -1065,7 +1126,7 @@
             reason: TimelineViewportChangeReason,
             visibleItems items: [UICollectionViewLayoutAttributes]? = nil
         ) {
-            guard !applying, !draining, latestSnapshot == nil, scrollAnimation == nil,
+            guard !isTornDown, !applying, !draining, latestSnapshot == nil, scrollAnimation == nil,
                 reason == .user
                     || (!userScrolling && !collectionView.isDragging
                         && !collectionView.isDecelerating),
@@ -1083,15 +1144,47 @@
                 0,
                 collectionView.bounds.height - collectionView.adjustedContentInset.top
                     - collectionView.adjustedContentInset.bottom)
-            model.viewportDidChange(
-                .init(
-                    firstVisibleIndex: visible.min(),
-                    lastVisibleIndex: visible.max(),
-                    distanceToTop: top,
-                    distanceToBottom: max(0, collectionView.contentSize.height - top - height),
-                    height: height,
-                    visibleMessageIDs: visibleMessageIDs
-                ), reason: reason, revision: installedRevision)
+            let viewport = TimelineViewport(
+                firstVisibleIndex: visible.min(),
+                lastVisibleIndex: visible.max(),
+                distanceToTop: top,
+                distanceToBottom: max(0, collectionView.contentSize.height - top - height),
+                height: height,
+                visibleMessageIDs: visibleMessageIDs)
+            viewportHandoffGeneration += 1
+            let generation = viewportHandoffGeneration
+            let revision = installedRevision
+            let windowRevision = installedWindowRevision
+            let reportedGeometry = currentGeometry
+            let environment = currentEnvironment
+            let requestID = model.updates.value.pendingScroll?.id
+            let retainedUserReason =
+                pendingViewportContext?.revision == revision
+                && pendingViewportContext?.windowRevision == windowRevision
+                && pendingViewportContext?.requestID == requestID
+                && pendingViewportContext?.reason == .user
+            let reportReason: TimelineViewportChangeReason =
+                reason == .user || retainedUserReason ? .user : reason
+            pendingViewportContext = (revision, windowRevision, requestID, reportReason)
+            // UIScrollView delegates also run synchronously for SwiftUI inset and
+            // layout changes. Coalesce those reports and reject obsolete geometry,
+            // snapshots, navigation, and hosts before publishing read/live state.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !isTornDown, viewportHandoffGeneration == generation else { return }
+                pendingViewportContext = nil
+                guard revision == installedRevision, revision == model.updates.value.revision,
+                    windowRevision == installedWindowRevision,
+                    windowRevision == model.updates.value.windowRevision,
+                    reportedGeometry == currentGeometry, environment == currentEnvironment,
+                    model.updates.value.pendingScroll?.id == requestID,
+                    !applying, !draining, latestSnapshot == nil, scrollAnimation == nil,
+                    view.window != nil,
+                    reportReason == .user
+                        || (!userScrolling && !collectionView.isDragging
+                            && !collectionView.isDecelerating)
+                else { return }
+                model.viewportDidChange(viewport, reason: reportReason, revision: revision)
+            }
         }
     }
 

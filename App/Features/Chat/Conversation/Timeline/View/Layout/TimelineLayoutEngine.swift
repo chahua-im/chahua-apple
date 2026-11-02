@@ -78,7 +78,7 @@ struct TimelineLayoutEngine {
                 attributedText: p.preparedText!.makeMeasurementText(
                     mentions: row.entry.remoteMessage?.mentions ?? [], fontSize: e.bodySize),
                 metadata: metadata)
-            preferredText = textMeasurer.idealSize.width + 24 - (metadata?.textTrailingOutset ?? 0)
+            preferredText = textMeasurer.idealWidth + 24 - (metadata?.textTrailingOutset ?? 0)
         }
         var labelFont = BubbleNativeFont.systemFont(ofSize: e.bodySize)
         if deleted {
@@ -101,12 +101,23 @@ struct TimelineLayoutEngine {
                 nativeSize(label, font: labelFont).width + 24
                 + (unsupported ? symbolSize.width + 8 : 0)
         }
-        let preferredTitle =
-            p.title.map {
-                titleGeometry($0, width: max(0, bubbleWidthLimit - 24), environment: e).size.width
-                    + 24
-            }
-            ?? 0
+        // Natural and fitted headers use the same glyph metrics. Measure once;
+        // constructing preferred-width frames would immediately discard them.
+        let titleSizes = p.title.map {
+            (
+                name: nativeSize($0.name, size: e.captionSize, weight: .semibold),
+                group: $0.groupName.map { nativeSize($0, size: e.captionSize) },
+                gender: $0.genderGlyph.map { nativeSize($0, size: e.captionSize) }
+            )
+        }
+        let preferredTitle: CGFloat =
+            titleSizes.map { sizes -> CGFloat in
+                let groupWidth: CGFloat = sizes.group.map { pixel($0.width + 10, e) + 8 } ?? 0
+                let genderWidth: CGFloat = sizes.gender.map { pixel($0.width, e) + 8 } ?? 0
+                let naturalWidth = pixel(sizes.name.width, e) + groupWidth + genderWidth
+                let availableWidth = max(CGFloat.zero, bubbleWidthLimit - 24)
+                return min(availableWidth, naturalWidth) + 24
+            } ?? 0
         func quoteSizes(_ reply: MessagePreview) -> (author: CGSize, preview: CGSize) {
             let author = MessageSummaryContent.author(reply)
             replyMeasurer.update(
@@ -193,9 +204,8 @@ struct TimelineLayoutEngine {
         var y: CGFloat = continuesRun ? 0 : (e.isWideChatLayout ? 10 : 4)
         let bubbleY = y
         var height: CGFloat = 0
-        if let title = p.title {
-            let titleLayout = titleGeometry(
-                title, width: innerWidth, environment: e, fillsWidth: true)
+        if let titleSizes {
+            let titleLayout = titleGeometry(titleSizes, width: innerWidth, environment: e)
             titleFrames = titleLayout.frames
             height += 8
             frames[.title] = CGRect(
@@ -468,16 +478,11 @@ struct TimelineLayoutEngine {
     }
 
     private func titleGeometry(
-        _ title: TitleContent, width: CGFloat, environment e: TimelineLayoutEnvironment,
-        fillsWidth: Bool = false
+        _ sizes: (name: CGSize, group: CGSize?, gender: CGSize?), width: CGFloat,
+        environment e: TimelineLayoutEnvironment
     ) -> (size: CGSize, frames: [CGRect]) {
-        let name = nativeSize(title.name, size: e.captionSize, weight: .semibold)
-        let group = title.groupName.map { nativeSize($0, size: e.captionSize) }
-        let gender = title.genderGlyph.map { nativeSize($0, size: e.captionSize) }
-        let natural =
-            pixel(name.width, e) + (group.map { pixel($0.width + 10, e) + 8 } ?? 0)
-            + (gender.map { pixel($0.width, e) + 8 } ?? 0)
-        let w = fillsWidth ? width : min(width, natural)
+        let (name, group, gender) = sizes
+        let w = width
         let h = pixel(max(name.height, group?.height ?? 0, gender?.height ?? 0), e)
         // The bubble already grows to the complete header's natural width.
         // Only the column limit may compress it: name first, gender, then tag.

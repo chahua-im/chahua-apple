@@ -8,6 +8,7 @@ struct PresencePrivacySettingsView: View {
     @State private var saveTask: Task<Void, Never>?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
     let grouped: Bool
     private let onFinish: (() -> Void)?
 
@@ -41,8 +42,6 @@ struct PresencePrivacySettingsView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
-                        Label("Last Seen & Online", systemImage: "eye")
-                            .font(.title2.weight(.semibold))
                         Text("Who can see my last seen")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
@@ -65,10 +64,12 @@ struct PresencePrivacySettingsView: View {
         }
         .navigationTitle("Last Seen & Online")
         .settingsEditorControls(
+            title: "Last Seen & Online",
             isDirty: model.isDirty, canSave: model.canSave, isSaving: model.isSaving,
-            accountID: store.currentUserProfile?.uid, onSave: beginSave, onFinish: finish
+            accountID: store.currentUserProfile?.uid, onSave: beginSave,
+            onRevert: model.revert, onFinish: finish
         )
-        .task(id: store.currentUserProfile?.uid) {
+        .task(id: "\(store.currentUserProfile?.uid ?? 0)-\(store.sessionRevision)") {
             loadRetryTask?.cancel()
             saveTask?.cancel()
             await model.load()
@@ -178,7 +179,7 @@ struct PresencePrivacySettingsView: View {
             guard await model.save(), !Task.isCancelled,
                 store.currentUserProfile?.uid == uid, store.sessionRevision == sessionRevision
             else { return }
-            finish()
+            if !usesSplitLayout { finish() }
         }
     }
 

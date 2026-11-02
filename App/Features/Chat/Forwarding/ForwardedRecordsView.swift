@@ -37,7 +37,7 @@ struct ForwardedRecordsView: View {
     }
 
     var body: some View {
-        content
+        profileContent
             .environment(\.chatHeaderInset, 0)
             .environment(\.chatComposerInset, 0)
             .navigationTitle("Forwarded Messages")
@@ -47,13 +47,6 @@ struct ForwardedRecordsView: View {
             #endif
             .navigationDestination(item: $childBundleID) { bundleID in
                 ForwardedRecordsView(session: session, bundleID: bundleID)
-            }
-            .navigationDestination(item: $profileUID) { uid in
-                if let currentUserID = session.store.currentUserProfile?.uid {
-                    UserProfileView(
-                        uid: uid, currentUserID: currentUserID,
-                        store: session.store, onOpenChat: { profileChat = $0 })
-                }
             }
             .navigationDestination(item: $profileChat) { chat in
                 if let uid = session.store.currentUserProfile?.uid {
@@ -96,6 +89,21 @@ struct ForwardedRecordsView: View {
                 }
                 presentedGalleryID = nil
             }
+    }
+
+    @ViewBuilder
+    private var profileContent: some View {
+        if let currentUserID = session.store.currentUserProfile?.uid {
+            content.modifier(
+                UserProfilePresentation(
+                    uid: $profileUID, currentUserID: currentUserID, store: session.store,
+                    onOpenChat: { chat in
+                        profileUID = nil
+                        profileChat = chat
+                    }))
+        } else {
+            content
+        }
     }
 
     @ViewBuilder

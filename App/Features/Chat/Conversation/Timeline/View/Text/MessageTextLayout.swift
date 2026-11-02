@@ -33,6 +33,7 @@ final class MessageTextLayout {
     private(set) var assignedGeometry: MessageTextGeometry?
     private var cachedGeometry: MessageTextGeometry?
     private var cachedIdealSize: CGSize?
+    private var cachedIdealWidth: CGFloat?
     private var codeAttachments:
         [(range: NSRange, attachment: MessageCodeAttachment, inset: CGFloat)] = []
     private var fittedCodeWidth: CGFloat?
@@ -76,6 +77,7 @@ final class MessageTextLayout {
         if geometryChanged {
             cachedGeometry = nil
             cachedIdealSize = nil
+            cachedIdealWidth = nil
         }
         self.metadata = metadata
         return geometryChanged
@@ -93,7 +95,10 @@ final class MessageTextLayout {
         }
         assignedGeometry = geometry
         cachedGeometry = geometry
-        if changed { cachedIdealSize = nil }
+        if changed {
+            cachedIdealSize = nil
+            cachedIdealWidth = nil
+        }
         return changed
     }
 
@@ -107,20 +112,29 @@ final class MessageTextLayout {
         ]).width * 1.5
     }
 
-    var idealSize: CGSize {
-        if let cachedIdealSize { return cachedIdealSize }
+    /// Bubble sizing needs only the intrinsic width. Do not lay out again at that
+    /// width until a consumer actually needs the height or final glyph geometry.
+    var idealWidth: CGFloat {
+        if let cachedIdealWidth { return cachedIdealWidth }
         let geometry = geometry(for: 1_000_000)
         let width = max(
             geometry.bodyBounds.maxX + (metadata?.textTrailingOutset ?? 0),
             geometry.lastLineBounds.maxX + (storage.length > 0 && metadata != nil ? metadataGap : 0)
                 + (metadata?.size.width ?? 0))
-        let size = self.geometry(for: max(1, ceil(width))).size
+        let result = max(1, ceil(width))
+        cachedIdealWidth = result
+        return result
+    }
+
+    var idealSize: CGSize {
+        if let cachedIdealSize { return cachedIdealSize }
+        let size = geometry(for: idealWidth).size
         cachedIdealSize = size
         return size
     }
 
     func fittingSize(width: CGFloat?) -> CGSize {
-        geometry(for: width ?? idealSize.width).size
+        geometry(for: width ?? idealWidth).size
     }
 
     /// Concealed text remains in storage for stable layout, but is not a native

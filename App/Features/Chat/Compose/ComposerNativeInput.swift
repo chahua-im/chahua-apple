@@ -80,6 +80,9 @@ protocol ComposerNativeInput: AnyObject {
         private let marker = ComposerInputMarker()
         private weak var input: ComposerInputState?
         private var requestedFocus: Bool?
+        private var focusBinding: Binding<Bool>?
+        private var focusChangeGeneration = 0
+        private var connectionGeneration = 0
 
         init() {
             super.init(frame: .zero)
@@ -122,12 +125,13 @@ protocol ComposerNativeInput: AnyObject {
             onPasteMedia: (([NSItemProvider]) -> Void)?, focus: Binding<Bool>?,
             fontSize: CGFloat?, accessibilityLabel: String
         ) {
+            if self.input !== input { connectionGeneration &+= 1 }
             self.input = input
+            focusBinding = focus
             editor.onPasteMedia = onPasteMedia
-            editor.onFocusChanged = focus.map { binding in
-                { focused in
-                    DispatchQueue.main.async { binding.wrappedValue = focused }
-                }
+            editor.onFocusChanged = { [weak self, weak input] focused in
+                guard let self, let input, self.input === input else { return }
+                self.publishFocusAfterViewUpdate(focused)
             }
             editor.font =
                 fontSize.map { .systemFont(ofSize: $0) } ?? .preferredFont(forTextStyle: .body)
@@ -149,11 +153,42 @@ protocol ComposerNativeInput: AnyObject {
                 focusOnEntry: focus != nil)
             if let focus, requestedFocus != focus.wrappedValue {
                 requestedFocus = focus.wrappedValue
-                if focus.wrappedValue {
-                    window?.makeFirstResponder(editor)
-                } else if window?.firstResponder === editor {
-                    window?.makeFirstResponder(nil)
+                requestFocusAfterViewUpdate(focus.wrappedValue)
+            } else if focus == nil {
+                requestedFocus = nil
+            }
+        }
+
+        // AppKit can synchronously end editing (including IME settlement) while
+        // making a responder. Do that outside representable reconciliation, not
+        // by postponing text edits or Return's synchronous submission contract.
+        private func requestFocusAfterViewUpdate(_ focused: Bool) {
+            let generation = connectionGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.connectionGeneration == generation,
+                    self.input != nil, self.requestedFocus == focused,
+                    self.focusBinding?.wrappedValue == focused,
+                    !focused || self.editor.isEditable,
+                    let window = self.window
+                else { return }
+                if focused {
+                    window.makeFirstResponder(self.editor)
+                } else if window.firstResponder === self.editor {
+                    window.makeFirstResponder(nil)
                 }
+            }
+        }
+
+        private func publishFocusAfterViewUpdate(_ focused: Bool) {
+            focusChangeGeneration &+= 1
+            let generation = focusChangeGeneration
+            let connection = connectionGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.connectionGeneration == connection,
+                    self.focusChangeGeneration == generation, self.input != nil,
+                    let binding = self.focusBinding, binding.wrappedValue != focused
+                else { return }
+                binding.wrappedValue = focused
             }
         }
 
@@ -193,6 +228,10 @@ protocol ComposerNativeInput: AnyObject {
         }
 
         func disconnect() {
+            connectionGeneration &+= 1
+            focusChangeGeneration &+= 1
+            requestedFocus = nil
+            focusBinding = nil
             marker.disconnect()
             editor.onPasteMedia = nil
             editor.onFocusChanged = nil
@@ -366,6 +405,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         private var entryFocusRequested = false
         private var entryFocusPending = false
         private var entryFocusScheduled = false
+        private var entryFocusGeneration = 0
     #else
         private weak var editor: UIView?
         var onPasteImages: (([NSItemProvider]) -> Void)?
@@ -383,6 +423,14 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         onCompositionChanged: ((Bool) -> Void)?, onSubmit: (() -> Void)? = nil,
         focusOnEntry: Bool = false
     ) {
+        #if os(macOS)
+            if self.input !== input {
+                entryFocusGeneration &+= 1
+                entryFocusScheduled = false
+                entryFocusPending = false
+                entryFocusRequested = false
+            }
+        #endif
         self.input = input
         self.isComposerFocused = isFocused
         self.isComposerEnabled = isEnabled
@@ -399,15 +447,16 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
     }
 
     func disconnect() {
-        input?.detachAfterViewUpdate(finalSnapshot: snapshot())
+        input?.detachAfterViewUpdate(from: self, finalSnapshot: snapshot())
         stopMonitoring()
         #if os(macOS)
+            entryFocusGeneration &+= 1
+            entryFocusScheduled = false
             entryFocusPending = false
         #else
             onPasteImages = nil
             pendingPastedImages.removeAll()
         #endif
-        input?.nativeInput = nil
         input = nil
         onSubmit = nil
     }
@@ -799,10 +848,13 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
                 return
             }
             entryFocusScheduled = true
+            let generation = entryFocusGeneration
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                guard self.entryFocusGeneration == generation else { return }
                 self.entryFocusScheduled = false
                 guard self.entryFocusPending, self.isComposerEnabled,
+                    self.input?.nativeInput === self,
                     let window = self.window, window.attachedSheet == nil,
                     let control = self.entryControl()
                 else { return }
@@ -858,7 +910,9 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
         override func viewWillMove(toWindow newWindow: NSWindow?) {
             if window != nil, newWindow !== window {
-                input?.detachAfterViewUpdate(finalSnapshot: snapshot())
+                input?.detachAfterViewUpdate(from: self, finalSnapshot: snapshot())
+                entryFocusGeneration &+= 1
+                entryFocusScheduled = false
                 entryFocusPending = false
                 stopMonitoring()
             }
@@ -869,9 +923,10 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             super.viewDidMoveToWindow()
             stopMonitoring()
             guard window != nil else {
-                input?.detachAfterViewUpdate()
+                input?.detachAfterViewUpdate(from: self)
                 return
             }
+            if input?.nativeInput == nil { input?.nativeInput = self }
             observeUndo()
             scheduleEntryFocus()
             for name in [
@@ -888,7 +943,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [
                 .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown,
             ]) { [weak self] event in
-                guard let self else { return event }
+                guard let self, self.input?.nativeInput === self else { return event }
                 // A user action after entry supersedes delayed permission focus.
                 // Do not take focus back from navigation, a dialog, or a selection.
                 if event.window === self.window { self.entryFocusPending = false }
@@ -983,7 +1038,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         }
 
         @objc private func nativeChanged(_ notification: Notification) {
-            guard !changingMentionStorage else { return }
+            guard !changingMentionStorage, input?.nativeInput === self else { return }
             if notification.name == NSText.didEndEditingNotification,
                 let ended = notification.object as? NSTextView, owns(ended)
             {
@@ -1017,7 +1072,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
         override func willMove(toWindow newWindow: UIWindow?) {
             if window != nil, newWindow !== window {
-                input?.detachAfterViewUpdate(finalSnapshot: snapshot())
+                input?.detachAfterViewUpdate(from: self, finalSnapshot: snapshot())
                 stopMonitoring()
             }
             super.willMove(toWindow: newWindow)
@@ -1027,9 +1082,10 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             super.didMoveToWindow()
             stopMonitoring()
             guard window != nil else {
-                input?.detachAfterViewUpdate()
+                input?.detachAfterViewUpdate(from: self)
                 return
             }
+            if input?.nativeInput == nil { input?.nativeInput = self }
             observeUndo()
             // UIKit exposes selection changes only through its text delegate,
             // which belongs to SwiftUI. Observe the native selection at run-loop

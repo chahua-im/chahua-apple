@@ -101,8 +101,16 @@ struct StickerPickerView: View {
                     }
                 }
                 .padding(.horizontal, 12)
+                #if os(macOS)
+                    .background {
+                        StickerPackWheelScrollMarker()
+                        .frame(width: 0, height: 0)
+                    }
+                #endif
             }
-            .scrollIndicators(.hidden)
+            // Unlike .hidden, .never overrides macOS “Always show scroll bars”;
+            // a legacy scroller otherwise steals height from the 44pt pack tabs.
+            .scrollIndicators(.never)
             .frame(height: 44)
         }
         .frame(height: 260)

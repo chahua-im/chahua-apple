@@ -102,6 +102,8 @@
         // A newly mounted bridge must reset any SwiftUI offset retained by List.
         private var publishedOffset: CGFloat?
         private var isUpdatingView = false
+        private var offsetHandoffGeneration = 0
+        private var revealHandoffGeneration = 0
         private var onOffsetChanged: ((CGFloat, Bool) -> Void)?
         private var onRevealChanged: ((Bool) -> Void)?
         private var onAction: ((String) -> Void)?
@@ -149,12 +151,18 @@
         ) {
             let trace = ScrollPerformanceTrace.begin("Swipe.Controls")
             defer { ScrollPerformanceTrace.end("Swipe.Controls", trace) }
+            let wasUpdatingView = isUpdatingView
             isUpdatingView = true
-            defer { isUpdatingView = false }
+            defer { isUpdatingView = wasUpdatingView }
             let nextDirection: CGFloat = isRightToLeft ? -1 : 1
             let identityChanged = identity != id
             let actionsChanged = leadingAction != leading || trailingActions != trailing
             let directionChanged = direction != nextDirection
+            if identityChanged {
+                offsetHandoffGeneration += 1
+                revealHandoffGeneration += 1
+                publishedOffset = nil
+            }
             self.onRevealChanged = onRevealChanged
             self.onAction = onAction
             self.onOffsetChanged = onOffsetChanged
@@ -202,6 +210,9 @@
         }
 
         override func didMoveToWindow() {
+            let wasUpdatingView = isUpdatingView
+            isUpdatingView = true
+            defer { isUpdatingView = wasUpdatingView }
             super.didMoveToWindow()
             detachGestures()
             guard window != nil else {
@@ -235,6 +246,8 @@
 
         func detach() {
             ScrollPerformanceTrace.event("Swipe.Detached")
+            offsetHandoffGeneration += 1
+            revealHandoffGeneration += 1
             onRevealChanged = nil
             onAction = nil
             onOffsetChanged = nil
@@ -246,17 +259,14 @@
             super.layoutSubviews()
             let trace = ScrollPerformanceTrace.begin("Swipe.Layout")
             defer { ScrollPerformanceTrace.end("Swipe.Layout", trace) }
+            let wasUpdatingView = isUpdatingView
             isUpdatingView = true
-            defer { isUpdatingView = false }
+            defer { isUpdatingView = wasUpdatingView }
             if previousWidth > 0, previousWidth != bounds.width {
                 close(animated: false, notify: false)
                 // Geometry can change during a SwiftUI update; clear shared reveal
                 // ownership outside that update, without closing a newly reused row.
-                let resizedIdentity = identity
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, identity == resizedIdentity, offset == 0 else { return }
-                    onRevealChanged?(false)
-                }
+                publishReveal(false)
             }
             previousWidth = bounds.width
             applyOffset()
@@ -273,16 +283,34 @@
             let physicalOffset = offset * direction
             guard publishedOffset != physicalOffset else { return }
             publishedOffset = physicalOffset
+            offsetHandoffGeneration += 1
+            let generation = offsetHandoffGeneration
             if isUpdatingView {
                 let updatedIdentity = identity
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, identity == updatedIdentity,
-                        publishedOffset == physicalOffset
+                    guard let self, offsetHandoffGeneration == generation,
+                        identity == updatedIdentity, publishedOffset == physicalOffset
                     else { return }
                     onOffsetChanged?(physicalOffset, animated)
                 }
             } else {
                 onOffsetChanged?(physicalOffset, animated)
+            }
+        }
+
+        private func publishReveal(_ revealed: Bool) {
+            revealHandoffGeneration += 1
+            let generation = revealHandoffGeneration
+            if isUpdatingView {
+                let updatedIdentity = identity
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, revealHandoffGeneration == generation,
+                        identity == updatedIdentity
+                    else { return }
+                    onRevealChanged?(revealed)
+                }
+            } else {
+                onRevealChanged?(revealed)
             }
         }
 
@@ -370,7 +398,7 @@
                 applyOffset()
             }
             publishOffset(animated: animated && !reduceMotion)
-            if notify { onRevealChanged?(target != 0) }
+            if notify { publishReveal(target != 0) }
         }
 
         private func close(animated: Bool, notify: Bool) {
@@ -401,7 +429,7 @@
                 dragStartOffset = offset
                 isArmed = false
                 feedback.prepare()
-                onRevealChanged?(true)
+                publishReveal(true)
                 updateDrag(translation: recognizer.translation.x)
             case .changed:
                 guard isDragging else { return }

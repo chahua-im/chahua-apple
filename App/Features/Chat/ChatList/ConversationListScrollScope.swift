@@ -51,6 +51,7 @@ final class ConversationListScrollScope: ObservableObject {
     private var maximumPull: CGFloat = 0
     private var isGestureActive = false
     private var pendingOffset: CGFloat?
+    private var nativeLifetimeGeneration = 0
     private(set) var driver: (any ConversationListScrollDriver)?
 
     func select(
@@ -76,13 +77,23 @@ final class ConversationListScrollScope: ObservableObject {
         restore(offset)
     }
 
-    func attach(_ driver: any ConversationListScrollDriver) {
-        guard self.driver !== driver else { return }
+    func attach(_ driver: any ConversationListScrollDriver, preservingOffset: Bool = false) {
+        guard self.driver !== driver else {
+            // A replacement viewport host can adopt the same native scroll view.
+            // Its ownership invalidates an earlier host's deferred release.
+            nativeLifetimeGeneration += 1
+            return
+        }
         guard isActive else {
             driver.detach()
             return
         }
-        self.driver?.detach()
+        if preservingOffset {
+            detachDriver()
+        } else {
+            self.driver?.detach()
+        }
+        nativeLifetimeGeneration += 1
         self.driver = driver
         if let resumeOffset {
             self.resumeOffset = nil
@@ -95,7 +106,31 @@ final class ConversationListScrollScope: ObservableObject {
         }
     }
 
-    func activate() { isActive = true }
+    func activate() {
+        nativeLifetimeGeneration += 1
+        isActive = true
+    }
+
+    /// Native marker teardown runs inside SwiftUI's update transaction. Keep its
+    /// publication on the next main turn, unless a new marker has taken ownership.
+    func detachAfterViewUpdate() {
+        let generation = nativeLifetimeGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, nativeLifetimeGeneration == generation else { return }
+            detach()
+        }
+    }
+
+    /// A macOS viewport can remount while the SwiftUI screen stays active. An old
+    /// bridge must not detach its replacement or deactivate the still-visible scope.
+    func releaseNativeDriverAfterViewUpdate(_ expectedDriver: any ConversationListScrollDriver) {
+        let generation = nativeLifetimeGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, nativeLifetimeGeneration == generation, driver === expectedDriver
+            else { return }
+            detachDriver()
+        }
+    }
 
     func reset() {
         positions.removeAll()
@@ -114,9 +149,14 @@ final class ConversationListScrollScope: ObservableObject {
 
     func detach() {
         isActive = false
+        detachDriver()
+    }
+
+    private func detachDriver() {
+        nativeLifetimeGeneration += 1
         guard let driver else { return }
         savePosition()
-        resumeOffset = driver.offset
+        resumeOffset = driver.restorationOffset
         driver.detach()
         self.driver = nil
         isGestureActive = false
@@ -124,10 +164,10 @@ final class ConversationListScrollScope: ObservableObject {
         pullDistance = 0
     }
 
-    func beginGesture() {
+    func beginGesture(offset: CGFloat? = nil) {
         guard !isGestureActive else { return }
         isGestureActive = true
-        gestureStartOffset = max(0, driver?.offset ?? 0)
+        gestureStartOffset = max(0, offset ?? driver?.offset ?? 0)
         maximumPull = 0
     }
 
@@ -181,7 +221,7 @@ final class ConversationListScrollScope: ObservableObject {
     private func savePosition() {
         guard let context, let driver else { return }
         let drawer = isSearchRevealed && !isSearchPinned ? Self.drawerHeight : 0
-        positions[context] = max(0, driver.offset - drawer)
+        positions[context] = max(0, driver.restorationOffset - drawer)
         presentation?.offsets[context] = positions[context]
     }
 
@@ -198,6 +238,13 @@ final class ConversationListScrollScope: ObservableObject {
 @MainActor
 protocol ConversationListScrollDriver: AnyObject {
     var offset: CGFloat { get }
+    /// The logical target to preserve when replacing a native viewport. A queued
+    /// restore can belong to a newly selected scope while `offset` is still stale.
+    var restorationOffset: CGFloat { get }
     func restore(offset: CGFloat)
     func detach()
+}
+
+extension ConversationListScrollDriver {
+    var restorationOffset: CGFloat { offset }
 }

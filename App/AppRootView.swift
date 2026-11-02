@@ -58,23 +58,37 @@ struct AppRootView: View {
         }
         .onAppear {
             #if os(iOS)
-                realtimeCoordinator.setSceneActive(id: sceneID, active: scenePhase == .active)
+                reportSceneActivity(scenePhase == .active)
             #endif
             notifications.setSceneActive(id: sceneID, active: scenePhase == .active)
         }
         .onChange(of: scenePhase) { _, phase in
             #if os(iOS)
-                realtimeCoordinator.setSceneActive(id: sceneID, active: phase == .active)
+                reportSceneActivity(phase == .active)
             #endif
             notifications.setSceneActive(id: sceneID, active: phase == .active)
         }
         .onDisappear {
             #if os(iOS)
-                realtimeCoordinator.removeScene(id: sceneID)
+                let id = sceneID
+                DispatchQueue.main.async { [weak realtimeCoordinator] in
+                    realtimeCoordinator?.removeScene(id: id)
+                }
             #endif
             notifications.removeScene(id: sceneID)
         }
     }
+
+    #if os(iOS)
+        private func reportSceneActivity(_ active: Bool) {
+            // Scene callbacks can coincide with native hierarchy reconciliation.
+            // Keep lifecycle-driven store publications outside that transaction.
+            let id = sceneID
+            DispatchQueue.main.async { [weak realtimeCoordinator] in
+                realtimeCoordinator?.setSceneActive(id: id, active: active)
+            }
+        }
+    #endif
 }
 
 extension AuthStartupFailure {

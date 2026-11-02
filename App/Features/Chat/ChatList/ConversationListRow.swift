@@ -1,7 +1,7 @@
 import ChahuaAPI
 import SwiftUI
 
-struct ConversationListRow: View {
+struct ConversationListRow: View, Equatable {
     let item: ConversationListItem
     let draft: String
     var pending: LocalOutgoingMessage? = nil
@@ -10,6 +10,10 @@ struct ConversationListRow: View {
     let currentUserID: Int32
     let isSelected: Bool
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
+    private let isMuted: Bool
+    private let usesMutedBadges: Bool
+    private let currentUserName: String?
+    private let localization: ConversationListSwipeActionCache.Actions?
     @Environment(\.isWideChatLayout) private var isWideChatLayout
     @Environment(\.locale) private var locale
     @Environment(\.calendar) private var calendar
@@ -24,6 +28,45 @@ struct ConversationListRow: View {
         return formatter
     }()
 
+    init(
+        item: ConversationListItem, draft: String, pending: LocalOutgoingMessage? = nil,
+        store: ChatStore, currentUserID: Int32, isSelected: Bool,
+        badgeColor: ConversationUnreadBadgeColor = ConversationListPreferences
+            .defaultUnreadBadgeColor,
+        localization: ConversationListSwipeActionCache.Actions? = nil
+    ) {
+        self.item = item
+        self.draft = draft
+        self.pending = pending
+        self.store = store
+        self.currentUserID = currentUserID
+        self.isSelected = isSelected
+        self.badgeColor = badgeColor
+        self.localization = localization
+        let now = Date.now
+        if case .chat(let chat) = item {
+            isMuted = chat.notificationMuted(defaults: store.state.notificationDefaults, now: now)
+        } else {
+            isMuted = false
+        }
+        usesMutedBadges = item.hasMutedBadges(defaults: store.state.notificationDefaults, now: now)
+        currentUserName = store.currentUserProfile?.username
+    }
+
+    // Only the callback-free visual subtree is equatable. Selection/actions stay
+    // outside this boundary so new closures and busy state are never discarded.
+    // Snapshot the store-derived display values above: comparing a live store
+    // reference cannot detect notification-default or sender-name changes.
+    // The palette identity also invalidates eager strings when language modes
+    // or system preferred languages change without a different Locale value.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.store === rhs.store && lhs.item == rhs.item && lhs.draft == rhs.draft
+            && lhs.pending == rhs.pending && lhs.currentUserID == rhs.currentUserID
+            && lhs.isSelected == rhs.isSelected && lhs.badgeColor == rhs.badgeColor
+            && lhs.isMuted == rhs.isMuted && lhs.usesMutedBadges == rhs.usesMutedBadges
+            && lhs.currentUserName == rhs.currentUserName && lhs.localization === rhs.localization
+    }
+
     private var usesDesktopDensity: Bool {
         ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
     }
@@ -34,15 +77,6 @@ struct ConversationListRow: View {
         dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
             : AnyLayout(HStackLayout(spacing: ChahuaTheme.Spacing.medium))
-    }
-
-    private var isMuted: Bool {
-        guard case .chat(let chat) = item else { return false }
-        return chat.notificationMuted(defaults: store.state.notificationDefaults)
-    }
-
-    private var usesMutedBadges: Bool {
-        item.hasMutedBadges(defaults: store.state.notificationDefaults)
     }
 
     private var threadParentKind: ChatKind? {
@@ -107,7 +141,7 @@ struct ConversationListRow: View {
                                 color: subtitleColor,
                                 prefix: item.isDirectMessage
                                     ? ""
-                                    : (store.currentUserProfile?.asSender.name
+                                    : (currentUserName
                                         ?? AppLanguage.localized("User \(currentUserID)")) + ": ")
                         } else if let preview = item.previewMessage {
                             MessageSummaryText(
@@ -198,6 +232,159 @@ struct ConversationListRow: View {
                 ? format : format.year())
     }
 
+}
+
+/// A named, single-row view keeps ForEach's element construction cheap. Do not
+/// make this boundary equatable: its callbacks, reveal binding and busy state
+/// must always be refreshed, unlike the callback-free visual content below.
+struct ConversationListSwipeRow: View {
+    let row: ConversationListRow
+    let selectionColor: Color
+    let archived: Bool
+    let pendingAction: ConversationListAction?
+    let actions: ConversationListSwipeActionCache.Actions
+    @Binding var revealedID: ConversationKey?
+    let onSelect: () -> Void
+    let onAction: (String) -> Void
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
+
+    private var item: ConversationListItem { row.item }
+
+    private var blocksInteraction: Bool {
+        pendingAction != nil && pendingAction != .markRead && pendingAction != .markUnread
+    }
+
+    var body: some View {
+        let leading = actions.leading(for: item)
+        let trailing = actions.trailing(for: item, archived: archived)
+        SwipeRow(
+            id: item.id, revealedID: $revealedID,
+            leadingAction: leading, trailingActions: trailing, isBusy: blocksInteraction,
+            onAction: onAction
+        ) {
+            Button {
+                guard revealedID == nil else {
+                    revealedID = nil
+                    return
+                }
+                guard !row.isSelected else { return }
+                onSelect()
+            } label: {
+                row
+                    .equatable()
+                    .contentShape(Rectangle())
+                    .overlay {
+                        if blocksInteraction {
+                            ProgressView()
+                                .padding(10)
+                                .background(
+                                    .regularMaterial, in: RoundedRectangle(cornerRadius: 10)
+                                )
+                                .accessibilityLabel("Updating conversation")
+                                .allowsHitTesting(false)
+                        }
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(row.isSelected ? .isSelected : [])
+            .background(
+                row.isSelected ? selectionColor : Color.clear,
+                in: RoundedRectangle(cornerRadius: isWideChatLayout ? 10 : 0)
+            )
+            .accessibilityActions {
+                if pendingAction == nil {
+                    if let leading {
+                        Button(leading.title) { onAction(leading.action) }
+                    }
+                    ForEach(trailing, id: \.symbol) { action in
+                        Button(action.title) { onAction(action.action) }
+                    }
+                }
+            }
+        }
+        .onChange(of: blocksInteraction) { _, blocksInteraction in
+            if blocksInteraction, revealedID == item.id { revealedID = nil }
+        }
+        .onDisappear {
+            if revealedID == item.id { revealedID = nil }
+        }
+    }
+}
+
+/// Cache only localized, invariant action values, not row eligibility or busy
+/// state. Unread/read-through, chat/thread and archive choices stay live.
+@MainActor
+final class ConversationListSwipeActionCache {
+    final class Actions {
+        private let markRead: SwipeRowAction
+        private let markUnread: SwipeRowAction
+        private let activeChat: [SwipeRowAction]
+        private let archivedChat: [SwipeRowAction]
+        private let activeThread: [SwipeRowAction]
+        private let archivedThread: [SwipeRowAction]
+
+        init(language: AppLanguage) {
+            markRead = .init(
+                action: ConversationListAction.markRead.rawValue,
+                title: AppLanguage.localized("Mark as Read", language: language),
+                symbol: "checkmark.message", tint: .blue)
+            markUnread = .init(
+                action: ConversationListAction.markUnread.rawValue,
+                title: AppLanguage.localized("Mark as Unread", language: language),
+                symbol: "message.badge", tint: .blue)
+            let archive = SwipeRowAction(
+                action: ConversationListAction.archive.rawValue,
+                title: AppLanguage.localized("Archive", language: language),
+                symbol: "archivebox", tint: .indigo)
+            let unarchive = SwipeRowAction(
+                action: ConversationListAction.unarchive.rawValue,
+                title: AppLanguage.localized("Unarchive", language: language),
+                symbol: "tray", tint: .indigo)
+            let notifications = SwipeRowAction(
+                action: ConversationListAction.notificationSettings.rawValue,
+                title: AppLanguage.localized("Notification settings", language: language),
+                symbol: "bell", tint: .orange)
+            activeChat = [archive, notifications]
+            archivedChat = [unarchive, notifications]
+            activeThread = [archive]
+            archivedThread = [unarchive]
+        }
+
+        func leading(for item: ConversationListItem) -> SwipeRowAction? {
+            guard item.readThroughMessageID != nil else { return nil }
+            if item.unreadCount > 0 { return markRead }
+            if case .chat = item { return markUnread }
+            // Threads have no mark-unread endpoint.
+            return nil
+        }
+
+        func trailing(for item: ConversationListItem, archived: Bool) -> [SwipeRowAction] {
+            if case .chat = item { return archived ? archivedChat : activeChat }
+            return archived ? archivedThread : activeThread
+        }
+    }
+
+    private struct Key: Equatable {
+        let language: AppLanguage
+        let localeIdentifier: String
+        let preferredLanguages: [String]
+    }
+
+    private var key: Key?
+    private var cached: Actions?
+
+    func actions(language: AppLanguage, locale: Locale) -> Actions {
+        // Store value snapshots, not an autoupdating Locale whose identity can
+        // remain equal after the system language/region changes.
+        let next = Key(
+            language: language, localeIdentifier: locale.identifier,
+            preferredLanguages: language == .system ? Locale.preferredLanguages : [])
+        if key == next, let cached { return cached }
+        let actions = Actions(language: language)
+        key = next
+        cached = actions
+        return actions
+    }
 }
 
 private struct ConversationListDeliveryIndicator: View {

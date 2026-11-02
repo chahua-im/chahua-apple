@@ -45,6 +45,9 @@
         private var failureButton: NSButton?
         private let statusView = TimelineDeliveryStatusView(frame: .zero)
         private var codeViews: [Int: MessageCodeScrollView] = [:]
+        // Keep only a small number of empty TextKit/scroll graphs between rows.
+        // They retain neither message text nor selection, unlike a payload cache.
+        private var reusableCodeViews: [MessageCodeScrollView] = []
         private let spoilerAnimator = MessageSpoilerAnimator()
 
         init(geometry: MessageTextGeometry) {
@@ -96,14 +99,16 @@
         func apply(_ content: MessageTextContent, resetSelection: Bool) {
             if resetSelection {
                 contentLayout.layoutManager.revealedSpoilers.removeAll()
-                for view in codeViews.values { view.removeFromSuperview() }
-                codeViews.removeAll()
+                // A row identity change resets interaction even when prepared text
+                // supplies the very same attachment object. Keep the native graphs.
+                for view in codeViews.values { view.resetInteraction() }
             }
             let selection = selectedRange()
             let geometryChanged = content.update(contentLayout, coordinator: coordinator)
             let length = contentLayout.storage.length
             if resetSelection {
-                setSelectedRange(NSRange(location: 0, length: 0))
+                let empty = NSRange(location: 0, length: 0)
+                if selectedRange() != empty { setSelectedRange(empty) }
             } else if selection.location != NSNotFound {
                 let location = min(selection.location, length)
                 let clamped = NSRange(
@@ -114,7 +119,7 @@
             statusView.configure(contentLayout.metadata)
             if geometryChanged { needsLayout = true }
             needsDisplay = true
-            updateCodeViews()
+            if geometryChanged || resetSelection { updateCodeViews() }
             updateSpoilerAnimation()
         }
 
@@ -125,12 +130,13 @@
             coordinator.document = nil
             contentLayout.layoutManager.revealedSpoilers.removeAll()
             spoilerAnimator.stop()
-            for view in codeViews.values { view.removeFromSuperview() }
-            codeViews.removeAll()
+            for view in codeViews.values { recycleCodeView(view) }
+            codeViews.removeAll(keepingCapacity: true)
             failureAction = nil
             contentLayout.update(attributedText: NSAttributedString(string: ""), metadata: nil)
             statusView.configure(nil)
-            setSelectedRange(NSRange(location: 0, length: 0))
+            let empty = NSRange(location: 0, length: 0)
+            if selectedRange() != empty { setSelectedRange(empty) }
             needsDisplay = true
         }
 
@@ -209,22 +215,35 @@
         }
 
         private func updateCodeViews() {
+            // Applied geometry is authoritative, so synchronize here rather than
+            // repeating attachment lookup and code-view updates on every native layout.
             let blocks = contentLayout.codeBlocks
             let indices = Set(blocks.map { $0.0.characterIndex })
             for index in Array(codeViews.keys) where !indices.contains(index) {
-                codeViews.removeValue(forKey: index)?.removeFromSuperview()
+                if let view = codeViews.removeValue(forKey: index) { recycleCodeView(view) }
             }
             for (geometry, attachment) in blocks {
                 let view: MessageCodeScrollView
                 if let existing = codeViews[geometry.characterIndex] {
                     view = existing
                 } else {
-                    view = MessageCodeScrollView()
+                    view = reusableCodeViews.popLast() ?? MessageCodeScrollView()
                     codeViews[geometry.characterIndex] = view
-                    addSubview(view)
+                    if view.superview == nil { addSubview(view) }
                 }
-                view.frame = geometry.frame
+                view.isHidden = false
+                if view.frame != geometry.frame { view.frame = geometry.frame }
                 view.apply(attachment)
+            }
+        }
+
+        private func recycleCodeView(_ view: MessageCodeScrollView) {
+            view.clear()
+            view.isHidden = true
+            if reusableCodeViews.count < 4 {
+                reusableCodeViews.append(view)
+            } else {
+                view.removeFromSuperview()
             }
         }
 
@@ -268,7 +287,6 @@
         override func layout() {
             super.layout()
             guard let geometry = contentLayout.assignedGeometry else { return }
-            updateCodeViews()
 
             let frame = contentLayout.metadata?.statusFrame(in: geometry.metadataFrame) ?? .zero
             statusView.frame = frame
@@ -276,7 +294,11 @@
         }
 
         override func draw(_ dirtyRect: NSRect) {
+            // NSTextView leaves the context clipped to the narrower body container.
+            // Restore it before drawing metadata in the footer's trailing outset.
+            NSGraphicsContext.saveGraphicsState()
             super.draw(dirtyRect)
+            NSGraphicsContext.restoreGraphicsState()
             guard let geometry = contentLayout.assignedGeometry else { return }
             effectiveAppearance.performAsCurrentDrawingAppearance {
                 contentLayout.metadata?.draw(in: geometry.metadataFrame)

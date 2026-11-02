@@ -22,12 +22,16 @@ private enum AuthenticationAttemptError: Error {
 @MainActor
 final class AuthSessionModel: ObservableObject {
     @Published private(set) var state: AuthSessionState = .bootstrapping {
+        // Bind/clear dependent stores before authentication invalidates the view tree.
+        // A $state sink runs after objectWillChange has already begun that invalidation.
+        willSet { willTransitionSession?(newValue) }
         didSet { stateGeneration &+= 1 }
     }
     @Published private(set) var validationMessage: LocalizedStringKey?
     @Published private(set) var isSubmitting = false
     @Published private(set) var isSlow = false
     var prepareForSignOut: (() async throws -> Void)?
+    var willTransitionSession: ((AuthSessionState) -> Void)?
 
     private let apiClient: any ChahuaAPIClient
     private let credentialLoginClient: any CredentialLoginProviding

@@ -89,9 +89,11 @@
                 animation.safeAreaInsets = window.safeAreaInsets
                 let controller = MessageInteractionHostingController(rootView: overlay(animation))
                 controller.onClose = onClose
-                controller.onSafeAreaChange = { [weak animation = animation] insets in
-                    guard let animation, animation.safeAreaInsets != insets else { return }
-                    animation.safeAreaInsets = insets
+                controller.onSafeAreaChange = { [weak self, weak controller] insets in
+                    guard let self, let controller, self.controller === controller,
+                        self.animation.safeAreaInsets != insets
+                    else { return }
+                    self.animation.safeAreaInsets = insets
                 }
                 controller.view.backgroundColor = .clear
                 controller.view.frame = window.bounds
@@ -162,6 +164,8 @@
                 lift = nil
                 dismissal?.cancel()
                 dismissal = nil
+                controller?.onSafeAreaChange = nil
+                controller?.onClose = nil
                 controller?.beginAppearanceTransition(false, animated: false)
                 controller?.view.removeFromSuperview()
                 controller?.endAppearanceTransition()
@@ -186,13 +190,18 @@
     private final class MessageInteractionHostingController: UIHostingController<AnyView> {
         var onClose: (() -> Void)?
         var onSafeAreaChange: ((UIEdgeInsets) -> Void)?
+        private var safeAreaGeneration = 0
         override func viewSafeAreaInsetsDidChange() {
             super.viewSafeAreaInsetsDidChange()
             // UIKit owns the full-window safe area even though the SwiftUI backdrop
             // intentionally ignores it; publish outside the hosting layout pass.
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.onSafeAreaChange?(self.view.safeAreaInsets)
+            safeAreaGeneration += 1
+            let generation = safeAreaGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, safeAreaGeneration == generation, view.window != nil else {
+                    return
+                }
+                onSafeAreaChange?(view.safeAreaInsets)
             }
         }
         override var canBecomeFirstResponder: Bool { true }

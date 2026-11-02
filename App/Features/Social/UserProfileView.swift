@@ -13,7 +13,8 @@ struct UserProfileView: View {
     let uid: Int32
     let currentUserID: Int32
     @ObservedObject var store: ChatStore
-    var isPresentedAsRoot = false
+    // Modal owners clear their own selection; NavigationStack's dismiss can target a push instead.
+    var onClose: (() -> Void)? = nil
     let onOpenChat: (ChatListItem) -> Void
 
     @State private var user: MemberSummary?
@@ -27,7 +28,6 @@ struct UserProfileView: View {
     @State private var confirmation: SafetyAction?
     @State private var loadRevision = 0
     @State private var reloadPending = false
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
 
@@ -43,8 +43,13 @@ struct UserProfileView: View {
             .navigationTitle("")
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar(isPresentedAsRoot ? .hidden : .visible, for: .navigationBar)
+                .toolbar(
+                    onClose != nil || usesCompactProfileCard ? .hidden : .visible,
+                    for: .navigationBar
+                )
                 .background(ConversationSwipeBack())
+            #else
+                .toolbar(.hidden, for: .windowToolbar)
             #endif
             .task(id: uid) { await load() }
             .onReceive(store.socialInvalidations) { _ in invalidateProfile() }
@@ -70,51 +75,36 @@ struct UserProfileView: View {
 
     private var profileSurface: some View {
         ScrollView {
-            VStack(spacing: 24) {
-                if let user {
-                    profileHero(user)
-                    actionCards
-                    if uid != currentUserID {
-                        relationshipStatus
-                        if let policy { requestSection(policy) }
-                    }
-                }
-                if loading {
-                    ProgressView("Loading profile…")
-                        .frame(maxWidth: .infinity)
-                }
-                if busy {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                }
-                if let notice {
-                    Text(notice)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityAddTraits(.updatesFrequently)
-                }
-                if let error {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(error).foregroundStyle(.red)
-                        Button("Reload profile") { Task { await load() } }
-                            .disabled(busy || loading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(20)
-                    .background(cardBackground, in: RoundedRectangle(cornerRadius: 20))
-                }
+            VStack(spacing: usesCompactProfileCard ? 18 : 24) {
+                profileContents
             }
-            .frame(maxWidth: 560)
-            .padding(.horizontal, 20)
-            .padding(.top, isPresentedAsRoot ? 12 : 24)
-            .padding(.bottom, 32)
+            .frame(maxWidth: usesCompactProfileCard ? 400 : 560)
+            .padding(.horizontal, usesCompactProfileCard ? 16 : 20)
+            .padding(.top, usesCompactProfileCard ? 36 : (onClose != nil ? 12 : 24))
+            .padding(.bottom, usesCompactProfileCard ? 16 : 32)
             .frame(maxWidth: .infinity)
         }
-        .background(groupedBackground.ignoresSafeArea())
+        .background(profileBackground.ignoresSafeArea())
+        .overlay(alignment: .topLeading) {
+            if usesCompactProfileCard, let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .background(.primary.opacity(0.05), in: Circle())
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+                .padding(4)
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if isPresentedAsRoot {
+            if !usesCompactProfileCard, let onClose {
                 HStack {
-                    Button("Close", systemImage: "xmark") { dismiss() }
+                    Button("Close", systemImage: "xmark", action: onClose)
                         .labelStyle(.iconOnly)
                         .font(.system(size: 19, weight: .medium))
                         .foregroundStyle(.primary)
@@ -128,45 +118,114 @@ struct UserProfileView: View {
         }
     }
 
+    @ViewBuilder
+    private var profileContents: some View {
+        if let user {
+            profileHero(user)
+            actionCards
+            if uid != currentUserID {
+                if hasRelationshipStatus {
+                    relationshipStatus
+                }
+                if let policy { requestSection(policy) }
+            }
+        }
+        if loading {
+            ProgressView("Loading profile…")
+                .frame(maxWidth: .infinity)
+        }
+        if busy {
+            ProgressView()
+                .frame(maxWidth: .infinity)
+        }
+        if let notice {
+            Text(notice)
+                .font(usesCompactProfileCard ? .callout : .body)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+        if let error {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(error).foregroundStyle(.red)
+                Button("Reload profile") { Task { await load() } }
+                    .disabled(busy || loading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(usesCompactProfileCard ? 14 : 20)
+            .background(
+                usesCompactProfileCard ? actionBackground : cardBackground,
+                in: RoundedRectangle(cornerRadius: usesCompactProfileCard ? 12 : 20))
+        }
+    }
+
+    private var usesCompactProfileCard: Bool {
+        #if os(macOS)
+            true
+        #else
+            UIDevice.current.userInterfaceIdiom == .pad
+        #endif
+    }
+
+    private var profileAvatarDiameter: CGFloat {
+        guard usesCompactProfileCard else { return 112 }
+        #if os(macOS)
+            return 88
+        #else
+            return 96
+        #endif
+    }
+
+    private var profileNameSize: CGFloat {
+        guard usesCompactProfileCard else { return 28 }
+        #if os(macOS)
+            return 22
+        #else
+            return 24
+        #endif
+    }
+
     private func profileHero(_ user: MemberSummary) -> some View {
-        VStack(spacing: 14) {
+        VStack(spacing: usesCompactProfileCard ? 10 : 14) {
             AvatarView(
                 url: user.avatarUrl.flatMap(URL.init(string:)),
-                displayName: user.username ?? String(uid), diameter: 112
+                displayName: user.username ?? String(uid), diameter: profileAvatarDiameter
             )
             .overlay {
-                Circle().strokeBorder(.white, lineWidth: 4)
+                Circle().strokeBorder(.white, lineWidth: usesCompactProfileCard ? 0 : 4)
             }
-            .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
-            Text(user.username ?? String(uid))
-                .font(.system(size: 28, weight: .bold))
-                .multilineTextAlignment(.center)
-                .textSelection(.enabled)
-            HStack(spacing: 8) {
-                if let username = user.username, !username.isEmpty {
-                    Text(verbatim: "@\(username)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                if let name = user.userGroup?.name, !name.isEmpty {
-                    Text(name)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(profileTint)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            profileTint.opacity(0.12),
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .shadow(color: .black.opacity(usesCompactProfileCard ? 0 : 0.12), radius: 16, y: 8)
+            VStack(spacing: usesCompactProfileCard ? 4 : 14) {
+                Text(user.username ?? String(uid))
+                    .font(.system(size: profileNameSize, weight: .bold))
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+                HStack(spacing: usesCompactProfileCard ? 6 : 8) {
+                    if let username = user.username, !username.isEmpty {
+                        Text(verbatim: "@\(username)")
+                            .font(usesCompactProfileCard ? .caption : .subheadline)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    if let name = user.userGroup?.name, !name.isEmpty {
+                        Text(name)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(profileTint)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, usesCompactProfileCard ? 2 : 3)
+                            .background(
+                                profileTint.opacity(0.12),
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.bottom, 8)
+        .padding(.bottom, usesCompactProfileCard ? 0 : 8)
     }
 
     private var actionCards: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: usesCompactProfileCard ? 8 : 10) {
             if uid == currentUserID {
                 forumProfileCard
             } else if relationship?.isFriend == true {
@@ -220,21 +279,24 @@ struct UserProfileView: View {
     ) -> some View {
         VStack(spacing: 5) {
             Image(systemName: symbol)
-                .font(.system(size: 18, weight: .medium))
-                .frame(height: 21)
+                .font(.system(size: usesCompactProfileCard ? 16 : 18, weight: .medium))
+                .frame(height: usesCompactProfileCard ? 19 : 21)
             Text(title)
                 .font(.caption.weight(.semibold))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .foregroundStyle(primary ? Color.white : Color.accentColor)
-        .frame(maxWidth: .infinity, minHeight: 62)
+        .foregroundStyle(primary ? Color.white : (usesCompactProfileCard ? .blue : .accentColor))
+        .frame(maxWidth: .infinity, minHeight: usesCompactProfileCard ? 58 : 62)
         .padding(.horizontal, 4)
         .background(
-            primary ? Color.accentColor : cardBackground,
-            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            primary
+                ? (usesCompactProfileCard ? Color.blue : Color.accentColor)
+                : (usesCompactProfileCard ? actionBackground : cardBackground),
+            in: RoundedRectangle(cornerRadius: usesCompactProfileCard ? 12 : 18, style: .continuous)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(
+            RoundedRectangle(cornerRadius: usesCompactProfileCard ? 12 : 18, style: .continuous))
     }
 
     private var messageCard: some View {
@@ -279,6 +341,14 @@ struct UserProfileView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var hasRelationshipStatus: Bool {
+        guard let relationship else { return !loading }
+        return relationship.blocking == true
+            || relationship.blockedBy == true
+            || relationship.hasPendingOutgoingRequest == true
+            || (relationship.isFriend == true && relationship.dmChatId == nil)
+    }
+
     private var canRequestFriendship: Bool {
         !busy && !loading
             && relationship?.isFriend == false
@@ -312,6 +382,18 @@ struct UserProfileView: View {
             Color(uiColor: .secondarySystemGroupedBackground)
         #else
             Color(nsColor: .controlBackgroundColor)
+        #endif
+    }
+
+    private var profileBackground: Color {
+        usesCompactProfileCard ? cardBackground : groupedBackground
+    }
+
+    private var actionBackground: Color {
+        #if os(iOS)
+            Color(uiColor: .systemGroupedBackground)
+        #else
+            Color(nsColor: .quaternaryLabelColor).opacity(0.25)
         #endif
     }
 
@@ -356,8 +438,10 @@ struct UserProfileView: View {
                 .disabled(busy)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 20))
+        .padding(usesCompactProfileCard ? 14 : 20)
+        .background(
+            usesCompactProfileCard ? actionBackground : cardBackground,
+            in: RoundedRectangle(cornerRadius: usesCompactProfileCard ? 12 : 20))
     }
 
     private var validMessage: Bool {

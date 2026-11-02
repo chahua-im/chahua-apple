@@ -5,7 +5,7 @@
 
     /// AppKit is intentional here: whole-row SwiftUI hosts incurred measured layout
     /// and AttributeGraph work. Cached native geometry remains the sizing authority;
-    /// only shared controls, such as delivery status, use small SwiftUI hosts.
+    /// shared delivery decorations use canonical SwiftUI snapshots or a sending host.
     @MainActor
     final class TimelineBubbleContentView: NSView {
         private(set) var binding: TimelineRowBinding?
@@ -186,9 +186,12 @@
                 view.allowsContextMenu =
                     !binding.actions.interactionContext.isReadOnly
                     && !binding.actions.isSelectingMessages
-                view.isSelectable =
+                let selectable =
                     !binding.actions.interactionContext.isReadOnly
                     && !binding.actions.isSelectingMessages
+                // AppKit invalidates TextKit display/candidate state even when this
+                // setter repeats the current value during an ordinary row rebind.
+                if view.isSelectable != selectable { view.isSelectable = selectable }
                 view.apply(
                     MessageTextContent(
                         text: row.entry.messageType == .placeholder

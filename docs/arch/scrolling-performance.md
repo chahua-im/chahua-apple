@@ -125,3 +125,159 @@ Final integration: `.ci/Iter2-iOS-final.xcresult` passed 430 tests after tempora
 
 
 
+## macOS native timeline iteration
+
+Static delivery indicators retain their shared SwiftUI graph while native clipping/hiding conceals recycled rows. Only the sending spinner mounts/unmounts with visibility, so offscreen animations still stop. Rebinding an unchanged decoration compares every visual input before replacing its hosting root. Code attachments synchronize when applied text/geometry changes or selection resets, not again during native layout. Text selection and current link callbacks retain their existing update path.
+
+Animated native jumps use a separate `TimelineDisplayScheduler` instead of a 16ms sleep loop. This keeps animation writes aligned with the view's display without replacing the table-install scheduler's pending transaction. Elapsed-time easing, generation fences, user-scroll cancellation and height-settlement completion remain intact.
+
+Matched optimized Profile runs: `/tmp/chahua-mac-perf-before-6.xcresult` and `/tmp/chahua-mac-perf-after2.xcresult`. Both used 400 messages mixing ordinary text, Markdown/links and twelve-line code blocks in a 900×700 native window, a 120-step warm traversal, then 360 forward/reverse steps over the same 32,000pt range. Callback timings include forced native layout and transaction flushing; they are not GPU frame times.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Scroll callback mean, ms | 8.01 | 7.86 |
+| Scroll callback p95, ms | 13.10 | 13.23 |
+| Delivery hosting-root replacements during traversal | 930 | 0 |
+| Code viewport applications during traversal | 232 | 116 |
+
+The redundant work is removed, but callback latency is not materially improved; this does not certify that the reported stutter is resolved. A local Time Profiler capture still shows substantial native row binding, TextKit/height preparation and drawing work. The workload contains no images/video and does not mount the full authenticated shell.
+
+Both harnesses select the existing 60Hz run-loop fallback for repeatability, including a genuine near-live-edge animated jump that completed at the bottom. This verifies animation completion, not production display-link cadence or delivered FPS. A separate final real-display attempt could not obtain a visible native window; its occlusion precondition failed and is not passing evidence. The native post-traversal bitmap was inspected: text, code blocks, timestamps and static delivery checks remained visible.
+
+The baseline restores only the three changed macOS rendering/host sources through a compiler VFS overlay, from a preserved pre-edit copy; other current sources are shared. Both builds use `-O`, whole-module compilation, testability and existing fixture support. Ad-hoc test-host signing disables hardened runtime and adds the generated package-framework runpath only in these commands. Temporary counters, workload sources and overlay inputs are removed after verification; no profiling counter ships.
+
+Full integration after removing the temporary repository sources: macOS ran 495 tests with zero failures and seven GUI-activity skips; iPad ran 441 tests with zero failures. These suites include native selection/link actions, code horizontal scrolling/theme changes, metadata rendering, resize/anchor/read behavior and user cancellation of animated jumps. Profile Close also passed earlier native center-click checks for initial, reopened and nested-above-Chat-Info presentations; later GUI availability does not constitute a new passing interaction check.
+
+## Supplied macOS 120 Hz trace
+
+`trace-macos.trace` records 11.9 seconds of the user's scrolling in two conversations. It contains 150 hitch entries and 302 app-update intervals: p95 18.84ms, maximum 75.95ms, with 112 updates exceeding the 8.33ms interval at 120Hz. App-update duration is not delivered FPS. The recorded executable is a Debug build with SwiftUI view debugging, Metal validation, Main Thread Checker and backtrace recording enabled; do not use that configuration for refresh-rate acceptance.
+
+Resolved CPU samples put work in native row binding and repeated environment/installation checks, but also in SwiftUI graph updates, hosting-view layout and sidebar row sizing outside the timeline. The previous root-write guards did not remove the retained hosting graphs themselves.
+
+This iteration changes macOS only:
+
+- Sidebar swipe content stays in its original SwiftUI tree. A non-sizing native overlay retains phased wheel/momentum and mouse-pan arbitration, circular buttons and accessibility. The nested `NSHostingView`/`AnyView` and synchronous `fittingSize` measurement are removed.
+- Static delivery icons use a 64-entry bounded cache of snapshots from the canonical shared SwiftUI renderer. One offscreen host renders misses with the local native appearance; only sending retains a per-row live animation host. Keys include fitted size, backing scale, appearance and resolved colors.
+- Code view reuse retains native TextKit graphs and pools at most four emptied code views per text surface. Identity changes reset selection and horizontal offset even when the attachment object is unchanged. Unchanged-message updates preserve interaction.
+- Layout-environment lookup reuses unchanged font/locale results. Geometry, text-size choice, language, avatar/detail/selection settings and layout direction remain in its identity; locale/time-zone notifications invalidate it. Viewport/read and clipped-media reporting are not throttled.
+
+Accepted comparison: `/tmp/chahua-mac-120-before2.xcresult` and `/tmp/chahua-mac-120-after3.xcresult`. Both use optimized `-O` whole-module Profile builds, existing timeline fixture factories, a 900×700 native timeline beside a 300pt sidebar with thirty actual swipe rows, and 400 messages mixing text/Markdown/links and twelve-line code blocks. A 120-step warm traversal precedes two 360-step forward/reverse traversals over 32,000pt; the second also invalidates the sidebar's observed revision each step. This is a render/layout stress workload, not the authenticated shell or a replay of the user's conversations.
+
+| Native callback measurement | Before | After |
+| --- | ---: | ---: |
+| Timeline-only mean, ms | 8.64 | 8.08 |
+| Timeline-only p95, ms | 14.02 | 11.98 |
+| Timeline-only callbacks over 8.33ms, out of 360 | 200 | 170 |
+| With sidebar updates mean, ms | 10.84 | 10.24 |
+| With sidebar updates p95, ms | 15.75 | 13.81 |
+| With sidebar updates callbacks over 8.33ms, out of 360 | 266 | 291 |
+
+The p95 improvement is repeatable in the earlier after run (12.22ms / 13.87ms), but the update-heavy distribution does not uniformly improve. Both p95 values remain above 8.33ms. **This is not 120fps sign-off.** These callbacks include forced native layout/transaction flushing and use the scheduler's existing run-loop test fallback; they exclude GPU presentation and physical input latency. No images/video are included.
+
+The native post-traversal bitmap was inspected for sidebar content, code, timestamps and static delivery glyphs. Existing rendering regressions plus new canonical-ink/appearance/fitted-size and code-interaction-reset regressions passed in the targeted optimized run. The temporary wheel-event smoke could not construct the required native phases; its failed input precondition is not passing gesture evidence. Accessibility/input-posting permission is unavailable, so physical routing remains a manual check. No crash-on-GUI-precondition helper was used.
+
+To verify the goal, select **chahua-apple Profile → Product → Profile**, rather than attaching Instruments to a Debug Run. Repeat the same two conversations cold and warm with back-and-forth scrolling, and compare Animation Hitches, app-update intervals above 8.33ms and CPU stacks. Also check horizontal sidebar swipes versus vertical scrolling/navigation clicks, resizing, dark/high-contrast delivery checks, and code selection/horizontal scrolling. The native display-link policy remains system-adaptive: its [default range follows the display's maximum refresh rate](https://developer.apple.com/documentation/quartzcore/cadisplaylink/preferredframeraterange), not a new fixed 60Hz or forced 120Hz loop. OS power/thermal/accessibility policy can still lower cadence.
+
+The pre-edit App sources were preserved without checkout/reset, and a compiler overlay restored the five changed source files for the baseline. Temporary workload sources and overlay inputs are removed after verification. No benchmark counters or input simulation ship.
+
+Final integration: `/tmp/chahua-mac-120-final.xcresult` ran 497 tests with zero failures and seven existing GUI-activity skips after temporary source removal. The canonical delivery-ink and code selection/scroll-reset regressions passed. No view-update publication warning appeared in this run. `./format.sh --check` passed. iOS rendering/swipe implementations are intentionally unchanged.
+
+## Run 3: macOS chat-list scrolling
+
+Run 3 in the same supplied trace records 6.18 seconds of sidebar scrolling: 22 hitch entries and 45 outer app-update spans, with p95 131.59ms and maximum 219.60ms. Nested update records are excluded from those duration statistics. It is still the Debug executable, not an optimized Profile capture.
+
+Of 3,389 main-thread CPU samples, inclusive stacks contain SwiftUI graph updates in 2,040 samples, native automatic row-height updates in 729, `ChatListView.swipeRow` in 266, localization in 207, and native swipe `configure` in 148. These overlap; they are not independent percentages to sum. This points to list graph/layout churn, not a reason to force a different display-link rate.
+
+The chat-list changes keep native SwiftUI `List` and existing dynamic row sizing:
+
+- Named swipe rows leave callback/navigation/busy/reveal state outside the equality boundary around row visuals. Equality includes the complete item, draft, pending/selection state, localization identity and snapshots of store-derived mute, badge and sender values. Avatar presence and receipt children retain live observation; minute-based activity labels remain live.
+- A retained action palette resolves localized values once per selected language/locale/system-language key. Unread, thread/read-through and archive eligibility are still evaluated from current inputs.
+- Unchanged closed native swipe rows refresh callbacks without starting another close animation or requesting layout. Identity, actions, busy state and direction changes still update native geometry/buttons. Gesture ownership and cancellation behavior are unchanged.
+
+Accepted optimized comparisons: `/tmp/chahua-run3-list-before4.xcresult` versus `after4`, repeated as `before5` versus `after5` with the same filename prefix. Each hosts the actual `ChatListView` at a geometry-asserted 360×800pt, with 400 group/text rows built from existing test factories. After 120 warm steps, 360 forward/reverse steps traverse 24,000pt, forcing native layout and transaction flushing with an 8ms run-loop yield. Original sources are supplied to the baseline through a compiler overlay, without checkout/reset. Ranges below are the two observed runs, not confidence intervals.
+
+| Native list stress measurement | Before | After |
+| --- | ---: | ---: |
+| Whole-process CPU for measured traversal, seconds | 17.56–19.82 | 7.90–10.92 |
+| Forced-layout callback mean, ms | 46.85–52.96 | 20.30–28.73 |
+| Forced-layout callback p95, ms | 59.19–59.95 | 44.53–51.98 |
+| Callbacks exceeding 8.33ms, out of 360 | 360 | 360 |
+
+CPU work decreased in both matched pairs, but **this does not meet the 120Hz budget**. Callback timings include synchronous forced layout and exclude GPU presentation and physical input latency. The workload is offline text/group content, without remote avatars or the authenticated shell. Earlier undersized-host measurements are rejected; only the full-sized, geometry-asserted runs above are accepted. The post-traversal native bitmap was inspected, composited on white to make its transparent background readable.
+
+The forced-layout smoke emits an `NSTableView` reentrancy warning during initial mounting both before and after; this change does not claim to resolve that warning. Focused action-language/eligibility/visual-invalidation regressions and a temporary native closed-update/detach smoke passed. The latter is not physical swipe evidence. Temporary workload sources, overlay inputs and diagnostic smoke are removed; no profiling counters ship. Repeat physical ProMotion scrolling in an optimized Profile capture and check horizontal swipe ownership, vertical scrolling and navigation before refresh-rate acceptance.
+
+Final integration after removing temporary sources: `/tmp/chahua-run3-mac-final.xcresult` ran 500 tests with zero failures and seven existing skips; `/tmp/chahua-run3-ipad-final.xcresult` ran 444 tests with zero failures. Neither full-suite log contained a view-update publication warning. `./format.sh --check` passed.
+
+## Run 4: remove macOS per-cell hosting and marker graphs
+
+Run 4 records 5.40 seconds, 36 hitch entries and 110 outer app-update spans. Outer-update p95 is 70.70ms and maximum 112.51ms. It still attaches to a Debug executable with view debugging enabled. The shorter tail agrees with the user's improvement report, but different gestures/durations prevent treating the hitch counts as a controlled before/after FPS comparison.
+
+The 2,843 main-thread samples include `NSHostingView.layout` in 1,847, AttributeGraph update-stack work in 1,790, automatic table-row-height updates in 460, swipe configuration in 123, hidden button configuration in 81 and button initialization in 59. These are overlapping inclusive stacks. SwiftUI view-struct nesting alone does not imply extra hosting views; the concrete remaining hierarchy cost was `List`'s native table and per-cell hosting/sizing.
+
+This iteration:
+
+- Uses `ScrollView` + `LazyVStack` on macOS instead of `List`, preserving shared variable-height row content, action/navigation callbacks, selection and explicit sidebar insets. iOS retains `List`. This removes the native table-height/per-cell-host path without implementing a custom AppKit data source or hardcoding row heights.
+- Replaces macOS per-row scroll/scroller marker bridges with one viewport bridge, including empty/loading content. Public geometry identifies the owned `NSScrollView`; cached ownership is geometry-validated, without repeated row-tree traversal or private SwiftUI class names. Remounts adopt one driver, and pending restoration targets survive scope/search transitions.
+- Defers native swipe clips, layers and action buttons until the corresponding side is actually revealed. Closed-row updates still refresh callbacks and action values. Hidden controls do not allocate/configure just because a new row enters the viewport.
+
+The optimized 400-row, 360×800pt, 120-warm/360-measured-step workload from Run 3 is retained. `/tmp/chahua-run4-before.xcresult` uses exact pre-iteration sources through a compiler overlay. `/tmp/chahua-run4-native-list.xcresult` isolates deferred controls/single markers while retaining `List`; `/tmp/chahua-run4-ready.xcresult` exercises the completed scrolling-tree cutover and passes all five temporary render/interaction/lifecycle scenarios.
+
+| Forced-layout stress measurement | Before | Native reductions, still List | Lazy scrolling tree |
+| --- | ---: | ---: | ---: |
+| Measured traversal CPU, seconds | 17.67 | 14.41 | 7.16 |
+| Callback mean, ms | 47.50 | 39.25 | 19.13 |
+| Callback p95, ms | 55.54 | 49.63 | 21.47 |
+| Callbacks over 8.33ms, out of 360 | 360 | 360 | 358 |
+
+This stress path forces layout/transaction flushing while moving approximately 133pt per callback; it does not measure delivered FPS or replay the user's gestures. It still exceeds the 120Hz budget. The new actual-view smoke asserts one viewport marker, no `NSTableView`, overlay scrollers and active native offset observation. Its bitmap was inspected with transparency composited onto white.
+
+A separate Time Profiler capture, `/tmp/chahua-run4-flat-cpu.trace`, successfully saved despite the recording command timing out during shutdown. The matching workload `/tmp/chahua-run4-flat-profile.xcresult` passed (CPU 7.36s, callback p95 21.94ms). This capture includes warm-up/setup as well as measured scrolling; its 12,393 main-thread samples still predominantly traverse the single root hosting view's SwiftUI graph/layout machinery (`NSHostingView.layout` 8,658, AttributeGraph update stack 6,727, layout-engine sizing 2,097). Those stacks are not evidence that per-cell hosting remains, nor proof of GPU presentation timing.
+
+Temporary native smokes construct phased wheel events and click real action buttons, and exercise viewport discovery/rejection, ownership transfer, resize, teardown and scope/search restoration. The initial wheel helper encoded AppKit phases as CoreGraphics phases; its invalid input was corrected. A live-owner style-restoration scenario was also corrected to keep the departing viewport alive, exposing a real stale-geometry cache bug that is now guarded. Deferred scroller-scope release also prevents replacement backgrounds from recapturing modified overlay/autohide settings as native defaults. All five final diagnostic scenarios pass; earlier failed scenarios are not passing evidence. The temporary sources and compiler-overlay inputs are removed. Physical swipe arbitration, VoiceOver/navigation and authenticated ProMotion scrolling still require a Profile run on the actual app.
+
+A permanent macOS regression in `ConversationScopeTests` checks that detach immediately disables reconciliation while retaining original native policy for replacement adoption. It uses actual AppKit views in the existing test class, with no new fixture. The final lifetime guard does not alter the measured steady-state scrolling path.
+
+Final integration: `/tmp/chahua-run4-mac-release-check.xcresult` ran 501 tests with zero failures, including the teardown/replacement regression. `/tmp/chahua-run4-ipad-final.xcresult` ran 444 tests with zero failures; the final follow-on guard and regression are macOS-only. Neither full-suite log contains a view-update publication warning. `./format.sh --check` passes.
+
+## Profile build: mixed scrolling on a 60Hz display
+
+`Untitled2.trace` records 22.22 seconds and confirms the Profile executable, without the previous Debug view/backtrace instrumentation. The user identifies the display as 60Hz. There are 97 hitch entries (hitch-duration p95 50.00ms, maximum 150.01ms) and 447 outer app-update spans (p95 25.24ms, maximum 126.36ms; 75 above 16.67ms). Hitch duration and app-update duration are different measures; neither is delivered FPS.
+
+CPU stacks attribute the following approximate windows, rather than recorded input annotations:
+
+| Window | Predominant activity | Outer updates | Update p95, ms | Updates over 16.67ms |
+| --- | --- | ---: | ---: | ---: |
+| 8–15s | Chat list | 179 | 26.66 | 48 |
+| 15–19s | Conversation transition and scrolling | 143 | 19.11 | 14 |
+| 19–22.22s | Chat list | 101 | 21.54 | 13 |
+
+The sidebar remains the principal steady-scrolling concern. In its targeted 8–15s and 19–21s windows, inclusive stacks contain 609 lazy-placement samples, 555 lazy-stack length/spacing samples, 193 index/position resolutions and 176 backward measurements. Row-body samples total only 41, summary-body samples 24, scope callbacks four and native swipe-container layout zero. These overlap; the evidence points to variable-height lazy placement/remeasurement, not an observer feedback loop or hidden swipe buttons.
+
+A two-child title layout was tested to avoid HStack's minimum/maximum priority probes. Matched stress/60Hz-paced traversal results were essentially unchanged, so the custom layout and its cache were removed. Existing shared row layout, RTL, accessibility sizing and callback behavior remain untouched. This experiment is not reported as a speedup.
+
+Conversation scrolling has a separate cost: in three later 45–65ms update windows, native installation appears in 28–36 main-thread samples, with preparation and binding below it. The 126.36ms update at 15.316s is different: 78 of its 103 samples traverse SwiftUI graph updates and 26 traverse generic type metadata lookup, with composer/chrome construction present and almost no table-install work. The first cold conversation surface is not fixed by the sizing changes below.
+
+Retained changes:
+
+- `TimelineLayoutEngine` requests intrinsic text width without calculating and discarding intrinsic height, then performs the final constrained layout. Sender-header glyph metrics are measured once and reused for natural width and fitted frames instead of producing discarded intermediate frame arrays.
+- `MessageTextLayout` caches that intrinsic width with the existing text/metadata/geometry invalidation rules. Full `idealSize` behavior remains available. A permanent reuse/metadata/typography/CJK/emoji/spoiler/fenced-code regression compares final line breaks, footer placement and code geometry with the full intrinsic-size path.
+
+Accepted native workload: 400 existing-fixture messages alternating senders, with formatted text/links and 80 twelve-line code blocks, in a geometry-asserted 900×700pt window. Readiness requires all 401 native rows and a 45,276pt document, not merely a mounted empty table. The scheduler retains its existing run-loop test source and preparation budget. After mounting, 120 warm steps precede 360 stress steps over 24,000pt and 360 steps over 3,000pt paced to a 60Hz deadline; actual native live-scroll notifications and layout/transaction flushing are exercised.
+
+Paired `/tmp/chahua-mixed-cold-before.xcresult` and `/tmp/chahua-mixed-cold-after.xcresult`:
+
+| Native workload measurement | Before | After |
+| --- | ---: | ---: |
+| Mount/load to all rows installed, ms | 5057.85 | 3814.92 |
+| Warm stress traversal CPU, ms | 2805.06 | 2808.89 |
+| Warm stress callback p95, ms | 10.31 | 11.99 |
+| 60Hz-paced callback p95, ms | 12.20 | 11.98 |
+| 60Hz-paced callbacks over 16.67ms, out of 360 | 0 | 2 |
+
+Initial heavy-fixture preparation improves by approximately 25%; warm scrolling does not materially improve. This mount interval is not the authenticated app's normal conversation-open latency, and the workload does not replay the user's messages or input. Do not call this a 60/120fps fix. The actual native post-scroll image was inspected for code, sender headers, timestamps, inline metadata and delivery glyphs. Twenty-seven optimized text-layout regressions passed.
+
+Earlier temporary scenarios with invalid fixture JSON or a three-second readiness failure are excluded. The fixture's existing structured fields path supplies escaped multiline text; readiness is explicitly guarded before accepting any timing. Temporary workloads and compiler-overlay sources are removed. No fixed row heights, scheduler throttling or speculative sidebar layout ship.
+
+Final integration after temporary source removal: `/tmp/chahua-mixed-mac-final.xcresult` ran 502 tests with zero failures; `/tmp/chahua-mixed-ipad-final.xcresult` ran 445 tests with zero failures. Neither log contains a view-update publication warning. `./format.sh --check` passed.
+

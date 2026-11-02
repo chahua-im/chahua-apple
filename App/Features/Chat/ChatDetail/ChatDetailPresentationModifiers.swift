@@ -44,11 +44,15 @@ struct ChatDetailAttachmentPresentation: ViewModifier {
                                 threadID: message.replyRootId,
                                 initialPosition: .message(message.id))
                         }
-                        .navigationDestination(item: $infoProfileUID) { uid in
-                            UserProfileView(
-                                uid: uid, currentUserID: model.currentUserID, store: store,
-                                onOpenChat: { infoChatTarget = $0 })
-                        }
+                        .modifier(
+                            UserProfilePresentation(
+                                uid: $infoProfileUID, currentUserID: model.currentUserID,
+                                store: store,
+                                onOpenChat: { chat in
+                                    infoProfileUID = nil
+                                    infoChatTarget = chat
+                                })
+                        )
                         .navigationDestination(item: $infoChatTarget) { target in
                             ChatDetailPresentation(
                                 chat: target, currentUserID: model.currentUserID, store: store)

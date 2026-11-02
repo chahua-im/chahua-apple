@@ -171,7 +171,7 @@ private struct SavedMessageDetailView: View {
         _saved = ObservedObject(wrappedValue: store.savedMessages)
     }
 
-    var body: some View {
+    private var content: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.chat.name).font(.headline)
@@ -198,93 +198,108 @@ private struct SavedMessageDetailView: View {
         .navigationTitle("Saved Message")
         .environment(\.chatHeaderInset, 0)
         .environment(\.chatComposerInset, 0)
-        .navigationDestination(item: $profileUID) { uid in
-            if let currentUserID = store.currentUserProfile?.uid {
-                UserProfileView(
-                    uid: uid, currentUserID: currentUserID, store: store,
-                    onOpenChat: { profileChat = $0 })
-            }
+    }
+
+    @ViewBuilder
+    private var profileContent: some View {
+        if let currentUserID = store.currentUserProfile?.uid {
+            content.modifier(
+                UserProfilePresentation(
+                    uid: $profileUID, currentUserID: currentUserID, store: store,
+                    onOpenChat: { chat in
+                        profileUID = nil
+                        profileChat = chat
+                    }))
+        } else {
+            content
         }
-        .navigationDestination(item: $profileChat) { chat in
-            if let currentUserID = store.currentUserProfile?.uid {
-                ChatDetailPresentation(chat: chat, currentUserID: currentUserID, store: store)
+    }
+
+    var body: some View {
+        profileContent
+            .navigationDestination(item: $profileChat) { chat in
+                if let currentUserID = store.currentUserProfile?.uid {
+                    ChatDetailPresentation(chat: chat, currentUserID: currentUserID, store: store)
+                }
             }
-        }
-        .sheet(
-            isPresented: Binding(
-                get: { presentedFile != nil },
-                set: { if !$0 { presentedFile = nil } })
-        ) {
-            if let file = presentedFile {
-                NavigationStack {
-                    MessageFileAttachmentView(
-                        url: URL(string: file.url), fileName: file.fileName,
-                        contentType: file.kind, byteCount: file.size
-                    )
-                    .padding()
-                    .frame(minWidth: 300, minHeight: 180)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { presentedFile = nil }
+            .sheet(
+                isPresented: Binding(
+                    get: { presentedFile != nil },
+                    set: { if !$0 { presentedFile = nil } })
+            ) {
+                if let file = presentedFile {
+                    NavigationStack {
+                        MessageFileAttachmentView(
+                            url: URL(string: file.url), fileName: file.fileName,
+                            contentType: file.kind, byteCount: file.size
+                        )
+                        .padding()
+                        .frame(minWidth: 300, minHeight: 180)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { presentedFile = nil }
+                            }
                         }
                     }
                 }
             }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button("Open Source", systemImage: "arrow.up.forward") {
-                    Task {
-                        openingSource = true
-                        await onOpenSource()
-                        openingSource = false
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button("Open Source", systemImage: "arrow.up.forward") {
+                        Task {
+                            openingSource = true
+                            await onOpenSource()
+                            openingSource = false
+                        }
                     }
+                    .disabled(!item.canLocateContext || openingSource)
+                    Button(
+                        "Remove Saved Message", systemImage: "bookmark.slash", role: .destructive
+                    ) {
+                        Task { _ = await saved.remove(item) }
+                    }
+                    .disabled(
+                        saved.isMutating(
+                            chatID: item.originalChatId, messageID: item.originalMessageId)
+                    )
                 }
-                .disabled(!item.canLocateContext || openingSource)
-                Button("Remove Saved Message", systemImage: "bookmark.slash", role: .destructive) {
-                    Task { _ = await saved.remove(item) }
+            }
+            .task(id: saved.revision) {
+                guard let uid = store.currentUserProfile?.uid, item.messageType != .forwarded else {
+                    return
                 }
-                .disabled(
-                    saved.isMutating(chatID: item.originalChatId, messageID: item.originalMessageId)
-                )
+                let revision = saved.revision
+                let captured = ForwardedRecordSnapshot(
+                    response: ForwardedMessagesResponse(total: 1, messages: [item.capturedRecord]),
+                    currentUserID: uid)
+                await captured.timeline.open()
+                guard !Task.isCancelled, revision == saved.revision else {
+                    captured.invalidate()
+                    return
+                }
+                snapshot = captured
             }
-        }
-        .task(id: saved.revision) {
-            guard let uid = store.currentUserProfile?.uid, item.messageType != .forwarded else {
-                return
+            .onChange(of: saved.revision) { _, _ in
+                snapshot?.invalidate()
+                snapshot = nil
+                if imageDetailPresenter?.gallery?.id == presentedGalleryID {
+                    imageDetailPresenter?.dismiss()
+                }
+                dismiss()
             }
-            let revision = saved.revision
-            let captured = ForwardedRecordSnapshot(
-                response: ForwardedMessagesResponse(total: 1, messages: [item.capturedRecord]),
-                currentUserID: uid)
-            await captured.timeline.open()
-            guard !Task.isCancelled, revision == saved.revision else {
-                captured.invalidate()
-                return
+            .onReceive(saved.removedSnapshots) { savedMessageID in
+                guard savedMessageID == item.id else { return }
+                snapshot?.invalidate()
+                snapshot = nil
+                if imageDetailPresenter?.gallery?.id == presentedGalleryID {
+                    imageDetailPresenter?.dismiss()
+                }
+                dismiss()
             }
-            snapshot = captured
-        }
-        .onChange(of: saved.revision) { _, _ in
-            snapshot?.invalidate()
-            snapshot = nil
-            if imageDetailPresenter?.gallery?.id == presentedGalleryID {
-                imageDetailPresenter?.dismiss()
+            .onDisappear {
+                snapshot?.invalidate()
+                snapshot = nil
             }
-            dismiss()
-        }
-        .onReceive(saved.removedSnapshots) { savedMessageID in
-            guard savedMessageID == item.id else { return }
-            snapshot?.invalidate()
-            snapshot = nil
-            if imageDetailPresenter?.gallery?.id == presentedGalleryID {
-                imageDetailPresenter?.dismiss()
-            }
-            dismiss()
-        }
-        .onDisappear {
-            snapshot?.invalidate()
-            snapshot = nil
-        }
     }
 
     @ViewBuilder

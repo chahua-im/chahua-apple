@@ -1,11 +1,46 @@
 #if os(macOS)
     import AppKit
+    import Combine
     import SwiftUI
     import XCTest
     @testable import chahua_apple
 
     @MainActor
     final class ComposerInputStateTests: XCTestCase {
+        func testDeferredDetachCannotOverwriteAReplacementEditor() async throws {
+            let original = NativeComposerHarness(text: "original")
+            let replacement = NativeComposerHarness(text: "replacement")
+            let input = original.input
+            input.detachAfterViewUpdate(from: original, finalSnapshot: .committed("stale"))
+            input.configure(
+                draft: Binding(
+                    get: { replacement.persisted }, set: { replacement.persisted = $0 }),
+                onCompositionChanged: nil)
+            input.nativeInput = replacement
+            input.receiveExternalText("replacement")
+            // A late teardown from the old marker must not even detach its new owner.
+            input.detachAfterViewUpdate(from: original, finalSnapshot: .committed("older"))
+            try await Task.sleep(for: .milliseconds(20))
+            XCTAssertTrue(input.nativeInput === replacement)
+            XCTAssertEqual(input.editorText, "replacement")
+            XCTAssertEqual(replacement.persisted, "replacement")
+            input.detach()
+        }
+
+        func testNativeMarkedNotificationDefersPublicationButBlocksSubmission() {
+            let harness = NativeComposerHarness(text: "draft ")
+            defer { harness.input.detach() }
+            var publications = 0
+            let observation = harness.input.objectWillChange.sink { publications += 1 }
+            defer { observation.cancel() }
+            harness.mark("ni")
+            XCTAssertEqual(publications, 0)
+            XCTAssertFalse(harness.input.prepareSubmission())
+            harness.input.settleNativeInput()
+            XCTAssertTrue(harness.input.isComposing)
+            XCTAssertEqual(harness.persisted, "draft ")
+        }
+
         func testInlineFormattingPreservesEmojiEdgesWhitespaceAndParagraphs() {
             let source = NSAttributedString(string: "outside  😀 \n\n  你好😀  after")
             let selected = (source.string as NSString).range(of: "  😀 \n\n  你好😀  ")
@@ -61,7 +96,6 @@
             canceled.editor.unmarkText()
             canceled.input.settleNativeInput()
             XCTAssertEqual(canceled.persisted, "draft ")
-            XCTAssertEqual(canceled.events, ["composing", "committed"])
 
             let detached = NativeComposerHarness(text: "draft ")
             detached.mark("ni")
@@ -71,7 +105,6 @@
             detached.input.detach()
             XCTAssertEqual(detached.persisted, "restored")
             XCTAssertEqual(detached.input.editorText, "restored")
-            XCTAssertEqual(detached.events, ["composing", "committed"])
         }
 
         func testUserCommitWinsRestorationAndMarkedReturnCannotSubmit() {
@@ -224,6 +257,7 @@
             harness.input.refreshMentionQuery()
             XCTAssertEqual(harness.input.mentionQuery?.query, "a")
             harness.mark("b")
+            harness.input.settleNativeInput()
             XCTAssertNil(harness.input.mentionQuery)
         }
     }

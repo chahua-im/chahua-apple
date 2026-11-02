@@ -43,7 +43,7 @@ final class ReadReceiptPrivacySettingsModel: ObservableObject {
     }
 
     var canSave: Bool {
-        scope == .account && loadPhase == .loaded && baseline != nil && !isSaving
+        isDirty && baseline != nil && !isSaving
             && selection.map { choices.contains($0) } == true
     }
 
@@ -106,6 +106,12 @@ final class ReadReceiptPrivacySettingsModel: ObservableObject {
     func retrySave() async {
         guard case .friend = scope, saveError != nil else { return }
         _ = await persistSelection()
+    }
+
+    func revert() {
+        guard scope == .account, loadPhase == .loaded, !isSaving else { return }
+        selection = baseline
+        saveError = nil
     }
 
     func save() async -> Bool {

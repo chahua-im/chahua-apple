@@ -37,6 +37,8 @@ struct AuthenticatedShell: View {
     @State private var threadInfoAction: ThreadInfoAction?
     @State private var feature: FeatureDestination?
     @State private var profilePath: [Int32] = []
+    @State private var nestedProfileUID: Int32?
+    @State private var inspectorProfileUID: Int32?
     @State private var navigationError: String?
     @State private var isListRefreshing = false
     @StateObject private var listPresentation = ConversationListPresentation()
@@ -185,7 +187,19 @@ struct AuthenticatedShell: View {
                     if geometry.size.width >= ChatSplitMetrics.splitThreshold {
                         adaptiveLayout
                     } else {
-                        listNavigation(includesDetail: true)
+                        if UserProfilePresentation.usesModal {
+                            ChatInspectorLayout(isPresented: $showsInspector) {
+                                listNavigation(includesDetail: true)
+                            } inspector: {
+                                inspectorContent
+                            }
+                            .onChange(of: selectedConversationID) { _, _ in
+                                showsInspector = false
+                                inspectorProfileUID = nil
+                            }
+                        } else {
+                            listNavigation(includesDetail: true)
+                        }
                     }
                 }
                 .environment(\.conversationListBottomSafeArea, geometry.safeAreaInsets.bottom)
@@ -196,7 +210,13 @@ struct AuthenticatedShell: View {
         .environment(\.openUserProfile, navigationActions.openProfile)
         .environment(\.openGroupInvite, navigationActions.openInvite)
         .environment(\.openForwardDestination, navigationActions.openForward)
-        .sheet(item: $feature, onDismiss: { profilePath.removeAll() }) { destination in
+        .sheet(
+            item: $feature,
+            onDismiss: {
+                profilePath.removeAll()
+                nestedProfileUID = nil
+            }
+        ) { destination in
             NavigationStack(path: $profilePath) {
                 featureDestination(destination)
                     .navigationDestination(for: Int32.self) { uid in
@@ -212,10 +232,20 @@ struct AuthenticatedShell: View {
                         }
                     }
             }
+            .modifier(
+                UserProfilePresentation(
+                    uid: $nestedProfileUID, currentUserID: me.uid, store: chatStore,
+                    onOpenChat: openChat)
+            )
             .environment(\.openUserProfile, navigationActions.openProfile)
             .environment(\.openGroupInvite, navigationActions.openInvite)
             .environment(\.openForwardDestination, navigationActions.openForward)
-            .frame(minWidth: 320, minHeight: 420)
+            .modifier(
+                FeatureModalSizing(
+                    isProfile: {
+                        if case .profile = destination { return true }
+                        return false
+                    }()))
         }
         .task(id: pendingURL.wrappedValue) {
             guard let url = pendingURL.wrappedValue else { return }
@@ -258,6 +288,8 @@ struct AuthenticatedShell: View {
             listPath.removeAll()
             feature = nil
             profilePath.removeAll()
+            nestedProfileUID = nil
+            inspectorProfileUID = nil
             listPresentation.reset()
             isListRefreshing = false
             VoicePlaybackSession.shared.stop()
@@ -306,10 +338,19 @@ struct AuthenticatedShell: View {
         ) {
             #if os(macOS)
                 settings
-                    .frame(minWidth: 760, idealWidth: 880, minHeight: 540, idealHeight: 640)
+                    .frame(minWidth: 760, idealWidth: 880, minHeight: 540, idealHeight: 680)
+                    .presentationCornerRadius(20)
             #else
-                settings
-                    .frame(minWidth: 320, idealWidth: 560, minHeight: 520, idealHeight: 640)
+                if #available(iOS 18, *) {
+                    settings
+                        .frame(idealWidth: 940, idealHeight: 720)
+                        .presentationSizing(.fitted)
+                        .presentationCornerRadius(28)
+                } else {
+                    settings
+                        .frame(minWidth: 320, idealWidth: 940, minHeight: 520, idealHeight: 720)
+                        .presentationCornerRadius(28)
+                }
             #endif
         }
         #if os(iOS)
@@ -322,6 +363,41 @@ struct AuthenticatedShell: View {
                     settings
                 })
         #endif
+    }
+
+    private var inspectorContent: some View {
+        NavigationStack {
+            if let chat = selectedInfoChat {
+                GroupInfoView(
+                    chat: chat, currentUserID: me.uid, store: chatStore,
+                    onLeave: {
+                        if selectedConversationID?.chatID == chat.id {
+                            selectConversation(nil)
+                        }
+                    },
+                    onSearch: { openMessageSearch(in: chat) },
+                    onOpenMessage: { openMessageTarget($0, in: chat) },
+                    onOpenThread: {
+                        showsInspector = false
+                        openThread($0, in: chat)
+                    },
+                    isInspector: true,
+                    onClose: {
+                        withAnimation(.easeInOut(duration: 0.2)) { showsInspector = false }
+                    }
+                )
+                .id(chat.id)
+            }
+        }
+        .environment(\.chatHeaderInset, 0)
+        .environment(\.openUserProfile, { inspectorProfileUID = $0 })
+        .modifier(
+            UserProfilePresentation(
+                uid: $inspectorProfileUID, currentUserID: me.uid, store: chatStore,
+                onOpenChat: { chat in
+                    showsInspector = false
+                    openChat(chat)
+                }))
     }
 
     private func bindNavigationActions() {
@@ -407,30 +483,7 @@ struct AuthenticatedShell: View {
                     }
                 }
             } inspector: {
-                NavigationStack {
-                    if let chat = selectedInfoChat {
-                        GroupInfoView(
-                            chat: chat, currentUserID: me.uid, store: chatStore,
-                            onLeave: {
-                                if selectedConversationID?.chatID == chat.id {
-                                    selectConversation(nil)
-                                }
-                            },
-                            onSearch: { openMessageSearch(in: chat) },
-                            onOpenMessage: { openMessageTarget($0, in: chat) },
-                            onOpenThread: {
-                                showsInspector = false
-                                openThread($0, in: chat)
-                            },
-                            isInspector: true,
-                            onClose: {
-                                withAnimation(.easeInOut(duration: 0.2)) { showsInspector = false }
-                            }
-                        )
-                        .id(chat.id)
-                    }
-                }
-                .environment(\.chatHeaderInset, 0)
+                inspectorContent
             }
             .onChange(of: selectedConversationID) { _, _ in showsInspector = false }
             .onChange(of: threadPath) { _, path in
@@ -611,7 +664,13 @@ struct AuthenticatedShell: View {
             case .list:
                 FriendRequestsView(
                     currentUserID: me.uid, store: chatStore,
-                    onOpenProfile: { listPath.append(.friendRequests(.profile($0))) })
+                    onOpenProfile: { uid in
+                        if UserProfilePresentation.usesModal {
+                            openProfile(uid)
+                        } else {
+                            listPath.append(.friendRequests(.profile(uid)))
+                        }
+                    })
             case .profile(let uid):
                 UserProfileView(
                     uid: uid, currentUserID: me.uid, store: chatStore,
@@ -727,7 +786,13 @@ struct AuthenticatedShell: View {
         guard threadPath.isEmpty, let chat = selectedInfoChat else { return nil }
         return {
             guard groupPath.isEmpty, !isSigningOut else { return }
-            withAnimation { groupPath.append(.info(chat)) }
+            withAnimation {
+                if UserProfilePresentation.usesModal {
+                    showsInspector.toggle()
+                } else {
+                    groupPath.append(.info(chat))
+                }
+            }
         }
     }
 
@@ -791,6 +856,7 @@ struct AuthenticatedShell: View {
 
     private func openMessageSearch(in chat: ChatListItem) {
         guard !isSigningOut else { return }
+        showsInspector = false
         if messageSearch?.chat.id != chat.id {
             let store = chatStore
             let chatID = chat.id
@@ -812,6 +878,7 @@ struct AuthenticatedShell: View {
 
     private func openMessageTarget(_ message: MessageResponse, in chat: ChatListItem) {
         guard !isSigningOut, message.chatId == chat.id else { return }
+        showsInspector = false
         groupPath.removeAll()
         let chatKey = ConversationKey(chatID: chat.id, threadID: nil)
         guard let rootID = message.replyRootId else {
@@ -955,11 +1022,19 @@ struct AuthenticatedShell: View {
         case .profile(let uid):
             UserProfileView(
                 uid: uid, currentUserID: me.uid, store: chatStore,
-                isPresentedAsRoot: true, onOpenChat: openChat)
+                onClose: { feature = nil }, onOpenChat: openChat)
         }
     }
 
     private func openProfile(_ uid: Int32) {
+        if UserProfilePresentation.usesModal {
+            if feature == nil {
+                feature = .profile(uid)
+            } else if feature != .profile(uid) {
+                nestedProfileUID = uid
+            }
+            return
+        }
         if feature == .profile(uid) {
             profilePath.removeAll()
         } else if let index = profilePath.firstIndex(of: uid) {
@@ -976,6 +1051,8 @@ struct AuthenticatedShell: View {
         chatStore.retainChatForNavigation(chat)
         feature = nil
         profilePath.removeAll()
+        nestedProfileUID = nil
+        inspectorProfileUID = nil
         showsSettings = false
         let conversation = ConversationKey(chatID: chat.id, threadID: nil)
         if selectedConversationID == conversation {
@@ -1289,4 +1366,15 @@ struct AuthenticatedShell: View {
                 ConversationListItem.chat)
     }
 
+}
+
+private struct FeatureModalSizing: ViewModifier {
+    let isProfile: Bool
+    func body(content: Content) -> some View {
+        if isProfile && UserProfilePresentation.usesModal {
+            content.modifier(ProfileModalSizing())
+        } else {
+            content.frame(minWidth: 320, minHeight: 420)
+        }
+    }
 }

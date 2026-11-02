@@ -15,12 +15,14 @@
         func updateUIView(_ view: MarkerView, context: Context) { view.resolve() }
 
         static func dismantleUIView(_ view: MarkerView, coordinator: ()) {
-            if view.keepsScopeAlive { view.scope.detach() }
+            view.detach()
         }
 
         final class MarkerView: UIView {
             let scope: ConversationListScrollScope
             let keepsScopeAlive: Bool
+            private var detached = false
+            private var resolutionQueued = false
 
             init(scope: ConversationListScrollScope, keepsScopeAlive: Bool) {
                 self.scope = scope
@@ -44,6 +46,24 @@
             }
 
             func resolve() {
+                guard !detached, !resolutionQueued else { return }
+                resolutionQueued = true
+                // Resolving a List ancestor can install KVO while SwiftUI is
+                // laying it out. Native/model handoffs belong to the next turn.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    resolutionQueued = false
+                    guard !detached else { return }
+                    resolveNow()
+                }
+            }
+
+            func detach() {
+                detached = true
+                if keepsScopeAlive { scope.detachAfterViewUpdate() }
+            }
+
+            private func resolveNow() {
                 if keepsScopeAlive { return }
                 guard window != nil else { return }
                 var ancestor = superview
@@ -84,18 +104,35 @@
             observation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
                 MainActor.assumeIsolated {
                     guard let self else { return }
-                    self.scope?.didScroll(offset: self.offset)
+                    let offset = self.offset
+                    self.enqueue { $0.didScroll(offset: offset) }
                 }
             }
             scrollView.panGestureRecognizer.addTarget(self, action: #selector(panChanged))
         }
 
         @objc private func panChanged(_ recognizer: UIPanGestureRecognizer) {
-            switch recognizer.state {
-            case .began: scope?.beginGesture()
-            case .ended: scope?.endGesture()
-            case .cancelled, .failed: scope?.endGesture(cancelled: true)
-            default: break
+            let state = recognizer.state
+            let offset = self.offset
+            enqueue { scope in
+                switch state {
+                case .began: scope.beginGesture(offset: offset)
+                case .ended: scope.endGesture()
+                case .cancelled, .failed: scope.endGesture(cancelled: true)
+                default: break
+                }
+            }
+        }
+
+        /// KVO also fires for offsets assigned by List layout, not only gestures.
+        /// Queue gesture boundaries alongside offsets to retain pull/refresh order.
+        private func enqueue(_ action: @escaping (ConversationListScrollScope) -> Void) {
+            let expected = generation
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == expected, let scope, scope.driver === self else {
+                    return
+                }
+                action(scope)
             }
         }
 

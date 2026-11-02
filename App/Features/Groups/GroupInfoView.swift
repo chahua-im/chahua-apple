@@ -28,6 +28,9 @@ struct GroupInfoView: View {
     @State private var showsInvitations = false
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openUserProfile) private var openUserProfile
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @AppStorage(AppLanguage.storageKey) private var languageRawValue = AppLanguage.system.rawValue
     private let sessionRevision: Int
 
@@ -54,18 +57,40 @@ struct GroupInfoView: View {
         sessionRevision = store.sessionRevision
     }
 
-    private var pageBackground: Color {
+    private var usesDesignedPresentation: Bool {
         #if os(macOS)
-            // The floating inspector container owns the M6 material and tint.
-            isInspector ? .clear : ChahuaTheme.conversationBackground(for: colorScheme)
+            true
         #else
-            ChahuaTheme.conversationBackground(for: colorScheme)
+            isInspector || horizontalSizeClass == .regular
         #endif
+    }
+
+    private var usesContentHeader: Bool {
+        isInspector || (usesDesignedPresentation && onClose != nil)
+    }
+
+    private var isDense: Bool {
+        #if os(macOS)
+            true
+        #else
+            false
+        #endif
+    }
+
+    private var pageBackground: Color {
+        usesDesignedPresentation && colorScheme == .light
+            ? Color(red: 0.965, green: 0.965, blue: 0.975)
+            : ChahuaTheme.conversationBackground(for: colorScheme)
+    }
+
+    private var cardBackground: Color {
+        usesDesignedPresentation && colorScheme == .light
+            ? .white : ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme)
     }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: isInspector ? 12 : 20) {
+            VStack(spacing: usesDesignedPresentation ? (isDense ? 10 : 12) : 20) {
                 hero
                 actions
                 if let description {
@@ -96,17 +121,24 @@ struct GroupInfoView: View {
                     NavigationLink {
                         FriendPrivacySettingsView(store: store, peerUID: peer.uid)
                             .id(peer.uid)
-                            .modifier(GroupInfoDestinationNavigation(isInspector: isInspector))
+                            .modifier(GroupInfoDestinationNavigation())
                     } label: {
                         HStack {
                             Image(systemName: "hand.raised.fill")
-                                .font(.system(size: 16, weight: .medium))
+                                .font(
+                                    .system(
+                                        size: usesDesignedPresentation ? 12 : 16, weight: .medium)
+                                )
                                 .foregroundStyle(.white)
-                                .frame(width: 30, height: 30)
+                                .frame(
+                                    width: usesDesignedPresentation ? 24 : 30,
+                                    height: usesDesignedPresentation ? 24 : 30
+                                )
                                 .background(
                                     .blue, in: RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 )
                             Text("Privacy Settings")
+                                .font(usesDesignedPresentation ? .subheadline : .body)
                             Spacer()
                             Image(systemName: "chevron.right")
                                 .font(.caption.weight(.semibold))
@@ -114,13 +146,14 @@ struct GroupInfoView: View {
                                 .accessibilityHidden(true)
                         }
                         .foregroundStyle(.primary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 14)
+                        .padding(.horizontal, usesDesignedPresentation ? 12 : 16)
+                        .padding(.vertical, usesDesignedPresentation ? (isDense ? 8 : 10) : 14)
                         .background(
-                            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
-                            in: RoundedRectangle(cornerRadius: 18)
+                            cardBackground,
+                            in: RoundedRectangle(cornerRadius: usesDesignedPresentation ? 10 : 18)
                         )
-                        .contentShape(RoundedRectangle(cornerRadius: 18))
+                        .contentShape(
+                            RoundedRectangle(cornerRadius: usesDesignedPresentation ? 10 : 18))
                     }
                     .buttonStyle(.plain)
                     .frame(maxWidth: 560)
@@ -129,26 +162,27 @@ struct GroupInfoView: View {
                 sectionTabs
                 sectionContent
             }
-            .frame(maxWidth: 760)
-            .padding(.horizontal, isInspector ? 16 : 20)
-            .padding(.top, isInspector ? 12 : 24)
-            .padding(.bottom, 32)
+            .frame(maxWidth: usesDesignedPresentation ? 520 : 760)
+            .padding(.horizontal, usesDesignedPresentation ? (isDense ? 14 : 16) : 20)
+            .padding(.top, usesDesignedPresentation ? 6 : 24)
+            .padding(.bottom, usesDesignedPresentation ? 20 : 32)
             .frame(maxWidth: .infinity)
         }
         .background(pageBackground)
         .safeAreaInset(edge: .top, spacing: 0) {
-            if isInspector {
+            if usesContentHeader {
                 inspectorHeader
             }
         }
-        .navigationTitle(isInspector ? "" : (isDM ? "Chat Info" : "Group Info"))
+        .navigationTitle(usesContentHeader ? "" : (isDM ? "Chat Info" : "Group Info"))
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            // Only the inspector root hides native chrome. Pushed destinations restore it.
-            .toolbar(isInspector ? .hidden : .automatic, for: .navigationBar)
+            // Pushed pages restore native navigation chrome and its Back button.
+            .toolbar(usesContentHeader ? .hidden : .automatic, for: .navigationBar)
         #endif
+        .modifier(GroupInfoRootNavigation(hidesModalToolbar: usesContentHeader))
         .toolbar {
-            if !isInspector {
+            if !usesContentHeader {
                 ToolbarItem(placement: .primaryAction) {
                     editLink
                 }
@@ -156,7 +190,7 @@ struct GroupInfoView: View {
         }
         .navigationDestination(isPresented: $showsInvitations) {
             GroupInvitesView(store: store, chatID: chat.id)
-                .modifier(GroupInfoDestinationNavigation(isInspector: isInspector))
+                .modifier(GroupInfoDestinationNavigation())
         }
         .task(id: chat.id) { await loadInfo() }
         .onReceive(store.$groupInfoByChatID) { infos in
@@ -209,30 +243,32 @@ struct GroupInfoView: View {
 
     private var inspectorHeader: some View {
         HStack(spacing: 8) {
-            Text(isDM ? "Chat Info" : "Group Info")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 8)
-            editLink
-                .font(.subheadline.weight(.semibold))
-                .frame(minHeight: 44)
             if let onClose {
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 24, height: 24)
+                        .background(.secondary.opacity(0.09), in: Circle())
+                        .frame(width: 32, height: 36)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close")
                 .accessibilityIdentifier("group-info-close-button")
             }
+            Text(isDM ? "Chat Info" : "Group Info")
+                .font(.subheadline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            editLink
+                .font(.subheadline.weight(.semibold))
+                .frame(minHeight: 36)
         }
         .buttonStyle(.plain)
-        .padding(.leading, 16)
-        .padding(.trailing, 4)
-        .frame(minHeight: 52)
+        .padding(.horizontal, 10)
+        .padding(.top, 4)
+        .frame(minHeight: 44)
         .background(pageBackground)
     }
 
@@ -244,7 +280,7 @@ struct GroupInfoView: View {
                     groupInfo = updated
                     infoRevision += 1
                 }
-                .modifier(GroupInfoDestinationNavigation(isInspector: isInspector))
+                .modifier(GroupInfoDestinationNavigation())
             }
             .foregroundStyle(Color.accentColor)
             .accessibilityIdentifier("group-edit-button")
@@ -253,19 +289,20 @@ struct GroupInfoView: View {
     }
 
     private var hero: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: usesDesignedPresentation ? 3 : 6) {
             AvatarView(
-                url: avatarURL, displayName: displayName, diameter: 104,
+                url: avatarURL, displayName: displayName,
+                diameter: usesDesignedPresentation ? (isDense ? 68 : 84) : 104,
                 isOnline: ChatPresenceDisplay.isOnline(chat, in: store.state)
             )
-            .padding(.bottom, 8)
+            .padding(.bottom, usesDesignedPresentation ? 4 : 8)
             Text(displayName)
-                .font(.title2.weight(.bold))
+                .font(usesDesignedPresentation ? .headline : .title2.weight(.bold))
                 .multilineTextAlignment(.center)
                 .textSelection(.enabled)
             if let subtitle = ChatPresenceDisplay.subtitle(for: chat, in: store.state) {
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(usesDesignedPresentation ? .caption : .subheadline)
                     .foregroundStyle(.secondary)
             }
             if !isInspector, isCurrentSession, !isDM, groupInfo != nil {
@@ -352,14 +389,22 @@ struct GroupInfoView: View {
     }
 
     private var sectionContent: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: usesDesignedPresentation ? 8 : 16) {
             if activeSection == .media {
-                Picker("Media", selection: $selectedMediaKind) {
-                    Text("Images").tag(ChatAttachmentKind.image)
-                    Text("Videos").tag(ChatAttachmentKind.video)
+                if usesDesignedPresentation {
+                    HStack(spacing: 6) {
+                        mediaKindButton("Images", kind: .image)
+                        mediaKindButton("Videos", kind: .video)
+                        Spacer(minLength: 0)
+                    }
+                } else {
+                    Picker("Media", selection: $selectedMediaKind) {
+                        Text("Images").tag(ChatAttachmentKind.image)
+                        Text("Videos").tag(ChatAttachmentKind.video)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             }
 
             // Keep browsers mounted so changing sections preserves each cursor, loaded
@@ -383,6 +428,26 @@ struct GroupInfoView: View {
         }
     }
 
+    private func mediaKindButton(_ title: LocalizedStringKey, kind: ChatAttachmentKind) -> some View
+    {
+        let isSelected = selectedMediaKind == kind
+        return Button {
+            selectedMediaKind = kind
+        } label: {
+            Text(title)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .foregroundStyle(isSelected ? pageBackground : Color.primary)
+                .background(
+                    isSelected ? Color.primary : Color.secondary.opacity(0.08),
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
     private func attachmentSection(_ kind: ChatAttachmentKind, isSelected: Bool) -> some View {
         ChatAttachmentsView(
             store: store, chatID: chat.id, kind: kind, onOpenMessage: onOpenMessage,
@@ -392,10 +457,8 @@ struct GroupInfoView: View {
     }
 
     private var actions: some View {
-        HStack(spacing: isInspector ? 8 : 12) {
-            if !isInspector {
-                profileButton
-            }
+        HStack(spacing: usesDesignedPresentation ? 6 : 12) {
+            profileButton
 
             notificationMenu
 
@@ -407,10 +470,6 @@ struct GroupInfoView: View {
             .disabled(isLeaving)
 
             Menu {
-                if isInspector, peerUID != nil {
-                    profileButton
-                    Divider()
-                }
                 if isDM {
                     if relationship?.isFriend == true {
                         Button(
@@ -464,11 +523,7 @@ struct GroupInfoView: View {
             Button {
                 openUserProfile(peerUID)
             } label: {
-                if isInspector {
-                    Label("Profile", systemImage: "person.crop.circle")
-                } else {
-                    GroupInfoActionLabel(systemImage: "person.crop.circle", title: "Profile")
-                }
+                GroupInfoActionLabel(systemImage: "person.crop.circle", title: "Profile")
             }
             .accessibilityLabel("Profile")
             .accessibilityIdentifier("chat-profile-button")
@@ -736,20 +791,43 @@ struct GroupInfoView: View {
     }
 }
 
-/// Navigation-bar visibility is scoped to each pushed page, never the parent stack.
-private struct GroupInfoDestinationNavigation: ViewModifier {
-    let isInspector: Bool
+private struct GroupInfoRootNavigation: ViewModifier {
+    let hidesModalToolbar: Bool
+    #if os(macOS)
+        @Environment(\.chatInfoIsModal) private var chatInfoIsModal
+    #endif
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        #if os(iOS)
-            if isInspector {
-                content.toolbar(.visible, for: .navigationBar)
+        #if os(macOS)
+            if chatInfoIsModal && hidesModalToolbar {
+                content.toolbar(.hidden, for: .windowToolbar)
             } else {
+                // Inline inspectors must not change the owning app window’s toolbar.
                 content
             }
         #else
             content
+        #endif
+    }
+}
+
+/// Navigation-bar visibility is scoped to each pushed page, never the parent stack.
+private struct GroupInfoDestinationNavigation: ViewModifier {
+    #if os(macOS)
+        @Environment(\.chatInfoIsModal) private var chatInfoIsModal
+    #endif
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        #if os(iOS)
+            content.toolbar(.visible, for: .navigationBar)
+        #else
+            if chatInfoIsModal {
+                content.toolbar(.visible, for: .windowToolbar)
+            } else {
+                content
+            }
         #endif
     }
 }
@@ -785,30 +863,53 @@ private struct GroupInfoActionLabel: View {
     let title: LocalizedStringKey
     var isProgressing = false
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.isWideChatLayout) private var isWideChatLayout
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    private var usesDesignedPresentation: Bool {
+        #if os(macOS)
+            true
+        #else
+            horizontalSizeClass == .regular
+        #endif
+    }
+
+    private var iconSize: CGFloat {
+        #if os(macOS)
+            15
+        #else
+            usesDesignedPresentation ? 18 : 22
+        #endif
+    }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: usesDesignedPresentation ? 4 : 6) {
             if isProgressing {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(height: isWideChatLayout ? 22 : 24)
+                    .frame(height: usesDesignedPresentation ? 20 : 24)
             } else {
                 Image(systemName: systemImage)
-                    .font(.system(size: isWideChatLayout ? 18 : 22, weight: .medium))
-                    .frame(height: isWideChatLayout ? 22 : 24)
+                    .font(.system(size: iconSize, weight: .medium))
+                    .frame(height: usesDesignedPresentation ? 20 : 24)
             }
             Text(title)
-                .font(isWideChatLayout ? .caption.weight(.medium) : .subheadline.weight(.medium))
+                .font(
+                    usesDesignedPresentation
+                        ? .caption.weight(.medium) : .subheadline.weight(.medium)
+                )
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .foregroundStyle(Color.accentColor)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, isWideChatLayout ? 10 : 12)
-        .contentShape(RoundedRectangle(cornerRadius: isWideChatLayout ? 12 : 18))
-        // The wide pane uses denser tiles; compact presentation retains its original sizing.
+        .padding(.vertical, usesDesignedPresentation ? 8 : 12)
+        .contentShape(RoundedRectangle(cornerRadius: usesDesignedPresentation ? 9 : 18))
         .background(
-            ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
-            in: RoundedRectangle(cornerRadius: isWideChatLayout ? 12 : 18))
+            usesDesignedPresentation && colorScheme == .light
+                ? .white : ChahuaTheme.ChatBubble.incomingBackground(for: colorScheme),
+            in: RoundedRectangle(cornerRadius: usesDesignedPresentation ? 9 : 18))
     }
 }
 

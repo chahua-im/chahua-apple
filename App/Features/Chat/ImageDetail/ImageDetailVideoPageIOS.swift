@@ -42,6 +42,7 @@
         private var failed = false
         private var presentingFullScreen = false
         private var tornDown = false
+        private var playbackHandoffGeneration = 0
         var mayInteract: (() -> Bool)?
 
         var isAtFit: Bool { true }
@@ -119,6 +120,7 @@
         func tearDown() {
             guard !tornDown else { return }
             tornDown = true
+            playbackHandoffGeneration += 1
             NotificationCenter.default.removeObserver(self)
             cancelDownload()
             statusObservation?.cancel()
@@ -154,6 +156,7 @@
         }
 
         private func applyPlayback() {
+            playbackHandoffGeneration += 1
             // While AVKit presents full screen the viewer reports itself hidden; playback
             // belongs to that presentation until it ends.
             guard !tornDown, !presentingFullScreen else { return }
@@ -164,9 +167,20 @@
                 return
             }
             guard autoplayPending, !failed, let player else { return }
-            autoplayPending = false
-            ImageDetailVideoAudioSession.activate(owner: audioSessionOwner)
-            player.play()
+            let generation = playbackHandoffGeneration
+            // Page selection/appearance can run in SwiftUI's controller update.
+            // Audio ownership stops the observed voice player, so hand off the
+            // complete autoplay transaction after native layout has returned.
+            DispatchQueue.main.async { [weak self, weak player] in
+                guard let self, let player, playbackHandoffGeneration == generation,
+                    !tornDown, !presentingFullScreen, visible, selected,
+                    autoplayPending, !failed, self.player === player,
+                    UIApplication.shared.applicationState == .active
+                else { return }
+                autoplayPending = false
+                ImageDetailVideoAudioSession.activate(owner: audioSessionOwner)
+                player.play()
+            }
         }
 
         private func load() {

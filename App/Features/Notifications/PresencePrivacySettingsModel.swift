@@ -37,7 +37,7 @@ final class PresencePrivacySettingsModel: ObservableObject {
     }
 
     var canSave: Bool {
-        loadPhase == .loaded && baseline != nil && visibility != nil && !isSaving
+        isDirty && baseline != nil && visibility != nil && !isSaving
     }
 
     /// Reopening during a save keeps its selection visible until the write completes.
@@ -74,6 +74,12 @@ final class PresencePrivacySettingsModel: ObservableObject {
             return
         }
         visibility = value
+        saveError = nil
+    }
+
+    func revert() {
+        guard loadPhase == .loaded, !isSaving else { return }
+        visibility = baseline
         saveError = nil
     }
 
