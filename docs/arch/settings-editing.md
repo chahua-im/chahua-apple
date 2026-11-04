@@ -8,6 +8,7 @@ Applies to the account-wide **Friend Request Permission**, **Read Receipts**, **
 
 - macOS and regular-width iPad use the shared `SettingsSplitNavigationView`: account summary and categories on the left, page content on the right, Close at the top and Sign out at the bottom. macOS uses denser rows and a 268pt sidebar; iPad uses touch-sized rows and a 300pt sidebar. Narrow presentations reduce the sidebar width.
 - Compact iOS pushes into the existing Settings navigation; do not open a second pop-up sheet. Retain its inline title and native Back/swipe navigation.
+- The settings list ends with a centered, secondary-grey `version (build)` footer sourced from `AppConfiguration.version` (the bundle's `CFBundleShortVersionString` and `CFBundleVersion`). On macOS it is the final item inside the scrollable category area, above the separately pinned Sign out region. iPad keeps it below the pinned Sign out row; compact iOS uses that section's footer. It is informational, not another settings destination.
 - Keep a local draft and the last successfully loaded or persisted values. Editing must not write to the server or local preferences. Compare against that baseline to determine whether there are unsaved changes; reverting to the baseline removes the dirty state.
 - Load and save errors retain a useful Retry action. Do not treat an unavailable or failed initial load as editable default data.
 
@@ -46,6 +47,8 @@ This is a behavioral convention and reference implementation, not a requirement 
 ## Sign-out confirmation
 
 Sign out presents a native confirmation alert naming the account. Cancel does nothing; only the destructive confirmation invokes sign-out. The request is scoped to its account/session and is dismissed on account/session replacement. While signing out or unregistering notifications, repeat requests are disabled. The button owns its confirmation state so it works inside either platform's settings scaffold.
+
+Compact iOS leaves Sign out label sizing to the standard List row instead of adding a 44pt label minimum on top of native row insets. The standalone iPad sidebar button retains a 44pt target without extra vertical padding; macOS keeps its desktop sizing.
 
 ## Verification checklist
 

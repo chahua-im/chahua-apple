@@ -65,6 +65,12 @@ struct SettingsSplitNavigationView: View {
                     categorySection("Privacy and Security", pages: SettingsPage.privacyPages)
                     categorySection("Stickers", pages: SettingsPage.stickerPages)
                     categorySection("Notifications", pages: [.notifications])
+                    #if os(macOS)
+                        settings.appVersionFooter
+                            .padding(.horizontal, 16)
+                            .padding(.top, 16)
+                            .padding(.bottom, 8)
+                    #endif
                 }
                 .padding(.bottom, 8)
             }
@@ -75,7 +81,12 @@ struct SettingsSplitNavigationView: View {
                 .buttonStyle(.plain)
                 .font(.system(size: metrics.rowFontSize, weight: .medium))
                 .padding(.horizontal, compact ? 18 : 20)
-                .padding(.vertical, 8)
+                .padding(.vertical, compact ? 8 : 0)
+            #if os(iOS)
+                settings.appVersionFooter
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            #endif
         }
         .disabled(protectsEditorEdits)
         .background(

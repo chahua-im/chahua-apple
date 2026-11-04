@@ -74,6 +74,8 @@
                     }
                     Section {
                         settings.signOutRow
+                    } footer: {
+                        settings.appVersionFooter
                     }
                 }
                 .listStyle(.insetGrouped)

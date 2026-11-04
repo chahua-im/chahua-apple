@@ -151,6 +151,14 @@ struct NotificationSettingsView: View {
         }
     }
 
+    var appVersionFooter: some View {
+        Text(verbatim: "\(AppConfiguration.version.number) (\(AppConfiguration.version.build))")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("settings-app-version")
+    }
+
     @ViewBuilder
     func accountSummary(transitionTarget: Bool = true) -> some View {
         if usesHeroLayout {
@@ -629,6 +637,7 @@ private struct SettingsSignOutButton: View {
     let sessionRevision: Int
     let isBusy: Bool
     let onSignOut: () -> Void
+    @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
 
     private struct Request {
         let accountID: Int32
@@ -646,7 +655,7 @@ private struct SettingsSignOutButton: View {
                 #if os(macOS)
                     .frame(minHeight: 32)
                 #else
-                    .frame(minHeight: 44)
+                    .frame(minHeight: usesSplitLayout ? 44 : nil)
                 #endif
                 .contentShape(Rectangle())
         }

@@ -19,6 +19,19 @@ enum AppConfiguration {
         return ChahuaConfiguration(baseURL: baseURL, appVersion: appVersionHeader)
     }()
 
+    static let version: (number: String, build: String) = {
+        guard
+            let number = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                as? String,
+            !number.isEmpty,
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+            !build.isEmpty
+        else {
+            preconditionFailure("App version or build number is missing.")
+        }
+        return (number, build)
+    }()
+
     private static var appVersionHeader: String {
         #if os(iOS)
             let platform = "ios"
@@ -28,15 +41,6 @@ enum AppConfiguration {
             #error("Unsupported Chahua platform")
         #endif
 
-        guard
-            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
-                as? String,
-            !version.isEmpty,
-            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-            !build.isEmpty
-        else {
-            preconditionFailure("App version or build number is missing.")
-        }
-        return "\(platform)-\(version)-\(build)"
+        return "\(platform)-\(version.number)-\(version.build)"
     }
 }
