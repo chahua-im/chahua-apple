@@ -739,7 +739,7 @@
         private var overlay = false
         private var failureAction: (() -> Void)?
         private var failureButton: TimelineFailureButton?
-        private let statusHost = TimelineDeliveryStatusHost(frame: .zero)
+        private let statusHost = TimelineDeliveryStatusView(frame: .zero)
 
         override init(frame: CGRect) {
             super.init(frame: frame)

@@ -22,8 +22,8 @@
         private let pendingSurface = TimelineMenuSurface(cornerRadius: 14)
         private let progress = NSProgressIndicator()
         private let sourceHighlight = CAShapeLayer()
-        private var pickerHost: NSHostingView<ReactionEmojiKeyboard>?
-        private var pickerPlaceholderHost: NSHostingView<ReactionPickerPlaceholder>?
+        private var pickerView: TimelineReactionPickerView?
+        private var pickerPlaceholder: TimelineReactionPickerPlaceholder?
         private var pickerPopover: NSPopover?
         private var reactionEligibility: MessageReactionEligibility?
         var isShowingReactionPicker: Bool { pickerPopover != nil }
@@ -262,11 +262,11 @@
                 blockButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
             revokeButton.setAccessibilityHelp(
                 revokeButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
-            if let pickerHost {
+            if let pickerView {
                 reactionSurface.isHidden = true
                 scrollView.isHidden = true
                 progress.stopAnimation(nil)
-                pickerHost.rootView = pickerContent(eligibility: eligibility)
+                pickerView.update(eligibility: eligibility)
             }
             needsLayout = true
             layoutSubtreeIfNeeded()
@@ -318,7 +318,7 @@
             sourceHighlight.path = CGPath(
                 roundedRect: source.insetBy(dx: -3, dy: -3),
                 cornerWidth: 14, cornerHeight: 14, transform: nil)
-            if let placeholder = pickerPlaceholderHost {
+            if let placeholder = pickerPlaceholder {
                 layoutReactionPlaceholder(placeholder)
                 return
             }
@@ -387,8 +387,8 @@
         /// an application-wide key equivalent handler or consuming Command shortcuts.
         @discardableResult
         func focusNext(backward: Bool) -> Bool {
-            // Let AppKit/SwiftUI traverse the hosted category and emoji controls.
-            // The native menu's flat button list must not consume their Tab events.
+            // Let AppKit traverse the native category, search and emoji controls.
+            // The menu's flat button list must not consume their Tab events.
             guard !isShowingReactionPicker else { return false }
             var controls = reactionButtons.prefix(activeReactionCount).filter {
                 $0.isEnabled && !$0.isHidden
@@ -464,9 +464,11 @@
             pickerPopover?.close()
             pickerPopover?.contentViewController = nil
             pickerPopover = nil
-            pickerHost = nil
-            pickerPlaceholderHost?.removeFromSuperview()
-            pickerPlaceholderHost = nil
+            pickerView?.deactivate()
+            pickerView = nil
+            pickerPlaceholder?.onClose = nil
+            pickerPlaceholder?.removeFromSuperview()
+            pickerPlaceholder = nil
             reactionEligibility = nil
             nextKeyView = nil
             sourceHighlight.path = nil
@@ -483,7 +485,7 @@
         /// switch to an unrelated chat window.
         func ownsInteractionWindow(_ candidate: NSWindow?) -> Bool {
             guard let candidate else { return false }
-            return candidate === window || candidate === pickerHost?.window
+            return candidate === window || pickerView?.ownsInteractionWindow(candidate) == true
         }
 
         func popoverDidClose(_ notification: Notification) {
@@ -501,29 +503,28 @@
                 reactionEligibility.canReact, !reactionEligibility.isReacting,
                 window != nil
             else { return }
-            // This frame-view overlay sits above SwiftUI and the native title bar.
-            // SwiftUI's popover presenter cannot attach to that native anchor.
-            // NSPopover supplies a real pointer, window chrome and transient focus
-            // while leaving the original timeline message readable and unmoved.
-            let placeholder = NSHostingView(
-                rootView: ReactionPickerPlaceholder(
-                    onClose: { [weak self] in self?.onDismiss?() }))
-            placeholder.sizingOptions = []
-            placeholder.setAccessibilityIdentifier("reaction-picker-anchor")
-            pickerPlaceholderHost = placeholder
+            // A real native popover attaches to the frame-view overlay while
+            // preserving the readable, unmoved source message underneath it.
+            let placeholder = TimelineReactionPickerPlaceholder(frame: .zero)
+            placeholder.onClose = { [weak self] in self?.onDismiss?() }
+            pickerPlaceholder = placeholder
             addSubview(placeholder)
 
-            let host = NSHostingView(rootView: pickerContent(eligibility: reactionEligibility))
-            host.sizingOptions = []
-            host.autoresizingMask = [.width, .height]
+            let picker = TimelineReactionPickerView(eligibility: reactionEligibility)
+            picker.onSelect = { [weak self] emoji in
+                guard let self, !self.isCleared else { return }
+                self.onReaction?(emoji)
+            }
+            picker.onClose = { [weak self] in self?.onDismiss?() }
+            picker.autoresizingMask = [.width, .height]
             let controller = NSViewController()
-            controller.view = host
+            controller.view = picker
             let popover = NSPopover()
             popover.behavior = .transient
             popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
             popover.contentViewController = controller
             popover.delegate = self
-            pickerHost = host
+            pickerView = picker
             pickerPopover = popover
             reactionSurface.isHidden = true
             scrollView.isHidden = true
@@ -534,11 +535,12 @@
             popover.show(
                 relativeTo: placeholder.bounds, of: placeholder,
                 preferredEdge: above ? .minY : .maxY)
-            host.window?.recalculateKeyViewLoop()
+            picker.window?.recalculateKeyViewLoop()
+            picker.focusSearch()
         }
 
         private func layoutReactionPlaceholder(
-            _ placeholder: NSHostingView<ReactionPickerPlaceholder>
+            _ placeholder: TimelineReactionPickerPlaceholder
         ) {
             let usable = bounds.insetBy(dx: 16, dy: 16)
             let size = min(76, max(1, min(usable.width, usable.height)))
@@ -574,17 +576,6 @@
                     relativeTo: placeholder.bounds, of: placeholder,
                     preferredEdge: opensAbove ? .minY : .maxY)
             }
-        }
-
-        private func pickerContent(eligibility: MessageReactionEligibility)
-            -> ReactionEmojiKeyboard
-        {
-            ReactionEmojiKeyboard(
-                eligibility: eligibility,
-                onSelect: { [weak self] emoji in
-                    guard let self, !self.isCleared else { return }
-                    self.onReaction?(emoji)
-                })
         }
 
         private func reactionHint(eligibility: MessageReactionEligibility, hasCallback: Bool)

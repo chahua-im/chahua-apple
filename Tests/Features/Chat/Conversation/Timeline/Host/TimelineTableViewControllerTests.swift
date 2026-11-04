@@ -77,7 +77,7 @@
             }
         }
 
-        func testOpeningWithStructuralHeaderAndPinLandsAtLatestMessage() async throws {
+        func testFloatingHeaderAndPinPreserveLatestAndOldestMessageAccess() async throws {
             let page = try TimelineTestFixtures.page(
                 (0..<80).map {
                     try TimelineTestFixtures.message(
@@ -151,20 +151,21 @@
             defer { window.close() }
             host.view.layoutSubtreeIfNeeded()
             await model.loadInitial()
-            // Allow SwiftUI to mount the structurally reserved chrome and composer inset.
+            // Let measured floating chrome settle before checking usable scroll limits.
             try await Task.sleep(for: .milliseconds(200))
             host.view.layoutSubtreeIfNeeded()
             let scroll = try XCTUnwrap(timelineScrollView(in: host.view))
             let table = try XCTUnwrap(scroll.documentView as? NSTableView)
             XCTAssertEqual(table.numberOfRows, model.rows.count)
             XCTAssertGreaterThan(scroll.documentVisibleRect.height, 0)
-            XCTAssertEqual(scroll.contentInsets.top, 0)
             XCTAssertEqual(pinFrame.height, 36, accuracy: 1)
             XCTAssertGreaterThanOrEqual(pinFrame.minY, headerFrame.maxY)
-            XCTAssertGreaterThanOrEqual(timelineFrame.minY, pinFrame.maxY + 12)
-            XCTAssertEqual(
-                scroll.bounds.height, timelineFrame.height, accuracy: 1,
-                "The native scroll viewport must occupy only the space below header and pin.")
+            XCTAssertLessThan(timelineFrame.minY, headerFrame.maxY)
+            XCTAssertLessThan(timelineFrame.minY, pinFrame.minY)
+            XCTAssertGreaterThanOrEqual(
+                scroll.contentInsets.top, pinFrame.maxY - timelineFrame.minY,
+                "Scrollable clearance must include both floating bars.")
+            XCTAssertEqual(scroll.bounds.height, timelineFrame.height, accuracy: 1)
             XCTAssertEqual(
                 table.bounds.maxY, scroll.documentVisibleRect.maxY - scroll.contentInsets.bottom,
                 accuracy: 1,
@@ -191,6 +192,42 @@
             XCTAssertEqual(
                 scroller.doubleValue, 1, accuracy: 0.001,
                 "At the latest message, the indicator must be at the bottom of its track.")
+
+            // Mid-history rows physically occupy the area behind the floating bars.
+            let middle = try XCTUnwrap(
+                model.rows.firstIndex { $0.messageID == MessageID(40) })
+            model.userScrollBegan()
+            let middleFrame = table.rect(ofRow: middle)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: middleFrame.minY))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            NotificationCenter.default.post(
+                name: NSScrollView.didLiveScrollNotification, object: scroll)
+            try await Task.sleep(for: .milliseconds(50))
+            XCTAssertLessThan(
+                middleFrame.minY,
+                scroll.documentVisibleRect.minY + scroll.contentInsets.top)
+            XCTAssertGreaterThan(middleFrame.maxY, scroll.documentVisibleRect.minY)
+            let bitmap = try XCTUnwrap(
+                host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+            host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+            let image = NSImage(size: host.view.bounds.size)
+            image.addRepresentation(bitmap)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Floating title and pin over scrolled messages"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+
+            // Top clearance belongs to scrollable content, not a clipped layout row.
+            var proposed = scroll.contentView.bounds
+            proposed.origin.y = -10_000
+            scroll.contentView.scroll(
+                to: scroll.contentView.constrainBoundsRect(proposed).origin)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await Task.sleep(for: .milliseconds(50))
+            XCTAssertGreaterThanOrEqual(
+                table.rect(ofRow: 0).minY,
+                scroll.documentVisibleRect.minY + scroll.contentInsets.top - 1,
+                "Even the oldest content must be fully reachable beneath the header.")
         }
 
         func testSelectingAnotherMessageClearsPreviousBubbleSelection() async throws {
@@ -265,7 +302,7 @@
             XCTAssertEqual(pasteboard.string(forType: .string), "second")
         }
 
-        func testUnreadMarkerAndReadTrackingRespectViewportAndFloatingComposer() async throws {
+        func testUnreadMarkerAndReadTrackingRespectViewportAndFloatingChrome() async throws {
             let messages = try (0..<16).map {
                 try TimelineTestFixtures.message(
                     id: UInt64($0 + 1), senderID: 2, at: $0, text: "Visible message \($0)")
@@ -286,6 +323,7 @@
                 markRead: { reads.append($0) }
             )
             let controller = TimelineTableViewController(model: model)
+            controller.headerInset = 96
             controller.composerInset = 80
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
@@ -312,7 +350,7 @@
             marker.layoutSubtreeIfNeeded()
             XCTAssertEqual(
                 table.rect(ofRow: markerIndex).minY,
-                scroll.documentVisibleRect.minY, accuracy: 1)
+                scroll.documentVisibleRect.minY + controller.headerInset, accuracy: 1)
 
             model.updateReadState(unreadCount: 5, lastReadMessageID: messages[10].id)
             await model.jumpTowardLatest()
@@ -343,13 +381,13 @@
                 window.setContentSize(
                     NSSize(
                         width: 400,
-                        height: bottom - top + controller.composerInset))
+                        height: bottom - top + controller.headerInset + controller.composerInset))
                 controller.view.layoutSubtreeIfNeeded()
                 controller.viewDidLayout()
                 try await waitForDisplay(controller, model: model)
                 NotificationCenter.default.post(
                     name: NSScrollView.willStartLiveScrollNotification, object: scroll)
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: top))
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: top - controller.headerInset))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 NotificationCenter.default.post(
                     name: NSScrollView.didLiveScrollNotification, object: scroll)
@@ -1657,6 +1695,160 @@
             queries.append(query)
             guard !pages.isEmpty else { throw CocoaError(.fileReadUnknown) }
             return pages.removeFirst()
+        }
+    }
+#endif
+
+#if os(macOS)
+    extension TimelineTableViewControllerTests {
+        func testFloatingHeaderClearancePreservesLatestAndReadableHistoryAnchor() async throws {
+            let page = try TimelineTestFixtures.page(
+                (0..<80).map {
+                    try TimelineTestFixtures.message(
+                        id: UInt64($0), senderID: 2, at: $0,
+                        text: String(repeating: "Floating header history anchor. ", count: 4))
+                })
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: HistorySource(initial: page, older: page),
+                messageStore: ConversationMessageStore())
+            let controller = TimelineTableViewController(model: model)
+            controller.headerInset = 110
+            controller.composerInset = 70
+            controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
+            let window = mountForDisplay(controller)
+            defer {
+                model.close()
+                window.close()
+            }
+            await model.loadInitial()
+            let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
+            let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+            for inset: CGFloat in [146, 86, 110] {
+                controller.headerInset = inset
+                controller.view.layoutSubtreeIfNeeded()
+                controller.viewDidLayout()
+                try await waitForDisplay(controller, model: model) {
+                    abs(
+                        table.bounds.maxY - scroll.documentVisibleRect.maxY
+                            + controller.composerInset) <= 1
+                }
+                XCTAssertTrue(model.state.live.followsLatest)
+            }
+
+            model.userScrollBegan()
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: -controller.headerInset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            NotificationCenter.default.post(
+                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+            let first = try XCTUnwrap(model.rows.firstIndex { $0.messageID != nil })
+            XCTAssertGreaterThanOrEqual(
+                table.rect(ofRow: first).minY,
+                scroll.documentVisibleRect.minY + controller.headerInset)
+
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(40) })
+            scroll.contentView.scroll(
+                to: NSPoint(
+                    x: 0, y: table.rect(ofRow: index).minY + 12 - controller.headerInset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            NotificationCenter.default.post(
+                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+            let offset =
+                table.rect(ofRow: index).minY
+                - scroll.documentVisibleRect.minY - controller.headerInset
+            let heights = model.rows.indices.map { table.rect(ofRow: $0).height }
+            for inset: CGFloat in [146, 86, 110, 0] {
+                controller.headerInset = inset
+                controller.view.layoutSubtreeIfNeeded()
+                controller.viewDidLayout()
+                try await waitForDisplay(controller, model: model) {
+                    abs(
+                        table.rect(ofRow: index).minY - scroll.documentVisibleRect.minY
+                            - controller.headerInset - offset) <= 1
+                }
+                XCTAssertEqual(scroll.bounds.height, 400, accuracy: 1)
+                XCTAssertEqual(model.rows.indices.map { table.rect(ofRow: $0).height }, heights)
+                XCTAssertFalse(model.state.live.followsLatest)
+            }
+        }
+
+        func testMessageAndReadBoundaryRevealsUseUnobscuredHeaderViewport() async throws {
+            let page = try TimelineTestFixtures.page(
+                (0..<80).map {
+                    try TimelineTestFixtures.message(id: UInt64($0), senderID: 2, at: $0)
+                })
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: HistorySource(initial: page, older: page),
+                messageStore: ConversationMessageStore())
+            let controller = TimelineTableViewController(model: model)
+            controller.headerInset = 120
+            controller.composerInset = 60
+            controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
+            let window = mountForDisplay(controller)
+            defer {
+                model.close()
+                window.close()
+            }
+            await model.loadInitial()
+            try await waitForDisplay(controller, model: model)
+            let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
+            let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+            let index = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(40) })
+            await model.jumpToMessage(MessageID(40))
+            try await waitForDisplay(controller, model: model) {
+                let top = scroll.documentVisibleRect.minY + controller.headerInset
+                let bottom = scroll.documentVisibleRect.maxY - controller.composerInset
+                return model.updates.value.pendingScroll == nil
+                    && abs(table.rect(ofRow: index).midY - (top + bottom) / 2) <= 1
+            }
+            XCTAssertGreaterThanOrEqual(
+                table.rect(ofRow: index).minY,
+                scroll.documentVisibleRect.minY + controller.headerInset)
+            await model.jumpToMessage(MessageID(40), atReadBoundary: true)
+            try await waitForDisplay(controller, model: model) {
+                model.updates.value.pendingScroll == nil
+                    && abs(
+                        table.rect(ofRow: index).maxY - scroll.documentVisibleRect.maxY
+                            + controller.composerInset) <= 1
+            }
+        }
+    }
+#endif
+
+#if os(macOS)
+    extension TimelineTableViewControllerTests {
+        func testShortConversationFitsBetweenFloatingHeaderAndComposer() async throws {
+            let page = try TimelineTestFixtures.page([
+                TimelineTestFixtures.message(id: 1, senderID: 2, at: 1, text: "First"),
+                TimelineTestFixtures.message(id: 2, senderID: 2, at: 2, text: "Second"),
+            ])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: HistorySource(initial: page, older: page),
+                messageStore: ConversationMessageStore())
+            let controller = TimelineTableViewController(model: model)
+            controller.headerInset = 150
+            controller.composerInset = 70
+            controller.view.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
+            let window = mountForDisplay(controller)
+            defer {
+                model.close()
+                window.close()
+            }
+            await model.loadInitial()
+            try await waitForDisplay(controller, model: model)
+            let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
+            let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+            let first = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(1) })
+            let last = try XCTUnwrap(model.rows.firstIndex { $0.messageID == MessageID(2) })
+            XCTAssertGreaterThanOrEqual(
+                table.rect(ofRow: first).minY,
+                scroll.documentVisibleRect.minY + controller.headerInset - 1)
+            XCTAssertLessThanOrEqual(
+                table.rect(ofRow: last).maxY,
+                scroll.documentVisibleRect.maxY - controller.composerInset + 1)
+            XCTAssertTrue(model.state.live.followsLatest)
         }
     }
 #endif

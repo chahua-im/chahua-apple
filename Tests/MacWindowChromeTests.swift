@@ -17,6 +17,7 @@
             window.isReleasedWhenClosed = false
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
+            window.toolbarStyle = .unified
             window.contentViewController = host
             window.orderFront(nil)
             defer { window.close() }
@@ -60,6 +61,10 @@
         private func positions(in window: NSWindow) throws -> [CGPoint] {
             try [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].map { kind in
                 let button = try XCTUnwrap(window.standardWindowButton(kind))
+                XCTAssertFalse(
+                    button.isHiddenOrHasHiddenAncestor,
+                    "Native window controls must remain visible, not merely keep their old frames")
+                XCTAssertGreaterThan(button.alphaValue, 0)
                 let frame = button.convert(button.bounds, to: nil)
                 return CGPoint(x: frame.minX, y: window.frame.height - frame.maxY)
             }
@@ -88,6 +93,7 @@
                     }
                 }
                 .frame(minWidth: 900, minHeight: 600)
+                .modifier(MacConversationWindowChrome())
             }
         }
     }

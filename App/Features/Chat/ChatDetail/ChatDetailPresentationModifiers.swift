@@ -192,6 +192,7 @@ extension ChatDetailView {
         @Binding var systemMessageTarget: MessageResponse?
         @Binding var recordRequest: RecordSelection?
 
+        let onForwardCompleted: () -> Void
         func body(content: Content) -> some View {
             content
                 .sheet(item: $forwardRequest) { request in forwardingPicker(request) }
@@ -215,10 +216,11 @@ extension ChatDetailView {
                 loader = nil
             }
             return ForwardDestinationPicker(
-                store: store, sources: request.sources, loadSources: loader,
-                moveFrom: request.moveFrom, expectedForwardID: request.expectedForwardID
+                store: store, sources: request.sources, sourceTitle: chat.chatDisplayName,
+                loadSources: loader
             ) {
                 request.onPrepared()
+                onForwardCompleted()
             }
         }
     }

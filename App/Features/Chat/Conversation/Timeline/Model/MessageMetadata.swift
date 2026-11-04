@@ -108,7 +108,7 @@ struct MessageMetadata {
     var statusContent: MessageDeliveryStatusContent? {
         guard let status else { return nil }
         return MessageDeliveryStatusContent(
-            status: status, size: statusFontSize, foreground: Color(foreground),
+            status: status, size: statusFontSize, foreground: foreground,
             checkSeparation: checkSeparation, checkHeight: capHeight)
     }
 

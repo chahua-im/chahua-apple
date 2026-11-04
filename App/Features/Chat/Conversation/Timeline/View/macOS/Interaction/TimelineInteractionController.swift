@@ -257,7 +257,7 @@
                 refresh()
                 return
             }
-            // The shared keyboard owns recents for its selections; quick native
+            // The Unicode keyboard owns recents for its selections; quick native
             // reactions still record here. Neither path records selected removals.
             if overlay?.isShowingReactionPicker != true && !eligibility.isSelected(emoji) {
                 let defaults = UserDefaults.standard

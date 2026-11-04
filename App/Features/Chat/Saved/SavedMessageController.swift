@@ -70,7 +70,8 @@ final class SavedMessageController: ObservableObject {
     }
 
     func isSaved(chatID: String, messageID: MessageID) -> Bool {
-        scopes[chatID]?.contains(messageID) == true
+        let key = Key(chatID: chatID, messageID: messageID)
+        return scopeOverrides[key]?.saved ?? (scopes[chatID]?.contains(messageID) == true)
     }
 
     func hasLoaded(chatID: String) -> Bool { scopes[chatID] != nil }
@@ -161,18 +162,43 @@ final class SavedMessageController: ObservableObject {
                 }
                 write(key, saved: false)
             } else {
-                let captured = try await apiClient.saveMessage(messageID: message.id)
-                try checkSession(requestGeneration)
-                mutationVersion &+= 1
-                additions[captured.id] = (mutationVersion, captured)
-                removedIDs.remove(captured.id)
-                items.removeAll { $0.id == captured.id }
-                items.insert(captured, at: 0)
-                write(key, saved: true)
+                try await capture(message, key: key, generation: requestGeneration)
             }
         } catch {
             await report(error, generation: requestGeneration)
         }
+    }
+
+    /// Explicit save is idempotent; forwarding to Saved Messages must never
+    /// toggle an already saved source off. Failures stay in the forward modal.
+    func save(_ message: MessageResponse) async throws {
+        guard accountID != nil else { throw CancellationError() }
+        let key = Key(chatID: message.chatId, messageID: message.id)
+        guard !mutations.contains(key) else { throw APIError.unavailable }
+        if isSaved(chatID: key.chatID, messageID: key.messageID) { return }
+        let requestGeneration = generation
+        mutations.insert(key)
+        defer { if generation == requestGeneration { mutations.remove(key) } }
+        do {
+            try await capture(message, key: key, generation: requestGeneration)
+        } catch {
+            if generation == requestGeneration, case APIError.invalidToken = error {
+                await onInvalidToken()
+            }
+            throw error
+        }
+    }
+
+    private func capture(_ message: MessageResponse, key: Key, generation request: Int) async throws
+    {
+        let captured = try await apiClient.saveMessage(messageID: message.id)
+        try checkSession(request)
+        mutationVersion &+= 1
+        additions[captured.id] = (mutationVersion, captured)
+        removedIDs.remove(captured.id)
+        items.removeAll { $0.id == captured.id }
+        items.insert(captured, at: 0)
+        write(key, saved: true)
     }
 
     func remove(_ item: SavedMessageResponse) async -> Bool {

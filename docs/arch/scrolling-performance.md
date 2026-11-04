@@ -2,6 +2,13 @@
 
 [Documentation index](../README.md) · [Profiling builds](../development.md#profiling-builds)
 
+## Native timeline component boundary
+
+Delivery indicators draw directly in AppKit/UIKit with shared check geometry and native layer-backed sending animation; neither live delivery hosts nor offscreen SwiftUI raster hosts remain. macOS jump/FAB controls and the full reaction picker are native AppKit. The iOS message interaction preview, quick reactions, action grid, and full emoji picker use a native controller attached to the source window. Catalog/search/recents and eligibility remain shared. Voice playback is the explicit remaining nested SwiftUI component inside native timeline rows and their previews; the app's outer SwiftUI scene is unchanged.
+
+Native window/controller smokes exercised the AppKit controls and UIKit overlay/search/selection/escape paths and captured their rendered surfaces. These checks establish native presentation and interactions, not a measured scrolling FPS gain. Compare optimized physical-device traces before attributing residual hitches to these components.
+
+
 The shared chat list memoizes its ordered items and conversation-state references using complete chat/thread payloads, scope/archive preferences, and draft activity. Unrelated store or swipe-state updates reuse that projection; stable-ID edits, badges, membership changes, and draft removal still invalidate it. Genuine changes build one projection buffer and sort it in place, without intermediate filtered or decorated arrays.
 
 DM avatar mount/unmount changes use a dedicated transport invalidation stream rather than `ChatStore`'s UI change publisher. Scrolling peers into or out of view updates the presence watch without rebuilding the whole list for unchanged chat data. Accepted server presence snapshots still publish visible state, preserving online dots, overlapping statuses during watch refresh, and last-seen label aging.
@@ -97,7 +104,7 @@ The supplied third device run confirmed that WebP decoding moved off main, but S
 - Conversation-state watch scope is transport-only, like presence scope: its dedicated signal still schedules websocket watches without invalidating every store-observing view.
 - Chat detail observes only its current permissions, matching thread reply count and account/session projection, plus existing independent feature controllers. Thread identifiers are parsed once rather than formatted for every list-state comparison.
 - The parent route has an equality boundary over presentation/routing metadata, not unread counters or previews. Automatic unread positioning reads the current cache on appearance/open. Explicit anchors and account/reset identity still remount; normal metadata edits preserve the timeline and draft.
-- Shell navigation environment closures have stable identity with refreshed imperative targets. Recreating these closures on every shell update bypassed route equality through environment dependencies. Targets are cleared on disappearance/sign-out and rebound on appearance; asynchronous forward routing rechecks the live target and account fence.
+- Shell navigation environment closures have stable identity with refreshed imperative targets. Recreating these closures on every shell update bypassed route equality through environment dependencies. Profile/invite targets are cleared on disappearance/sign-out and rebound on appearance. Forwarding remains inside its modal and has no shell navigation target.
 
 Accepted paired smokes: `.ci/Iter2-before4-native.xcresult` and `.ci/Iter2-after5-native.xcresult`, one passed each, with matching local Time Profiler/Points of Interest traces. Both mount the actual `AuthenticatedShell`, navigate through its notification route, and scroll the actual detail screen with 120 conversations and 180 messages. The workload includes Markdown/code, real mixed-aspect 1/2/4/6/9-photo attachments, captionless photos and 120-line captions. Three phases each process 120 display-tick steps: identical snapshots, real changes in an unrelated conversation, then genuine active-conversation unread/message edits.
 
@@ -127,7 +134,7 @@ Final integration: `.ci/Iter2-iOS-final.xcresult` passed 430 tests after tempora
 
 ## macOS native timeline iteration
 
-Static delivery indicators retain their shared SwiftUI graph while native clipping/hiding conceals recycled rows. Only the sending spinner mounts/unmounts with visibility, so offscreen animations still stop. Rebinding an unchanged decoration compares every visual input before replacing its hosting root. Code attachments synchronize when applied text/geometry changes or selection resets, not again during native layout. Text selection and current link callbacks retain their existing update path.
+In this historical iteration, static delivery indicators retained their shared SwiftUI graph while native clipping/hiding concealed recycled rows. Only the sending spinner mounted/unmounted with visibility. This delivery-host implementation is superseded by the native component boundary above; the measurements below describe the earlier iteration. Code attachments synchronize when applied text/geometry changes or selection resets, not again during native layout. Text selection and current link callbacks retain their existing update path.
 
 Animated native jumps use a separate `TimelineDisplayScheduler` instead of a 16ms sleep loop. This keeps animation writes aligned with the view's display without replacing the table-install scheduler's pending transaction. Elapsed-time easing, generation fences, user-scroll cancellation and height-settlement completion remain intact.
 
@@ -157,7 +164,7 @@ Resolved CPU samples put work in native row binding and repeated environment/ins
 This iteration changes macOS only:
 
 - Sidebar swipe content stays in its original SwiftUI tree. A non-sizing native overlay retains phased wheel/momentum and mouse-pan arbitration, circular buttons and accessibility. The nested `NSHostingView`/`AnyView` and synchronous `fittingSize` measurement are removed.
-- Static delivery icons use a 64-entry bounded cache of snapshots from the canonical shared SwiftUI renderer. One offscreen host renders misses with the local native appearance; only sending retains a per-row live animation host. Keys include fitted size, backing scale, appearance and resolved colors.
+- At this historical trace iteration, static delivery icons used a 64-entry bounded cache of snapshots from the canonical shared SwiftUI renderer, with an offscreen miss-rendering host and per-row sending-animation hosts. Native drawing and layer-backed animation have since replaced both, as described above; the following comparison measures the cache iteration, not the later native cutover.
 - Code view reuse retains native TextKit graphs and pools at most four emptied code views per text surface. Identity changes reset selection and horizontal offset even when the attachment object is unchanged. Unchanged-message updates preserve interaction.
 - Layout-environment lookup reuses unchanged font/locale results. Geometry, text-size choice, language, avatar/detail/selection settings and layout direction remain in its identity; locale/time-zone notifications invalidate it. Viewport/read and clipped-media reporting are not throttled.
 

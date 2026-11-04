@@ -15,6 +15,7 @@
             let unreadReactionCount: Int
             let activityJumpInProgress: Bool
             let badgeColor: ConversationUnreadBadgeColor
+            let headerInset: CGFloat
             let composerInset: CGFloat
         }
 
@@ -36,9 +37,9 @@
         private let repositionFailure = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
         private let reconciliationFailure = TimelineBannerView(
             cornerRadius: ChahuaTheme.Radius.small)
-        // The native table requires an AppKit overlay to preserve its scroll geometry;
-        // only the small navigation stack is hosted, not individual message rows.
-        private var jumpControl: NSHostingView<TimelineNavigationControls>?
+        // The native table owns this overlay and its hit region; retained AppKit
+        // controls avoid a SwiftUI graph refresh on viewport-only changes.
+        private let jumpControl = TimelineNativeNavigationControls()
         private var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
         private(set) var showsTable = false
         override var isFlipped: Bool { true }
@@ -52,6 +53,10 @@
                 child.isHidden = true
                 addSubview(child)
             }
+            addSubview(jumpControl)
+            jumpControl.onLatest = { [weak self] in self?.perform(.jump) }
+            jumpControl.onMention = { [weak self] in self?.perform(.mention) }
+            jumpControl.onReaction = { [weak self] in self?.perform(.reaction) }
             initialFailure.onRetry = { [weak self] in self?.perform(.initial) }
             initialBanner.onAction = { [weak self] in self?.perform(.initial) }
             olderEdge.onRetry = { [weak self] in self?.model?.retryOlder() }
@@ -62,7 +67,8 @@
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func update(model: ConversationTimelineModel, composerInset: CGFloat) {
+        func update(model: ConversationTimelineModel, headerInset: CGFloat, composerInset: CGFloat)
+        {
             if self.model !== model {
                 cancelPendingActions()
                 self.model = model
@@ -77,7 +83,9 @@
                         guard let self, let model else { return }
                         self.viewportShowsJumpToLatest = showsJumpToLatest
                         guard let presentation = self.presentation else { return }
-                        self.update(model: model, composerInset: presentation.composerInset)
+                        self.update(
+                            model: model, headerInset: presentation.headerInset,
+                            composerInset: presentation.composerInset)
                     }
             }
             let next = Presentation(
@@ -87,7 +95,7 @@
                 unreadMentionCount: model.unreadMentionJumpCount,
                 unreadReactionCount: model.unreadReactionJumpCount,
                 activityJumpInProgress: model.activityJumpInProgress,
-                badgeColor: badgeColor, composerInset: composerInset)
+                badgeColor: badgeColor, headerInset: headerInset, composerInset: composerInset)
             guard presentation != next else { return }
             presentation = next
             let state = next.state
@@ -142,26 +150,12 @@
             } else {
                 reconciliationFailure.hide()
             }
-            let controls = TimelineNavigationControls(
-                showsJumpToLatest: next.showsJumpToLatest,
-                unreadMessageCount: next.unreadMessageCount,
-                unreadMentionCount: next.unreadMentionCount,
-                unreadReactionCount: next.unreadReactionCount,
-                isBusy: next.activityJumpInProgress || isRepositioning,
-                badgeColor: next.badgeColor,
-                jumpToLatest: { [weak self] in self?.perform(.jump) },
-                jumpToMention: { [weak self] in self?.perform(.mention) },
-                jumpToReaction: { [weak self] in self?.perform(.reaction) })
-            if let jumpControl {
-                jumpControl.rootView = controls
-            } else {
-                let host = NSHostingView(rootView: controls)
-                jumpControl = host
-                addSubview(host)
-            }
-            jumpControl?.isHidden =
-                !next.showsJumpToLatest && next.unreadMentionCount <= 0
-                && next.unreadReactionCount <= 0
+            jumpControl.configure(
+                showsLatest: next.showsJumpToLatest,
+                messages: next.unreadMessageCount, mentions: next.unreadMentionCount,
+                reactions: next.unreadReactionCount,
+                busy: next.activityJumpInProgress || isRepositioning,
+                badgeColor: next.badgeColor)
             needsLayout = true
         }
 
@@ -170,33 +164,40 @@
             guard let presentation else { return }
             let width = bounds.width
             let height = bounds.height
-            initialLoading.frame = bounds
-            initialFailure.frame = bounds
-            var top: CGFloat = 0
+            // SwiftUI header/pins overlap this full-size native overlay. AppKit
+            // controls need their measured inset explicitly, since native layout
+            // cannot read the shared SwiftUI overlay's unobscured content area.
+            let contentTop = presentation.headerInset
+            let contentBottom = max(contentTop, height - presentation.composerInset)
+            let contentBounds = NSRect(
+                x: 0, y: contentTop, width: width, height: contentBottom - contentTop)
+            initialLoading.frame = contentBounds
+            initialFailure.frame = contentBounds
+            var top = contentTop
             if !initialBanner.isHidden {
                 initialBanner.frame = NSRect(x: 0, y: top, width: width, height: 36)
                 top += 36
             }
             olderEdge.frame = NSRect(x: 0, y: top, width: width, height: 48)
             newerEdge.frame = NSRect(
-                x: 0, y: max(0, height - presentation.composerInset - 48), width: width, height: 48)
+                x: 0, y: max(contentTop, contentBottom - 48), width: width, height: 48)
             // Failures remain non-blocking overlays; they never change row geometry.
             // Keep simultaneous failures individually reachable rather than overlapping.
-            var failureTop = ChahuaTheme.Spacing.large
+            var failureTop = contentTop + ChahuaTheme.Spacing.large
             for banner in [repositionFailure, reconciliationFailure] where !banner.isHidden {
                 banner.frame = NSRect(x: 16, y: failureTop, width: max(0, width - 32), height: 36)
                 failureTop += 44
             }
             repositionProgress.frame = NSRect(
-                x: max(0, (width - 52) / 2), y: max(0, (height - 52) / 2), width: 52, height: 52)
-            if let jumpControl, !jumpControl.isHidden {
+                x: max(0, (width - 52) / 2),
+                y: max(contentTop, contentBounds.midY - 26), width: 52, height: 52)
+            if !jumpControl.isHidden {
                 let size = jumpControl.fittingSize
                 jumpControl.frame = NSRect(
                     x: max(0, width - ChahuaTheme.Spacing.large - size.width),
                     y: max(
-                        0,
-                        height - presentation.composerInset - ChahuaTheme.Spacing.large
-                            - size.height),
+                        contentTop,
+                        contentBottom - ChahuaTheme.Spacing.large - size.height),
                     width: size.width, height: size.height)
             }
         }

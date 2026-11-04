@@ -4,8 +4,8 @@
     import SwiftUI
 
     /// Per-row NSHostingView layout and AttributeGraph work made timeline scrolling
-    /// expensive. Keep the table, state panels and interaction preview native while
-    /// hosting the small shared navigation controls above the cached-geometry table.
+    /// expensive. Keep the table, state panels, navigation controls, and interaction
+    /// preview native above the cached-geometry table.
     @MainActor
     final class TimelineViewController: NSViewController {
         private let model: ConversationTimelineModel
@@ -17,6 +17,7 @@
         private var initialLoadTask: Task<Void, Never>?
         private var didRequestInitialLoad = false
         private var isTornDown = false
+        private var headerInset: CGFloat = 0
         private var composerInset: CGFloat = 0
         private var colorScheme: ColorScheme = .light
 
@@ -76,11 +77,13 @@
             showAllAvatars: Bool,
             showDmDetails: Bool,
             unreadBadgeColor: ConversationUnreadBadgeColor,
+            headerInset: CGFloat,
             composerInset: CGFloat,
             isSplitResizing: Bool,
             isWideChatLayout: Bool
         ) {
             guard !isTornDown else { return }
+            self.headerInset = headerInset
             self.composerInset = composerInset
             let appearanceChanged = self.colorScheme != colorScheme
             self.colorScheme = colorScheme
@@ -92,8 +95,9 @@
             tableController.showAllAvatars = showAllAvatars
             tableController.showDmDetails = showDmDetails
             tableController.isWideChatLayout = isWideChatLayout
-            // Header and pins are structural SwiftUI siblings above this viewport.
-            // Only the floating composer contributes a native content inset.
+            // SwiftUI overlays cannot change AppKit's native scroll limits.
+            // Keep the table full-size and supply scrollable chrome clearance.
+            tableController.headerInset = headerInset
             tableController.composerInset = composerInset
             interactionController.configure(actions: actions, context: interactionContext)
             tableController.actions = interactionController.routedActions
@@ -145,7 +149,7 @@
             guard isViewLoaded, !isTornDown else { return }
             // @Published emits before assignment. Read the current model here, on the
             // queued display turn; isAtLiveEdge is computed, not a publisher.
-            chromeView.update(model: model, composerInset: composerInset)
+            chromeView.update(model: model, headerInset: headerInset, composerInset: composerInset)
             let hidesTable = !chromeView.showsTable
             if tableController.view.isHidden != hidesTable {
                 tableController.view.isHidden = hidesTable

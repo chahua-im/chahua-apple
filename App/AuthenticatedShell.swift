@@ -209,7 +209,6 @@ struct AuthenticatedShell: View {
         .onPreferenceChange(ThreadInfoActionKey.self) { threadInfoAction = $0 }
         .environment(\.openUserProfile, navigationActions.openProfile)
         .environment(\.openGroupInvite, navigationActions.openInvite)
-        .environment(\.openForwardDestination, navigationActions.openForward)
         .sheet(
             item: $feature,
             onDismiss: {
@@ -239,7 +238,6 @@ struct AuthenticatedShell: View {
             )
             .environment(\.openUserProfile, navigationActions.openProfile)
             .environment(\.openGroupInvite, navigationActions.openInvite)
-            .environment(\.openForwardDestination, navigationActions.openForward)
             .modifier(
                 FeatureModalSizing(
                     isProfile: {
@@ -407,7 +405,6 @@ struct AuthenticatedShell: View {
         }
         navigationActions.profileHandler = openProfile
         navigationActions.inviteHandler = { feature = .joinGroup($0) }
-        navigationActions.forwardHandler = openForwardDestination
     }
 
     private var adaptiveLayout: some View {
@@ -662,15 +659,33 @@ struct AuthenticatedShell: View {
         Group {
             switch route {
             case .list:
-                FriendRequestsView(
-                    currentUserID: me.uid, store: chatStore,
-                    onOpenProfile: { uid in
-                        if UserProfilePresentation.usesModal {
-                            openProfile(uid)
-                        } else {
-                            listPath.append(.friendRequests(.profile(uid)))
-                        }
-                    })
+                #if os(macOS)
+                    VStack(spacing: 0) {
+                        MacConversationListHeader(
+                            onBack: { listPath.removeLast() }, isUpdating: false,
+                            account: { accountButton }, actions: { creationButton })
+                        Text("Friend Requests")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 8)
+                        FriendRequestsView(
+                            currentUserID: me.uid, store: chatStore,
+                            onOpenProfile: openProfile)
+                    }
+                    .navigationTitle("")
+                    .navigationBarBackButtonHidden(true)
+                #else
+                    FriendRequestsView(
+                        currentUserID: me.uid, store: chatStore,
+                        onOpenProfile: { uid in
+                            if UserProfilePresentation.usesModal {
+                                openProfile(uid)
+                            } else {
+                                listPath.append(.friendRequests(.profile(uid)))
+                            }
+                        })
+                #endif
             case .profile(let uid):
                 UserProfileView(
                     uid: uid, currentUserID: me.uid, store: chatStore,
@@ -1077,34 +1092,6 @@ struct AuthenticatedShell: View {
             listPath.removeAll()
         }
         selectConversation(conversation)
-    }
-
-    /// The picker prepares a draft, not a send. Resolve access before mutating
-    /// navigation so a failed destination leaves both conversations' drafts intact.
-    private func openForwardDestination(_ target: ConversationListItem) async throws -> Bool {
-        guard !isSigningOut, navigationActions.forwardHandler != nil else { return false }
-        let accountID = me.uid
-        let info = try await chatStore.groupInfo(chatID: target.id.chatID)
-        let parent = chatStore.groupChatSnapshot(info)
-        let root: MessageResponse?
-        if target.id.threadID != nil {
-            root = try await chatStore.threadRoot(for: target.id)
-            guard root?.isDeleted == false else { return false }
-        } else {
-            root = nil
-        }
-        try Task.checkCancellation()
-        guard !isSigningOut, navigationActions.forwardHandler != nil, me.uid == accountID,
-            chatStore.currentUserProfile?.uid == accountID
-        else { return false }
-        if visibleConversation == target.id, groupPath.isEmpty, feature == nil {
-            return true
-        }
-        listPath.removeAll()
-        openChat(parent)
-        if let root { openThread(root, in: parent) }
-        return selectedConversationID?.chatID == target.id.chatID
-            && (root == nil || threadPath.last == target.id)
     }
 
     private func openSourceMessage(_ message: MessageResponse, in chat: ChatListItem) {

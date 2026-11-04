@@ -5,7 +5,7 @@
 
     /// AppKit is intentional here: whole-row SwiftUI hosts incurred measured layout
     /// and AttributeGraph work. Cached native geometry remains the sizing authority;
-    /// shared delivery decorations use canonical SwiftUI snapshots or a sending host.
+    /// delivery decorations draw natively, with only voice playback retaining a host.
     @MainActor
     final class TimelineBubbleContentView: NSView {
         private(set) var binding: TimelineRowBinding?

@@ -67,7 +67,7 @@ struct ChahuaApp: App {
             .windowStyle(.hiddenTitleBar)
             .windowToolbarStyle(.unified)
             .windowResizability(.contentMinSize)
-            .defaultSize(width: 800, height: 600)
+            .conversationWindowDefaults()
         #endif
     }
 

@@ -552,18 +552,18 @@ extension EnvironmentValues {
     }
 }
 
-/// iOS reserves scrollable breathing room beneath floating chrome. macOS instead
-/// reserves a structural header row so no timeline row can render behind the glass.
+/// Floating title chrome publishes scrollable clearance without shrinking the viewport.
 struct ChatHeaderOverlay<Header: View>: ViewModifier {
     var isVisible = true
     @ViewBuilder let header: () -> Header
-    /// Header frame and the content's top, in window coordinates. The content extends
-    /// under the status bar on iOS, so the inset must be measured from its own top, not
-    /// from a coordinate space anchored at the safe-area edge.
-    @State private var headerFrame = CGRect.zero
-    @State private var contentTop: CGFloat = 0
-
-    private static var space: String { "chat-header-overlay" }
+    #if os(iOS)
+        /// The content extends under the status bar, so measure from its own window
+        /// origin rather than a coordinate space anchored at the safe-area edge.
+        @State private var headerFrame = CGRect.zero
+        @State private var contentTop: CGFloat = 0
+    #else
+        @State private var headerHeight: CGFloat = 0
+    #endif
 
     func body(content: Content) -> some View {
         #if os(iOS)
@@ -592,27 +592,41 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
                     }
                 }
         #else
-            VStack(spacing: isVisible ? 8 : 0) {
-                if isVisible {
-                    header()
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 12)
+            // AppKit's viewport must fill the original container so rows can pass
+            // beneath the title. Measure only this overlay's local height: feeding
+            // window-space frames back into layout can grow the inset on resize.
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .environment(\.chatHeaderInset, isVisible ? headerHeight + 12 + 8 : 0)
+                .overlay(alignment: .top) {
+                    if isVisible {
+                        header()
+                            .frame(maxWidth: .infinity)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear
+                                        .onAppear { headerHeight = geometry.size.height }
+                                        .onChange(of: geometry.size.height) { _, height in
+                                            headerHeight = height
+                                        }
+                                }
+                            }
+                            .padding(.top, 12)
+                    }
                 }
-                content
-                    .environment(\.chatHeaderInset, 0)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
         #endif
     }
 
-    private func measuredHeader(in space: CoordinateSpace) -> some View {
-        GeometryReader { headerGeometry in
-            let frame = headerGeometry.frame(in: space)
-            Color.clear
-                .onAppear { headerFrame = frame }
-                .onChange(of: frame) { _, frame in headerFrame = frame }
+    #if os(iOS)
+        private func measuredHeader(in space: CoordinateSpace) -> some View {
+            GeometryReader { headerGeometry in
+                let frame = headerGeometry.frame(in: space)
+                Color.clear
+                    .onAppear { headerFrame = frame }
+                    .onChange(of: frame) { _, frame in headerFrame = frame }
+            }
         }
-    }
+    #endif
 }
 
 /// Backdrop behind floating chat chrome whose blur strengthens toward the screen edge.

@@ -125,6 +125,7 @@ final class ConversationTimelineModel: ObservableObject {
     private var mentionTargets: Set<MessageID> = []
     private var dismissedMentionTargets: Set<MessageID> = []
     private var reactionTargets: Set<MessageID> = []
+    private var acknowledgedReactionTargets: Set<MessageID> = []
     // Activity revisions are independent of history pagination and repositioning.
     private var activityRevision = 0
     private var mentionTask: Task<Void, Never>?
@@ -563,6 +564,7 @@ final class ConversationTimelineModel: ObservableObject {
                             !self.dismissedMentionTargets.contains($0)
                                 && !self.isActivityTargetDeleted($0)
                         })
+                    dismissVisibleActivityTargets()
                     publishActivityCounts()
                     if !mentionsDirty { mentionsChanged = false }
                 } catch {
@@ -597,6 +599,7 @@ final class ConversationTimelineModel: ObservableObject {
                     }
                     reactionTargets.formUnion(
                         response.messageIds.lazy.filter { !self.isActivityTargetDeleted($0) })
+                    acknowledgedReactionTargets.subtract(response.messageIds)
                     publishActivityCounts()
                     // Never acknowledge a failed GET, or a response from an inactive session.
                     if let acknowledgeReactions {
@@ -606,6 +609,9 @@ final class ConversationTimelineModel: ObservableObject {
                             return
                         }
                         if ack.unreadReactions > 0 { reactionsDirty = true }
+                        acknowledgedReactionTargets.formUnion(
+                            reactionTargets.intersection(response.messageIds))
+                        dismissVisibleActivityTargets()
                     }
                     if !reactionsDirty { reactionsChanged = false }
                 } catch {
@@ -637,6 +643,7 @@ final class ConversationTimelineModel: ObservableObject {
         mentionTargets.removeAll()
         dismissedMentionTargets.removeAll()
         reactionTargets.removeAll()
+        acknowledgedReactionTargets.removeAll()
         publishActivityCounts()
     }
 
@@ -655,6 +662,29 @@ final class ConversationTimelineModel: ObservableObject {
         dismissedMentionTargets.formUnion(ids)
         mentionTargets.subtract(ids)
         reactionTargets.subtract(ids)
+        acknowledgedReactionTargets.subtract(ids)
+        publishActivityCounts()
+    }
+
+    /// Visibility alone is not a read acknowledgement. Mentions use the message
+    /// cursor; reactions use the server's opaque snapshot boundary.
+    private func dismissVisibleActivityTargets() {
+        guard readTrackingActive, state.content == .ready, pendingScroll == nil,
+            viewportRevision == snapshotRevision,
+            lastViewport.isValid(forRowCount: rows.count),
+            !mentionTargets.isEmpty || !reactionTargets.isEmpty
+        else { return }
+        let visible = Set(lastViewport.visibleMessageIDs)
+        let mentions = mentionTargets.intersection(visible).filter { id in
+            readWatermark.map { $0 >= id } == true
+        }
+        let reactions = reactionTargets.intersection(visible)
+            .intersection(acknowledgedReactionTargets)
+        guard !mentions.isEmpty || !reactions.isEmpty else { return }
+        dismissedMentionTargets.formUnion(mentions)
+        mentionTargets.subtract(mentions)
+        reactionTargets.subtract(reactions)
+        acknowledgedReactionTargets.subtract(reactions)
         publishActivityCounts()
     }
 
@@ -683,6 +713,7 @@ final class ConversationTimelineModel: ObservableObject {
                     mentionTargets.remove(id)
                 } else {
                     reactionTargets.remove(id)
+                    acknowledgedReactionTargets.remove(id)
                 }
                 publishActivityCounts()
                 return
@@ -724,6 +755,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func updateReadCandidate() {
+        dismissVisibleActivityTargets()
         guard let candidate = visibleReadCandidate else {
             cancelReadCandidate()
             return
@@ -768,6 +800,7 @@ final class ConversationTimelineModel: ObservableObject {
                     self?.readWatermarkRevision == watermarkRevision
                 {
                     self?.advanceReadWatermark(to: candidate.id)
+                    self?.dismissVisibleActivityTargets()
                 }
             } catch {
                 // A later viewport can retry; failures must not spin a write loop.

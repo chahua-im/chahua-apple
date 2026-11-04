@@ -6,44 +6,25 @@
         var isUpdating: Bool
         @ViewBuilder var account: () -> Account
         @ViewBuilder var actions: () -> Actions
-        @State private var sidebarWidth: CGFloat = 300
         @FocusState private var isHeaderFocused: Bool
 
         var body: some View {
-            // The docked title row is 52pt, followed by an 8pt search margin.
-            // AppKit still owns the toolbar controls centered at native y26.
-            Color.clear.frame(height: 60)
+            // Content extends behind the transparent title bar; ordinary padding
+            // reserves the native traffic lights without changing window dragging.
+            headerActions
+                .padding(.leading, 100)
+                .padding(.trailing, 16)
+                .frame(height: MacConversationWindowChrome.titleBandHeight)
+                .padding(.bottom, 8)
                 // Keep automatic window-entry focus off Search. Explicit search
                 // clicks/shortcuts and the conversation editor retain their own focus.
                 .focusable()
                 .focusEffectDisabled()
                 .focused($isHeaderFocused)
                 .defaultFocus($isHeaderFocused, true)
-                .onGeometryChange(for: CGFloat.self) {
-                    $0.size.width
-                } action: {
-                    sidebarWidth = $0
-                }
-                .toolbar {
-                    if #available(macOS 26, *) {
-                        accountToolbar.sharedBackgroundVisibility(.hidden)
-                    } else {
-                        accountToolbar
-                    }
-                }
         }
 
-        private var accountToolbar: some ToolbarContent {
-            ToolbarItem(id: "chahua-sidebar-account-actions", placement: .navigation) {
-                toolbarActions
-                    // Align the account controls with AppKit's native y26 center.
-                    .frame(
-                        width: max(100, sidebarWidth - 108),
-                        height: MacConversationWindowChrome.titleBandHeight)
-            }
-        }
-
-        private var toolbarActions: some View {
+        private var headerActions: some View {
             HStack(spacing: 9) {
                 if let onBack {
                     Button(action: onBack) {

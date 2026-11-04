@@ -41,8 +41,27 @@
         }
 
         func updateVisibility() {
+            guard window != nil, !isHiddenOrHasHiddenAncestor, !visibleRect.isEmpty else {
+                rowView.setVisible(false)
+                return
+            }
+            guard let scrollView = enclosingScrollView, let document = scrollView.documentView
+            else {
+                rowView.setVisible(false)
+                return
+            }
+            // Native visibleRect includes rows under SwiftUI's floating chrome.
+            // Keep those rows rendered for blur, but pause covered media using
+            // the same public AppKit content-inset geometry as read reporting.
+            let visible = scrollView.documentVisibleRect
+            let insets = scrollView.contentInsets
+            let unobscured = NSRect(
+                x: visible.minX + insets.left,
+                y: visible.minY + insets.top,
+                width: max(0, visible.width - insets.left - insets.right),
+                height: max(0, visible.height - insets.top - insets.bottom))
             rowView.setVisible(
-                window != nil && !isHiddenOrHasHiddenAncestor && !visibleRect.isEmpty)
+                !unobscured.isEmpty && convert(unobscured, from: document).intersects(visibleRect))
         }
     }
 #endif

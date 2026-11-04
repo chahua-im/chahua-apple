@@ -2,169 +2,100 @@ import ChahuaAPI
 import Combine
 import SwiftUI
 
-private struct OpenForwardDestinationKey: EnvironmentKey {
-    static let defaultValue: (@MainActor @Sendable (ConversationListItem) async throws -> Bool)? =
-        nil
-}
+enum ForwardDestination {
+    case saved
+    case conversation(ConversationListItem)
 
-extension EnvironmentValues {
-    var openForwardDestination: (@MainActor @Sendable (ConversationListItem) async throws -> Bool)?
-    {
-        get { self[OpenForwardDestinationKey.self] }
-        set { self[OpenForwardDestinationKey.self] = newValue }
+    var title: String {
+        switch self {
+        case .saved: AppLanguage.localized("Saved Messages")
+        case .conversation(.chat(let chat)): chat.chatDisplayName
+        case .conversation(.thread(let thread)): thread.chatName
+        }
     }
 }
 
-/// Present directly as a sheet; this view owns its shared iOS/macOS navigation stack.
+/// A content-sized modal owns both destination selection and explicit-send preview.
 struct ForwardDestinationPicker: View {
-    enum SourceError: Error {
-        case tooMany, unavailable
-    }
-
-    @ObservedObject private var store: ChatStore
+    enum SourceError: Error { case tooMany, unavailable }
     @StateObject private var model: ForwardDestinationPickerModel
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openForwardDestination) private var openForwardDestination
     @State private var query = ""
     private let onPrepared: () -> Void
+    @ObservedObject private var store: ChatStore
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
     init(
-        store: ChatStore, sources: [MessageResponse],
+        store: ChatStore, sources: [MessageResponse], sourceTitle: String? = nil,
         loadSources: (@MainActor () async throws -> [MessageResponse])? = nil,
-        moveFrom: ConversationKey? = nil, expectedForwardID: UUID? = nil,
         onPrepared: @escaping () -> Void
     ) {
         self.store = store
         self.onPrepared = onPrepared
         _model = StateObject(
             wrappedValue: ForwardDestinationPickerModel(
-                store: store, sources: sources, loadSources: loadSources,
-                moveFrom: moveFrom, expectedForwardID: expectedForwardID))
+                store: store, sources: sources, loadSources: loadSources, sourceTitle: sourceTitle))
+    }
+
+    private var previewHeight: CGFloat {
+        min(560, 300 + CGFloat(min(model.messageCount, 3)) * 72)
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                if let failure = model.failure {
-                    Text(failure.localizedDescription)
-                        .foregroundStyle(.red)
-                        .accessibilityIdentifier("forward-selection-error")
-                }
-                if model.isResolving || model.isSubmitting {
-                    ProgressView("Preparing forward…")
-                }
-                let targets = model.targets(matching: query)
-                ForEach(targets) { target in
-                    Button {
-                        model.select(
-                            target,
-                            navigate: { destination in
-                                try await openForwardDestination?(destination) ?? false
-                            }
-                        ) {
-                            onPrepared()
-                            dismiss()
-                        }
-                    } label: {
-                        destinationRow(target)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.selectionBlocked)
-                }
-                if targets.isEmpty {
-                    if model.isLoading {
-                        ProgressView("Loading conversations…")
-                    } else if !model.chatsFailed && !model.threadsFailed {
-                        Text("No forwarding destinations found")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if model.chatsFailed {
-                    retryRow("Could not load chats", action: model.retryChats)
-                }
-                if model.threadsFailed {
-                    retryRow("Could not load threads", action: model.retryThreads)
-                }
-                // Search is local to loaded pages. Keep paging outside the results branch.
-                if model.moreAvailable {
-                    Button("Load More", action: model.loadMore)
-                        .disabled(model.isLoading)
-                        .frame(maxWidth: .infinity)
+        ForwardPickerContent(
+            store: store, model: model, query: $query,
+            onClose: {
+                model.stop()
+                dismiss()
+            },
+            onCompleted: {
+                onPrepared()
+                dismiss()
+            }
+        )
+        #if os(macOS)
+            // A List has no useful ideal height in a macOS sheet; without
+            // explicit geometry AppKit collapses it down to toolbar chrome.
+            .frame(width: 420, height: model.selectedTarget == nil ? 560 : previewHeight)
+        #else
+            .frame(idealWidth: 480, idealHeight: 640)
+            .presentationDetents(
+                model.selectedTarget == nil || horizontalSizeClass == .regular
+                    ? [.large] : [.height(previewHeight), .large])
+        #endif
+        .alert(
+            "Replace unavailable content?",
+            isPresented: Binding(
+                get: { model.confirmation != nil },
+                set: { if !$0 { model.cancelConfirmation() } }),
+            presenting: model.confirmation
+        ) { confirmation in
+            Button("Cancel", role: .cancel) { model.cancelConfirmation() }
+            Button("Continue") {
+                model.confirm(confirmation) {
+                    onPrepared()
+                    dismiss()
                 }
             }
-            .listStyle(.plain)
-            .navigationTitle("Forward to")
-            .searchable(text: $query, prompt: "Search chats and threads")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        model.stop()
-                        dismiss()
-                    }
-                }
-            }
-            .alert(
-                "Replace unavailable content?",
-                isPresented: Binding(
-                    get: { model.confirmation != nil },
-                    set: { if !$0 { model.cancelConfirmation() } }),
-                presenting: model.confirmation
-            ) { confirmation in
-                Button("Cancel", role: .cancel) { model.cancelConfirmation() }
-                Button("Continue") {
-                    model.confirm(confirmation) {
-                        onPrepared()
-                        dismiss()
-                    }
-                }
-            } message: { confirmation in
-                Text(confirmation.prompt)
-            }
+        } message: {
+            Text($0.prompt)
         }
         .onAppear { model.start() }
+        .interactiveDismissDisabled(model.isSubmitting)
         .onDisappear { model.stop() }
         .onChange(of: store.currentUserProfile?.uid) { _, _ in
             model.stop()
             dismiss()
         }
     }
-
-    private func destinationRow(_ target: ConversationListItem) -> some View {
-        HStack(spacing: 12) {
-            ConversationAvatarView(
-                item: target, store: store, currentUserID: store.currentUserProfile?.uid ?? 0)
-            VStack(alignment: .leading, spacing: 4) {
-                switch target {
-                case .chat(let chat):
-                    Text(chat.chatDisplayName).font(.headline)
-                case .thread(let thread):
-                    Label(thread.chatName, systemImage: "text.bubble")
-                        .font(.headline)
-                    MessageSummaryText(thread.threadRootMessage, fontSize: 14, color: .secondary)
-                    Text("\(thread.replyCount) replies")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
-    }
-
-    private func retryRow(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
-        HStack {
-            Text(title).foregroundStyle(.secondary)
-            Spacer()
-            Button("Retry", action: action)
-        }
-    }
 }
 
 @MainActor
-private final class ForwardDestinationPickerModel: ObservableObject {
+final class ForwardDestinationPickerModel: ObservableObject {
     enum Failure: Error, LocalizedError, Equatable {
-        case unavailable, stale, tooMany, topicUnavailable, loadFailed, navigationFailed
+        case unavailable, stale, tooMany, topicUnavailable, loadFailed, sendFailed
         case restricted(SpeakingMode)
 
         var errorDescription: String? {
@@ -184,9 +115,8 @@ private final class ForwardDestinationPickerModel: ObservableObject {
             case .loadFailed:
                 AppLanguage.localized(
                     "Could not reload the messages. Choose a destination to retry.")
-            case .navigationFailed:
-                AppLanguage.localized(
-                    "Could not open this destination. Choose a destination to retry.")
+            case .sendFailed:
+                AppLanguage.localized("Could not forward these messages. Try again.")
             case .restricted(let mode):
                 mode.restrictionExplanation
             }
@@ -194,7 +124,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
     }
 
     struct Confirmation {
-        let target: ConversationListItem
+        let target: ForwardDestination
         let sources: [MessageResponse]
         let pendingAudio: Bool
         let nestedForward: Bool
@@ -218,6 +148,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
 
     @Published private(set) var failure: Failure?
     @Published private(set) var confirmation: Confirmation?
+    @Published private(set) var selectedTarget: ForwardDestination?
     @Published private(set) var isResolving = false
     @Published private(set) var isSubmitting = false
     @Published private(set) var chatsFailed = false
@@ -232,10 +163,8 @@ private final class ForwardDestinationPickerModel: ObservableObject {
     private let store: ChatStore
     private let sources: [MessageResponse]
     private let loadSources: (@MainActor () async throws -> [MessageResponse])?
-    private let moveFrom: ConversationKey?
-    private let expectedForwardID: UUID?
-    private var navigateDestination: (@MainActor (ConversationListItem) async throws -> Bool)?
     private let accountID: Int32?
+    let sourceTitle: String
     private var chatCursor: String?
     private var threadCursor: String?
     private var chatBoundary = Date.distantFuture
@@ -252,16 +181,24 @@ private final class ForwardDestinationPickerModel: ObservableObject {
 
     init(
         store: ChatStore, sources: [MessageResponse],
-        loadSources: (@MainActor () async throws -> [MessageResponse])?,
-        moveFrom: ConversationKey?, expectedForwardID: UUID?
+        loadSources: (@MainActor () async throws -> [MessageResponse])?, sourceTitle: String? = nil
     ) {
         self.store = store
-        self.sources = sources
+        self.sources = sources.sorted { $0.id < $1.id }
         self.loadSources = loadSources
-        self.moveFrom = moveFrom
-        self.expectedForwardID = expectedForwardID
         accountID = store.currentUserProfile?.uid
+        let id = sources.first?.chatId
+        self.sourceTitle =
+            sourceTitle
+            ?? (store.state.chats.first(where: { $0.id == id })
+            ?? store.state.archivedChats.first(where: { $0.id == id }))?.chatDisplayName
+            ?? AppLanguage.localized("Conversation")
     }
+
+    var previewSources: [MessageResponse] {
+        resolvedSources.isEmpty ? sources : resolvedSources
+    }
+    var messageCount: Int { resolvedSources.isEmpty ? sources.count : resolvedSources.count }
 
     var isLoading: Bool { chatsLoading || threadsLoading }
     var moreAvailable: Bool {
@@ -409,13 +346,8 @@ private final class ForwardDestinationPickerModel: ObservableObject {
         }
     }
 
-    func select(
-        _ target: ConversationListItem,
-        navigate: (@MainActor @Sendable (ConversationListItem) async throws -> Bool)?,
-        onPrepared: @escaping () -> Void
-    ) {
+    func choose(_ target: ForwardDestination) {
         guard !selectionBlocked else { return }
-        navigateDestination = navigate
         isResolving = true
         let token = generation
         selectionTask = Task { [weak self] in
@@ -430,28 +362,48 @@ private final class ForwardDestinationPickerModel: ObservableObject {
                 let selection = try await self.resolveSources(token: token)
                 guard self.current(token), self.failure != .stale else { return }
                 try self.validate(selection)
-                self.resolvedSources = selection
+                self.resolvedSources = selection.sorted { $0.id < $1.id }
                 self.failure = nil
-                let pendingAudio = selection.contains(where: self.isPendingAudio)
-                let nestedForward =
-                    selection.count > 1
-                    && selection.contains {
-                        $0.messageType == .forwarded
-                            && $0.forwardedPreview?.containsForwardedMessages == true
-                    }
-                if pendingAudio || nestedForward {
-                    self.confirmation = Confirmation(
-                        target: target, sources: selection,
-                        pendingAudio: pendingAudio, nestedForward: nestedForward)
-                } else {
-                    await self.submit(
-                        target, sources: selection, allowPlaceholders: false,
-                        token: token, onPrepared: onPrepared)
-                }
+                self.selectedTarget = target
             } catch {
                 guard self.current(token), self.failure != .stale else { return }
                 self.failure = error as? Failure ?? .loadFailed
             }
+        }
+    }
+
+    func changeDestination() {
+        guard !isResolving, !isSubmitting else { return }
+        selectedTarget = nil
+        confirmation = nil
+        if failure != .stale { failure = nil }
+    }
+
+    func send(onCompleted: @escaping () -> Void) {
+        guard !selectionBlocked, let target = selectedTarget else { return }
+        let selection = previewSources
+        let pendingAudio = selection.contains(where: isPendingAudio)
+        let nestedForward =
+            selection.count > 1
+            && selection.contains {
+                $0.messageType == .forwarded
+                    && $0.forwardedPreview?.containsForwardedMessages == true
+            }
+        if case .conversation = target, pendingAudio || nestedForward {
+            confirmation = Confirmation(
+                target: target, sources: selection,
+                pendingAudio: pendingAudio, nestedForward: nestedForward)
+            return
+        }
+        let token = generation
+        // Block duplicate activation before the task gets a main-actor turn.
+        isSubmitting = true
+        selectionTask = Task { [weak self] in
+            guard let self else { return }
+            await submit(
+                target, sources: selection, allowPlaceholders: false,
+                token: token, onPrepared: onCompleted)
+            if current(token) { selectionTask = nil }
         }
     }
 
@@ -461,6 +413,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
         guard isOpen, !isSubmitting, !didPrepare, failure != .stale else { return }
         confirmation = nil
         let token = generation
+        isSubmitting = true
         selectionTask = Task { [weak self] in
             guard let self else { return }
             await self.submit(
@@ -512,21 +465,28 @@ private final class ForwardDestinationPickerModel: ObservableObject {
     }
 
     private func submit(
-        _ target: ConversationListItem, sources selection: [MessageResponse],
+        _ target: ForwardDestination, sources selection: [MessageResponse],
         allowPlaceholders: Bool, token: Int, onPrepared: @escaping () -> Void
     ) async {
         guard current(token), !didPrepare, failure != .stale else { return }
+        defer { if current(token) { isSubmitting = false } }
         do {
             try validate(selection)
-            isSubmitting = true
-            defer { if current(token) { isSubmitting = false } }
-            try await store.requireSpeakingPermission(
-                chatID: target.id.chatID, threadID: target.id.threadID)
-            guard current(token), let navigateDestination else { throw Failure.navigationFailed }
-            let opened = try await store.drafts.prepareForward(
-                sources: selection, allowPlaceholders: allowPlaceholders, destination: target,
-                moveFrom: moveFrom, expectedID: expectedForwardID, navigate: navigateDestination)
-            guard opened else { throw Failure.navigationFailed }
+            switch target {
+            case .saved:
+                for message in selection {
+                    guard current(token) else { throw CancellationError() }
+                    try await store.savedMessages.save(message)
+                }
+            case .conversation(let destination):
+                try await store.requireSpeakingPermission(
+                    chatID: destination.id.chatID, threadID: destination.id.threadID)
+                guard current(token) else { throw CancellationError() }
+                try await store.outgoingQueue.enqueueForward(
+                    chatID: destination.id.chatID, threadID: destination.id.threadID,
+                    sources: selection, allowPlaceholders: allowPlaceholders)
+            }
+            guard current(token) else { return }
             didPrepare = true
             onPrepared()
         } catch {
@@ -536,7 +496,7 @@ private final class ForwardDestinationPickerModel: ObservableObject {
             {
                 failure = .restricted(mode)
             } else {
-                failure = error as? Failure ?? .navigationFailed
+                failure = error as? Failure ?? .sendFailed
             }
         }
     }

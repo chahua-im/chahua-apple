@@ -1,8 +1,9 @@
 #if os(macOS)
+    import AppKit
     import SwiftUI
 
-    /// Keep one native toolbar alive for the lifetime of the main window. AppKit owns
-    /// traffic-light geometry; no content view moves, hides, or replaces those buttons.
+    /// Keep AppKit's transparent title band and native window buttons alive.
+    /// Sidebar actions stay in content so full-window overlays cover them.
     struct MacConversationWindowChrome: ViewModifier {
         static let titleBandHeight: CGFloat = 52
 
@@ -20,12 +21,19 @@
 
         private var titleBand: some ToolbarContent {
             ToolbarItem(id: "chahua-window-titleband", placement: .principal) {
-                // Unified AppKit toolbars keep a 52pt native band regardless of taller
-                // custom-item requests. Preserve their native traffic-light geometry;
-                // stretching or reparenting those controls is unsafe during navigation.
                 Color.clear.frame(width: 1, height: Self.titleBandHeight)
                     .accessibilityHidden(true)
             }
+        }
+    }
+
+    extension Scene {
+        func conversationWindowDefaults() -> some Scene {
+            // Use the macOS 14-compatible default-size API. This never resizes
+            // an attached window or overrides a restored frame.
+            let available = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1280, height: 800)
+            return self.defaultSize(
+                width: min(1280, available.width), height: min(800, available.height))
         }
     }
 #endif

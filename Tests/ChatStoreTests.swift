@@ -1602,7 +1602,7 @@ final class ChatStoreTests: XCTestCase {
                     appLanguage: AppLanguage.selected.rawValue,
                     showAllAvatars: ConversationTimelinePreferences.defaultShowAllAvatars,
                     showDmDetails: ConversationTimelinePreferences.defaultShowDmDetails,
-                    unreadBadgeColor: .default, composerInset: 0,
+                    unreadBadgeColor: .default, headerInset: 0, composerInset: 0,
                     isSplitResizing: false, isWideChatLayout: false)
             }
             refreshActions()
@@ -1928,11 +1928,183 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), redacted)
     }
 
-    private func openDraftHarness() async throws -> DraftHarness {
+    func testForwardPickerBackChangeAndCancelNeverEnqueueOrModifyDrafts() async throws {
+        let h = try await openDraftHarness()
+        h.store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
+        let destination = ConversationListItem.chat(
+            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
+        let destinationReply = try TimelineTestFixtures.message(id: 1, chatID: "chat", at: 0)
+        h.store.drafts.setDraftText("source draft", chatID: "source")
+        h.store.drafts.setDraftReply(source.replyPreview, chatID: "source")
+        h.store.drafts.setDraftText("destination draft", chatID: "chat")
+        h.store.drafts.setDraftReply(destinationReply.replyPreview, chatID: "chat")
+        await h.store.drafts.flushAll()
+        let sourceDraft = try XCTUnwrap(
+            h.queue.snapshots[ConversationKey(chatID: "source")]?.draft)
+        let destinationDraft = try XCTUnwrap(
+            h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft)
+        let model = ForwardDestinationPickerModel(
+            store: h.store, sources: [source], loadSources: nil)
+        model.start()
+        defer { model.stop() }
+
+        try await chooseForwardDestination(.conversation(destination), in: model)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+        model.changeDestination()
+        XCTAssertNil(model.selectedTarget)
+        try await chooseForwardDestination(.saved, in: model)
+        model.changeDestination()
+        XCTAssertNil(model.selectedTarget)
+        try await chooseForwardDestination(.conversation(destination), in: model)
+        model.stop()
+
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "source").isEmpty)
+        XCTAssertTrue(h.store.savedMessages.items.isEmpty)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "source"), "source draft")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "source"), source.replyPreview)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "destination draft")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), destinationReply.replyPreview)
+        XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "source")]?.draft, sourceDraft)
+        XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft, destinationDraft)
+    }
+
+    func testForwardPickerExplicitSendEnqueuesOnceAndPreservesBothDrafts() async throws {
+        let api = FakeChatAPI()
+        await api.setConversationPageMetadata(
+            group: .init(
+                id: "chat", myRole: .member, kind: .group, speakingMode: .unrestricted,
+                mySpeakingMode: .unrestricted, effectiveSpeakingMode: .unrestricted))
+        let h = try await openDraftHarness(api: api)
+        h.store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
+        let destinationReply = try TimelineTestFixtures.message(id: 1, chatID: "chat", at: 0)
+        let destination = ConversationListItem.chat(
+            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
+        h.store.drafts.setDraftText("source draft", chatID: "source")
+        h.store.drafts.setDraftReply(source.replyPreview, chatID: "source")
+        h.store.drafts.setDraftText("destination draft", chatID: "chat")
+        h.store.drafts.setDraftReply(destinationReply.replyPreview, chatID: "chat")
+        await h.store.drafts.flushAll()
+        let sourceDraft = try XCTUnwrap(
+            h.queue.snapshots[ConversationKey(chatID: "source")]?.draft)
+        let destinationDraft = try XCTUnwrap(
+            h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft)
+        let model = ForwardDestinationPickerModel(
+            store: h.store, sources: [source], loadSources: nil)
+        model.start()
+        defer { model.stop() }
+        try await chooseForwardDestination(.conversation(destination), in: model)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+
+        let completed = expectation(description: "Explicit forward commits durably")
+        var completionCount = 0
+        let onCompleted = {
+            completionCount += 1
+            completed.fulfill()
+        }
+        model.send(onCompleted: onCompleted)
+        model.send(onCompleted: onCompleted)
+        await fulfillment(of: [completed], timeout: 5)
+        model.send(onCompleted: onCompleted)
+
+        XCTAssertNil(model.failure)
+        XCTAssertEqual(completionCount, 1)
+        let pending = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").count, 1)
+        XCTAssertEqual(pending.forwardRequest?.sources.map(\.id), [source.id])
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "source").isEmpty)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "source"), "source draft")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "source"), source.replyPreview)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "destination draft")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), destinationReply.replyPreview)
+        XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "source")]?.draft, sourceDraft)
+        XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft, destinationDraft)
+        let durable = try await h.localStore.restore()
+        XCTAssertEqual(durable.first { $0.chatID == "source" }?.draft, sourceDraft)
+        XCTAssertEqual(durable.first { $0.chatID == "chat" }?.draft, destinationDraft)
+        XCTAssertEqual(
+            durable.first { $0.chatID == "chat" }?.outgoing.map(\.clientGeneratedID),
+            [pending.clientGeneratedID])
+    }
+
+    func testForwardPickerExplicitSaveNeverTogglesAlreadySavedSourceOff() async throws {
+        let api = FakeChatAPI()
+        let h = try await openDraftHarness(api: api)
+        h.store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        h.store.savedMessages.setAccount(1)
+        let source = try TimelineTestFixtures.message(
+            id: 1, senderID: 2, at: 1, text: "Captured text")
+        let snapshotData = try JSONSerialization.data(withJSONObject: [
+            "id": "saved-1", "originalMessageId": "1", "originalChatId": "chat",
+            "originalSenderUid": 2, "originalCreatedAt": 0, "savedAt": 0,
+            "messageType": "text", "message": "Captured text", "mentions": [], "attachments": [],
+            "sender": try JSONSerialization.jsonObject(with: JSONEncoder().encode(source.sender)),
+            "chat": ["id": "chat", "name": "Chat"], "canLocateContext": true,
+        ])
+        let snapshot = try JSONDecoder().decode(SavedMessageResponse.self, from: snapshotData)
+        await api.setSaveResult(snapshot)
+        try await h.store.savedMessages.save(source)
+        let savedRevision = h.store.savedMessages.revision
+        let model = ForwardDestinationPickerModel(
+            store: h.store, sources: [source], loadSources: nil)
+        model.start()
+        defer { model.stop() }
+        try await chooseForwardDestination(.saved, in: model)
+        XCTAssertEqual(h.store.savedMessages.revision, savedRevision)
+
+        let completed = expectation(
+            description: "Explicit save completes without removing snapshot")
+        var completionCount = 0
+        let onCompleted = {
+            completionCount += 1
+            completed.fulfill()
+        }
+        model.send(onCompleted: onCompleted)
+        model.send(onCompleted: onCompleted)
+        await fulfillment(of: [completed], timeout: 5)
+        try await h.store.savedMessages.save(source)
+
+        XCTAssertNil(model.failure)
+        XCTAssertEqual(completionCount, 1)
+        XCTAssertTrue(h.store.savedMessages.isSaved(chatID: source.chatId, messageID: source.id))
+        XCTAssertEqual(h.store.savedMessages.items.map(\.id), [snapshot.id])
+        XCTAssertEqual(h.store.savedMessages.items.first?.message, "Captured text")
+        XCTAssertEqual(h.store.savedMessages.revision, savedRevision)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: source.chatId).isEmpty)
+    }
+
+    private func chooseForwardDestination(
+        _ target: ForwardDestination, in model: ForwardDestinationPickerModel,
+        file: StaticString = #filePath, line: UInt = #line
+    ) async throws {
+        let resolved = expectation(description: "Forward destination resolves")
+        let observation = model.$isResolving.dropFirst().first(where: { !$0 })
+            .sink { _ in resolved.fulfill() }
+        defer { observation.cancel() }
+        model.choose(target)
+        await fulfillment(of: [resolved], timeout: 5)
+        XCTAssertNil(model.failure, file: file, line: line)
+        XCTAssertNotNil(model.selectedTarget, file: file, line: line)
+    }
+
+    private func openDraftHarness(api: FakeChatAPI = FakeChatAPI()) async throws -> DraftHarness {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "ChatDraft-\(UUID().uuidString)")
         let localStore = try await Task.detached { try ChahuaLocalStore(directory: root) }.value
-        let api = FakeChatAPI()
         let probe = DraftStorageProbe()
         let queue = OutgoingMessageQueue(
             apiClient: api,
@@ -3625,73 +3797,6 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
         case .failure(let error): pendingChatRequest?.resume(throwing: error)
         }
         pendingChatRequest = nil
-    }
-}
-
-extension ChatStoreTests {
-    func testMovingPendingForwardRollsBackFailureAndPreservesDestinationDrafts() async throws {
-        let h = try await openDraftHarness()
-        let drafts = h.store.drafts
-        let first = ConversationListItem.chat(
-            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
-        let second = ConversationListItem.chat(
-            .init(id: "other", unreadCount: 0, archived: false, kind: .group))
-        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
-        let otherSource = try TimelineTestFixtures.message(id: 11, chatID: "source", at: 1)
-        let reply = try TimelineTestFixtures.message(id: 1, chatID: "chat", at: 0).replyPreview
-        drafts.setDraftText("first caption", chatID: "chat")
-        drafts.setDraftReply(reply, chatID: "chat")
-        drafts.setDraftText("second caption", chatID: "other")
-        _ = try await drafts.prepareForward(
-            sources: [source], allowPlaceholders: false, destination: first,
-            moveFrom: nil, expectedID: nil, navigate: { _ in true })
-        _ = try await drafts.prepareForward(
-            sources: [otherSource], allowPlaceholders: true, destination: second,
-            moveFrom: nil, expectedID: nil, navigate: { _ in true })
-        let firstSelection = try XCTUnwrap(drafts.pendingForwards[first.id])
-        let secondSelection = try XCTUnwrap(drafts.pendingForwards[second.id])
-        let rejected = try await drafts.prepareForward(
-            sources: firstSelection.sources, allowPlaceholders: false, destination: second,
-            moveFrom: first.id, expectedID: firstSelection.id, navigate: { _ in false })
-        XCTAssertFalse(rejected)
-        XCTAssertEqual(drafts.pendingForwards[first.id], firstSelection)
-        XCTAssertEqual(drafts.pendingForwards[second.id], secondSelection)
-
-        let moved = try await drafts.prepareForward(
-            sources: firstSelection.sources, allowPlaceholders: false, destination: second,
-            moveFrom: first.id, expectedID: firstSelection.id, navigate: { _ in true })
-        XCTAssertTrue(moved)
-        XCTAssertNil(drafts.pendingForwards[first.id])
-        XCTAssertEqual(drafts.pendingForwards[second.id]?.sources, [source])
-        XCTAssertEqual(drafts.draftText(chatID: "chat"), "first caption")
-        XCTAssertEqual(drafts.draftReply(chatID: "chat"), reply)
-        XCTAssertEqual(drafts.draftText(chatID: "other"), "second caption")
-        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
-        XCTAssertTrue(h.queue.pendingMessages(chatID: "other").isEmpty)
-    }
-
-    func testForwardCancelledDuringDestinationEntryCannotReappearAtNewTarget() async throws {
-        let h = try await openDraftHarness()
-        let drafts = h.store.drafts
-        let first = ConversationListItem.chat(
-            .init(id: "chat", unreadCount: 0, archived: false, kind: .group))
-        let second = ConversationListItem.chat(
-            .init(id: "other", unreadCount: 0, archived: false, kind: .group))
-        let source = try TimelineTestFixtures.message(id: 10, chatID: "source", at: 0)
-        _ = try await drafts.prepareForward(
-            sources: [source], allowPlaceholders: false, destination: first,
-            moveFrom: nil, expectedID: nil, navigate: { _ in true })
-        let selection = try XCTUnwrap(drafts.pendingForwards[first.id])
-        let moved = try await drafts.prepareForward(
-            sources: [source], allowPlaceholders: false, destination: second,
-            moveFrom: first.id, expectedID: selection.id,
-            navigate: { _ in
-                drafts.cancelForward(at: first.id, expectedID: selection.id)
-                return true
-            })
-        XCTAssertFalse(moved)
-        XCTAssertNil(drafts.pendingForwards[first.id])
-        XCTAssertNil(drafts.pendingForwards[second.id])
     }
 }
 

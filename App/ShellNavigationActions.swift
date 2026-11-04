@@ -7,7 +7,6 @@ import Foundation
 final class ShellNavigationActions {
     var profileHandler: ((Int32) -> Void)?
     var inviteHandler: ((String) -> Void)?
-    var forwardHandler: ((ConversationListItem) async throws -> Bool)?
 
     lazy var openProfile: (Int32) -> Void = { [weak self] uid in
         self?.profileHandler?(uid)
@@ -15,15 +14,9 @@ final class ShellNavigationActions {
     lazy var openInvite: (String) -> Void = { [weak self] code in
         self?.inviteHandler?(code)
     }
-    lazy var openForward: @MainActor @Sendable (ConversationListItem) async throws -> Bool = {
-        [weak self] target in
-        guard let handler = self?.forwardHandler else { return false }
-        return try await handler(target)
-    }
 
     func clear() {
         profileHandler = nil
         inviteHandler = nil
-        forwardHandler = nil
     }
 }

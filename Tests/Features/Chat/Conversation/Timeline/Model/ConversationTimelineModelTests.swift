@@ -1855,6 +1855,62 @@ final class ConversationTimelineModelTests: XCTestCase {
         }
     }
 
+    func testVisibleActivityDismissalWaitsForServerReadAndPreservesOffscreenTargets() async throws {
+        let reading = expectation(description: "Visible message read sent")
+        var releaseRead: CheckedContinuation<Void, Never>?
+        var reads: [MessageID] = []
+        var boundaries: [String?] = []
+        var snapshot = 0
+        let (model, source, _) = try makeModel(
+            pages: [.success(try livePage(ids: 1...3))],
+            markRead: { id in
+                reads.append(id)
+                await withCheckedContinuation {
+                    releaseRead = $0
+                    reading.fulfill()
+                }
+            },
+            fetchUnreadMentions: { _ in .init(messageIds: [MessageID(1), MessageID(2)]) },
+            fetchUnreadReactions: { _ in
+                snapshot += 1
+                return .init(messageIds: [MessageID(1), MessageID(2)], readThrough: "\(snapshot)")
+            },
+            acknowledgeReactions: { _, boundary in
+                boundaries.append(boundary)
+                return .init(unreadReactions: 0)
+            })
+        await model.open()
+        model.setReadTrackingActive(true)
+        await source.drain()
+        XCTAssertEqual(model.unreadMentionJumpCount, 2)
+        XCTAssertEqual(model.unreadReactionJumpCount, 2)
+        reportVisible([MessageID(2)], to: model)
+        await fulfillment(of: [reading], timeout: 2)
+        XCTAssertEqual(reads, [MessageID(2)])
+        XCTAssertEqual(boundaries, ["1"])
+        XCTAssertEqual(model.unreadMentionJumpCount, 2, "Pending reads must not dismiss mentions.")
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        releaseRead?.resume()
+        await source.drain()
+        XCTAssertEqual(model.unreadMentionJumpCount, 1)
+        model.setReadTrackingActive(false)
+        reportVisible([MessageID(1)], to: model)
+        XCTAssertEqual(model.unreadMentionJumpCount, 1)
+        XCTAssertEqual(model.unreadReactionJumpCount, 1)
+        model.setReadTrackingActive(true)
+        reportVisible([MessageID(1)], to: model)
+        await source.drain()
+        XCTAssertEqual(model.unreadMentionJumpCount, 0)
+        XCTAssertEqual(model.unreadReactionJumpCount, 0)
+        model.refreshUnreadActivity(mentions: false)
+        await source.drain()
+        XCTAssertEqual(boundaries, ["1", "2"])
+        XCTAssertEqual(
+            model.unreadReactionJumpCount, 1,
+            "A new reaction on an offscreen old message remains navigable.")
+        model.close()
+    }
+
     func testReactionSnapshotsAcknowledgeExactBoundaryAndLoopForRemainingUnread() async throws {
         var fetches = 0
         var boundaries: [String?] = []

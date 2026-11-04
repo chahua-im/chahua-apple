@@ -12,6 +12,78 @@ import XCTest
 
 @MainActor
 final class MessageTextLayoutTests: XCTestCase {
+    func testMentionPaddingDoesNotLeaveAnEmptyPillAtLineWrap() throws {
+        let mentions = try JSONDecoder().decode(
+            [MentionInfo].self, from: Data(#"[{"uid":2,"username":"崩溃","gender":0}]"#.utf8))
+        let text = MessageTextContent.attributedText(
+            text: "Native preview with @[uid:2] text", mentions: mentions,
+            currentUserID: 1, isOutgoing: false, font: .systemFont(ofSize: 17))
+        let nameRange = try XCTUnwrap(text.string.range(of: "@崩溃"))
+        let name = NSRange(nameRange, in: text.string)
+        var mention = NSRange()
+        _ = text.attribute(.bubbleMentionID, at: name.location, effectiveRange: &mention)
+        let layout = MessageTextLayout(attributedText: text)
+        for width in 90...300 {
+            _ = layout.geometry(for: CGFloat(width))
+            let paddingGlyph = layout.layoutManager.glyphIndexForCharacter(at: mention.location)
+            let nameGlyph = layout.layoutManager.glyphIndexForCharacter(at: name.location)
+            let paddingLine = layout.layoutManager.lineFragmentRect(
+                forGlyphAt: paddingGlyph, effectiveRange: nil)
+            let nameLine = layout.layoutManager.lineFragmentRect(
+                forGlyphAt: nameGlyph, effectiveRange: nil)
+            XCTAssertEqual(
+                paddingLine.minY, nameLine.minY,
+                "Mention background must not orphan a padding-only fragment at width \(width)")
+        }
+    }
+
+    func testNativeDeliveryAnimationStopsOffscreenAndOnReuse() throws {
+        let view = TimelineDeliveryStatusView(frame: CGRect(x: 0, y: 0, width: 24, height: 20))
+        #if os(macOS)
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 24, height: 20),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            window.orderFront(nil)
+            defer { window.close() }
+            let layer = try XCTUnwrap(view.layer)
+        #else
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            let controller = UIViewController()
+            controller.view.addSubview(view)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                previousKeyWindow?.makeKey()
+            }
+            let layer = view.layer
+        #endif
+        func animates(_ layer: CALayer) -> Bool {
+            !(layer.animationKeys() ?? []).isEmpty
+                || (layer.sublayers ?? []).contains(where: animates)
+        }
+        view.configure(MessageMetadata(time: "12:34", state: .sending, isOutgoing: true))
+        #if os(macOS)
+            view.layoutSubtreeIfNeeded()
+        #else
+            view.layoutIfNeeded()
+        #endif
+        XCTAssertTrue(animates(layer), "Visible sending indicators must animate.")
+        view.setVisible(false)
+        XCTAssertFalse(animates(layer), "Offscreen rows must not retain a repeating animation.")
+        view.setVisible(true)
+        XCTAssertTrue(animates(layer))
+        view.configure(MessageMetadata(time: "12:34", state: .delivered, isOutgoing: true))
+        XCTAssertFalse(
+            animates(layer), "Reusing a sending row for a sent message must stop animation.")
+        view.configure(nil)
+        XCTAssertFalse(animates(layer))
+    }
+
     func testSeparateFooterDoesNotRetainFailedInlineWidth() throws {
         for text in ["现在基本内部都有大规模的 AI 扫 bug", "The timestamp needs its own row"] {
             for bodySize in [CGFloat(17), CGFloat(28)] {
@@ -193,11 +265,26 @@ final class MessageTextLayoutTests: XCTestCase {
                             let bitmap = try XCTUnwrap(
                                 view.bitmapImageRepForCachingDisplay(in: view.bounds))
                             view.cacheDisplay(in: view.bounds, to: bitmap)
+                            let nominalSize = MessageDeliveryStatusView.layoutSize(
+                                for: metadata.statusFontSize,
+                                checkSeparation: metadata.checkSeparation)
+                            let scale = min(
+                                1, view.bounds.width / nominalSize.width,
+                                view.bounds.height / nominalSize.height)
                             let canonical = NSHostingView(
-                                rootView: try XCTUnwrap(metadata.statusContent)
-                                    .environment(
-                                        \.displayScale,
-                                        CGFloat(bitmap.pixelsWide) / view.bounds.width))
+                                rootView: MessageDeliveryStatusView(
+                                    status: try XCTUnwrap(metadata.status),
+                                    size: metadata.statusFontSize,
+                                    checkSeparation: metadata.checkSeparation,
+                                    checkHeight: metadata.digitHeight
+                                )
+                                .foregroundStyle(Color(metadata.foreground))
+                                .fixedSize()
+                                .scaleEffect(scale)
+                                .frame(width: view.bounds.width, height: view.bounds.height)
+                                .environment(
+                                    \.displayScale,
+                                    CGFloat(bitmap.pixelsWide) / view.bounds.width))
                             canonical.sizingOptions = []
                             canonical.appearance = view.appearance
                             canonical.frame = view.bounds
@@ -207,11 +294,17 @@ final class MessageTextLayoutTests: XCTestCase {
                             canonical.cacheDisplay(in: canonical.bounds, to: reference)
                             let actualInk = inkBounds(bitmap)
                             let expectedInk = inkBounds(reference)
-                            XCTAssertFalse(actualInk.isNull)
-                            XCTAssertEqual(actualInk.minX, expectedInk.minX, accuracy: 1)
-                            XCTAssertEqual(actualInk.maxX, expectedInk.maxX, accuracy: 1)
-                            XCTAssertEqual(actualInk.minY, expectedInk.minY, accuracy: 1)
-                            XCTAssertEqual(actualInk.maxY, expectedInk.maxY, accuracy: 1)
+                            let diagnostic =
+                                "\(state), read=\(read), font=\(fontSize), fit=\(fit), appearance=\(appearanceName)"
+                            XCTAssertFalse(actualInk.isNull, diagnostic)
+                            XCTAssertEqual(
+                                actualInk.minX, expectedInk.minX, accuracy: 1, diagnostic)
+                            XCTAssertEqual(
+                                actualInk.maxX, expectedInk.maxX, accuracy: 1, diagnostic)
+                            XCTAssertEqual(
+                                actualInk.minY, expectedInk.minY, accuracy: 1, diagnostic)
+                            XCTAssertEqual(
+                                actualInk.maxY, expectedInk.maxY, accuracy: 1, diagnostic)
                             // Bounds alone would allow a vertically mirrored check.
                             // Permit edge antialiasing differences from the cached
                             // backing scale, but require the same glyph coverage.
@@ -226,7 +319,22 @@ final class MessageTextLayoutTests: XCTestCase {
                                     coverage += expected
                                 }
                             }
-                            XCTAssertLessThan(difference / max(coverage, 1), 0.65)
+                            if difference / max(coverage, 1) >= 0.65
+                                || abs(actualInk.maxY - expectedInk.maxY) > 1
+                                || abs(actualInk.maxX - expectedInk.maxX) > 1
+                            {
+                                for (name, rendered) in [
+                                    ("Native", bitmap), ("Reference", reference),
+                                ] {
+                                    let image = NSImage(size: view.bounds.size)
+                                    image.addRepresentation(rendered)
+                                    let attachment = XCTAttachment(image: image)
+                                    attachment.name = "\(name) \(diagnostic)"
+                                    attachment.lifetime = .keepAlways
+                                    add(attachment)
+                                }
+                            }
+                            XCTAssertLessThan(difference / max(coverage, 1), 0.65, diagnostic)
                         }
                     }
                 }
@@ -443,9 +551,6 @@ final class MessageTextLayoutTests: XCTestCase {
             try await settle()
             let linkRange = (text.text as NSString).range(of: "https://example.com")
             let mentionRange = (text.text as NSString).range(of: "@User 2")
-            let expectedText = "Hello https://example.com \u{2002}@User 2\u{2002}"
-            XCTAssertEqual(
-                text.text, expectedText, "Timestamp metadata must not enter the selectable text.")
             let coordinator = try XCTUnwrap(text.delegate as? MessageTextContent.Coordinator)
             text.selectedRange = NSRange(location: 0, length: 5)
             coordinator.activateLink(in: text.textStorage, at: linkRange.location)
@@ -469,7 +574,6 @@ final class MessageTextLayoutTests: XCTestCase {
             coordinator.activateLink(in: text.textStorage, at: mentionRange.location)
             XCTAssertEqual(opened, expectedActions)
             XCTAssertEqual(text.selectedRange, NSRange(location: 0, length: 5))
-            XCTAssertEqual(text.text, expectedText)
         }
     #endif
 

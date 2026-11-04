@@ -276,8 +276,6 @@ struct MessageTextContent {
                     }
                     inline(children, attributes)
                 case .mention(let uid):
-                    attributes[.font] = BubbleNativeFont.systemFont(
-                        ofSize: font.pointSize * 0.9, weight: .semibold)
                     let tint = interactiveForeground
                     attributes[.foregroundColor] = tint
                     attributes[.bubbleMentionID] = NSNumber(value: uid)
@@ -288,13 +286,10 @@ struct MessageTextContent {
                     if mentionsEnabled {
                         attributes[.link] = URL(string: "chahua-mention://\(uid)")
                     }
-                    let start = output.length
-                    append("\u{2002}@\(names[uid] ?? "User \(uid)")\u{2002}", attributes)
-                    for location in [start, output.length - 1] {
-                        output.addAttribute(
-                            .font, value: BubbleNativeFont.systemFont(ofSize: 8),
-                            range: NSRange(location: location, length: 1))
-                    }
+                    // Keep the body font/baseline, including Markdown traits.
+                    // Narrow no-break spaces scale with the font and stay with
+                    // the mention, rather than leaving an empty pill at a line edge.
+                    append("\u{202F}@\(names[uid] ?? "User \(uid)")\u{202F}", attributes)
                 }
             }
         }

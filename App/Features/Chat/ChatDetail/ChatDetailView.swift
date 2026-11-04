@@ -68,8 +68,6 @@ struct ChatDetailView: View {
         let id = UUID()
         let sources: [MessageResponse]
         var wholeThread = false
-        var moveFrom: ConversationKey?
-        var expectedForwardID: UUID?
         var onPrepared: () -> Void = {}
     }
 
@@ -389,7 +387,8 @@ struct ChatDetailView: View {
                     chat: chat, currentUserID: model.currentUserID, store: store,
                     onOpenThread: onOpenThread, loadWholeThread: loadWholeThreadForForwarding,
                     forwardRequest: $forwardRequest, systemMessageTarget: $systemMessageTarget,
-                    recordRequest: $recordRequest)
+                    recordRequest: $recordRequest,
+                    onForwardCompleted: { showsForwardStarted = true })
             )
             .alert(
                 "Delete these messages?",
@@ -429,14 +428,19 @@ struct ChatDetailView: View {
     }
 
     private func selectionToolbar(actions: TimelineBubbleActions) -> some View {
-        HStack(spacing: 16) {
+        let canForward = !actions.selectedMessageIDs.isEmpty && !isDeletingSelection
+        let canDelete =
+            !actions.selectedMessageIDs.isEmpty
+            && canDeleteSelection(actions.selectionMessages) && !isDeletingSelection
+        return HStack(spacing: 16) {
             Button(role: .destructive) {
                 selectionToDelete = actions
             } label: {
                 Image(systemName: "trash")
             }
             .accessibilityLabel("Delete selected messages")
-            .disabled(!canDeleteSelection(actions.selectionMessages) || isDeletingSelection)
+            .foregroundStyle(canDelete ? ChahuaTheme.destructive : Color.secondary)
+            .disabled(!canDelete)
             Spacer(minLength: 0)
             if isDeletingSelection {
                 ProgressView().controlSize(.small)
@@ -448,6 +452,10 @@ struct ChatDetailView: View {
                 selectionDeleteTask?.cancel()
                 actions.endMessageSelection?()
             }
+            .foregroundStyle(ChahuaTheme.accent)
+            #if os(macOS)
+                .keyboardShortcut(.cancelAction)
+            #endif
             Button {
                 forwardRequest = ForwardSelection(
                     sources: actions.selectionMessages,
@@ -456,9 +464,10 @@ struct ChatDetailView: View {
                 Image(systemName: "arrowshape.turn.up.right")
             }
             .accessibilityLabel("Forward")
-            .disabled(actions.selectedMessageIDs.isEmpty || isDeletingSelection)
+            .foregroundStyle(canForward ? ChahuaTheme.accent : Color.secondary)
+            .disabled(!canForward)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .padding()
         .background(.regularMaterial, in: Capsule())
         .padding(.horizontal, 12).padding(.bottom, 8)
@@ -638,9 +647,6 @@ struct ChatDetailView: View {
                                         .background(
                                             .regularMaterial, in: RoundedRectangle(cornerRadius: 16)
                                         )
-                                }
-                                if let selection = drafts.pendingForwards[conversationKey] {
-                                    pendingForwardPreview(selection)
                                 }
                                 if interactionContext.canWrite,
                                     !(editingMessage.map(isEditable) ?? interactionContext.canSend),
@@ -1195,67 +1201,4 @@ struct ChatDetailView: View {
         }
     }
 
-    private func changeForwardDestination(_ selection: PendingForwardDraft) {
-        forwardRequest = ForwardSelection(
-            sources: selection.sources, moveFrom: conversationKey,
-            expectedForwardID: selection.id)
-    }
-
-    private func pendingForwardPreview(_ selection: PendingForwardDraft) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Button {
-                    changeForwardDestination(selection)
-                } label: {
-                    Label("Forward", systemImage: "arrowshape.turn.up.right")
-                        .font(.headline)
-                }
-                .accessibilityLabel("Change Destination")
-                Spacer()
-                Button("Cancel", systemImage: "xmark") {
-                    drafts.cancelForward(at: conversationKey, expectedID: selection.id)
-                }
-                .labelStyle(.iconOnly)
-            }
-            let countTitle: LocalizedStringKey =
-                selection.sources.count == 1
-                ? "1 message" : "\(selection.sources.count) messages"
-            Text(countTitle)
-                .font(.caption).foregroundStyle(.secondary)
-            if let first = selection.sources.first {
-                MessageSummaryText(first.replyPreview, fontSize: 14, color: .secondary)
-                    .lineLimit(2)
-            }
-            HStack {
-                Button("Change Destination") {
-                    changeForwardDestination(selection)
-                }
-                Spacer()
-                Button("Send Forward") {
-                    Task {
-                        do {
-                            guard currentInteractionContext.canSend else { return }
-                            let sent = try await drafts.submitForward(
-                                at: conversationKey, expectedID: selection.id)
-                            if sent {
-                                model.revealLatestAfterSend()
-                                showsForwardStarted = true
-                            }
-                        } catch {
-                            outboxError =
-                                (error as? APIError)?.speakingRestriction?
-                                .restrictionExplanation ?? error.localizedDescription
-                        }
-                    }
-                }
-                .disabled(
-                    !interactionContext.canSend || outgoingQueue.storageState != .ready
-                        || drafts.committingDrafts.contains(conversationKey))
-            }
-        }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .padding(.horizontal, 12)
-        .padding(.bottom, 6)
-    }
 }

@@ -118,31 +118,37 @@ struct ChatPinnedMessageBar: View {
     }
 }
 
-/// macOS reserves the pin bar above the native viewport. iOS keeps the floating
-/// presentation and supplies its measured occlusion to the timeline.
+/// Floating pins add their measured height to the title's scrollable clearance.
 struct ChatPinnedBarOverlay<Bar: View>: ViewModifier {
     let isVisible: Bool
     @ViewBuilder let bar: () -> Bar
     @Environment(\.isWideChatLayout) private var isWideChatLayout
-    #if !os(macOS)
-        @Environment(\.chatHeaderInset) private var titleInset
-        @State private var barHeight: CGFloat = 0
-    #endif
+    @Environment(\.chatHeaderInset) private var titleInset
+    @State private var barHeight: CGFloat = 0
 
     func body(content: Content) -> some View {
         #if os(macOS)
-            // Content insets only affect scroll limits; they cannot stop AppKit rows
-            // drawing behind glass. Reserve the bar in SwiftUI so the native clip
-            // view starts below it, including on the first layout before measurement.
-            VStack(spacing: 0) {
-                if isVisible {
-                    bar()
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, isWideChatLayout ? 16 : 12)
-                        .padding(.bottom, 12)
+            // Keep the native clip view full-height; only the scrollable content
+            // clearance grows. The title and pins stay above the timeline backdrop.
+            content
+                .environment(\.chatHeaderInset, titleInset + (isVisible ? barHeight + 12 : 0))
+                .overlay(alignment: .top) {
+                    if isVisible {
+                        bar()
+                            .fixedSize(horizontal: false, vertical: true)
+                            .background {
+                                GeometryReader { geometry in
+                                    Color.clear
+                                        .onAppear { barHeight = geometry.size.height }
+                                        .onChange(of: geometry.size.height) { _, height in
+                                            barHeight = height
+                                        }
+                                }
+                            }
+                            .padding(.horizontal, isWideChatLayout ? 16 : 12)
+                            .padding(.top, titleInset)
+                    }
                 }
-                content
-            }
         #else
             content
                 .environment(\.chatHeaderInset, titleInset + (isVisible ? barHeight + 12 : 0))

@@ -2,10 +2,42 @@
     import AppKit
     import SwiftUI
 
-    /// SwiftUI owns only the application boundary; the complete timeline is native.
-    struct ConversationTimelineView: NSViewControllerRepresentable {
+    /// AppKit owns the native table; SwiftUI owns the shared floating-chrome backdrop.
+    struct ConversationTimelineView: View {
+        @Environment(\.chatHeaderInset) private var chatHeaderInset
+        let model: ConversationTimelineModel
+        var initialPosition: TimelineInitialPosition = .liveEdge
+        var loadsInitialAutomatically = true
+        var actions = TimelineBubbleActions()
+        var interactionContext = MessageInteractionContext()
+
+        var body: some View {
+            MacTimelineControllerHost(
+                model: model,
+                initialPosition: initialPosition,
+                loadsInitialAutomatically: loadsInitialAutomatically,
+                actions: actions,
+                interactionContext: interactionContext
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                if chatHeaderInset > 0 {
+                    // Keep the material in the parent SwiftUI graph, above native
+                    // rows but below the outer title/pin overlays. No additional
+                    // NSHostingView is needed for the macOS AppKit boundary.
+                    ChatHeaderBackdrop(edge: .top, strength: .light)
+                        .frame(height: chatHeaderInset + 24)
+                }
+            }
+        }
+    }
+
+    /// The native table preserves AppKit scrolling, selection and row reuse; only
+    /// its controller bridge is platform-specific, not the floating chrome.
+    private struct MacTimelineControllerHost: NSViewControllerRepresentable {
         @Environment(\.mediaContext) private var mediaContext
         @Environment(\.colorScheme) private var colorScheme
+        @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
         @Environment(\.isChatSplitResizing) private var isSplitResizing
         @Environment(\.isWideChatLayout) private var isWideChatLayout
@@ -51,6 +83,7 @@
                 showAllAvatars: showAllAvatars,
                 showDmDetails: showDmDetails,
                 unreadBadgeColor: unreadBadgeColor,
+                headerInset: chatHeaderInset,
                 composerInset: chatComposerInset,
                 isSplitResizing: isSplitResizing,
                 isWideChatLayout: isWideChatLayout

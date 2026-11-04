@@ -1,188 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "No images yet": {
-      "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "No images yet" } },
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "暂无图片" } },
-        "zh-Hant": { "stringUnit": { "state": "translated", "value": "尚無圖片" } }
-      }
-    },
-    "No videos yet": {
-      "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "No videos yet" } },
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "暂无视频" } },
-        "zh-Hant": { "stringUnit": { "state": "translated", "value": "尚無影片" } }
-      }
-    },
-    "No files yet": {
-      "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "No files yet" } },
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "暂无文件" } },
-        "zh-Hant": { "stringUnit": { "state": "translated", "value": "尚無檔案" } }
-      }
-    },
-    "Friends only" : {
-      "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Friends only" } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "仅好友" } },
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "僅限朋友" } }
-      }
-    },
-    "Sign out…": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign out…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "退出登录…"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "登出⋯"
-          }
-        }
-      }
-    },
-    "Sign out of %@?": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sign out of %@?"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "要退出 %@ 的登录吗？"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "要登出 %@ 嗎？"
-          }
-        }
-      }
-    },
-    "You’ll need to sign in again to see your chats on this Mac.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You’ll need to sign in again to see your chats on this Mac."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你需要重新登录才能在这台 Mac 上查看聊天。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你需要重新登入才能在這部 Mac 上查看聊天。"
-          }
-        }
-      }
-    },
-    "You’ll need to sign in again to see your chats on this device.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "You’ll need to sign in again to see your chats on this device."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你需要重新登录才能在此设备上查看聊天。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "你需要重新登入才能在此裝置上查看聊天。"
-          }
-        }
-      }
-    },
-    "View profile": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "View profile"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查看资料"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "查看個人資料"
-          }
-        }
-      }
-    },
-    "Unsaved changes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unsaved changes"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未保存的更改"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未儲存的變更"
-          }
-        }
-      }
-    },
-    "Revert": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Revert"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "还原"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "還原"
-          }
-        }
-      }
-    },
     "" : {
       "localizations" : {
         "zh-Hans" : {
@@ -448,6 +266,16 @@
         }
       }
     },
+    "%@ · %lld replies" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$lld replies"
+          }
+        }
+      }
+    },
     "%@ / %@" : {
       "comment" : "A label showing the current playback time and total duration of a voice message. The first argument is the string “%1$d:%2$02d”. The second argument is the string “%1$d:%2$02d”.",
       "isCommentAutoGenerated" : true,
@@ -693,6 +521,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 則訊息"
+          }
+        }
+      }
+    },
+    "%lld messages from %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld messages from %2$@"
           }
         }
       }
@@ -951,6 +789,12 @@
         }
       }
     },
+    "+%lld more messages" : {
+
+    },
+    "+1 more message" : {
+
+    },
     "♀" : {
       "comment" : "A symbol for a female user.",
       "isCommentAutoGenerated" : true,
@@ -1003,6 +847,9 @@
           }
         }
       }
+    },
+    "1 message from %@" : {
+
     },
     "1 reply" : {
       "comment" : "A label displayed in a message thread indicating the number of replies.",
@@ -2028,6 +1875,9 @@
         }
       }
     },
+    "Back to destinations" : {
+
+    },
     "Backend registration" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2373,6 +2223,12 @@
         }
       }
     },
+    "Change" : {
+
+    },
+    "Change destination" : {
+
+    },
     "Change Destination" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2662,6 +2518,9 @@
       "comment" : "A label for a button that closes the emoji picker.",
       "isCommentAutoGenerated" : true
     },
+    "Close forwarding" : {
+
+    },
     "Close image" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -2832,6 +2691,9 @@
     "Continue" : {
       "comment" : "A button that confirms forwarding a message to a user.",
       "isCommentAutoGenerated" : true
+    },
+    "Conversation" : {
+
     },
     "Conversation actions" : {
       "extractionState" : "manual",
@@ -3020,6 +2882,9 @@
     "Copy URL" : {
       "comment" : "A button that copies a group invitation URL to the clipboard.",
       "isCommentAutoGenerated" : true
+    },
+    "Could not forward these messages. Try again." : {
+
     },
     "Could not load chats" : {
       "extractionState" : "manual",
@@ -4683,6 +4548,9 @@
         }
       }
     },
+    "Direct message" : {
+
+    },
     "Direct Message %@" : {
       "comment" : "A DM chat name, if available. Otherwise, a generic DM name with the chat ID.",
       "isCommentAutoGenerated" : true,
@@ -5673,6 +5541,12 @@
         }
       }
     },
+    "Forward %lld messages" : {
+
+    },
+    "Forward 1 message" : {
+
+    },
     "Forward Thread" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5706,6 +5580,12 @@
           }
         }
       }
+    },
+    "Forward to %@" : {
+
+    },
+    "Forward to…" : {
+
     },
     "Forwarded from %@" : {
       "extractionState" : "manual",
@@ -5872,6 +5752,31 @@
           }
         }
       }
+    },
+    "Friends only" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Friends only"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅好友"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "僅限朋友"
+          }
+        }
+      }
+    },
+    "From %@" : {
+
     },
     "General" : {
       "comment" : "A section title for general settings options.",
@@ -8489,6 +8394,28 @@
         }
       }
     },
+    "No files yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No files yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚無檔案"
+          }
+        }
+      }
+    },
     "No forwarding destinations found" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8569,9 +8496,34 @@
         }
       }
     },
+    "No images yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No images yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无图片"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚無圖片"
+          }
+        }
+      }
+    },
     "No invitations" : {
       "comment" : "A message displayed when a user has no invitations.",
       "isCommentAutoGenerated" : true
+    },
+    "No matching conversations in loaded results" : {
+
     },
     "No matching emoji" : {
       "extractionState" : "manual",
@@ -8676,6 +8628,9 @@
         }
       }
     },
+    "No recent conversations" : {
+
+    },
     "No recent emoji" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -8753,6 +8708,28 @@
     "No threads in this chat" : {
       "comment" : "A message displayed when a user has no threads in a chat.",
       "isCommentAutoGenerated" : true
+    },
+    "No videos yet" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No videos yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无视频"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚無影片"
+          }
+        }
+      }
     },
     "Nobody" : {
       "extractionState" : "manual",
@@ -9603,6 +9580,9 @@
           }
         }
       }
+    },
+    "Preparing preview…" : {
+
     },
     "Preview" : {
       "comment" : "The section of the sticker upload sheet that displays the sticker preview.",
@@ -11609,6 +11589,28 @@
         }
       }
     },
+    "Revert" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revert"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还原"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "還原"
+          }
+        }
+      }
+    },
     "Revoke" : {
       "comment" : "The text of a button that revokes an invitation.",
       "isCommentAutoGenerated" : true
@@ -12600,6 +12602,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "登出"
+          }
+        }
+      }
+    },
+    "Sign out of %@?" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign out of %@?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要退出 %@ 的登录吗？"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要登出 %@ 嗎？"
+          }
+        }
+      }
+    },
+    "Sign out…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign out…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退出登录…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登出⋯"
           }
         }
       }
@@ -13859,6 +13905,9 @@
         }
       }
     },
+    "To" : {
+
+    },
     "tomorrow" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -14411,6 +14460,28 @@
         }
       }
     },
+    "Unsaved changes" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unsaved changes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未保存的更改"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未儲存的變更"
+          }
+        }
+      }
+    },
     "Unsubscribe" : {
       "localizations" : {
         "zh-Hans" : {
@@ -14830,6 +14901,28 @@
         }
       }
     },
+    "View profile" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View profile"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看资料"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看個人資料"
+          }
+        }
+      }
+    },
     "View Profile" : {
       "comment" : "A button that opens a user's profile.",
       "isCommentAutoGenerated" : true
@@ -15231,6 +15324,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你已無權管理群組成員。"
+          }
+        }
+      }
+    },
+    "You’ll need to sign in again to see your chats on this device." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You’ll need to sign in again to see your chats on this device."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要重新登录才能在此设备上查看聊天。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要重新登入才能在此裝置上查看聊天。"
+          }
+        }
+      }
+    },
+    "You’ll need to sign in again to see your chats on this Mac." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You’ll need to sign in again to see your chats on this Mac."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要重新登录才能在这台 Mac 上查看聊天。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要重新登入才能在這部 Mac 上查看聊天。"
           }
         }
       }

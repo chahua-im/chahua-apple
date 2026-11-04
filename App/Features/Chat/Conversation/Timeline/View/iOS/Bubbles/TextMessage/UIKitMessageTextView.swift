@@ -41,7 +41,7 @@
             didSet { updateAccessibilityActions() }
         }
         private var failureButton: TimelineFailureButton?
-        private let statusHost = TimelineDeliveryStatusHost(frame: .zero)
+        private let statusHost = TimelineDeliveryStatusView(frame: .zero)
         private var codeViews: [Int: MessageCodeScrollView] = [:]
         private let spoilerAnimator = MessageSpoilerAnimator()
         /// A non-selectable UITextView does not activate links; this tap stands in for

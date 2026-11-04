@@ -129,6 +129,19 @@
                 requestDisplayUpdate()
             }
         }
+        var headerInset: CGFloat = 0 {
+            didSet {
+                guard headerInset != oldValue, isViewLoaded else { return }
+                // SwiftUI overlays cannot supply AppKit's scroll limits. Capture
+                // against the old unobscured edge before changing native padding,
+                // so pin/header resizing preserves the same readable row offset.
+                if installedRevision >= 0, installedGeometry == currentGeometry {
+                    settledPosition = capturePosition()
+                }
+                scrollView.contentInsets.top = headerInset
+                view.needsLayout = true
+            }
+        }
         var composerInset: CGFloat = 0 {
             didSet {
                 guard composerInset != oldValue, isViewLoaded else { return }
@@ -204,9 +217,12 @@
             scrollView.horizontalScrollElasticity = .none
             scrollView.drawsBackground = false
             scrollView.automaticallyAdjustsContentInsets = false
-            // The header and pins are outside this scroll view, not scrollable
-            // content padding. AppKit insets the scroller for the floating composer;
-            // setting scrollerInsets as well would count that clearance twice.
+            // SwiftUI's floating header/pins and composer cover the full native
+            // viewport. Content insets make both edges reachable without moving
+            // that viewport, so rows can still render beneath the header blur.
+            // AppKit already insets the overlay scroller for contentInsets;
+            // setting scrollerInsets as well would count the clearance twice.
+            scrollView.contentInsets.top = headerInset
             scrollView.contentInsets.bottom = composerInset
             scrollView.contentView.postsBoundsChangedNotifications = true
             scrollView.wheelWillScroll = { [weak self] in
@@ -725,8 +741,18 @@
             installedWindowRevision = snapshot.windowRevision
         }
 
-        private func capturePosition() -> Position {
+        private var unobscuredDocumentRect: NSRect {
             let visible = scrollView.documentVisibleRect
+            let insets = scrollView.contentInsets
+            return NSRect(
+                x: visible.minX + insets.left,
+                y: visible.minY + insets.top,
+                width: max(0, visible.width - insets.left - insets.right),
+                height: max(0, visible.height - insets.top - insets.bottom))
+        }
+
+        private func capturePosition() -> Position {
+            let visible = unobscuredDocumentRect
             let range = tableView.rows(in: visible)
             if range.location != NSNotFound, range.length > 0 {
                 let upperBound = min(NSMaxRange(range), rows.count)
@@ -753,13 +779,15 @@
                 // The anchor may have been deleted or replaced with another history window.
                 y = position.originY
             }
-            setScrollOrigin(constrainedOrigin(y: y))
+            setScrollOrigin(constrainedOrigin(y: y - scrollView.contentInsets.top))
         }
 
         private var bottomOrigin: NSPoint {
             constrainedOrigin(
-                y: tableView.bounds.maxY - scrollView.contentView.bounds.height
-                    + scrollView.contentInsets.bottom)
+                y: max(
+                    -scrollView.contentInsets.top,
+                    tableView.bounds.maxY - scrollView.contentView.bounds.height
+                        + scrollView.contentInsets.bottom))
         }
 
         private func constrainedOrigin(y: CGFloat) -> NSPoint {
@@ -797,7 +825,8 @@
                     target = constrainedOrigin(
                         y: id == .unreadSeparator
                             ? frame.minY - scrollView.contentInsets.top
-                            : frame.midY - scrollView.contentView.bounds.height / 2)
+                            : frame.midY - scrollView.contentInsets.top
+                                - unobscuredDocumentRect.height / 2)
                 }
                 scroll(to: target, animated: animated, requestID: request.id)
             }
@@ -1169,20 +1198,17 @@
                 installedGeometry == currentGeometry, layoutEnvironment == currentEnvironment,
                 !liveScrolling || reason == .user
             else { return }
-            let visible = scrollView.documentVisibleRect
-            guard visible.height > 0 else { return }
-            let range = tableView.rows(in: visible)
+            // Rendering and height preparation retain the full document viewport
+            // for the blur. Read, jump, paging and visible-media candidates use
+            // only the area between the floating header/pins and composer.
+            let unobscured = unobscuredDocumentRect
+            // A fully covered viewport must cancel the previous read candidate,
+            // not leave its dwell timer running while there is no usable area.
+            let range =
+                unobscured.isEmpty
+                ? NSRange(location: NSNotFound, length: 0) : tableView.rows(in: unobscured)
             let hasVisibleRows =
                 range.location != NSNotFound && range.length > 0 && range.location < rows.count
-            // The structural header/pin viewport is already excluded. Only the
-            // floating composer can obscure rows inside documentVisibleRect.
-            let insets = scrollView.contentInsets
-            let unobscured = NSRect(
-                x: visible.minX + insets.left,
-                y: visible.minY + insets.top,
-                width: max(0, visible.width - insets.left - insets.right),
-                height: max(0, visible.height - insets.top - insets.bottom)
-            )
             var visibleMessageIDs: [MessageID] = []
             if hasVisibleRows, !unobscured.isEmpty {
                 for index in range.location..<min(NSMaxRange(range), rows.count) {
@@ -1196,10 +1222,9 @@
             let viewport = TimelineViewport(
                 firstVisibleIndex: hasVisibleRows ? range.location : nil,
                 lastVisibleIndex: hasVisibleRows ? min(NSMaxRange(range), rows.count) - 1 : nil,
-                distanceToTop: max(0, visible.minY + scrollView.contentInsets.top),
-                distanceToBottom: max(
-                    0, tableView.bounds.maxY + scrollView.contentInsets.bottom - visible.maxY),
-                height: visible.height,
+                distanceToTop: max(0, unobscured.minY),
+                distanceToBottom: max(0, tableView.bounds.maxY - unobscured.maxY),
+                height: unobscured.height,
                 visibleMessageIDs: visibleMessageIDs)
             let revision = installedRevision
             let geometry = installedGeometry
