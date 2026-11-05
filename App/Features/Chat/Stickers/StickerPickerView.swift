@@ -103,15 +103,18 @@ struct StickerPickerView: View {
                     Button {
                         showsDiscovery = true
                     } label: {
-                        Image(systemName: "plus.magnifyingglass")
-                            .font(.title3)
+                        Image(systemName: "bag")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 36)
+                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10))
                             .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .disabled(library.accountID == nil)
-                    .accessibilityLabel("Discover Stickers")
-                    .help("Discover Stickers")
+                    .accessibilityLabel("Sticker Shop")
+                    .help("Sticker Shop")
                 }
                 .padding(.horizontal, 12)
                 #if os(macOS)
@@ -129,19 +132,7 @@ struct StickerPickerView: View {
         .frame(height: 260)
         .background(.background)
         .task { await library.refresh() }
-        .sheet(isPresented: $showsDiscovery) {
-            NavigationStack {
-                StickerDiscoveryView(library: library)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showsDiscovery = false }
-                        }
-                    }
-            }
-            #if os(macOS)
-                .frame(width: 560, height: 680)
-            #endif
-        }
+        .stickerShop(isPresented: $showsDiscovery, library: library)
         .task(id: selectedPackID) {
             if let selectedPackID { _ = await library.loadPack(selectedPackID) }
         }

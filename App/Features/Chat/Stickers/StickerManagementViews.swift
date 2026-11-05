@@ -87,6 +87,7 @@ struct StickerPackManagementView: View {
     let currentUserID: Int32
 
     @State private var showsCreatePack = false
+    @State private var showsShop = false
     @State private var newPackName = ""
     @State private var isCreatingPack = false
     @State private var createdPackID: String?
@@ -94,10 +95,10 @@ struct StickerPackManagementView: View {
     var body: some View {
         List {
             Section {
-                NavigationLink {
-                    StickerDiscoveryView(library: library)
+                Button {
+                    showsShop = true
                 } label: {
-                    Label("Discover Stickers", systemImage: "magnifyingglass")
+                    Label("Sticker Shop", systemImage: "bag")
                 }
                 Button {
                     newPackName = ""
@@ -131,6 +132,7 @@ struct StickerPackManagementView: View {
             await library.refresh()
         }
         .refreshable { await library.refresh() }
+        .stickerShop(isPresented: $showsShop, library: library)
         .navigationDestination(item: $createdPackID) { packID in
             StickerPackDetailSettingsView(
                 library: library, currentUserID: currentUserID, packID: packID)

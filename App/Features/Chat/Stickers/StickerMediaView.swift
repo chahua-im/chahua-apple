@@ -16,6 +16,7 @@ import WebKit
 struct StickerMediaView: View {
     let media: MessageStickerMediaResponse
     let emoji: String
+    var insetsArtwork = true
     @Environment(\.mediaContext) private var mediaContext
     @Environment(\.displayScale) private var displayScale
     @Environment(\.scenePhase) private var scenePhase
@@ -24,7 +25,8 @@ struct StickerMediaView: View {
     var body: some View {
         StickerMediaRepresentable(
             media: media, emoji: emoji, mediaContext: mediaContext,
-            displayScale: displayScale, visible: visible && scenePhase == .active
+            displayScale: displayScale, visible: visible && scenePhase == .active,
+            insetsArtwork: insetsArtwork
         )
         .onAppear { visible = true }
         .onDisappear { visible = false }
@@ -38,13 +40,15 @@ struct StickerMediaView: View {
         let mediaContext: AppMediaContext?
         let displayScale: CGFloat
         let visible: Bool
+        let insetsArtwork: Bool
 
         func makeUIView(context: Context) -> StickerMediaSurfaceView {
             StickerMediaSurfaceView(frame: .zero)
         }
         func updateUIView(_ view: StickerMediaSurfaceView, context: Context) {
             view.configure(
-                media: media, emoji: emoji, displayScale: displayScale, mediaContext: mediaContext)
+                media: media, emoji: emoji, displayScale: displayScale, mediaContext: mediaContext,
+                insetsArtwork: insetsArtwork)
             view.setVisible(visible)
         }
         static func dismantleUIView(_ view: StickerMediaSurfaceView, coordinator: ()) {
@@ -58,13 +62,15 @@ struct StickerMediaView: View {
         let mediaContext: AppMediaContext?
         let displayScale: CGFloat
         let visible: Bool
+        let insetsArtwork: Bool
 
         func makeNSView(context: Context) -> StickerMediaSurfaceView {
             StickerMediaSurfaceView(frame: .zero)
         }
         func updateNSView(_ view: StickerMediaSurfaceView, context: Context) {
             view.configure(
-                media: media, emoji: emoji, displayScale: displayScale, mediaContext: mediaContext)
+                media: media, emoji: emoji, displayScale: displayScale, mediaContext: mediaContext,
+                insetsArtwork: insetsArtwork)
             view.setVisible(visible)
         }
         static func dismantleNSView(_ view: StickerMediaSurfaceView, coordinator: ()) {
@@ -98,6 +104,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
     private var emoji = ""
     private var displayScale: CGFloat = 1
     private var imagePixels = CGSize.zero
+    private var insetsArtwork = true
     private var requestedVisible = false
     private var isVideo = false
     private var failure: String?
@@ -164,7 +171,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
 
     func configure(
         media: MessageStickerMediaResponse, emoji: String, displayScale: CGFloat,
-        mediaContext: AppMediaContext?
+        mediaContext: AppMediaContext?, insetsArtwork: Bool = true
     ) {
         let changed = self.media != media || self.mediaContext !== mediaContext
         if changed {
@@ -186,9 +193,9 @@ final class StickerMediaSurfaceView: StickerNativeView {
         self.emoji = emoji
         self.displayScale = displayScale
         self.mediaContext = mediaContext
+        self.insetsArtwork = insetsArtwork
         let type = media.contentType.lowercased()
-        isVideo =
-            type.hasPrefix("video/") || URL(string: media.url)?.pathExtension.lowercased() == "webm"
+        isVideo = type.hasPrefix("video/")
         imageView.isHidden = failure != nil || (isVideo && (!hasVideoPoster || !videoLoading))
         if changed {
             guard let url = URL(string: media.url),
@@ -376,8 +383,15 @@ final class StickerMediaSurfaceView: StickerNativeView {
     }
 
     private func layoutMedia() {
-        imageView.frame = bounds
-        video?.view.frame = bounds
+        // Native timeline rows and SwiftUI previews share one square, inset canvas.
+        // Inset the surfaces, not decoded pixels, so animation and video use the same fit.
+        let side = max(0, min(bounds.width, bounds.height))
+        let slot = CGRect(
+            x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
+        let inset = insetsArtwork ? side * 0.12 : 0
+        let artwork = slot.insetBy(dx: inset, dy: inset)
+        imageView.frame = artwork
+        video?.view.frame = artwork
         #if os(iOS)
             progress.center = CGPoint(x: bounds.midX, y: bounds.midY)
         #else
@@ -386,11 +400,11 @@ final class StickerMediaSurfaceView: StickerNativeView {
         let height = min(bounds.height, 56)
         statusLabel.frame = CGRect(
             x: 4, y: (bounds.height - height) / 2, width: max(0, bounds.width - 8), height: height)
-        guard let media, !isVideo, failure == nil, bounds.width > 0, bounds.height > 0 else {
+        guard let media, !isVideo, failure == nil, artwork.width > 0, artwork.height > 0 else {
             return
         }
         let pixels = CGSize(
-            width: ceil(bounds.width * displayScale), height: ceil(bounds.height * displayScale))
+            width: ceil(artwork.width * displayScale), height: ceil(artwork.height * displayScale))
         guard pixels != imagePixels else { return }
         imagePixels = pixels
         imageView.onLoadFailure = { [weak self] error in self?.showFailure(error) }
@@ -494,7 +508,7 @@ private final class StickerVideoPlayback: NSObject, WKScriptMessageHandler, WKNa
 
     init(url: URL, contentType: String, dataStore: WKWebsiteDataStore) {
         self.url = url
-        self.contentType = url.pathExtension.lowercased() == "webm" ? "video/webm" : contentType
+        self.contentType = contentType
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = dataStore
         configuration.mediaTypesRequiringUserActionForPlayback = []

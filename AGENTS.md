@@ -53,3 +53,7 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 
 ## Documentation
 Try to keep code documentation inline when needed. Do not update `docs/setup.md` unless explicitly requested by the user.
+
+- `docs/development.md` is a durable developer guide, not a task diary or changelog. Update it only when a change affects reusable setup, development workflows, or architectural constraints, or when explicitly requested.
+- Do not append per-fix narratives, test implementation details, local test/smoke results, or one-off verification checklists to developer docs. Put verification evidence in the change description or assistant response.
+- Keep non-obvious implementation rationale near the code and behavioral coverage in tests. Do not duplicate implementation constants or test assertions in developer docs.
