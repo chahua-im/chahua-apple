@@ -40,7 +40,7 @@
                 kind: .group, peer: nil)
             let leadingAvatar = ThreadHeaderAvatar(
                 key: .init(chatID: "chat", threadID: "1"), parent: parent, store: store,
-                currentUserID: 1, diameter: ChatFloatingHeader<EmptyView>.avatarDiameter,
+                diameter: ChatFloatingHeader<EmptyView>.avatarDiameter,
                 root: root)
             for dynamicType in [DynamicTypeSize.large, .accessibility5] {
                 for width in [CGFloat(320), CGFloat(402)] {

@@ -43,6 +43,7 @@
         private var failureButton: TimelineFailureButton?
         private let statusHost = TimelineDeliveryStatusView(frame: .zero)
         private var codeViews: [Int: MessageCodeScrollView] = [:]
+        private var copyEnabled = true
         private let spoilerAnimator = MessageSpoilerAnimator()
         /// A non-selectable UITextView does not activate links; this tap stands in for
         /// UIKit's link interaction while selection is off.
@@ -132,6 +133,7 @@
             }
             let selection = selectedRange
             let geometryChanged = content.update(contentLayout, coordinator: coordinator)
+            copyEnabled = content.copyEnabled
             let length = contentLayout.storage.length
             if resetSelection {
                 resignFirstResponder()
@@ -174,7 +176,6 @@
         override func layoutSubviews() {
             super.layoutSubviews()
             guard let geometry = contentLayout.assignedGeometry else { return }
-            updateCodeViews()
             if let metadata = contentLayout.metadata {
                 let frame = metadata.statusFrame(in: geometry.metadataFrame)
                 statusHost.frame = frame
@@ -288,7 +289,8 @@
                     addSubview(view)
                 }
                 view.frame = geometry.frame
-                view.apply(attachment, allowsSelection: allowsSelection)
+                view.apply(
+                    attachment, allowsSelection: allowsSelection, copyEnabled: copyEnabled)
             }
         }
 

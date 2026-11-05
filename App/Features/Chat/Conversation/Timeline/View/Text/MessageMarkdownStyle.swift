@@ -161,6 +161,11 @@ final class MessageCodeAttachment: NSTextAttachment {
     let attributedCode: NSAttributedString
     let backgroundColor: BubbleNativeColor
     let naturalSize: CGSize
+    let codeSize: CGSize
+    let headerFont: BubbleNativeFont
+    let headerForeground: BubbleNativeColor
+    let headerBackground: BubbleNativeColor
+    let headerHeight: CGFloat
     let language: String?
     let code: String
     static let horizontalPadding: CGFloat = 10
@@ -170,6 +175,10 @@ final class MessageCodeAttachment: NSTextAttachment {
         self.language = language
         self.code = code
         backgroundColor = MessageMarkdownStyle.codeBlockBackground(foreground: foreground)
+        headerFont = .systemFont(ofSize: fontSize * 0.75)
+        headerForeground = foreground
+        headerBackground = foreground.withAlphaComponent(0.20)
+        headerHeight = max(20, ceil(fontSize * 1.2))
         let highlighted = MarkdownCodeHighlight.supports(language: language)
         let font = BubbleNativeFont.monospacedSystemFont(ofSize: fontSize * 0.92, weight: .regular)
         let paragraph = NSMutableParagraphStyle()
@@ -203,10 +212,16 @@ final class MessageCodeAttachment: NSTextAttachment {
         manager.ensureLayout(for: container)
         var size = manager.usedRect(for: container).size
         if code.last == "\n" { size.height = max(size.height, manager.extraLineFragmentRect.maxY) }
-        naturalSize = CGSize(
+        codeSize = CGSize(
             width: ceil(size.width) + Self.horizontalPadding * 2,
-            height: ceil(size.height) + Self.verticalPadding * 2
-        )
+            height: ceil(size.height) + Self.verticalPadding * 2)
+        // Reserve the header in the attachment itself so measurement, selection and
+        // both native renderers keep exactly the same block and following-line bounds.
+        let labelWidth = ((language ?? "") as NSString).size(withAttributes: [.font: headerFont])
+            .width
+        naturalSize = CGSize(
+            width: max(codeSize.width, ceil(labelWidth) + 6 + 8 + 24 + 2),
+            height: codeSize.height + headerHeight)
         super.init(data: nil, ofType: nil)
         bounds = CGRect(origin: .zero, size: naturalSize)
         #if os(macOS)
@@ -228,6 +243,11 @@ final class MessageCodeAttachment: NSTextAttachment {
         attributedCode = source.attributedCode
         backgroundColor = source.backgroundColor
         naturalSize = source.naturalSize
+        codeSize = source.codeSize
+        headerFont = source.headerFont
+        headerForeground = source.headerForeground
+        headerBackground = source.headerBackground
+        headerHeight = source.headerHeight
         language = source.language
         code = source.code
         super.init(data: nil, ofType: nil)
@@ -241,6 +261,69 @@ final class MessageCodeAttachment: NSTextAttachment {
         bounds.size.width = width
         return true
     }
+}
+
+/// Per-visible-block feedback, never part of cached Markdown or mutable layout.
+/// Native headers use the existing pasteboard conventions; the source is the
+/// parser's raw code, not the highlighted string (which pads an empty block).
+final class MessageCodeCopyController {
+    enum Status {
+        case ready, copied, failed
+
+        var symbol: String {
+            switch self {
+            case .ready: "doc.on.doc"
+            case .copied: "checkmark"
+            case .failed: "exclamationmark.triangle"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .ready: AppLanguage.localized("Copy")
+            case .copied: AppLanguage.localized("Copied")
+            case .failed: AppLanguage.localized("Failed")
+            }
+        }
+    }
+
+    static let feedbackDuration: TimeInterval = 3
+    private(set) var status = Status.ready
+    var isEnabled = true
+    var onChange: (() -> Void)?
+    private var timer: Timer?
+
+    func copy(_ code: String) {
+        guard isEnabled else { return }
+        timer?.invalidate()
+        timer = nil
+        #if os(macOS)
+            NSPasteboard.general.clearContents()
+            guard NSPasteboard.general.setString(code, forType: .string) else {
+                status = .failed
+                onChange?()
+                return
+            }
+        #else
+            UIPasteboard.general.string = code
+        #endif
+        status = .copied
+        onChange?()
+        let timer = Timer(timeInterval: Self.feedbackDuration, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reset() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    func reset() {
+        timer?.invalidate()
+        timer = nil
+        status = .ready
+        onChange?()
+    }
+
+    deinit { timer?.invalidate() }
 }
 
 /// A weak-owner callback at each callsite prevents a timer retaining recycled cells.

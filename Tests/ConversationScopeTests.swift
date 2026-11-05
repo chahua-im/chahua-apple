@@ -368,7 +368,7 @@ final class ConversationScopeTests: XCTestCase {
             let thread = ConversationListItem.thread(
                 .init(
                     chatId: "chat", chatName: "Parent", threadRootMessage: root,
-                    participants: [], lastReply: root, replyCount: 1,
+                    lastReply: root, replyCount: 1,
                     lastReplyAt: Date(timeIntervalSince1970: 40), unreadCount: unreadCount,
                     subscribedAt: .distantPast, archived: false))
             XCTAssertEqual(
@@ -611,7 +611,7 @@ final class ConversationScopeTests: XCTestCase {
             let thread = ConversationListItem.thread(
                 ThreadListItem(
                     chatId: "unloaded-parent", chatName: "", threadRootMessage: root,
-                    participants: [], replyCount: 0, lastReplyAt: now,
+                    replyCount: 0, lastReplyAt: now,
                     unreadCount: 0, unreadMentions: 2, unreadReactions: 3,
                     chatKind: kind, subscribedAt: now, archived: true))
             XCTAssertEqual(thread.unreadMentions, kind == .group ? 2 : 0)
@@ -690,7 +690,7 @@ final class ConversationScopeTests: XCTestCase {
             .thread(
                 ThreadListItem(
                     chatId: "chat", chatName: "Parent chat", threadRootMessage: root,
-                    participants: [], lastReply: lastReply, replyCount: 1,
+                    lastReply: lastReply, replyCount: 1,
                     lastReplyAt: Date(timeIntervalSince1970: 2), unreadCount: 0,
                     subscribedAt: .distantPast, archived: false))
         }
@@ -860,7 +860,7 @@ enum ScopeTestFixtures {
         let preview = try decoder.decode(MessagePreview.self, from: encoder.encode(message))
         return ThreadListItem(
             chatId: chatID, chatName: "Parent", chatAvatar: nil, threadRootMessage: preview,
-            participants: [], lastReply: nil, replyCount: 1,
+            lastReply: nil, replyCount: 1,
             lastReplyAt: Date(timeIntervalSince1970: at),
             unreadCount: unreadCount, lastReadMessageId: nil,
             subscribedAt: Date(timeIntervalSince1970: 0),

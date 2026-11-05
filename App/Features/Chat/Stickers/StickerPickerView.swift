@@ -7,6 +7,7 @@ struct StickerPickerView: View {
     let onSelect: (MessageStickerResponse) async -> Bool
     @State private var selectedPackID: String?
     @State private var isSending = false
+    @State private var showsDiscovery = false
 
     private var stickers: [MessageStickerResponse] {
         guard let selectedPackID else { return library.favorites }
@@ -99,6 +100,18 @@ struct StickerPickerView: View {
                             }
                         }
                     }
+                    Button {
+                        showsDiscovery = true
+                    } label: {
+                        Image(systemName: "plus.magnifyingglass")
+                            .font(.title3)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(library.accountID == nil)
+                    .accessibilityLabel("Discover Stickers")
+                    .help("Discover Stickers")
                 }
                 .padding(.horizontal, 12)
                 #if os(macOS)
@@ -116,6 +129,19 @@ struct StickerPickerView: View {
         .frame(height: 260)
         .background(.background)
         .task { await library.refresh() }
+        .sheet(isPresented: $showsDiscovery) {
+            NavigationStack {
+                StickerDiscoveryView(library: library)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showsDiscovery = false }
+                        }
+                    }
+            }
+            #if os(macOS)
+                .frame(width: 560, height: 680)
+            #endif
+        }
         .task(id: selectedPackID) {
             if let selectedPackID { _ = await library.loadPack(selectedPackID) }
         }

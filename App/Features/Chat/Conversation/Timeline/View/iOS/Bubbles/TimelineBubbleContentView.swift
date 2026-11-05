@@ -203,7 +203,9 @@
                         mentionAction: isPreview ? nil : binding.actions.openMention,
                         metadata: localFrames[.metadata] == nil ? presentation.metadata : nil,
                         failureAction: failureAction, geometry: geometry,
-                        fontSize: environment.bodySize, preparedText: presentation.preparedText
+                        fontSize: environment.bodySize, preparedText: presentation.preparedText,
+                        copyEnabled: !isPreview && !binding.actions.isSelectingMessages
+                            && !binding.actions.interactionContext.isReadOnly
                     ), resetSelection: resetSelection)
                 view.setVisible(visible)
             } else {

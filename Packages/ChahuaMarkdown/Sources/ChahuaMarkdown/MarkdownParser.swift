@@ -187,6 +187,24 @@ internal enum MarkdownParser {
                 result.append(.codeBlock(language: language, code: scalarString(content)))
                 continue
             }
+            if lines[position].indentation >= 4 {
+                hasMarkup = true
+                let start = position
+                var end = position
+                while position < lines.count,
+                    lines[position].isBlank || lines[position].indentation >= 4
+                {
+                    if !lines[position].isBlank { end = position + 1 }
+                    position += 1
+                }
+                var content: [Scalar] = []
+                for line in lines[start..<end] {
+                    line.removingIndent(4).append(to: &content)
+                    content.append("\n")
+                }
+                result.append(.codeBlock(language: nil, code: scalarString(content)))
+                continue
+            }
             if depth < 100, let first = marker(lines[position]) {
                 hasMarkup = true
                 var items: [[MarkdownBlock]] = []

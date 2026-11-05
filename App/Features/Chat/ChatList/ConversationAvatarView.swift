@@ -4,10 +4,8 @@ import SwiftUI
 struct ConversationAvatarView: View {
     let item: ConversationListItem
     @ObservedObject var store: ChatStore
-    let currentUserID: Int32
     var diameter: CGFloat = 40
     var isSelected = false
-    @State private var resolvedParent: ChatListItem?
 
     var body: some View {
         Group {
@@ -23,26 +21,9 @@ struct ConversationAvatarView: View {
             case .thread(let thread):
                 ThreadAvatarView(
                     chatName: thread.chatName, chatAvatar: thread.chatAvatar,
-                    parent: store.state.chats.first(where: { $0.id == thread.chatId })
-                        ?? store.state.archivedChats.first(where: { $0.id == thread.chatId })
-                        ?? resolvedParent,
-                    participants: thread.participants, rootSender: thread.threadRootMessage.sender,
-                    currentUserID: currentUserID, diameter: diameter, isSelected: isSelected)
-            }
-        }
-        .task(id: item.id.chatID) {
-            resolvedParent = nil
-            guard case .thread(let thread) = item,
-                !store.state.chats.contains(where: { $0.id == thread.chatId })
-            else { return }
-            // Archived parents can be absent from the active list. Resolve their kind
-            // rather than guessing that every subscribed thread belongs to a group.
-            do {
-                let parent = try await store.chatForThread(thread)
-                try Task.checkCancellation()
-                resolvedParent = parent
-            } catch {
-                // HTTP failures are logged by the client; retain the available avatar fallback.
+                    chatKind: thread.chatKind, peer: thread.peer,
+                    rootSender: thread.threadRootMessage.sender,
+                    diameter: diameter, isSelected: isSelected)
             }
         }
     }
@@ -51,28 +32,24 @@ struct ConversationAvatarView: View {
 struct ThreadAvatarView: View {
     let chatName: String
     let chatAvatar: String?
-    let parent: ChatListItem?
-    let participants: [User]
+    let chatKind: ChatKind?
+    let peer: MemberSummary?
     let rootSender: User?
-    let currentUserID: Int32
     var diameter: CGFloat = 48
     var isSelected = false
     @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
 
-    private var isDM: Bool { parent?.kind == .dm }
-    private var participant: User? { participants.first { $0.uid != currentUserID } }
+    private var isDM: Bool { chatKind == .dm }
     private var primaryName: String {
         if isDM {
-            if let peer = parent?.peer { return peer.username ?? chatName }
-            return participant?.name ?? chatName
+            return peer?.username ?? chatName
         }
         return chatName
     }
     private var primaryURL: URL? {
         let value =
             isDM
-            ? ((parent?.peer != nil ? parent?.peer?.avatarUrl : participant?.avatarUrl)
-                ?? chatAvatar)
+            ? (peer?.avatarUrl ?? chatAvatar)
             : chatAvatar
         return value.flatMap(URL.init(string:))
     }
@@ -82,7 +59,7 @@ struct ThreadAvatarView: View {
         AvatarView(url: primaryURL, displayName: primaryName, diameter: diameter)
             .overlay(alignment: .topTrailing) {
                 // Do not infer group-vs-DM styling while the parent kind is unresolved.
-                if isDM || (parent != nil && !(rootSender?.name ?? "").isEmpty) {
+                if isDM || (chatKind == .group && !(rootSender?.name ?? "").isEmpty) {
                     Group {
                         if isDM {
                             Image(systemName: "bubble.left.and.bubble.right.fill")

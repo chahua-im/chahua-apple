@@ -4,6 +4,16 @@
 
 Run the commands below from the repository root.
 
+## iOS compatibility
+
+The app and iOS share extension require iOS 17 or later. Use native SwiftUI navigation, sheet configuration, change observation, and text input; iOS 15 compatibility adapters are not retained. First-party packages retain their own supported deployment targets, all compatible with the app's iOS 17 minimum.
+
+Swift 6.4 can assert while resolving chained observable-object dictionary lookups in optimized builds. Keep the dictionary and lookup key in separate locals at affected sites rather than changing pin-loading or route semantics.
+
+## Thread inbox contract
+
+`GET /threads` returns compact rows with `chatKind` and an optional DM `peer` (`MemberSummary`), not a `participants` array. Thread-row and header avatars use that identity directly, including when the parent chat is not loaded. Full participant lists remain paginated through `GET /chats/{chatId}/threads/{rootId}/participants` in thread information.
+
 ## iOS simulator signing
 
 Simulator builds use ad-hoc signing (“Sign to Run Locally”); they do not need device provisioning profiles. If signing `ChahuaMarkdown_ChahuaMarkdown.bundle` reports `bundle format unrecognized, invalid, or unsuitable`, clean the build folder (**Product → Clean Build Folder**) and rebuild. Older builds copied a literal `Resources` directory into the bundle root, which codesign misidentifies as a different bundle layout. The package now processes resources into the platform-appropriate layout, and the highlighter loads `highlight.js` from the bundle root.
@@ -35,6 +45,10 @@ For verification, open Chat Info wide, narrow until it becomes modal, open a pro
 
 Wide timelines cap bubbles at 620pt, use 24pt side padding, and retain the user's message text size. Wide conversation-list search is always visible but remains explicitly unavailable; in-chat message search is a separate working feature.
 
+Compact iOS list pulling follows the F4 pull-down prototype: the first 56pt directly reveals Search; additional drag uses 0.55 resistance. Releasing at a visible opening of at least 28pt leaves Search revealed, while 120pt arms refresh. Reversing below the refresh threshold before release disarms it. Refresh settles to a 100pt opening until the actual request completes, then returns to the 56pt drawer without focusing the keyboard. The 28pt, eight-spoke indicator progressively fills in the gap below Search. Native scroll insets own row displacement, avoiding a second SwiftUI spacer.
+
+An active query retains the existing explicit unavailable-search notice in an additional 32pt area; this change does not add global search. Wide iOS search and macOS behavior are unchanged. For device verification, try a short reveal, a deeper refresh, reversal before release, upward retraction, typing/cancelling Search, and row swipes. Header/tabs must remain stationary, the first row must stay below the drawer/indicator, and refresh must not run twice.
+
 New macOS windows default to 1280×800pt, constrained per dimension to the main display's usable `visibleFrame` (excluding Dock/menu bar), subject to existing content minimums. This uses only SwiftUI `defaultSize`, compatible with macOS 14; the stable scene retains native frame restoration and never resizes/recenters an attached window. Restored geometry takes precedence over the initial default. A native scene smoke opened at 1280×800 within the screen and retained a user resize/reposition to 900×650 through layout. Quit/relaunch restoration and changing display arrangements remain manual checks.
 
 On macOS the main window retains a transparent native 52pt title band with its standard traffic lights. Only the toolbar background is hidden, not the toolbar itself; hiding the entire toolbar in a hidden-title-bar SwiftUI scene removes the window controls. The split layout extends to the top edge so there is no separate title-bar gap. No view moves, replaces or asynchronously repositions the system buttons, and no custom draggable-area bridge is installed.
@@ -48,6 +62,10 @@ Its native List rows retain 8pt outer horizontal insets, 10pt inner horizontal p
 Desktop floating glass uses explicit tint, hairlines and shadow over native backdrop material rather than OS-version-dependent Liquid Glass lenses; it approximates, rather than reproduces, CSS blur/saturation. The existing conversation canvas color is retained.
 
 The macOS conversation header and pinned strip are structural rows above the native timeline, not floating overlays or scroll-content insets. The header is 48pt high at y12 with 16pt horizontal margins. The 36pt pin strip begins at y68, with an 8pt gap above and 12pt below; messages are clipped to the viewport beginning at y116 and cannot scroll behind these controls. Only the floating composer contributes a native timeline inset. Its 44pt attachment, editor/sticker field and microphone surfaces use 10pt gaps, 16pt side/bottom margins and separate columns; the attachment menu uses a plain button style with its native menu indicator hidden.
+
+Speaking-policy notices replace the composer input when the current context cannot send or edit; they are not an extra banner above disabled controls. Permitted editing still uses the normal composer. Live permission changes restore/hide the input without clearing the stored draft.
+
+The macOS timeline navigation buttons keep badge backgrounds separate from their text labels. Center the label's intrinsic line height inside the circle/capsule; stretching `NSTextField` to the badge height top-aligns the digits. Native layout coverage includes single digits, multiple digits, and the `999+` cap.
 
 For manual verification, open a group on macOS or a wide iPad window, toggle the header's inspector control, and confirm the timeline contracts without moving the window edges. Narrow and widen the window with information open, then check Edit/back, Members/Media/Files/Threads, source-message navigation, search, mute, and closing. Repeat on compact iPhone and folded/unfolded Duo, including Dynamic Type. The existing `-bubble-timeline -fixture-split` diagnostic exercises the shared inspector container without production services; its info panel contains diagnostic controls rather than live group data. Launch it only after the build finishes, so verification does not run an older executable against replaced package resources.
 

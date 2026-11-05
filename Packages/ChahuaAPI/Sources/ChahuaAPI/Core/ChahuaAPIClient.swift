@@ -206,6 +206,11 @@ public protocol ChahuaAPIClient: SocialAPIClient, GroupAPIClient {
     func createPin(chatID: String, messageID: MessageID) async throws -> PinResponse
     func deletePin(chatID: String, pinID: String) async throws
 
+    /// Searches public packs with `GET /stickers/packs`; offset counts raw server rows.
+    func discoverStickerPacks(
+        query: String?, sort: StickerPackSort, limit: Int, offset: Int
+    ) async throws -> StickerPackDiscoveryResponse
+
     /// Sticker library snapshots and flat sticker/pack detail responses.
     func listOwnedStickerPacks() async throws -> [StickerPackSummary]
     func listSubscribedStickerPacks() async throws -> [StickerPackSummary]
@@ -403,6 +408,12 @@ extension ChahuaAPIClient {
     }
 
     public func unblockUser(uid: Int32) async throws {
+        throw APIError.unavailable
+    }
+
+    public func discoverStickerPacks(
+        query: String?, sort: StickerPackSort, limit: Int, offset: Int
+    ) async throws -> StickerPackDiscoveryResponse {
         throw APIError.unavailable
     }
 

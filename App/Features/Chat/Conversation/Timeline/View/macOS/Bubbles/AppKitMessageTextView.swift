@@ -45,6 +45,7 @@
         private var failureButton: NSButton?
         private let statusView = TimelineDeliveryStatusView(frame: .zero)
         private var codeViews: [Int: MessageCodeScrollView] = [:]
+        private var copyEnabled = true
         // Keep only a small number of empty TextKit/scroll graphs between rows.
         // They retain neither message text nor selection, unlike a payload cache.
         private var reusableCodeViews: [MessageCodeScrollView] = []
@@ -105,6 +106,8 @@
             }
             let selection = selectedRange()
             let geometryChanged = content.update(contentLayout, coordinator: coordinator)
+            let copyPolicyChanged = copyEnabled != content.copyEnabled
+            copyEnabled = content.copyEnabled
             let length = contentLayout.storage.length
             if resetSelection {
                 let empty = NSRange(location: 0, length: 0)
@@ -119,7 +122,7 @@
             statusView.configure(contentLayout.metadata)
             if geometryChanged { needsLayout = true }
             needsDisplay = true
-            if geometryChanged || resetSelection { updateCodeViews() }
+            if geometryChanged || resetSelection || copyPolicyChanged { updateCodeViews() }
             updateSpoilerAnimation()
         }
 
@@ -233,7 +236,8 @@
                 }
                 view.isHidden = false
                 if view.frame != geometry.frame { view.frame = geometry.frame }
-                view.apply(attachment)
+                view.apply(
+                    attachment, allowsSelection: isSelectable, copyEnabled: copyEnabled)
             }
         }
 

@@ -91,7 +91,7 @@ struct ConversationListRow: View, Equatable {
             spacing: usesDesktopDensity ? 10 : (isWideChatLayout ? 8 : ChahuaTheme.Spacing.medium)
         ) {
             ConversationAvatarView(
-                item: item, store: store, currentUserID: currentUserID,
+                item: item, store: store,
                 diameter: ConversationListMetrics.avatarDiameter(isWide: isWideChatLayout),
                 isSelected: isSelected)
             VStack(alignment: .leading, spacing: usesDesktopDensity ? 3 : 4) {
@@ -507,7 +507,7 @@ enum ConversationListMetrics {
                 .thread(
                     ThreadListItem(
                         chatId: id, chatName: "Design team", threadRootMessage: message,
-                        participants: [message.sender], lastReply: message, replyCount: 8,
+                        lastReply: message, replyCount: 8,
                         lastReplyAt: message.createdAt, unreadCount: unread,
                         chatKind: .group, subscribedAt: message.createdAt, archived: false))
             }

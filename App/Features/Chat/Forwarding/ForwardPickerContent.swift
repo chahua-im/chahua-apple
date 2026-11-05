@@ -384,8 +384,7 @@ struct ForwardPickerContent: View {
 
     private func conversationIdentity(_ target: ConversationListItem) -> some View {
         HStack(spacing: 12) {
-            ConversationAvatarView(
-                item: target, store: store, currentUserID: store.currentUserProfile?.uid ?? 0)
+            ConversationAvatarView(item: target, store: store)
             VStack(alignment: .leading, spacing: 4) {
                 switch target {
                 case .chat(let chat):

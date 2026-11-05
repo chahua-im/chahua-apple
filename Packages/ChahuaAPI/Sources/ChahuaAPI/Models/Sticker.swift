@@ -104,3 +104,73 @@ public struct StickerDetailResponse: Codable, Hashable, Sendable {
         try container.encode(packs, forKey: .packs)
     }
 }
+
+public enum StickerPackSort: String, Codable, CaseIterable, Sendable {
+    case trending, subscribers
+}
+
+public enum StickerPackVisibility: String, Codable, Sendable {
+    case `public`, `private`
+}
+
+/// Discovery uses the same flat pack fields as detail, plus ranking and preview data.
+public struct StickerPackDiscoveryItem: Codable, Hashable, Sendable, Identifiable {
+    public var pack: StickerPackSummary
+    public let visibility: StickerPackVisibility
+    public let previewStickers: [StickerPackPreviewSticker]
+    public let recentSubscriberCount: Int
+    public let subscriberCount: Int
+    public var id: String { pack.id }
+
+    public init(
+        pack: StickerPackSummary, visibility: StickerPackVisibility,
+        previewStickers: [StickerPackPreviewSticker], recentSubscriberCount: Int,
+        subscriberCount: Int
+    ) {
+        self.pack = pack
+        self.visibility = visibility
+        self.previewStickers = previewStickers
+        self.recentSubscriberCount = recentSubscriberCount
+        self.subscriberCount = subscriberCount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case visibility, previewStickers, recentSubscriberCount, subscriberCount
+    }
+
+    public init(from decoder: any Decoder) throws {
+        pack = try StickerPackSummary(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        visibility = try container.decode(StickerPackVisibility.self, forKey: .visibility)
+        previewStickers = try container.decode(
+            [StickerPackPreviewSticker].self, forKey: .previewStickers)
+        recentSubscriberCount = try container.decode(Int.self, forKey: .recentSubscriberCount)
+        subscriberCount = try container.decode(Int.self, forKey: .subscriberCount)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        try pack.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(visibility, forKey: .visibility)
+        try container.encode(previewStickers, forKey: .previewStickers)
+        try container.encode(recentSubscriberCount, forKey: .recentSubscriberCount)
+        try container.encode(subscriberCount, forKey: .subscriberCount)
+    }
+}
+
+public struct StickerPackDiscoveryResponse: Codable, Hashable, Sendable {
+    public let packs: [StickerPackDiscoveryItem]
+    public let hasMore: Bool
+    public let recentWindowDays: Int
+    public let statsUpdatedAt: Date
+
+    public init(
+        packs: [StickerPackDiscoveryItem], hasMore: Bool, recentWindowDays: Int,
+        statsUpdatedAt: Date
+    ) {
+        self.packs = packs
+        self.hasMore = hasMore
+        self.recentWindowDays = recentWindowDays
+        self.statsUpdatedAt = statsUpdatedAt
+    }
+}

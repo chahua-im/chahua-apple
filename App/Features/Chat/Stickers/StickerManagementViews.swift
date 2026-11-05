@@ -94,6 +94,11 @@ struct StickerPackManagementView: View {
     var body: some View {
         List {
             Section {
+                NavigationLink {
+                    StickerDiscoveryView(library: library)
+                } label: {
+                    Label("Discover Stickers", systemImage: "magnifyingglass")
+                }
                 Button {
                     newPackName = ""
                     showsCreatePack = true
@@ -163,7 +168,7 @@ struct StickerPackManagementView: View {
             } else if library.packs.isEmpty {
                 ContentUnavailableView(
                     "No Sticker Packs", systemImage: "square.stack",
-                    description: Text("Create a pack or subscribe to one from a sticker message."))
+                    description: Text("Create a pack or discover packs to add to your collection."))
             } else {
                 ForEach(library.packs) { pack in
                     NavigationLink {
@@ -263,7 +268,7 @@ private struct StickerPackRow: View {
     }
 }
 
-private struct StickerPackDetailSettingsView: View {
+struct StickerPackDetailSettingsView: View {
     @ObservedObject var library: StickerLibrary
     let currentUserID: Int32
     let packID: String

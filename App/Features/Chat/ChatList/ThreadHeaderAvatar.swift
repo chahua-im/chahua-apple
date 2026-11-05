@@ -6,7 +6,6 @@ struct ThreadHeaderAvatar: View {
     let key: ConversationKey
     let parent: ChatListItem?
     @ObservedObject var store: ChatStore
-    let currentUserID: Int32
     var diameter: CGFloat = 38
     var root: MessageResponse? = nil
     @State private var resolvedParent: ChatListItem?
@@ -44,9 +43,9 @@ struct ThreadHeaderAvatar: View {
         ThreadAvatarView(
             chatName: chat?.chatDisplayName ?? thread?.chatName ?? AppLanguage.localized("Thread"),
             chatAvatar: chat?.chatAvatarURL?.absoluteString ?? thread?.chatAvatar,
-            parent: chat, participants: thread?.participants ?? [],
+            chatKind: chat?.kind ?? thread?.chatKind, peer: chat?.peer ?? thread?.peer,
             rootSender: thread?.threadRootMessage.sender ?? knownRoot?.sender,
-            currentUserID: currentUserID, diameter: diameter
+            diameter: diameter
         )
         .task(id: key) {
             // A changed route must never display the previous route's resolved author or kind.
@@ -55,7 +54,7 @@ struct ThreadHeaderAvatar: View {
             resolvedRoot = nil
             resolvedKey = requestKey
             do {
-                if knownParent == nil {
+                if knownParent == nil, listedThread == nil {
                     let info = try await store.groupInfo(chatID: requestKey.chatID)
                     try Task.checkCancellation()
                     guard key == requestKey else { return }

@@ -21,6 +21,7 @@ struct MessageTextContent {
     let geometry: MessageTextGeometry
     let fontSize: CGFloat
     var preparedText: PreparedText? = nil
+    var copyEnabled = true
 
     func update(_ layout: MessageTextLayout, coordinator: Coordinator) -> Bool {
         coordinator.openLink = action

@@ -15,12 +15,28 @@ final class StickerLibrary: ObservableObject {
     @Published private(set) var autoSortPacks = false
     @Published private(set) var autoSortFavorites = false
     @Published var error: String?
+    @Published private(set) var discoveryPacks: [StickerPackDiscoveryItem] = []
+    @Published private(set) var isDiscovering = false
+    @Published private(set) var hasLoadedDiscovery = false
+    @Published private(set) var discoveryError: String?
+    @Published private(set) var discoveryCursor: Int?
+    @Published private(set) var discoveryRecentWindowDays = 30
+    @Published private(set) var discoveryRevision = 0
+    @Published private(set) var discoveryPageRequest = false
+    @Published private(set) var accountID: Int32?
 
     private let apiClient: any ChahuaAPIClient
     private let onInvalidToken: @MainActor @Sendable () async -> Void
     private var generation = 0
     private var hasLoadedLibrary = false
-    private var accountID: Int32?
+    private var discoveryRequestID = UUID()
+    private var discoveryTask: Task<StickerPackDiscoveryResponse, Error>?
+    private var discoveryQuery = ""
+    private var discoverySort = StickerPackSort.trending
+    private var displayedDiscoveryQuery = ""
+    private var displayedDiscoverySort = StickerPackSort.trending
+    private var discoverySubscriptionChanges: [String: Bool] = [:]
+    private var discoveryDeletedIDs = Set<String>()
     private var preferences = StickerPreferences()
     private var ownedPackIDs = Set<String>()
     // Keep server order independently of the displayed preference order, including ties.
@@ -58,6 +74,7 @@ final class StickerLibrary: ObservableObject {
 
     func setAccount(_ accountID: Int32?) {
         guard self.accountID != accountID else { return }
+        reset()
         self.accountID = accountID
         MessageReactionPreferences.setActiveAccount(accountID)
         guard let accountID else {
@@ -113,6 +130,99 @@ final class StickerLibrary: ObservableObject {
             StickerPackOrderUpdate(
                 stickerPackId: packID, lastUsedOn: Self.currentTimestamp(), isAutoSort: true)
         ])
+    }
+
+    /// Keeps known rows while replacing a query/ranking. Only mutations overlapping
+    /// this read override its subscription snapshot; subsequent reads trust the server.
+    func discover(query: String, sort: StickerPackSort, more: Bool = false) async {
+        guard accountID != nil, !Task.isCancelled else { return }
+        let query = String(query.prefix(255)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if more {
+            guard !isDiscovering, discoveryCursor != nil,
+                query == discoveryQuery, sort == discoverySort
+            else { return }
+        }
+        let offset = more ? discoveryCursor! : 0
+        let requestGeneration = generation
+        let requestID = UUID()
+        discoveryTask?.cancel()
+        discoveryRequestID = requestID
+        discoveryQuery = query
+        discoverySort = sort
+        discoveryPageRequest = more
+        discoverySubscriptionChanges.removeAll()
+        discoveryDeletedIDs.removeAll()
+        if !more { discoveryCursor = nil }
+        isDiscovering = true
+        discoveryError = nil
+        defer {
+            if discoveryRequestID == requestID {
+                discoveryTask = nil
+                isDiscovering = false
+            }
+        }
+        do {
+            let apiClient = apiClient
+            let task = Task {
+                try await apiClient.discoverStickerPacks(
+                    query: query.isEmpty ? nil : query, sort: sort, limit: 20, offset: offset)
+            }
+            discoveryTask = task
+            let page = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            }
+            try checkSession(requestGeneration)
+            guard discoveryRequestID == requestID else { return }
+            let incoming = page.packs.filter { !discoveryDeletedIDs.contains($0.id) }.map {
+                var item = $0
+                if let subscribed = discoverySubscriptionChanges[item.id] {
+                    item.pack.isSubscribed = subscribed
+                }
+                return item
+            }
+            var rows = more ? discoveryPacks : []
+            var positions = Dictionary(
+                uniqueKeysWithValues: rows.enumerated().map { ($0.element.id, $0.offset) })
+            for item in incoming {
+                if let index = positions[item.id] {
+                    rows[index] = item
+                } else {
+                    positions[item.id] = rows.count
+                    rows.append(item)
+                }
+            }
+            discoveryPacks = rows
+            // Advance by the unfiltered server count, not deduplicated visible rows.
+            discoveryCursor = page.hasMore ? offset + page.packs.count : nil
+            discoveryRecentWindowDays = page.recentWindowDays
+            hasLoadedDiscovery = true
+            if !more,
+                query != displayedDiscoveryQuery || sort != displayedDiscoverySort
+            {
+                discoveryRevision += 1
+            }
+            displayedDiscoveryQuery = query
+            displayedDiscoverySort = sort
+        } catch {
+            guard generation == requestGeneration, discoveryRequestID == requestID,
+                !(error is CancellationError), !Task.isCancelled
+            else { return }
+            discoveryError = AppLanguage.localized("Couldn’t load sticker packs. Please try again.")
+            if case APIError.invalidToken = error { await onInvalidToken() }
+        }
+    }
+
+    func retryDiscovery() async {
+        await discover(query: discoveryQuery, sort: discoverySort, more: discoveryPageRequest)
+    }
+
+    func cancelDiscovery() {
+        discoveryRequestID = UUID()
+        discoveryTask?.cancel()
+        discoveryTask = nil
+        isDiscovering = false
     }
 
     func refresh() async {
@@ -282,7 +392,9 @@ final class StickerLibrary: ObservableObject {
             try await apiClient.setStickerPackSubscription(id: pack.id, subscribed: subscribed)
             try checkSession(requestGeneration)
             subscriptionOverrides[pack.id] = subscribed
+            updateDiscoverySubscription(pack.id, subscribed: subscribed)
             updateSubscription(pack, subscribed: subscribed, in: &serverPacks)
+            if subscribed { packOrder[pack.id] = Self.currentTimestamp() }
             if isLoading { refreshChanges.append(.subscription(pack, subscribed)) }
             sortPacks()
             normalizeCaches()
@@ -319,6 +431,7 @@ final class StickerLibrary: ObservableObject {
             created.isSubscribed = true
             ownedPackIDs.insert(created.id)
             subscriptionOverrides.removeValue(forKey: created.id)
+            packOrder[created.id] = Self.currentTimestamp()
             replacePack(created)
             if isLoading { refreshChanges.append(.packCreated(created)) }
             return normalized(created)
@@ -486,6 +599,19 @@ final class StickerLibrary: ObservableObject {
         favoriteOverrides.removeAll()
         serverFavoriteIDs.removeAll()
         subscriptionOverrides.removeAll()
+        cancelDiscovery()
+        discoveryPacks.removeAll()
+        hasLoadedDiscovery = false
+        discoveryError = nil
+        discoveryCursor = nil
+        discoveryRecentWindowDays = 30
+        discoveryQuery = ""
+        discoverySort = .trending
+        displayedDiscoveryQuery = ""
+        displayedDiscoverySort = .trending
+        discoveryPageRequest = false
+        discoverySubscriptionChanges.removeAll()
+        discoveryDeletedIDs.removeAll()
         stickerDetails.removeAll()
         refreshChanges.removeAll()
         packs.removeAll()
@@ -596,6 +722,9 @@ final class StickerLibrary: ObservableObject {
     }
 
     private func replacePack(_ pack: StickerPackSummary) {
+        if let index = discoveryPacks.firstIndex(where: { $0.id == pack.id }) {
+            discoveryPacks[index].pack = pack
+        }
         var replacement = pack
         if ownedPackIDs.contains(replacement.id) { replacement.isSubscribed = true }
         if let index = serverPacks.firstIndex(where: { $0.id == replacement.id }) {
@@ -611,6 +740,8 @@ final class StickerLibrary: ObservableObject {
     }
 
     private func removePack(_ id: String) {
+        discoveryDeletedIDs.insert(id)
+        discoveryPacks.removeAll { $0.id == id }
         serverPacks.removeAll { $0.id == id }
         ownedPackIDs.remove(id)
         subscriptionOverrides.removeValue(forKey: id)
@@ -714,6 +845,13 @@ final class StickerLibrary: ObservableObject {
             default: lhs.offset < rhs.offset
             }
         }.map(\.element)
+    }
+
+    private func updateDiscoverySubscription(_ id: String, subscribed: Bool) {
+        discoverySubscriptionChanges[id] = subscribed
+        if let index = discoveryPacks.firstIndex(where: { $0.id == id }) {
+            discoveryPacks[index].pack.isSubscribed = subscribed
+        }
     }
 
     private func normalized(_ pack: StickerPackSummary) -> StickerPackSummary {

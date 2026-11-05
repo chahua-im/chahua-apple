@@ -310,7 +310,7 @@ final class ChatStoreTests: XCTestCase {
         let topic = ConversationListItem.thread(
             ThreadListItem(
                 chatId: "chat", chatName: "DM topic", threadRootMessage: own,
-                participants: [own.sender], replyCount: 0, lastReplyAt: own.createdAt,
+                replyCount: 0, lastReplyAt: own.createdAt,
                 unreadCount: 0, chatKind: .dm, subscribedAt: own.createdAt, archived: false))
         XCTAssertNil(status(topic))
     }
@@ -2209,7 +2209,12 @@ final class ChatStoreTests: XCTestCase {
     }
 
     func testThreadSubscriptionChangesMoveListsOnlyAfterServerAcceptance() async throws {
-        let thread = try ScopeTestFixtures.thread(chatID: "chat", id: 1)
+        let root = try ScopeTestFixtures.thread(chatID: "chat", id: 1).threadRootMessage
+        let peer = MemberSummary(uid: 2, username: "Grace", gender: 1)
+        let thread = ThreadListItem(
+            chatId: "chat", chatName: "Grace", threadRootMessage: root, peer: peer,
+            replyCount: 1, lastReplyAt: root.createdAt, unreadCount: 0,
+            subscribedAt: root.createdAt, archived: false)
         let api = FakeChatAPI(
             threadResults: [.success(.init(threads: [thread]))],
             archiveResults: [.success(()), .failure(FakeChatAPIError.failed), .success(())])
@@ -2223,6 +2228,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(archived, ThreadSubscriptionStatus(subscribed: true, archived: true))
         XCTAssertTrue(store.state.threads.isEmpty)
         XCTAssertEqual(store.state.archivedThreads, [thread.withArchived(true)])
+        XCTAssertEqual(store.state.archivedThreads.first?.peer, peer)
 
         do {
             _ = try await store.changeThreadSubscription(
@@ -3209,6 +3215,47 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
     private var bulkDeleteResults: [Result<BulkDeletedPayload, Error>] = []
     private var bulkDeleteIDs: [[MessageID]] = []
 
+    private var stickerDiscoveryRequests:
+        [(query: String?, sort: StickerPackSort, limit: Int, offset: Int)] = []
+    private var pendingStickerDiscovery:
+        [Int: CheckedContinuation<StickerPackDiscoveryResponse, Error>] = [:]
+    private var stickerDiscoveryObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func discoverStickerPacks(
+        query: String?, sort: StickerPackSort, limit: Int, offset: Int
+    ) async throws -> StickerPackDiscoveryResponse {
+        let index = stickerDiscoveryRequests.count
+        stickerDiscoveryRequests.append((query, sort, limit, offset))
+        // Intentionally deliver even after cancellation, exercising the consumer's
+        // stale-query and account fences rather than relying on transport timing.
+        return try await withCheckedThrowingContinuation { continuation in
+            pendingStickerDiscovery[index] = continuation
+            let ready = stickerDiscoveryObservers.keys.filter {
+                $0 <= stickerDiscoveryRequests.count
+            }
+            for count in ready {
+                stickerDiscoveryObservers.removeValue(forKey: count)?.resume()
+            }
+        }
+    }
+
+    func waitForStickerDiscoveryRequests(_ count: Int) async {
+        if stickerDiscoveryRequests.count >= count { return }
+        await withCheckedContinuation { stickerDiscoveryObservers[count] = $0 }
+    }
+
+    func finishStickerDiscovery(
+        _ index: Int, with result: Result<StickerPackDiscoveryResponse, Error>
+    ) {
+        pendingStickerDiscovery.removeValue(forKey: index)?.resume(with: result)
+    }
+
+    func recordedStickerDiscoveryRequests()
+        -> [(query: String?, sort: StickerPackSort, limit: Int, offset: Int)]
+    {
+        stickerDiscoveryRequests
+    }
+
     func setBulkDeleteResults(_ results: [Result<BulkDeletedPayload, Error>]) {
         bulkDeleteResults = results
     }
@@ -3836,6 +3883,122 @@ extension ChatStoreTests {
         scroll.didScroll(offset: -180)
         scroll.endGesture()
         XCTAssertEqual(refreshes, 1)
+    }
+
+    func testPrototypePullUsesDirectSlotThenResistanceAndCurrentReleaseDistance() {
+        let scroll = ConversationListScrollScope()
+        scroll.prototypePullEnabled = true
+        var refreshes = 0
+        scroll.onRefresh = { refreshes += 1 }
+        scroll.beginGesture()
+        scroll.didScroll(offset: -56)
+        XCTAssertEqual(scroll.pullDistance, 56)
+        scroll.didScroll(offset: -200)
+        XCTAssertEqual(scroll.pullDistance, 135.2, accuracy: 0.001)
+        scroll.didScroll(offset: -100)
+        XCTAssertEqual(scroll.pullDistance, 80.2, accuracy: 0.001)
+        scroll.endGesture()
+        XCTAssertEqual(refreshes, 0)
+        XCTAssertFalse(scroll.isRefreshing)
+        XCTAssertTrue(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 56)
+    }
+
+    func testPrototypePullHalfSlotThresholdAndUpwardRetraction() {
+        let scroll = ConversationListScrollScope()
+        scroll.prototypePullEnabled = true
+        scroll.beginGesture()
+        scroll.didScroll(offset: -27)
+        scroll.endGesture()
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 0)
+
+        scroll.beginGesture()
+        scroll.didScroll(offset: -28)
+        scroll.endGesture()
+        XCTAssertTrue(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 56)
+
+        scroll.beginGesture()
+        scroll.didScroll(offset: -20)
+        scroll.endGesture()
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 0)
+    }
+
+    func testPrototypeCancelledPullRestoresOriginalHiddenOrRevealedDrawer() {
+        let scroll = ConversationListScrollScope()
+        scroll.prototypePullEnabled = true
+        var refreshes = 0
+        scroll.onRefresh = { refreshes += 1 }
+        scroll.beginGesture()
+        scroll.didScroll(offset: -220)
+        scroll.endGesture(cancelled: true)
+        XCTAssertEqual(scroll.pullDistance, 0)
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertEqual(refreshes, 0)
+
+        scroll.revealSearch()
+        scroll.beginGesture()
+        scroll.didScroll(offset: 30)
+        scroll.endGesture(cancelled: true)
+        XCTAssertEqual(scroll.pullDistance, 56)
+        XCTAssertTrue(scroll.isSearchRevealed)
+    }
+
+    func testPrototypeRefreshHoldsUntilCompletionAndCannotRunConcurrently() {
+        let scroll = ConversationListScrollScope()
+        scroll.prototypePullEnabled = true
+        var refreshes = 0
+        scroll.onRefresh = { refreshes += 1 }
+        scroll.beginGesture()
+        scroll.didScroll(offset: -200)
+        scroll.endGesture()
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertTrue(scroll.isRefreshing)
+        XCTAssertTrue(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 100)
+
+        scroll.beginGesture()
+        scroll.didScroll(offset: -240)
+        scroll.endGesture()
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(scroll.pullDistance, 100)
+
+        scroll.isRefreshing = false
+        XCTAssertEqual(scroll.pullDistance, 56)
+        scroll.beginGesture()
+        scroll.didScroll(offset: -200)
+        scroll.endGesture()
+        XCTAssertEqual(refreshes, 2)
+        scroll.reset()
+        scroll.isRefreshing = false
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 0)
+    }
+
+    func testPrototypePinnedQueryPreservesFeedbackAndAccountResetClearsDrawer() {
+        let scroll = ConversationListScrollScope()
+        scroll.prototypePullEnabled = true
+        scroll.select(scope: .messages, archived: false, currentUserID: 1)
+        scroll.revealSearch()
+        scroll.isSearchPinned = true
+        scroll.prototypeSearchAdditionalHeight = 32
+        XCTAssertEqual(scroll.pullDistance, 88)
+        scroll.beginGesture()
+        scroll.didScroll(offset: 100)
+        scroll.endGesture()
+        XCTAssertTrue(scroll.isSearchRevealed)
+        XCTAssertEqual(scroll.pullDistance, 88)
+
+        scroll.select(
+            scope: .groups, archived: false, currentUserID: 1, preservingSearch: true)
+        XCTAssertEqual(scroll.pullDistance, 88)
+        XCTAssertTrue(scroll.isSearchPinned)
+        scroll.select(scope: .groups, archived: false, currentUserID: 2)
+        XCTAssertFalse(scroll.isSearchRevealed)
+        XCTAssertFalse(scroll.isSearchPinned)
+        XCTAssertEqual(scroll.pullDistance, 0)
     }
 
     func testConversationListActiveSearchSurvivesScopeChangeButNotAccountReset() {

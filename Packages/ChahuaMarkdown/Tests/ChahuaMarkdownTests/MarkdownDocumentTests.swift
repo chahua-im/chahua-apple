@@ -201,6 +201,40 @@ final class MarkdownDocumentTests: XCTestCase {
             [.paragraph([.text("~~~\nplain\n~~~")])])
     }
 
+    func testCodeBlocksPreserveRawClipboardTextAndIndentedCodeHasNoLanguage() {
+        let raw = "\tconst html = \"<b>raw</b>\";  \n\n// **literal** @[uid:2]\n"
+        XCTAssertEqual(
+            MarkdownDocument(parsing: "```js\n" + raw + "```\n```\nsecond\n```").blocks,
+            [.codeBlock(language: "js", code: raw), .codeBlock(language: nil, code: "second\n")])
+        XCTAssertEqual(
+            MarkdownDocument(parsing: "    \t<b>raw</b>  \n\n    **literal** @[uid:2]\n\nAfter")
+                .blocks,
+            [
+                .codeBlock(language: nil, code: "\t<b>raw</b>  \n\n**literal** @[uid:2]\n"),
+                .paragraph([.text("After")]),
+            ])
+        XCTAssertEqual(
+            MarkdownDocument(parsing: "    unterminated").blocks,
+            [.codeBlock(language: nil, code: "unterminated\n")])
+        XCTAssertEqual(
+            MarkdownDocument(parsing: "Paragraph\n    continuation").blocks,
+            [.paragraph([.text("Paragraph\n    continuation")])],
+            "Without markup, the PWA plain-text path preserves continuation indentation.")
+        XCTAssertEqual(
+            MarkdownDocument(parsing: "**Paragraph**\n    continuation").blocks,
+            [.paragraph([.strong([.text("Paragraph")]), .text("\ncontinuation")])],
+            "Indented code cannot interrupt an existing Markdown paragraph.")
+        XCTAssertEqual(
+            MarkdownDocument(parsing: "\t![diagram](diagram.png) \n").blocks,
+            [.codeBlock(language: nil, code: "![diagram](diagram.png) \n")])
+        XCTAssertEqual(
+            MarkdownDocument(parsing: " \t hello  \r\n\r\nworld \t ").blocks,
+            [
+                .codeBlock(language: nil, code: " hello  \n"),
+                .paragraph([.text("world")]),
+            ])
+    }
+
     func testListsSupportStartsNestedBlocksLazyContinuationAndRestrictedBullets() {
         XCTAssertEqual(
             MarkdownDocument(parsing: "3. three\n   - nested\n4. four").blocks,
@@ -267,48 +301,46 @@ final class MarkdownDocumentTests: XCTestCase {
 
     func testPlainMessagesPreserveSourceWhitespaceAndOnlyRestoreMentions() {
         for source in [
-            " \t hello  \r\n\r\nworld \t ",
+            "  hello  \r\n\r\nworld \t ",
             "\n\n* literal* \t\n***literal***\n# heading\n> quote\n---\n",
-            "\t![diagram](diagram.png) \n",
-            " \t `unmatched\n\ncode`  ",
             " \t \r\n",
         ] {
             XCTAssertEqual(
                 MarkdownDocument(parsing: source).blocks, [.paragraph([.text(source)])], source)
         }
-        let source = " \t@[uid:7]  \r\n\r\n @[uid:42]\t "
+        let source = "  @[uid:7]  \r\n\r\n @[uid:42]\t "
         XCTAssertEqual(
             MarkdownDocument(parsing: source).blocks,
             [
                 .paragraph([
-                    .text(" \t"), .mention(7), .text("  \r\n\r\n "), .mention(42), .text("\t "),
+                    .text("  "), .mention(7), .text("  \r\n\r\n "), .mention(42), .text("\t "),
                 ])
             ])
         XCTAssertEqual(
             MarkdownDocument(parsing: source).summary,
             [
-                .text(" \t"), .mention(7), .text("    "), .mention(42), .text("\t "),
+                .text("  "), .mention(7), .text("    "), .mention(42), .text("\t "),
             ])
         XCTAssertEqual(
-            MarkdownDocument(parsing: " \t first\r\n\r\nsecond\u{2028}\u{2029}last  ").summary,
+            MarkdownDocument(parsing: "  first\r\n\r\nsecond\u{2028}\u{2029}last  ").summary,
             [
-                .text(" \t first second last  ")
+                .text("  first second last  ")
             ])
     }
 
     func testRealMarkupAndEscapedPunctuationActivateNormalizedMarkdownPath() {
         XCTAssertEqual(
-            MarkdownDocument(parsing: " \t **bold** \n\n ").blocks,
+            MarkdownDocument(parsing: "  **bold** \n\n ").blocks,
             [
                 .paragraph([.strong([.text("bold")])])
             ])
         XCTAssertEqual(
-            MarkdownDocument(parsing: " \t \\*literal\\* \n\n ").blocks,
+            MarkdownDocument(parsing: "  \\*literal\\* \n\n ").blocks,
             [
                 .paragraph([.text("*literal*")])
             ])
         XCTAssertEqual(
-            MarkdownDocument(parsing: " \t https://example.com \n\n ").blocks,
+            MarkdownDocument(parsing: "  https://example.com \n\n ").blocks,
             [
                 .paragraph([
                     .link(
@@ -317,7 +349,7 @@ final class MarkdownDocumentTests: XCTestCase {
                 ])
             ])
         XCTAssertEqual(
-            MarkdownDocument(parsing: " \t [label](/relative) \n\n ").blocks,
+            MarkdownDocument(parsing: "  [label](/relative) \n\n ").blocks,
             [
                 .paragraph([.text("label")])
             ])
@@ -351,12 +383,16 @@ final class MarkdownDocumentTests: XCTestCase {
                 MarkdownDocument(parsing: source).blocks, [.paragraph([.text(source)])], source)
         }
         XCTAssertEqual(
-            MarkdownDocument(parsing: " \t example.com \n\n ").blocks,
+            MarkdownDocument(parsing: "  example.com \n\n ").blocks,
             [
                 .paragraph([
                     .link(destination: "http://example.com", children: [.text("example.com")])
                 ])
             ])
+        XCTAssertEqual(
+            MarkdownDocument(parsing: " \t example.com \n\n ").blocks,
+            [.codeBlock(language: nil, code: " example.com \n")],
+            "Four-column indentation creates literal code, never an automatic link.")
         XCTAssertEqual(
             MarkdownDocument(parsing: "`example.com www.example.com`").blocks,
             [

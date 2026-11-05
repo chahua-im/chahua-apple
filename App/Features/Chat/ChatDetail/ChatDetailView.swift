@@ -653,87 +653,96 @@ struct ChatDetailView: View {
                                     let mode = interactionContext.speakingMode
                                 {
                                     Text(mode.restrictionExplanation)
-                                        .font(.caption)
+                                        .font(.callout)
                                         .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.center)
+                                        .frame(maxWidth: .infinity, minHeight: 44)
                                         .padding(.horizontal, 16).padding(.vertical, 8)
+                                        .background(
+                                            .regularMaterial, in: RoundedRectangle(cornerRadius: 20)
+                                        )
+                                        .padding(.horizontal, 12)
+                                } else {
+                                    MessageComposerView(
+                                        text: composerText,
+                                        attachmentState: composerAttachments,
+                                        maxHeight: max(36, geometry.size.height / 3),
+                                        isEnabled: editingMessage.map(isEditable)
+                                            ?? interactionContext.canSend,
+                                        canSend: canSubmitComposer,
+                                        onSubmit: submitComposer,
+                                        onCompositionChanged: { composing in
+                                            isComposerComposing = composing
+                                            guard editingMessage == nil else { return }
+                                            drafts.setDraftComposing(
+                                                composing, chatID: chat.id, threadID: threadID)
+                                        },
+                                        replyToMessage: drafts.draftReply(
+                                            chatID: chat.id, threadID: threadID),
+                                        replyFocusRequest: replyFocusRequest,
+                                        onCancelReply: {
+                                            drafts.setDraftReply(
+                                                nil, chatID: chat.id, threadID: threadID)
+                                        },
+                                        onOpenReply: { id in Task { await model.jumpToMessage(id) }
+                                        },
+                                        editingMessage: editingMessage,
+                                        onCancelEdit: cancelEditing,
+                                        onRequestEditLastMessage: requestEditLastOwnMessage,
+                                        attachments: outgoingQueue.draftAttachments(
+                                            chatID: chat.id, threadID: threadID),
+                                        attachmentProgress: outgoingQueue.attachmentProgress,
+                                        compressionEnabled: outgoingQueue.compressionEnabled(
+                                            chatID: chat.id, threadID: threadID),
+                                        onImportImages: { urls in
+                                            try await drafts.flushForAttachmentChange(
+                                                chatID: chat.id, threadID: threadID)
+                                            try await outgoingQueue.importImages(
+                                                urls: urls, chatID: chat.id, threadID: threadID)
+                                        },
+                                        onImportFiles: { urls in
+                                            try await drafts.flushForAttachmentChange(
+                                                chatID: chat.id, threadID: threadID)
+                                            try await outgoingQueue.importFiles(
+                                                urls: urls, chatID: chat.id, threadID: threadID)
+                                        },
+                                        onRemoveAttachment: { id in
+                                            try await drafts.flushForAttachmentChange(
+                                                chatID: chat.id, threadID: threadID)
+                                            try await outgoingQueue.removeAttachment(
+                                                id: id, chatID: chat.id, threadID: threadID)
+                                        },
+                                        onRetryAttachment: { id in
+                                            try await drafts.flushForAttachmentChange(
+                                                chatID: chat.id, threadID: threadID)
+                                            try await outgoingQueue.retryAttachment(
+                                                id: id, chatID: chat.id, threadID: threadID)
+                                        },
+                                        onCompressionChanged: { enabled in
+                                            try await drafts.flushForAttachmentChange(
+                                                chatID: chat.id, threadID: threadID)
+                                            try await outgoingQueue.setCompressionEnabled(
+                                                enabled, chatID: chat.id, threadID: threadID)
+                                        },
+                                        onReorderAttachments: { ids in
+                                            try await drafts.flushForAttachmentChange(
+                                                chatID: chat.id, threadID: threadID)
+                                            try await outgoingQueue.reorderAttachments(
+                                                ids: ids, chatID: chat.id, threadID: threadID)
+                                        },
+                                        onDiscardAttachments: {
+                                            try await drafts.discardAttachments(
+                                                chatID: chat.id, threadID: threadID)
+                                        },
+                                        stickerLibrary: store.stickers,
+                                        onSendSticker: sendSticker,
+                                        onSendVoice: sendVoice,
+                                        onSearchMembers: { query in
+                                            try await store.searchMembers(
+                                                chatID: chat.id, query: query)
+                                        }
+                                    )
                                 }
-                                MessageComposerView(
-                                    text: composerText,
-                                    attachmentState: composerAttachments,
-                                    maxHeight: max(36, geometry.size.height / 3),
-                                    isEnabled: editingMessage.map(isEditable)
-                                        ?? interactionContext.canSend,
-                                    canSend: canSubmitComposer,
-                                    onSubmit: submitComposer,
-                                    onCompositionChanged: { composing in
-                                        isComposerComposing = composing
-                                        guard editingMessage == nil else { return }
-                                        drafts.setDraftComposing(
-                                            composing, chatID: chat.id, threadID: threadID)
-                                    },
-                                    replyToMessage: drafts.draftReply(
-                                        chatID: chat.id, threadID: threadID),
-                                    replyFocusRequest: replyFocusRequest,
-                                    onCancelReply: {
-                                        drafts.setDraftReply(
-                                            nil, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onOpenReply: { id in Task { await model.jumpToMessage(id) } },
-                                    editingMessage: editingMessage,
-                                    onCancelEdit: cancelEditing,
-                                    onRequestEditLastMessage: requestEditLastOwnMessage,
-                                    attachments: outgoingQueue.draftAttachments(
-                                        chatID: chat.id, threadID: threadID),
-                                    attachmentProgress: outgoingQueue.attachmentProgress,
-                                    compressionEnabled: outgoingQueue.compressionEnabled(
-                                        chatID: chat.id, threadID: threadID),
-                                    onImportImages: { urls in
-                                        try await drafts.flushForAttachmentChange(
-                                            chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.importImages(
-                                            urls: urls, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onImportFiles: { urls in
-                                        try await drafts.flushForAttachmentChange(
-                                            chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.importFiles(
-                                            urls: urls, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onRemoveAttachment: { id in
-                                        try await drafts.flushForAttachmentChange(
-                                            chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.removeAttachment(
-                                            id: id, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onRetryAttachment: { id in
-                                        try await drafts.flushForAttachmentChange(
-                                            chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.retryAttachment(
-                                            id: id, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onCompressionChanged: { enabled in
-                                        try await drafts.flushForAttachmentChange(
-                                            chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.setCompressionEnabled(
-                                            enabled, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onReorderAttachments: { ids in
-                                        try await drafts.flushForAttachmentChange(
-                                            chatID: chat.id, threadID: threadID)
-                                        try await outgoingQueue.reorderAttachments(
-                                            ids: ids, chatID: chat.id, threadID: threadID)
-                                    },
-                                    onDiscardAttachments: {
-                                        try await drafts.discardAttachments(
-                                            chatID: chat.id, threadID: threadID)
-                                    },
-                                    stickerLibrary: store.stickers,
-                                    onSendSticker: sendSticker,
-                                    onSendVoice: sendVoice,
-                                    onSearchMembers: { query in
-                                        try await store.searchMembers(chatID: chat.id, query: query)
-                                    }
-                                )
                             }
                         }
                     })
@@ -908,13 +917,20 @@ struct ChatDetailView: View {
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
         actions.pinnedMessageIDs = Set(chatPins.map { $0.message.id })
         actions.pendingPinMessageIDs = pins.pendingMessageIDs
+        // Split the lookup operands to avoid a Swift 6.4 constraint-solver crash.
+        let pinChatID: String = chat.id
+        let pinsByChatID: [String: [PinResponse]] = pins.pinsByChatID
+        let loadedPins: [PinResponse]? = pinsByChatID[pinChatID]
         if canManagePins,
-            pins.pinsByChatID[chat.id] != nil, !pins.failedChatIDs.contains(chat.id)
+            loadedPins != nil, !pins.failedChatIDs.contains(chat.id)
         {
             actions.togglePin = requestPinChange
         }
-        if let tail = outgoingQueue.snapshots[conversationKey]?.outgoing.last,
-            outgoingQueue.snapshots[conversationKey]?.composingItem == nil, !tail.dispatchClaimed
+        let queueKey = conversationKey
+        let queueSnapshots = outgoingQueue.snapshots
+        let queueSnapshot = queueSnapshots[queueKey]
+        if let tail = queueSnapshot?.outgoing.last,
+            queueSnapshot?.composingItem == nil, !tail.dispatchClaimed
         {
             actions.modifiablePendingMessageIDs = [tail.clientGeneratedID]
         }
@@ -984,7 +1000,11 @@ struct ChatDetailView: View {
             ).availability(of: .delete) == .enabled
     }
 
-    private var chatPins: [PinResponse] { pins.pinsByChatID[chat.id] ?? [] }
+    private var chatPins: [PinResponse] {
+        let chatID = chat.id
+        let pinsByChatID = pins.pinsByChatID
+        return pinsByChatID[chatID] ?? []
+    }
 
     private var canManagePins: Bool {
         let context = currentInteractionContext

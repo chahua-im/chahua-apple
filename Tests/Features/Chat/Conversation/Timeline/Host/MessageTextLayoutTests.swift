@@ -356,34 +356,37 @@ final class MessageTextLayoutTests: XCTestCase {
             text.layoutSubtreeIfNeeded()
             var code = try XCTUnwrap(
                 text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
-            var document = try XCTUnwrap(code.documentView as? NSTextView)
+            var viewport: NSScrollView = code
+            var document = try XCTUnwrap(viewport.documentView as? NSTextView)
             document.setSelectedRange(NSRange(location: 0, length: 3))
-            code.contentView.scroll(to: CGPoint(x: 50, y: 0))
-            XCTAssertGreaterThan(code.contentView.bounds.minX, 0)
+            viewport.contentView.scroll(to: CGPoint(x: 50, y: 0))
+            XCTAssertGreaterThan(viewport.contentView.bounds.minX, 0)
             text.apply(content, resetSelection: false)
             XCTAssertEqual(document.selectedRange().length, 3)
-            XCTAssertGreaterThan(code.contentView.bounds.minX, 0)
+            XCTAssertGreaterThan(viewport.contentView.bounds.minX, 0)
 
             // Identical prepared text retains the attachment identity. A different
             // message must still reset both selection and the horizontal position.
             text.apply(content, resetSelection: true)
             code = try XCTUnwrap(
                 text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
-            document = try XCTUnwrap(code.documentView as? NSTextView)
+            viewport = code
+            document = try XCTUnwrap(viewport.documentView as? NSTextView)
             XCTAssertEqual(document.selectedRange(), NSRange(location: 0, length: 0))
-            XCTAssertEqual(code.contentView.bounds.origin, .zero)
+            XCTAssertEqual(viewport.contentView.bounds.origin, .zero)
             document.setSelectedRange(NSRange(location: 0, length: 3))
-            code.contentView.scroll(to: CGPoint(x: 50, y: 0))
+            viewport.contentView.scroll(to: CGPoint(x: 50, y: 0))
             text.clear()
             text.apply(content, resetSelection: true)
             code = try XCTUnwrap(
                 text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
-            document = try XCTUnwrap(code.documentView as? NSTextView)
+            viewport = code
+            document = try XCTUnwrap(viewport.documentView as? NSTextView)
             XCTAssertEqual(document.selectedRange(), NSRange(location: 0, length: 0))
-            XCTAssertEqual(code.contentView.bounds.origin, .zero)
+            XCTAssertEqual(viewport.contentView.bounds.origin, .zero)
 
             document.setSelectedRange(NSRange(location: 0, length: 3))
-            code.contentView.scroll(to: CGPoint(x: 50, y: 0))
+            viewport.contentView.scroll(to: CGPoint(x: 50, y: 0))
             let shiftedSource = "A new prefix\n" + source
             let shifted = try preparedText(shiftedSource, width: 180)
             text.apply(
@@ -394,9 +397,10 @@ final class MessageTextLayoutTests: XCTestCase {
                 resetSelection: true)
             code = try XCTUnwrap(
                 text.subviews.compactMap { $0 as? MessageCodeScrollView }.first { !$0.isHidden })
-            document = try XCTUnwrap(code.documentView as? NSTextView)
+            viewport = code
+            document = try XCTUnwrap(viewport.documentView as? NSTextView)
             XCTAssertEqual(document.selectedRange(), NSRange(location: 0, length: 0))
-            XCTAssertEqual(code.contentView.bounds.origin, .zero)
+            XCTAssertEqual(viewport.contentView.bounds.origin, .zero)
         }
 
         func testNativeTextPreservesSelectionAndUsesCurrentLinkActions() throws {
@@ -988,6 +992,97 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertGreaterThan(glyphBounds(nested.location).minX, glyphBounds(parent.location).minX)
     }
 
+    func testNativeCodeHeadersCopyRawBlocksIndependentlyAndDisableInPreview() async throws {
+        let raw = "\tconst html = \"<b>raw</b>\";  \n\n// **literal** @[uid:2]\n"
+        let source = "```js\n" + raw + "```\n\n    second  \n"
+        let prepared = try preparedText(source, width: 180)
+        #if os(macOS)
+            let text = AppKitMessageTextView(geometry: prepared.geometry)
+            let board = NSPasteboard.general
+            let saved = (board.pasteboardItems ?? []).map { item in
+                let copy = NSPasteboardItem()
+                for type in item.types {
+                    if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+                }
+                return copy
+            }
+            defer {
+                board.clearContents()
+                board.writeObjects(saved)
+            }
+            func copied() -> String? { board.string(forType: .string) }
+            func press(_ block: MessageCodeScrollView) { block.copyButton.performClick(nil) }
+            func feedback(_ block: MessageCodeScrollView) -> String? {
+                block.copyButton.accessibilityLabel()
+            }
+        #else
+            let text = UIKitMessageTextView(geometry: prepared.geometry)
+            let saved = UIPasteboard.general.items
+            defer { UIPasteboard.general.items = saved }
+            func copied() -> String? { UIPasteboard.general.string }
+            func press(_ block: MessageCodeScrollView) {
+                block.copyButton.sendActions(for: .touchUpInside)
+            }
+            func feedback(_ block: MessageCodeScrollView) -> String? {
+                block.copyButton.accessibilityLabel
+            }
+        #endif
+        var content = MessageTextContent(
+            text: source, mentions: [], currentUserID: 1, isOutgoing: false, action: nil,
+            metadata: prepared.metadata, geometry: prepared.geometry, fontSize: 14,
+            preparedText: prepared.preparedText)
+        text.apply(content, resetSelection: true)
+        defer { text.clear() }
+        let blocks = text.subviews.compactMap { $0 as? MessageCodeScrollView }
+            .sorted { $0.frame.minY < $1.frame.minY }
+        XCTAssertEqual(blocks.count, 2)
+        let first = try XCTUnwrap(blocks.first)
+        let second = try XCTUnwrap(blocks.last)
+        let attachments = text.contentLayout.codeBlocks.map(\.1)
+        XCTAssertEqual(attachments.first?.language, "js")
+        XCTAssertNil(attachments.last?.language)
+        for (geometry, attachment) in text.contentLayout.codeBlocks {
+            XCTAssertEqual(
+                geometry.frame.height, attachment.codeSize.height + attachment.headerHeight,
+                accuracy: 0.5)
+            XCTAssertGreaterThanOrEqual(attachment.headerHeight, 20)
+        }
+        #if os(macOS)
+            let originalSelection = text.selectedRange()
+        #else
+            let originalSelection = text.selectedRange
+        #endif
+        press(first)
+        XCTAssertEqual(copied(), raw)
+        XCTAssertEqual(feedback(first), AppLanguage.localized("Copied"))
+        XCTAssertEqual(feedback(second), AppLanguage.localized("Copy"))
+        try await Task.sleep(for: .milliseconds(1100))
+        press(second)
+        XCTAssertEqual(copied(), "second  \n")
+        try await Task.sleep(for: .milliseconds(2100))
+        XCTAssertEqual(feedback(first), AppLanguage.localized("Copy"))
+        XCTAssertEqual(feedback(second), AppLanguage.localized("Copied"))
+        #if os(macOS)
+            XCTAssertEqual(text.selectedRange(), originalSelection)
+        #else
+            XCTAssertEqual(text.selectedRange, originalSelection)
+        #endif
+        content.copyEnabled = false
+        text.apply(content, resetSelection: false)
+        XCTAssertFalse(first.copyButton.isEnabled)
+        press(first)
+        XCTAssertEqual(copied(), "second  \n", "An inactive preview must not copy.")
+        content.copyEnabled = true
+        text.apply(content, resetSelection: false)
+        press(first)
+        XCTAssertEqual(copied(), raw)
+        text.apply(content, resetSelection: true)
+        let rebound = try XCTUnwrap(
+            text.subviews.compactMap { $0 as? MessageCodeScrollView }
+                .filter { !$0.isHidden }.min { $0.frame.minY < $1.frame.minY })
+        XCTAssertEqual(feedback(rebound), AppLanguage.localized("Copy"))
+    }
+
     func testPlainFencesInheritBubbleContrastWhileKnownTokenlessCodeUsesSyntaxTheme() throws {
         for outgoing in [false, true] {
             for language in [nil, "not-a-real-language", "markdown"] as [String?] {
@@ -1253,7 +1348,7 @@ final class MessageTextLayoutTests: XCTestCase {
     }
 
     #if os(macOS)
-        func testCodeViewportReceivesHitsAndHorizontalScrolling() throws {
+        func testCodeViewportKeepsHeaderFixedAndRoutesContentHits() throws {
             let source = "```swift\n" + String(repeating: "let value = 123; ", count: 40) + "\n```"
             let prepared = try preparedText(source, width: 180)
             let text = AppKitMessageTextView(geometry: prepared.geometry)
@@ -1271,23 +1366,34 @@ final class MessageTextLayoutTests: XCTestCase {
             text.layoutSubtreeIfNeeded()
             let code = try XCTUnwrap(
                 text.subviews.compactMap { $0 as? MessageCodeScrollView }.first)
-            XCTAssertGreaterThan(
-                try XCTUnwrap(code.documentView).frame.width, code.contentView.bounds.width)
-            let point = text.convert(
-                CGPoint(x: code.frame.midX, y: code.frame.midY), to: text.superview)
-            let hit = try XCTUnwrap(text.hitTest(point))
-            XCTAssertTrue(
-                hit === code || hit.isDescendant(of: code),
-                "The outer selectable text view must not steal code viewport interaction.")
-            let event = try XCTUnwrap(
-                CGEvent(
-                    scrollWheelEvent2Source: nil, units: .pixel,
-                    wheelCount: 2, wheel1: 0, wheel2: -120, wheel3: 0))
-            code.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: event)))
-            XCTAssertGreaterThan(code.contentView.bounds.minX, 0)
-            XCTAssertLessThanOrEqual(
-                code.contentView.bounds.maxX,
-                try XCTUnwrap(code.documentView).frame.maxX + 0.5)
+            let document = try XCTUnwrap(code.documentView as? NSTextView)
+            let clip = code.contentView
+            let maximumOffset = document.frame.width - clip.bounds.width
+            XCTAssertGreaterThan(maximumOffset, 120)
+            XCTAssertTrue(document.isSelectable)
+            let headerFrame = code.copyButton.convert(code.copyButton.bounds, to: text)
+            XCTAssertLessThanOrEqual(code.copyButton.frame.maxY, clip.frame.minY)
+
+            // Drive native clip bounds directly: a windowless Quartz event tests
+            // AppKit's event/animation environment, not our layout or hit routing.
+            for offset in [CGFloat.zero, 120, maximumOffset] {
+                clip.scroll(to: CGPoint(x: offset, y: 0))
+                code.reflectScrolledClipView(clip)
+                text.layoutSubtreeIfNeeded()
+                XCTAssertEqual(clip.bounds.minX, offset, accuracy: 0.5)
+                XCTAssertEqual(
+                    code.copyButton.convert(code.copyButton.bounds, to: text), headerFrame)
+                let contentPoint = clip.convert(
+                    CGPoint(x: clip.bounds.midX, y: clip.bounds.midY), to: text.superview)
+                let contentHit = try XCTUnwrap(text.hitTest(contentPoint))
+                XCTAssertTrue(
+                    contentHit === document || contentHit.isDescendant(of: document),
+                    "Code interaction must reach its selectable document, not the outer message.")
+                let copyPoint = code.copyButton.convert(
+                    CGPoint(x: code.copyButton.bounds.midX, y: code.copyButton.bounds.midY),
+                    to: text.superview)
+                XCTAssertTrue(text.hitTest(copyPoint) === code.copyButton)
+            }
         }
     #endif
 

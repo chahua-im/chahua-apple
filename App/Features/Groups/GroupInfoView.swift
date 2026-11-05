@@ -688,7 +688,10 @@ struct GroupInfoView: View {
             let response = try await store.groupInfo(chatID: chat.id)
             try Task.checkCancellation()
             guard isCurrentSession else { return }
-            groupInfo = store.groupInfoByChatID[chat.id] ?? response
+            // Separate lookup operands for the Swift 6.4 constraint solver.
+            let chatID = chat.id
+            let groupInfoByChatID = store.groupInfoByChatID
+            groupInfo = groupInfoByChatID[chatID] ?? response
             store.trackNotificationExpiry(for: notificationChat)
             if failure?.operation.isLoad == true { failure = nil }
         } catch is CancellationError {

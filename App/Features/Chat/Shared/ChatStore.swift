@@ -3730,7 +3730,7 @@ extension ThreadListItem {
         guard response != readState else { return self }
         return ThreadListItem(
             chatId: chatId, chatName: chatName, chatAvatar: chatAvatar,
-            threadRootMessage: threadRootMessage, participants: participants,
+            threadRootMessage: threadRootMessage, peer: peer,
             lastReply: lastReply, replyCount: replyCount, lastReplyAt: lastReplyAt,
             unreadCount: response.unreadCount, unreadMentions: response.unreadMentions,
             unreadReactions: response.unreadReactions,
@@ -3745,7 +3745,7 @@ extension ThreadListItem {
     ) -> ThreadListItem {
         ThreadListItem(
             chatId: chatId, chatName: chatName, chatAvatar: chatAvatar,
-            threadRootMessage: root ?? threadRootMessage, participants: participants,
+            threadRootMessage: root ?? threadRootMessage, peer: peer,
             lastReply: lastReply ?? self.lastReply, replyCount: replyCount ?? self.replyCount,
             lastReplyAt: lastReplyAt ?? self.lastReplyAt, unreadCount: unreadCount,
             unreadMentions: unreadMentions, unreadReactions: unreadReactions,

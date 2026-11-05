@@ -166,11 +166,16 @@ struct GroupEditingView: View {
     }
 
     private var currentInfo: GroupInfoResponse {
-        store.groupInfoByChatID[info.id] ?? info
+        // Separate lookup operands for the Swift 6.4 constraint solver.
+        let chatID = info.id
+        let groupInfoByChatID = store.groupInfoByChatID
+        return groupInfoByChatID[chatID] ?? info
     }
 
     private var authorized: Bool {
-        store.groupInfoByChatID[info.id]?.myRole == .admin
+        let chatID = info.id
+        let groupInfoByChatID = store.groupInfoByChatID
+        return groupInfoByChatID[chatID]?.myRole == .admin
             && accountUID == store.currentUserProfile?.uid
             && sessionRevision == store.sessionRevision
     }
@@ -185,7 +190,9 @@ struct GroupEditingView: View {
                 chatID: info.id, speakingMode: speakingMode)
             guard authorized, !Task.isCancelled else { return }
             self.speakingMode = updated.speakingMode
-            if let updatedInfo = store.groupInfoByChatID[info.id] { onUpdated(updatedInfo) }
+            let chatID = info.id
+            let groupInfoByChatID = store.groupInfoByChatID
+            if let updatedInfo = groupInfoByChatID[chatID] { onUpdated(updatedInfo) }
         } catch is CancellationError {} catch {
             guard authorized, !Task.isCancelled else { return }
             self.error = error.localizedDescription

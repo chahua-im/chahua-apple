@@ -1190,7 +1190,7 @@ struct AuthenticatedShell: View {
             ?? (openedThread?.key == key ? openedThread?.chat : nil)
             ?? (messageNavigation?.chat?.id == key.chatID ? messageNavigation?.chat : nil)
         return ThreadHeaderAvatar(
-            key: key, parent: parent, store: chatStore, currentUserID: me.uid,
+            key: key, parent: parent, store: chatStore,
             diameter: ChatFloatingHeader<EmptyView>.avatarDiameter,
             root: openedThread?.key == key ? openedThread?.root : nil)
     }
@@ -1207,7 +1207,7 @@ struct AuthenticatedShell: View {
     @ViewBuilder private var selectedAvatar: some View {
         if let conversation = selectedConversation {
             ConversationAvatarView(
-                item: conversation, store: chatStore, currentUserID: me.uid,
+                item: conversation, store: chatStore,
                 diameter: ChatFloatingHeader<EmptyView>.avatarDiameter)
         } else if let chat = messageNavigation?.chat {
             AvatarView(

@@ -623,7 +623,7 @@ final class ChahuaAPITests: XCTestCase {
                       "mentions": [],
                       "isDeleted": false
                     },
-                    "participants": [{"uid": 2, "gender": 1, "name": null, "avatarUrl": null}],
+                    "peer": {"uid": 2, "gender": 1, "username": "Grace", "avatarUrl": null},
                     "lastReply": {
                       "id": "9007199254740995",
                       "clientGeneratedId": "reply-attempt",
@@ -659,8 +659,8 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(thread.chatId, "9007199254740993")
         XCTAssertEqual(thread.threadRootMessage.id, MessageID(9_007_199_254_740_994))
         XCTAssertEqual(thread.threadRootMessage.message, "Discuss the release")
-        XCTAssertEqual(thread.participants.first?.uid, 2)
-        XCTAssertNil(thread.participants.first?.name)
+        XCTAssertEqual(thread.peer?.uid, 2)
+        XCTAssertEqual(thread.peer?.username, "Grace")
         XCTAssertNil(thread.chatAvatar)
         XCTAssertEqual(thread.lastReply?.id, MessageID(9_007_199_254_740_995))
         XCTAssertEqual(thread.lastReply?.isDeleted, true)
@@ -677,11 +677,13 @@ final class ChahuaAPITests: XCTestCase {
         currentThread["unreadMentions"] = 1
         currentThread["unreadReactions"] = 4
         currentThread["chatKind"] = "group"
+        currentThread["peer"] = NSNull()
         let withActivity = try JSONCoding.decoder.decode(
             ThreadListItem.self, from: JSONSerialization.data(withJSONObject: currentThread))
         XCTAssertEqual(withActivity.unreadMentions, 1)
         XCTAssertEqual(withActivity.unreadReactions, 4)
         XCTAssertEqual(withActivity.chatKind, .group)
+        XCTAssertNil(withActivity.peer)
         XCTAssertEqual(
             try JSONCoding.decoder.decode(
                 ThreadListItem.self, from: JSONCoding.encoder.encode(withActivity)), withActivity)
@@ -746,7 +748,7 @@ final class ChahuaAPITests: XCTestCase {
                     "sender":{"uid":1,"gender":0},
                     "messageType":{"private-invalid-value":1},"message":"private message",
                     "attachments":[],"mentions":[],"isDeleted":false},
-                  "participants":[],"replyCount":0,"lastReplyAt":"2026-09-01T00:00:00Z",
+                  "peer":null,"replyCount":0,"lastReplyAt":"2026-09-01T00:00:00Z",
                   "unreadCount":0,"subscribedAt":"2026-09-01T00:00:00Z","archived":false}]}
                 """#
             )
@@ -1154,11 +1156,32 @@ final class ChahuaAPITests: XCTestCase {
             """#
         let flatPack = String(pack.dropLast()) + ",\"stickers\":[\(sticker)]}"
         let flatSticker = String(sticker.dropLast()) + ",\"packs\":[\(pack)]}"
+        let discoveryPack =
+            String(pack.dropLast())
+            + #","visibility":"public","previewStickers":[],"recentSubscriberCount":6,"subscriberCount":20}"#
         StubURLProtocol.handler = { request in
             guard request.httpMethod == "GET",
                 request.value(forHTTPHeaderField: "Authorization") == "Bearer candidate"
             else { return (403, "") }
             switch request.url?.path {
+            case "/stickers/packs":
+                let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+                    .queryItems
+                guard
+                    query == [
+                        URLQueryItem(name: "q", value: "wave & hello"),
+                        URLQueryItem(name: "sort", value: "subscribers"),
+                        URLQueryItem(name: "limit", value: "20"),
+                        URLQueryItem(name: "offset", value: "20"),
+                    ]
+                else { return (400, "Invalid discovery query") }
+                return (
+                    200,
+                    """
+                    {"packs":[\(discoveryPack)],"hasMore":true,"recentWindowDays":30,
+                     "statsUpdatedAt":"2026-09-01T01:02:04Z"}
+                    """
+                )
             case "/stickers/packs/mine/owned", "/stickers/packs/mine/subscribed":
                 return (200, "{\"packs\":[\(pack)]}")
             case "/stickers/mine/favorites":
@@ -1180,6 +1203,8 @@ final class ChahuaAPITests: XCTestCase {
         let favorites = try await client.listFavoriteStickers()
         let packDetail = try await client.getStickerPack(id: "pack-one")
         let stickerDetail = try await client.getSticker(id: "sticker-one")
+        let discovery = try await client.discoverStickerPacks(
+            query: "wave & hello", sort: .subscribers, limit: 20, offset: 20)
 
         XCTAssertEqual(owned.map(\.id), ["pack-one"])
         XCTAssertEqual(subscribed, owned)
@@ -1198,6 +1223,13 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertNil(stickerDetail.sticker.name)
         XCTAssertEqual(stickerDetail.sticker.media.width, 320)
         XCTAssertNil(stickerDetail.sticker.media.height)
+        let discovered = try XCTUnwrap(discovery.packs.first)
+        XCTAssertEqual(discovered.pack, owned.first)
+        XCTAssertEqual(discovered.visibility, .public)
+        XCTAssertEqual(discovered.recentSubscriberCount, 6)
+        XCTAssertEqual(discovered.subscriberCount, 20)
+        XCTAssertTrue(discovery.hasMore)
+        XCTAssertEqual(discovery.recentWindowDays, 30)
     }
 
     func testStickerMutationsUseBodylessPutAndDeleteAndPreserveErrors() async throws {

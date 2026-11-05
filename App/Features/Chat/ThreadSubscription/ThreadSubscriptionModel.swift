@@ -12,7 +12,7 @@ extension ThreadListItem {
     func withArchived(_ archived: Bool) -> ThreadListItem {
         ThreadListItem(
             chatId: chatId, chatName: chatName, chatAvatar: chatAvatar,
-            threadRootMessage: threadRootMessage, participants: participants,
+            threadRootMessage: threadRootMessage, peer: peer,
             lastReply: lastReply, replyCount: replyCount, lastReplyAt: lastReplyAt,
             unreadCount: unreadCount, unreadMentions: unreadMentions,
             unreadReactions: unreadReactions, lastReadMessageId: lastReadMessageId,

@@ -88,6 +88,21 @@ private struct StickerMultipartBody {
 }
 
 extension ChahuaClient {
+    public func discoverStickerPacks(
+        query: String?, sort: StickerPackSort, limit: Int, offset: Int
+    ) async throws -> StickerPackDiscoveryResponse {
+        try await send(
+            HTTPRequestSpec(
+                method: .get, path: ["stickers", "packs"],
+                query: [
+                    query.map { URLQueryItem(name: "q", value: $0) },
+                    URLQueryItem(name: "sort", value: sort.rawValue),
+                    URLQueryItem(name: "limit", value: String(limit)),
+                    URLQueryItem(name: "offset", value: String(offset)),
+                ].compactMap { $0 }),
+            decoding: StickerPackDiscoveryResponse.self)
+    }
+
     public func listOwnedStickerPacks() async throws -> [StickerPackSummary] {
         try await send(
             HTTPRequestSpec(method: .get, path: ["stickers", "packs", "mine", "owned"]),

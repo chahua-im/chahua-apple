@@ -187,7 +187,9 @@ struct ChatListView: View {
             isPullRefreshing: isPullRefreshing, onRetry: { await performManualRefresh() }
         )
         ConversationListViewport {
-            if !isWideChatLayout, scrollScope.isSearchRevealed && !isSearchPinned {
+            if !isWideChatLayout, !usesPrototypePull,
+                scrollScope.isSearchRevealed && !isSearchPinned
+            {
                 Color.clear
                     .frame(height: ConversationListScrollScope.drawerHeight)
                     #if os(iOS)
@@ -296,12 +298,20 @@ struct ChatListView: View {
                     scrollScope: scrollScope, scrollerScope: overlayScrollers))
         #else
             .background(ConversationListScrollMarker(scope: scrollScope, keepsScopeAlive: true))
+            .background(alignment: .top) {
+                if usesPrototypePull {
+                    IOSConversationListPullRefreshIndicator(
+                        pullDistance: scrollScope.pullDistance,
+                        isRefreshing: scrollScope.isRefreshing,
+                        searchHeight: prototypeSearchHeight)
+                }
+            }
         #endif
         #if os(iOS)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if isWideChatLayout {
                     wideSearchHeader
-                } else if scrollScope.isSearchRevealed, isSearchPinned {
+                } else if !usesPrototypePull, scrollScope.isSearchRevealed, isSearchPinned {
                     Color.clear.frame(height: searchDrawerHeight)
                 }
             }
@@ -313,7 +323,24 @@ struct ChatListView: View {
             }
         #endif
         .overlay(alignment: .top) {
-            if !isWideChatLayout,
+            #if os(iOS)
+                if usesPrototypePull {
+                    IOSConversationListPullSearchPresentation(
+                        pullDistance: scrollScope.pullDistance,
+                        searchHeight: prototypeSearchHeight
+                    ) {
+                        searchControls
+                    } feedback: {
+                        if !searchText.isEmpty {
+                            searchUnavailableFeedback
+                                .padding(.horizontal, 16)
+                        }
+                    }
+                    .allowsHitTesting(scrollScope.isSearchRevealed)
+                    .accessibilityIdentifier("conversation-search-drawer")
+                }
+            #endif
+            if !isWideChatLayout, !usesPrototypePull,
                 scrollScope.isSearchRevealed || scrollScope.pullDistance > 0
             {
                 searchDrawer
@@ -377,6 +404,12 @@ struct ChatListView: View {
             }
         }
         .onChange(of: isSearchPinned) { _, pinned in scrollScope.isSearchPinned = pinned }
+        .onChange(of: usesPrototypePull) { _, enabled in
+            scrollScope.prototypePullEnabled = enabled
+        }
+        .onChange(of: prototypeSearchAdditionalHeight) { _, height in
+            scrollScope.prototypeSearchAdditionalHeight = height
+        }
         .onChange(of: scope) { _, _ in resetScopePresentation() }
         .onChange(of: archivedMode) { _, _ in resetScopePresentation() }
         .onChange(of: currentUserID) { _, _ in resetScopePresentation(preservingSearch: false) }
@@ -432,6 +465,22 @@ struct ChatListView: View {
         isWideChatLayout || isSearchFocused || !searchText.isEmpty
     }
 
+    private var usesPrototypePull: Bool {
+        #if os(iOS)
+            !isWideChatLayout
+        #else
+            false
+        #endif
+    }
+
+    private var prototypeSearchAdditionalHeight: CGFloat {
+        usesPrototypePull && !searchText.isEmpty ? 32 : 0
+    }
+
+    private var prototypeSearchHeight: CGFloat {
+        ConversationListScrollScope.prototypeDrawerHeight + prototypeSearchAdditionalHeight
+    }
+
     private var usesDesktopDensity: Bool {
         ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
     }
@@ -455,54 +504,12 @@ struct ChatListView: View {
 
     private var searchDrawer: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                HStack(spacing: usesDesktopDensity ? 6 : 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(usesDesktopDensity ? .system(size: 14) : .body)
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    TextField(
-                        isWideChatLayout
-                            ? LocalizedStringKey(usesDesktopDensity ? "Search (⌘K)" : "Search")
-                            : LocalizedStringKey("Search chats, messages, people"),
-                        text: $searchText
-                    )
-                    .textFieldStyle(.plain)
-                    .focused($isSearchFocused)
-                    .submitLabel(.search)
-                    .accessibilityHint("Search is not available yet.")
-                }
-                .font(usesDesktopDensity ? .system(size: 13) : .body)
-                .padding(.horizontal, usesDesktopDensity ? 8 : 12)
-                .frame(height: searchControlHeight)
-                .background {
-                    if isWideChatLayout {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.secondary.opacity(0.1))
-                    } else {
-                        Capsule().fill(Color.secondary.opacity(0.1))
-                    }
-                }
-                if isSearchFocused || !searchText.isEmpty {
-                    Button("Cancel") {
-                        isSearchFocused = false
-                        searchText = ""
-                        if !isWideChatLayout { scrollScope.cancelSearch() }
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
-                    .foregroundStyle(.blue)
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: searchRowHeight, alignment: usesDesktopDensity ? .top : .center)
+            searchControls
+                .padding(.horizontal, 12)
+                .frame(height: searchRowHeight, alignment: usesDesktopDensity ? .top : .center)
             if !searchText.isEmpty {
-                Text("Search is not available yet.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                searchUnavailableFeedback
                     .padding(.horizontal, 12)
-                    .frame(height: 32, alignment: .topLeading)
-                    .accessibilityIdentifier("conversation-search-unavailable")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -512,6 +519,63 @@ struct ChatListView: View {
         .accessibilityIdentifier("conversation-search-drawer")
     }
 
+    private var searchUnavailableFeedback: some View {
+        Text("Search is not available yet.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(height: 32, alignment: .topLeading)
+            .accessibilityIdentifier("conversation-search-unavailable")
+    }
+
+    private var searchControls: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: usesDesktopDensity ? 6 : 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(usesDesktopDensity ? .system(size: 14) : .body)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField(
+                    isWideChatLayout
+                        ? LocalizedStringKey(usesDesktopDensity ? "Search (⌘K)" : "Search")
+                        : LocalizedStringKey("Search chats, messages, people"),
+                    text: $searchText
+                )
+                .textFieldStyle(.plain)
+                .focused($isSearchFocused)
+                .submitLabel(.search)
+                .accessibilityHint("Search is not available yet.")
+            }
+            .font(usesDesktopDensity ? .system(size: 13) : .body)
+            .padding(.horizontal, usesDesktopDensity ? 8 : (usesPrototypePull ? 14 : 12))
+            .frame(height: searchControlHeight)
+            .background {
+                if isWideChatLayout {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.secondary.opacity(0.1))
+                } else {
+                    Capsule().fill(searchControlFill)
+                }
+            }
+            if isSearchFocused || !searchText.isEmpty {
+                Button("Cancel") {
+                    isSearchFocused = false
+                    searchText = ""
+                    if !isWideChatLayout { scrollScope.cancelSearch() }
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .foregroundStyle(.blue)
+            }
+        }
+    }
+
+    private var searchControlFill: Color {
+        #if os(iOS)
+            if usesPrototypePull { return Color(uiColor: .tertiarySystemFill) }
+        #endif
+        return Color.secondary.opacity(0.1)
+    }
+
     private func configureListPresentation() {
         isListVisible = true
         if let presentation, presentationGeneration != presentation.resetGeneration {
@@ -519,6 +583,8 @@ struct ChatListView: View {
             searchText = ""
             presentationGeneration = presentation.resetGeneration
         }
+        scrollScope.prototypePullEnabled = usesPrototypePull
+        scrollScope.prototypeSearchAdditionalHeight = prototypeSearchAdditionalHeight
         scrollScope.activate()
         scrollScope.presentation = presentation
         scrollScope.select(scope: scope, archived: archivedMode, currentUserID: currentUserID)
@@ -536,6 +602,7 @@ struct ChatListView: View {
             isSearchFocused = false
             searchText = ""
         }
+        scrollScope.prototypeSearchAdditionalHeight = prototypeSearchAdditionalHeight
         scrollScope.isSearchPinned = isSearchPinned
         scrollScope.onRefresh = { Task { await performManualRefresh() } }
     }

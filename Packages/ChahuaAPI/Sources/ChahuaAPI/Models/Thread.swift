@@ -9,7 +9,8 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
     public let chatName: String
     public let chatAvatar: String?
     public let threadRootMessage: MessagePreview
-    public let participants: [User]
+    /// Other participant for a DM; absent for groups. Participant lists are fetched separately.
+    public let peer: MemberSummary?
     public let lastReply: MessagePreview?
     public let replyCount: Int64
     public let lastReplyAt: Date
@@ -29,7 +30,7 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         chatName: String,
         chatAvatar: String? = nil,
         threadRootMessage: MessagePreview,
-        participants: [User],
+        peer: MemberSummary? = nil,
         lastReply: MessagePreview? = nil,
         replyCount: Int64,
         lastReplyAt: Date,
@@ -46,7 +47,7 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         self.chatName = chatName
         self.chatAvatar = chatAvatar
         self.threadRootMessage = threadRootMessage
-        self.participants = participants
+        self.peer = peer
         self.lastReply = lastReply
         self.replyCount = replyCount
         self.lastReplyAt = lastReplyAt
@@ -66,7 +67,7 @@ public struct ThreadListItem: Codable, Hashable, Sendable {
         chatName = try container.decode(String.self, forKey: .chatName)
         chatAvatar = try container.decodeIfPresent(String.self, forKey: .chatAvatar)
         threadRootMessage = try container.decode(MessagePreview.self, forKey: .threadRootMessage)
-        participants = try container.decode([User].self, forKey: .participants)
+        peer = try container.decodeIfPresent(MemberSummary.self, forKey: .peer)
         lastReply = try container.decodeIfPresent(MessagePreview.self, forKey: .lastReply)
         replyCount = try container.decode(Int64.self, forKey: .replyCount)
         lastReplyAt = try container.decode(Date.self, forKey: .lastReplyAt)

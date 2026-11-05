@@ -103,6 +103,18 @@
             guard let tableView, let window = tableView.window, event.window === window,
                 !tableView.isHiddenOrHasHiddenAncestor
             else { return event }
+            // Intercept neither primary selection nor secondary context gestures
+            // belonging to a code-copy control, even when the control is disabled.
+            if let content = window.contentView {
+                let point =
+                    content.superview?.convert(event.locationInWindow, from: nil)
+                    ?? event.locationInWindow
+                var target = content.hitTest(point)
+                while let view = target {
+                    if view is MessageCodeCopyButton { return event }
+                    target = view.superview
+                }
+            }
             if event.type == .leftMouseDown && !event.modifierFlags.contains(.control) {
                 if let previous = selectedTextView {
                     let point = tableView.convert(event.locationInWindow, from: nil)

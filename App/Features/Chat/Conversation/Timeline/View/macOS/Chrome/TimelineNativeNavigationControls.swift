@@ -86,6 +86,7 @@
         var onPress: (() -> Void)?
         private let material: NSView
         private let symbolView = NSImageView()
+        private let badgeBackground = NSView()
         private let badge = NSTextField(labelWithString: "")
         private let badgeFont = NSFont.monospacedDigitSystemFont(
             ofSize: NSFont.preferredFont(forTextStyle: .caption2).pointSize, weight: .bold)
@@ -96,7 +97,7 @@
         override var isEnabled: Bool {
             didSet {
                 symbolView.alphaValue = isEnabled ? 1 : 0.4
-                badge.alphaValue = isEnabled ? 1 : 0.4
+                badgeBackground.alphaValue = isEnabled ? 1 : 0.4
             }
         }
 
@@ -139,10 +140,12 @@
             badge.font = badgeFont
             badge.textColor = .white
             badge.alignment = .center
-            badge.wantsLayer = true
-            badge.isHidden = true
             badge.setAccessibilityElement(false)
-            addSubview(badge)
+            badgeBackground.wantsLayer = true
+            badgeBackground.isHidden = true
+            badgeBackground.setAccessibilityElement(false)
+            badgeBackground.addSubview(badge)
+            addSubview(badgeBackground)
         }
         required init?(coder: NSCoder) { nil }
 
@@ -151,13 +154,12 @@
             color: ConversationUnreadBadgeColor
         ) {
             badge.stringValue = count > 999 ? "999+" : String(count)
-            badge.isHidden = count <= 0
+            badgeBackground.isHidden = count <= 0
             badgeWidth = max(
                 22,
                 ceil((badge.stringValue as NSString).size(withAttributes: [.font: badgeFont]).width)
                     + 10)
-            badge.layer?.backgroundColor = NSColor(color.color).cgColor
-            badge.layer?.cornerRadius = max(22, badgeFont.pointSize * 2) / 2
+            badgeBackground.layer?.backgroundColor = NSColor(color.color).cgColor
             let label = AppLanguage.localized(label)
             setAccessibilityLabel(label)
             setAccessibilityValue(value)
@@ -170,13 +172,21 @@
             material.frame = NSRect(x: 0, y: 0, width: 32, height: 32)
             symbolView.frame = material.frame
             let height = max(22, badgeFont.pointSize * 2)
-            badge.frame = NSRect(x: 40 - badgeWidth, y: -8, width: badgeWidth, height: height)
+            badgeBackground.frame = NSRect(
+                x: 40 - badgeWidth, y: -8, width: badgeWidth, height: height)
+            badgeBackground.layer?.cornerRadius = height / 2
+            // NSTextField aligns text at the top of a tall frame. Center its
+            // measured line box inside the badge instead of stretching the label.
+            let labelHeight = min(height, ceil(badge.intrinsicContentSize.height))
+            badge.frame = NSRect(
+                x: 0, y: (height - labelHeight) / 2,
+                width: badgeWidth, height: labelHeight)
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? {
             guard !isHidden else { return nil }
             let local = convert(point, from: superview)
-            return bounds.union(badge.frame).contains(local) ? self : nil
+            return bounds.union(badgeBackground.frame).contains(local) ? self : nil
         }
         override func resetCursorRects() {
             super.resetCursorRects()
