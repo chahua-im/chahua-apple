@@ -1298,7 +1298,25 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch
         ) -> Bool {
-            isComposerFocused && !bounds.contains(touch.location(in: self))
+            shouldDismissTouch(at: touch.location(in: self))
+        }
+        func shouldDismissTouch(at point: CGPoint) -> Bool {
+            guard isComposerFocused, !bounds.contains(point) else { return false }
+            // Modal touches share this window, but must not remove their presenting
+            // composer/picker. Resume outside-tap dismissal after the modal closes.
+            var responder = next
+            while let current = responder {
+                if let owner = current as? UIViewController {
+                    var controller: UIViewController? = owner
+                    while let current = controller {
+                        if current.presentedViewController != nil { return false }
+                        controller = current.parent
+                    }
+                    break
+                }
+                responder = current.next
+            }
+            return true
         }
         @objc private func tapped() {
             guard isComposerFocused else { return }

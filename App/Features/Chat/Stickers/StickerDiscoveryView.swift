@@ -267,13 +267,8 @@ struct StickerDiscoveryView: View {
                     .padding(.horizontal, isWide ? 8 : 16)
                     .padding(.bottom, 12)
                 }
-                .overlay(alignment: .top) {
-                    if library.isDiscovering && library.hasLoadedDiscovery
-                        && !library.discoveryPageRequest
-                    {
-                        ProgressView().progressViewStyle(.linear)
-                    }
-                }
+                // Keep existing cards unobscured during sort/search refreshes; a
+                // linear overlay flashes across the first card on fast responses.
                 .onChange(of: library.discoveryRevision) { _, _ in
                     proxy.scrollTo("discovery-top", anchor: .top)
                 }

@@ -161,6 +161,61 @@ final class ComposerFocusTests: XCTestCase {
             try await pause()
             XCTAssertFalse(h.hasFocusedEditor)
         }
+
+        func testOutsideTapDoesNotClosePickerWhileStickerShopIsPresented() async throws {
+            let h = try await mount(text: "")
+            let api = FakeChatAPI()
+            let library = StickerLibrary(apiClient: api, onInvalidToken: {})
+            library.setAccount(1)
+            h.state.stickerLibrary = library
+            try await pause()
+            XCTAssertTrue(
+                try XCTUnwrap(h.accessibilityElement(named: "Stickers")).accessibilityActivate())
+            try await pause()
+            let observer = try XCTUnwrap(h.outsideTapObserver)
+            let outside = CGPoint(x: observer.bounds.midX, y: -20)
+            XCTAssertFalse(
+                observer.shouldDismissTouch(
+                    at: CGPoint(
+                        x: observer.bounds.midX, y: observer.bounds.midY)))
+            XCTAssertTrue(observer.shouldDismissTouch(at: outside))
+
+            XCTAssertTrue(
+                try XCTUnwrap(h.accessibilityElement(named: "Sticker Shop"))
+                    .accessibilityActivate())
+            try await waitUntil {
+                h.host.presentedViewController != nil
+                    && h.host.presentedViewController?.isBeingPresented == false
+            }
+            let shop = try XCTUnwrap(h.host.presentedViewController)
+            await api.waitForStickerDiscoveryRequests(1)
+            await api.finishStickerDiscovery(
+                0,
+                with: .success(
+                    StickerPackDiscoveryResponse(
+                        packs: [], hasMore: false, recentWindowDays: 30,
+                        statsUpdatedAt: Date(timeIntervalSince1970: 0))))
+            XCTAssertFalse(observer.shouldDismissTouch(at: outside))
+
+            try h.focus()
+            try h.insertIntoFocusedEditor("cats")
+            await api.waitForStickerDiscoveryRequests(2)
+            await api.finishStickerDiscovery(
+                1,
+                with: .success(
+                    StickerPackDiscoveryResponse(
+                        packs: [], hasMore: false, recentWindowDays: 30,
+                        statsUpdatedAt: Date(timeIntervalSince1970: 0))))
+            try await pause()
+            XCTAssertTrue(h.host.presentedViewController === shop)
+            XCTAssertFalse(observer.shouldDismissTouch(at: outside))
+            shop.dismiss(animated: false)
+            try await waitUntil { h.host.presentedViewController == nil }
+            XCTAssertTrue(observer.shouldDismissTouch(at: outside))
+            observer.dismiss?()
+            try await waitUntil { h.accessibilityElement(named: "Stickers") != nil }
+            XCTAssertNotNil(h.accessibilityElement(named: "Stickers"))
+        }
     #endif
 
     #if os(iOS)
@@ -763,6 +818,12 @@ private final class FocusComposerHarness {
             host.presentedViewController?.view ?? host.view
         #endif
     }
+
+    #if os(iOS)
+        var outsideTapObserver: ComposerOutsideTapView? {
+            allViews(host.view).compactMap { $0 as? ComposerOutsideTapView }.first
+        }
+    #endif
 
     var hasFocusedEditor: Bool {
         #if os(macOS)

@@ -85,49 +85,26 @@ struct StickerPickerView: View {
                 }
             }
             Divider()
-            ScrollView(.horizontal) {
-                HStack(spacing: 4) {
-                    packTab(id: nil, name: AppLanguage.localized("Favorites")) {
-                        Image(systemName: "heart.fill").font(.title3)
-                    }
-                    ForEach(library.packs) { pack in
-                        packTab(id: pack.id, name: pack.name) {
-                            if let preview = pack.previewSticker {
-                                StickerMediaView(media: preview.media, emoji: preview.emoji)
-                                    .frame(width: 32, height: 32)
-                            } else {
-                                Image(systemName: "square.stack").font(.title3)
+            #if os(iOS)
+                HStack(spacing: 0) {
+                    packTabs
+                        .mask {
+                            HStack(spacing: 0) {
+                                Rectangle()
+                                LinearGradient(
+                                    colors: [.black, .clear],
+                                    startPoint: .leading, endPoint: .trailing
+                                )
+                                .frame(width: 24)
                             }
                         }
-                    }
-                    Button {
-                        showsDiscovery = true
-                    } label: {
-                        Image(systemName: "bag")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 36)
-                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10))
-                            .frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(library.accountID == nil)
-                    .accessibilityLabel("Sticker Shop")
-                    .help("Sticker Shop")
+                    shopButton
+                        .padding(.leading, 4)
+                        .padding(.trailing, 12)
                 }
-                .padding(.horizontal, 12)
-                #if os(macOS)
-                    .background {
-                        StickerPackWheelScrollMarker()
-                        .frame(width: 0, height: 0)
-                    }
-                #endif
-            }
-            // Unlike .hidden, .never overrides macOS “Always show scroll bars”;
-            // a legacy scroller otherwise steals height from the 44pt pack tabs.
-            .scrollIndicators(.never)
-            .frame(height: 44)
+            #else
+                packTabs
+            #endif
         }
         .frame(height: 260)
         .background(.background)
@@ -141,6 +118,61 @@ struct StickerPickerView: View {
                 self.selectedPackID = nil
             }
         }
+    }
+
+    private var packTabs: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 4) {
+                packTab(id: nil, name: AppLanguage.localized("Favorites")) {
+                    Image(systemName: "heart.fill").font(.title3)
+                }
+                ForEach(library.packs) { pack in
+                    packTab(id: pack.id, name: pack.name) {
+                        if let preview = pack.previewSticker {
+                            StickerMediaView(media: preview.media, emoji: preview.emoji)
+                                .frame(width: 32, height: 32)
+                        } else {
+                            Image(systemName: "square.stack").font(.title3)
+                        }
+                    }
+                }
+                #if os(macOS)
+                    shopButton
+                #endif
+            }
+            .padding(.horizontal, 12)
+            #if os(iOS)
+                // Leave the final pack clear of the fade when scrolled to the end.
+                .padding(.trailing, 12)
+            #else
+                .background {
+                    StickerPackWheelScrollMarker()
+                    .frame(width: 0, height: 0)
+                }
+            #endif
+        }
+        // Unlike .hidden, .never overrides macOS “Always show scroll bars”;
+        // a legacy scroller otherwise steals height from the 44pt pack tabs.
+        .scrollIndicators(.never)
+        .frame(height: 44)
+    }
+
+    private var shopButton: some View {
+        Button {
+            showsDiscovery = true
+        } label: {
+            Image(systemName: "bag")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 36)
+                .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(library.accountID == nil)
+        .accessibilityLabel("Sticker Shop")
+        .help("Sticker Shop")
     }
 
     private func packTab<Content: View>(
