@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>APIBaseURL</key>
+	<string>$(API_BASE_URL)</string>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Chahua</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ChahuaAPNSEnvironment</key>
+	<string>$(APNS_ENVIRONMENT)</string>
+	<key>ChahuaSharedKeychainAccessGroup</key>
+	<string>$(CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.social-networking</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos to send in messages.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Record and send voice messages.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save images to your Photo Library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Share and save photos and images</string>
+	<!-- Release setup supplies the HTTPS appcast and base64 32-byte Ed25519 public key. -->
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>$(CHAHUA_UPDATE_FEED_URL)</string>
+	<key>SUPublicEDKey</key>
+	<string>$(CHAHUA_UPDATE_PUBLIC_ED_KEY)</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Chahua composer media slot</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.chahua.chat.composer-media-slot</string>
+		</dict>
+	</array>
+</dict>
+</plist>

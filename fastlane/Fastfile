@@ -87,12 +87,14 @@ platform :mac do
 end
 
 # Jenkins runs this only on the isolated macos-signing agent. Match remains read-only.
-desc("Build the checked commit's App Store IPA and notarized Developer ID app ZIP")
+desc("Build the checked commit's App Store IPA and unnotarized Developer ID app ZIP")
 lane :ci_artifacts do
   require "json"
   require "digest"
+  require "plist"
 
   root = File.expand_path("..", __dir__)
+  commit_sha = sh("git", "-C", root, "rev-parse", "HEAD").strip
   output = File.join(root, "build", "artifacts")
   number = ENV.fetch("BUILD_NUMBER")
   UI.user_error!("BUILD_NUMBER must be a positive integer") unless number.match?(/\A[1-9]\d*\z/)
@@ -143,7 +145,25 @@ lane :ci_artifacts do
       "OTHER_CODE_SIGN_FLAGS=--timestamp",
       "ENABLE_HARDENED_RUNTIME=YES"
     )
-    app = File.join(archive, "Products", "Applications", "Chahua.app")
+    export = File.join(root, "build", "macos-export")
+    export_options = File.join(root, "build", "macos-export-options.plist")
+    File.write(export_options, {
+      method: "developer-id",
+      manageAppVersionAndBuildNumber: false,
+      signingStyle: "manual",
+      signingCertificate: "Developer ID Application",
+      teamID: "9422PL3GFR",
+      provisioningProfiles: {
+        "app.chahua.chat" => "match Direct app.chahua.chat macos"
+      }
+    }.to_plist)
+    sh(
+      "xcodebuild", "-exportArchive",
+      "-archivePath", archive,
+      "-exportPath", export,
+      "-exportOptionsPlist", export_options
+    )
+    app = File.join(export, "Chahua.app")
     # The artifact is Developer ID-signed but intentionally unnotarized. The
     # manual macOS release job submits, staples, and publishes a selected ZIP.
     zip = File.join(output, "Chahua-macOS.zip")
@@ -154,6 +174,7 @@ lane :ci_artifacts do
     File.write(File.join(output, "apple-artifact-metadata.json"), JSON.pretty_generate(
       buildNumber: number,
       bundleVersion: version,
+      commitSha: commit_sha,
       artifacts: artifacts.to_h { |name| [name, Digest::SHA256.file(File.join(output, name)).hexdigest] }
     ))
   ensure

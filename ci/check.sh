@@ -6,6 +6,8 @@ set -euo pipefail
 # selects a simulator without installing any tools or relying on a device UUID.
 readonly PROJECT='chahua-apple.xcodeproj'
 readonly SCHEME='chahua-apple'
+# Keep destination-specific binary artifact resolution separate (e.g. macOS-only Sparkle).
+# Reusing one SwiftPM workspace after an iOS build can leave macOS artifacts unresolved.
 readonly BUILD_ROOT="${WORKSPACE:-${PWD}}/.ci"
 
 prepare_build_root() {
@@ -87,7 +89,7 @@ compile() {
     -sdk iphonesimulator \
     -destination "$ios_destination" \
     -derivedDataPath "$BUILD_ROOT/DerivedData/iOS" \
-    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages" \
+    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages/iOS" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO
 
@@ -100,7 +102,7 @@ compile() {
     -sdk macosx \
     -destination 'platform=macOS' \
     -derivedDataPath "$BUILD_ROOT/DerivedData/macOS" \
-    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages" \
+    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages/macOS" \
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY=- \
     CODE_SIGN_ENTITLEMENTS= \
@@ -132,7 +134,7 @@ test() {
     -test-timeouts-enabled YES \
     -default-test-execution-time-allowance 60 \
     -maximum-test-execution-time-allowance 120 \
-    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages" \
+    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages/iOS" \
     -resultBundlePath "$BUILD_ROOT/TestResults/chahua-ios.xcresult" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO
@@ -144,7 +146,7 @@ test() {
     -sdk macosx \
     -destination 'platform=macOS' \
     -derivedDataPath "$BUILD_ROOT/DerivedData/macOS" \
-    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages" \
+    -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages/macOS" \
     -parallel-testing-enabled NO \
     -test-timeouts-enabled YES \
     -default-test-execution-time-allowance 60 \

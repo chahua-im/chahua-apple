@@ -19,6 +19,9 @@ struct ChahuaApp: App {
     }
 
     private let compositionRoot: AppCompositionRoot?
+    #if os(macOS)
+        private let updater: MacAppUpdater
+    #endif
 
     init() {
         // Hosted tests and SwiftUI previews must not start production services or
@@ -30,6 +33,9 @@ struct ChahuaApp: App {
                 || ProcessInfo.processInfo.arguments.contains("-message-status-preview")
             {
                 compositionRoot = nil
+                #if os(macOS)
+                    updater = MacAppUpdater(productionServicesEnabled: false)
+                #endif
                 return
             }
         #endif
@@ -39,6 +45,9 @@ struct ChahuaApp: App {
             compositionRoot = AppCompositionRoot(
                 apiConfiguration: AppConfiguration.apiConfiguration)
         }
+        #if os(macOS)
+            updater = MacAppUpdater(productionServicesEnabled: compositionRoot != nil)
+        #endif
         pushDelegate.coordinator = compositionRoot?.notifications
     }
 
@@ -68,6 +77,9 @@ struct ChahuaApp: App {
             .windowToolbarStyle(.unified)
             .windowResizability(.contentMinSize)
             .conversationWindowDefaults()
+            .commands {
+                MacAppUpdateCommands(updater: updater)
+            }
         #endif
     }
 

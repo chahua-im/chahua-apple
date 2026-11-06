@@ -18,6 +18,7 @@
 		C0F1000130460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000330460000003200C0 /* libwebp */; };
 		C0F1000230460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000430460000003200C0 /* libwebp */; };
 		C0F2000130460000003200C0 /* ChahuaMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = C0F2000230460000003200C0 /* ChahuaMarkdown */; };
+		C0F3000130460000003200C0 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = C0F3000230460000003200C0 /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -66,6 +67,7 @@
 		C0F0000830460000003200C0 /* ShareExtension-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "ShareExtension-Info.plist"; sourceTree = "<group>"; };
 		C0F0000930460000003200C0 /* ShareExtension-iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "ShareExtension-iOS.entitlements"; sourceTree = "<group>"; };
 		C0F0001530460000003200C0 /* ShareExtension-Local-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "ShareExtension-Local-Info.plist"; sourceTree = "<group>"; };
+		C0F3000430460000003200C0 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -101,6 +103,7 @@
 				C0EE0001303BCC2200320001 /* ChahuaAudio in Frameworks */,
 				C0F2000130460000003200C0 /* ChahuaMarkdown in Frameworks */,
 				C0F1000130460000003200C0 /* libwebp in Frameworks */,
+				C0F3000130460000003200C0 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -153,6 +156,7 @@
 				C098623230467881003200C0 /* iOS.entitlements */,
 				C098620530463971003200C0 /* InfoPlist.xcstrings */,
 				C098620430463901003200C0 /* Info.plist */,
+				C0F3000430460000003200C0 /* Info-macOS.plist */,
 				C0F0000830460000003200C0 /* ShareExtension-Info.plist */,
 				C0F0001530460000003200C0 /* ShareExtension-Local-Info.plist */,
 				C0F0000930460000003200C0 /* ShareExtension-iOS.entitlements */,
@@ -193,6 +197,7 @@
 				C0EE0002303BCC2200320001 /* ChahuaAudio */,
 				C0F2000230460000003200C0 /* ChahuaMarkdown */,
 				C0F1000330460000003200C0 /* libwebp */,
+				C0F3000230460000003200C0 /* Sparkle */,
 			);
 			productName = "chahua-ios";
 			productReference = C0985FCE303BCC22003200C0 /* Chahua.app */;
@@ -300,6 +305,7 @@
 				C0EE0010303BCC2200320001 /* XCLocalSwiftPackageReference "Packages/ChahuaAudio" */,
 				C0F2000330460000003200C0 /* XCLocalSwiftPackageReference "Packages/ChahuaMarkdown" */,
 				C0F1000530460000003200C0 /* XCRemoteSwiftPackageReference "libwebp-Xcode" */,
+				C0F3000330460000003200C0 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C0985FCF303BCC22003200C0 /* Products */;
@@ -775,6 +781,8 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
 				CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP = "$(AppIdentifierPrefix)app.chahua.chat.shared";
+				"CHAHUA_UPDATE_FEED_URL[sdk=macosx*]" = "https://jenkins.codetector.org/job/chahua/job/deploy/job/macos-notarize/lastSuccessfulBuild/artifact/build/artifacts/appcast.xml";
+				"CHAHUA_UPDATE_PUBLIC_ED_KEY[sdk=macosx*]" = "BlBCwxhJo3KmPVOEEiKlY1qQiKMdAeuj5xUifRoCYUM=";
 				CODE_SIGN_ENTITLEMENTS = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Distribution";
@@ -798,6 +806,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Config/Info.plist;
+				"INFOPLIST_FILE[sdk=macosx*]" = "Config/Info-macOS.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Chahua;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -822,6 +831,7 @@
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
+				"SWIFT_ACTIVE_COMPILATION_CONDITIONS[sdk=macosx*]" = "$(inherited) CHAHUA_SELF_UPDATE";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1199,6 +1209,14 @@
 				version = 1.6.0;
 			};
 		};
+		C0F3000330460000003200C0 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1246,6 +1264,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = C0F2000330460000003200C0 /* XCLocalSwiftPackageReference "Packages/ChahuaMarkdown" */;
 			productName = ChahuaMarkdown;
+		};
+		C0F3000230460000003200C0 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0F3000330460000003200C0 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

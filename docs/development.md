@@ -18,6 +18,37 @@ Swift 6.4 can assert while resolving chained observable-object dictionary lookup
 
 Simulator builds use ad-hoc signing (“Sign to Run Locally”); they do not need device provisioning profiles. If signing `ChahuaMarkdown_ChahuaMarkdown.bundle` reports `bundle format unrecognized, invalid, or unsuitable`, clean the build folder (**Product → Clean Build Folder**) and rebuild. Older builds copied a literal `Resources` directory into the bundle root, which codesign misidentifies as a different bundle layout. The package now processes resources into the platform-appropriate layout, and the highlighter loads `highlight.js` from the bundle root.
 
+## macOS self-updates
+
+The directly distributed macOS app uses Sparkle's standard update UI. Only the macOS `Release` configuration enables the updater; Debug, Local, Profile, previews, fixture modes, and hosted tests do not start it. The application menu contains **Check for Updates…**, disabled when updating is unavailable.
+
+Configure these Xcode build settings when producing an updater-enabled release:
+
+- `CHAHUA_UPDATE_FEED_URL`: the stable HTTPS appcast URL. In an `.xcconfig`, escape the URL's `//` as `https:/$()/…` to avoid starting a comment.
+- `CHAHUA_UPDATE_PUBLIC_ED_KEY`: the base64-encoded Ed25519 public key printed by Sparkle's `generate_keys` tool.
+
+The macOS Release target configures the public key and the stable Jenkins feed:
+
+```text
+https://jenkins.codetector.org/job/chahua/job/deploy/job/macos-notarize/lastSuccessfulBuild/artifact/build/artifacts/appcast.xml
+```
+
+An unconfigured Release build disables updating and logs the missing configuration; it never falls back to Apple-code-signing-only updates. The macOS Release plist enables Sparkle's installer XPC service and requires archive-signature verification before extraction. The existing sandbox network-client entitlement handles downloads.
+
+### Jenkins release setup
+
+The manually triggered `chahua/deploy/macos-notarize` job uses `ci/Jenkinsfile.macos-notarize`. Install that pipeline definition in the existing standalone job; do not add automatic triggers. It needs Git, Copy Artifact, Pipeline Utility Steps, and Credentials Binding, the existing `github-app` and App Store Connect credentials, and a Secret file credential named `chahua-sparkle-ed25519`. The secret file must contain the base64-encoded raw 32-byte Ed25519 seed corresponding to the configured public key, not PEM or OpenSSH data. Keep the private key outside the repository with an encrypted backup.
+
+Build and release a commit containing the updated Fastfile and release helpers. `ci_artifacts` exports the macOS archive using Developer ID distribution before packaging, and records the actual checkout commit in its artifact metadata. Older artifacts without this provenance or the configured updater are not eligible for promotion.
+
+Select a successful, newer Apple build with the job's `APPLE_BUILD` Run Parameter. The release job copies its artifacts, checks out that exact commit into `release-source`, and runs `ci/macos-release.sh`. The helper verifies the app's version, identity, feed, public key, and required security settings; downloads checksum-pinned Sparkle tools; notarizes and staples; signs the final repackaged ZIP; and verifies the generated appcast signature against the app's embedded public key. The private signing credential is bound only for appcast generation, without importing it into Keychain.
+
+The job archives `appcast.xml`, `Chahua-macOS-notarized.zip`, and notarization metadata. The stable feed follows `lastSuccessfulBuild`, while its ZIP enclosure uses that release's numbered build URL. Each successful release is marked **Keep this build forever** to protect downloads from normal retention; manual deletion or renaming the job can still break installed clients. Both feed and ZIP must remain anonymously readable over HTTPS. Jenkins downtime prevents updating but does not prevent the installed app from running.
+
+This internal-testing feed contains only the latest release, without delta updates or historical minimum-OS branches. Promotion rejects the same or an older app bundle version, including comparison with legacy successful notarization metadata. To recover from a bad release, publish corrected code with a higher `CFBundleVersion`.
+
+Sparkle owns automatic-check permission, scheduling, installation prompts, and relaunch. This integration does not force downloads or restarts. Users of releases without Sparkle must manually install an updater-enabled release once. A genuine signed/notarized A → B update remains required before release; a local ad-hoc build cannot establish distribution-signing or installation correctness.
+
 ## Profiling builds
 
 Select the shared **chahua-apple Profile** scheme and use **Product → Profile** (⌘I) with a physical iOS device or **My Mac**. Both Run and Profile use the `Profile` configuration: Swift `-O` with whole-module compilation, C/Objective-C `-Os`, and matching dSYMs. The app and iOS share extension use the existing `match Development` provisioning profiles and development signing; push entitlements use the development APNs environment. Signing assets must be installed locally. Archive still uses `Release` for distribution.
@@ -80,6 +111,8 @@ macOS Settings uses an 880×680pt ideal sheet with a dense sidebar and dirty-onl
 ## Local checks and formatting
 
 Run the same checks locally with `bash ci/check.sh compile`, `bash ci/check.sh test`, and `bash ci/check.sh style`. Outputs live in ignored `.ci/`. Style checking uses Xcode's `swift-format`, `.swift-format` configuration, and first-party Swift files only. It is strict and read-only: existing violations must be formatted before the gate can pass; CI does not rewrite source files.
+
+The Xcode compile and test commands use separate SwiftPM workspaces at `.ci/SourcePackages/iOS` and `.ci/SourcePackages/macOS`. Keep these destination-specific: sharing one package workspace across iOS and macOS can leave macOS-only binary artifacts such as Sparkle unresolved after the iOS build. Compile and test reuse the same workspace for each platform.
 
 `App/` uses Xcode filesystem-synchronized source discovery, including platform subfolders such as `Features/Groups/macOS`. Keep Swift source directories out of the synchronized group's `explicitFolders`: those entries are opaque folder resources, so their Swift files are not compiled.
 
