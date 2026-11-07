@@ -568,6 +568,9 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
     func body(content: Content) -> some View {
         #if os(iOS)
             content
+                // Loading and failure placeholders have intrinsic height; anchor
+                // floating chrome to the viewport, not their centered content.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .environment(
                     \.chatHeaderInset,
                     isVisible ? max(0, headerFrame.maxY - contentTop) + 12 : 0

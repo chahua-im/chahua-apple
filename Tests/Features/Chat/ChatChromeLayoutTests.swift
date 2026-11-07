@@ -80,6 +80,36 @@
                 "Bounding controls must not reintroduce clipping of scaled online avatars.")
         }
 
+        func testLoadingPlaceholderKeepsFloatingHeaderAtViewportTop() async throws {
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            let probe = ChromeProbe()
+            window.rootViewController = UIHostingController(
+                rootView: ChahuaLoadingView(title: "Loading conversation")
+                    .measured { probe.snapshot.timeline = $0 }
+                    .modifier(
+                        ChatHeaderOverlay {
+                            ChatFloatingHeader(title: "Conversation", onBack: {}) {
+                                EmptyView()
+                            }
+                            .measured { probe.snapshot.header = $0 }
+                        }))
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            for _ in 0..<100 {
+                try await Task.sleep(for: .milliseconds(30))
+                if probe.snapshot.header.height > 0 { break }
+            }
+            window.layoutIfNeeded()
+            XCTAssertLessThanOrEqual(
+                probe.snapshot.header.minY, window.safeAreaInsets.top + 1,
+                "Intrinsic-height placeholders must not center the floating header.")
+            XCTAssertLessThan(
+                probe.snapshot.header.maxY, window.bounds.midY,
+                "Header and centered loading content must occupy separate regions.")
+        }
+
         func testTimelineExtendsEdgeToEdgeWhileChromeStacksWithoutOverlap() async throws {
             let scene = try XCTUnwrap(
                 UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)

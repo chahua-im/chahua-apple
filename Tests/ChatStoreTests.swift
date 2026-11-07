@@ -251,6 +251,66 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertNil(resolved.isMuted)
     }
 
+    func testNotificationWithMissingMessageStillAuthorizesConversation() async throws {
+        for error in [
+            APIError.http(status: 404, body: Data()),
+            APIError.invalidResponse(statusCode: 404),
+        ] {
+            let api = FakeChatAPI()
+            await api.setConversationPageMetadata(
+                group: .init(id: "1", name: "Authorized chat", kind: .group))
+            await api.setNotificationMessageError(error)
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api),
+                onInvalidToken: {})
+            let route = try XCTUnwrap(
+                PushNotificationRoute(userInfo: [
+                    "wettyChat": ["type": "newMessage", "chatId": "1", "messageId": "404"]
+                ]))
+            let chat = try await store.chatForNotification(route)
+            XCTAssertEqual(chat.id, "1")
+            XCTAssertEqual(chat.name, "Authorized chat")
+            store.reset()
+        }
+    }
+
+    func testNotificationDoesNotTreatTransportFailureAsMissingMessage() async throws {
+        let api = FakeChatAPI()
+        await api.setConversationPageMetadata(group: .init(id: "1", kind: .group))
+        await api.setNotificationMessageError(.unavailable)
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "1", "messageId": "404"]
+            ]))
+        do {
+            _ = try await store.chatForNotification(route)
+            XCTFail("Transport errors must remain retryable, not authorize a fallback")
+        } catch {
+            guard case APIError.unavailable = error else { return XCTFail("\(error)") }
+        }
+    }
+
+    func testMissingNotificationMessageDoesNotBypassConversationAuthorization() async throws {
+        let api = FakeChatAPI()
+        await api.setNotificationMessageError(.invalidResponse(statusCode: 404))
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "1", "messageId": "404"]
+            ]))
+        do {
+            _ = try await store.chatForNotification(route)
+            XCTFail("A missing message cannot authorize an inaccessible conversation")
+        } catch {
+            guard case APIError.unavailable = error else { return XCTFail("\(error)") }
+        }
+    }
+
     func testListReceiptsFenceOldSnapshotsAndClearAllDMTopicScopes() {
         let receipts = ConversationListReadReceipts()
         defer { receipts.reset() }
@@ -2246,6 +2306,64 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(store.state.archivedThreads.isEmpty)
     }
 
+    private func backBadgeSummary(_ count: Int64) -> ConversationUnreadSummary {
+        .init(
+            key: "messages", unreadAttentionCount: 0, unreadConversationCount: 3,
+            unreadMessageCount: count, unreadUnmutedAttentionCount: 0,
+            unreadUnmutedConversationCount: 3, unreadUnmutedMessageCount: count)
+    }
+
+    func testBackBadgeSeedsOnlyActiveUnmutedUnreadIncludingUnloadedChats() async throws {
+        let api = FakeChatAPI(
+            chatResults: [
+                .success(
+                    .init(chats: [
+                        .init(id: "current", unreadCount: 5, archived: false, kind: .group),
+                        .init(id: "other", unreadCount: 2, archived: false, kind: .dm),
+                        .init(
+                            id: "muted", unreadCount: 58, muteOverride: true, isMuted: true,
+                            archived: false, kind: .group),
+                    ]))
+            ],
+            archivedChatResults: [
+                .success(
+                    .init(chats: [
+                        .init(id: "archived", unreadCount: 30, archived: true, kind: .group)
+                    ]))
+            ])
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        await store.loadActiveChats()
+        await store.loadArchivedChats()
+        store.setBackBadgeExclusion(chatID: "current", for: UUID())
+        store.setRealtimeStatus(.connected)
+        store.beginConversationUnreadWatch(requestID: 7)
+        await store.applyRealtimeEvent(
+            .conversationUnread(
+                .init(requestId: 7, full: true, summaries: [], appBadgeCount: 100)),
+            currentUserID: 1)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
+        let active = ConversationUnreadSummary(
+            key: "messages", unreadAttentionCount: 0, unreadConversationCount: 4,
+            unreadMessageCount: 70, unreadUnmutedAttentionCount: 0,
+            unreadUnmutedConversationCount: 3, unreadUnmutedMessageCount: 12)
+        await store.applyRealtimeEvent(
+            .conversationUnread(.init(requestId: 7, full: false, summaries: [active])),
+            currentUserID: 1)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 7)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "muted"), 12)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "archived"), 12)
+        for (index, chatID) in ["muted", "archived", "current", "other"].enumerated() {
+            let message = try TimelineTestFixtures.message(
+                id: UInt64(index + 10), chatID: chatID, senderID: 2, at: index + 10)
+            await store.applyRealtimeEvent(.message(message), currentUserID: 1)
+            XCTAssertEqual(
+                store.backBadgeCount(excludingChatID: "current"), chatID == "other" ? 8 : 7)
+        }
+        XCTAssertEqual(store.state.appBadgeCount, 100)
+    }
+
     func testBackBadgeExcludesCurrentArrivalsAndDeduplicatesOtherChatMessages() async throws {
         let api = FakeChatAPI(
             chatResults: [
@@ -2265,7 +2383,9 @@ final class ChatStoreTests: XCTestCase {
         store.setRealtimeStatus(.connected)
         store.beginConversationUnreadWatch(requestID: 7)
         await store.applyRealtimeEvent(
-            .conversationUnread(.init(requestId: 7, full: true, summaries: [], appBadgeCount: 30)),
+            .conversationUnread(
+                .init(
+                    requestId: 7, full: true, summaries: [backBadgeSummary(30)], appBadgeCount: 30)),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 25)
 
@@ -2311,7 +2431,9 @@ final class ChatStoreTests: XCTestCase {
             store.beginConversationUnreadWatch(requestID: 7)
             await store.applyRealtimeEvent(
                 .conversationUnread(
-                    .init(requestId: 7, full: true, summaries: [], appBadgeCount: 30)),
+                    .init(
+                        requestId: 7, full: true, summaries: [backBadgeSummary(30)],
+                        appBadgeCount: 30)),
                 currentUserID: 1)
             let frame = RealtimeServerEvent.conversationUnread(
                 .init(requestId: 7, full: false, summaries: [], appBadgeCount: 25))
@@ -2349,7 +2471,10 @@ final class ChatStoreTests: XCTestCase {
         store.setRealtimeStatus(.connected)
         store.beginConversationUnreadWatch(requestID: 7)
         await store.applyRealtimeEvent(
-            .conversationUnread(.init(requestId: 7, full: true, summaries: [], appBadgeCount: 100)),
+            .conversationUnread(
+                .init(
+                    requestId: 7, full: true, summaries: [backBadgeSummary(100)],
+                    appBadgeCount: 100)),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 95)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "other"), 98)
@@ -3314,6 +3439,8 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
     private var conversationPageGroup: GroupInfoResponse?
     private var notificationMessage: MessageResponse?
     func setNotificationMessage(_ message: MessageResponse) { notificationMessage = message }
+    private var notificationMessageError: APIError?
+    func setNotificationMessageError(_ error: APIError) { notificationMessageError = error }
     private var suspendsNotificationPreferences = false
     private var pendingNotificationPreferences:
         [Bool: CheckedContinuation<NotificationSettingsResponse, Error>] = [:]
@@ -3658,6 +3785,7 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
         throw APIError.unavailable
     }
     func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
+        if let notificationMessageError { throw notificationMessageError }
         guard let notificationMessage, notificationMessage.chatId == chatID,
             notificationMessage.id == messageID
         else { throw APIError.unavailable }

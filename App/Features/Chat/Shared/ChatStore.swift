@@ -1156,10 +1156,26 @@ final class ChatStore: ObservableObject {
     }
 
     func chatForNotification(_ route: PushNotificationRoute) async throws -> ChatListItem {
-        let (message, chat) = try await resolveMessageLink(
-            chatID: route.chatID, messageID: route.messageID)
-        guard message.replyRootId == route.threadID else { throw APIError.unexpectedResponse }
-        return chat
+        let requestGeneration = generation
+        do {
+            let (message, chat) = try await resolveMessageLink(
+                chatID: route.chatID, messageID: route.messageID)
+            guard message.replyRootId == route.threadID else { throw APIError.unexpectedResponse }
+            return chat
+        } catch let error as APIError {
+            switch error {
+            case .http(status: 404, body: _), .invalidResponse(statusCode: 404):
+                // A notification can outlive its message. Authorize the chat
+                // independently; the timeline handles an unavailable reveal target.
+                let info = try await groupInfo(chatID: route.chatID)
+                try Task.checkCancellation()
+                guard generation == requestGeneration else { throw CancellationError() }
+                guard info.id == route.chatID else { throw APIError.unexpectedResponse }
+                return notificationChatSnapshot(groupChatSnapshot(info))
+            default:
+                throw error
+            }
+        }
     }
 
     /// Identifier-filtered reads reconcile only rows whose membership/preview is unknown.
@@ -2207,10 +2223,16 @@ final class ChatStore: ObservableObject {
         if state.conversationUnreadSummaries != summaries {
             state.conversationUnreadSummaries = summaries
         }
+        // The app-icon total has a different scope. Match the active main-chat,
+        // unmuted selector used by filtered back-badge calibration instead.
+        let backBadgeKey = ConversationListScope.messages.summaryKey(
+            archived: false, showThreadsInMessages: false)
+        if let summary = payload.summaries.first(where: { $0.key == backBadgeKey }) {
+            updateBackBadgeEstimate { $0.seed(total: summary.unreadUnmutedMessageCount) }
+        }
         if payload.full || payload.appBadgeCount != nil {
             let appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
             if state.appBadgeCount != appBadgeCount { state.appBadgeCount = appBadgeCount }
-            if let appBadgeCount { updateBackBadgeEstimate { $0.seed(total: appBadgeCount) } }
         }
         var fallbackCounts: [String: Int64] = [:]
         for summary in payload.summaries {

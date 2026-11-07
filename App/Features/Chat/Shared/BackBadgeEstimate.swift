@@ -1,5 +1,5 @@
 /// A deliberately approximate badge, separate from authoritative app-icon/read counters.
-/// The first server total retains chats we have never loaded. Later totals cannot
+/// The first active, unmuted main-chat total retains chats we have never loaded. Later totals cannot
 /// safely be subtracted from independently delivered read states, so only per-chat
 /// replacements and occasional filtered server snapshots correct this estimate.
 /// Ordinary total drift is accepted until reconnect or explicit uncertainty;

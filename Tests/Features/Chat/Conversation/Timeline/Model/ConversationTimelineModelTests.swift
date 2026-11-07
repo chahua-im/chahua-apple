@@ -505,6 +505,43 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
     }
 
+    func testInitialMissingOrRecalledTargetFallsBackToLatestMessages() async throws {
+        let recalled = try TimelineTestFixtures.message(id: 404, at: 4).redactedForDeletion()
+        let missingPages: [Result<ListMessagesResponse, Error>] = [
+            .failure(APIError.http(status: 404, body: Data())),
+            .failure(APIError.invalidResponse(statusCode: 404)),
+            .success(try TimelineTestFixtures.page([])),
+            .success(try TimelineTestFixtures.page([recalled])),
+        ]
+        for missingPage in missingPages {
+            let (model, _, updates) = try makeModel(pages: [
+                missingPage, .success(try livePage(ids: 10...11)),
+            ])
+            await model.open(position: .message(MessageID(404)))
+            XCTAssertEqual(model.state.content, .ready)
+            XCTAssertEqual(model.state.repositionFailure, .message(MessageID(404)))
+            XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(10), MessageID(11)])
+            XCTAssertTrue(model.isAtLiveEdge)
+            XCTAssertTrue(model.state.live.followsLatest)
+            XCTAssertEqual(updates.value.last?.pendingScroll?.intent, .bottom(animated: false))
+            model.close()
+        }
+    }
+
+    func testMissingInitialTargetLatestFailureRemainsRetryable() async throws {
+        let (model, _, _) = try makeModel(pages: [
+            .failure(APIError.invalidResponse(statusCode: 404)),
+            .failure(StubError()),
+            .success(try livePage(ids: 404...405)),
+        ])
+        await model.open(position: .message(MessageID(404)))
+        XCTAssertEqual(model.state.content, .initialLoadFailed)
+        await model.retryInitial()
+        XCTAssertEqual(model.state.content, .ready)
+        XCTAssertNil(model.state.repositionFailure)
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(404), MessageID(405)])
+    }
+
     func testOlderEdgeFailureIsSurfacedAndRetryable() async throws {
         let (model, source, _) = try makeModel(pages: [
             .success(try historyPage(ids: 10...11, olderCursor: MessageID(10), newerCursor: nil)),

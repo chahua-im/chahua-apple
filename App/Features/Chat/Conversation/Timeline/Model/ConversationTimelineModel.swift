@@ -331,28 +331,17 @@ final class ConversationTimelineModel: ObservableObject {
                     try await loadUnreadEntry(after: after, generation: requestGeneration)
                     return
                 }
+                if case .message(let id) = position {
+                    try await loadMessageEntry(id: id, generation: requestGeneration)
+                    return
+                }
                 try await fetchSnapshot(
-                    query: aroundQuery(for: position),
-                    mode: .replace(latest: position == .liveEdge), generation: requestGeneration
+                    query: liveEdgeQuery, mode: .replace(latest: true),
+                    generation: requestGeneration
                 ) {
                     self.state.content = .ready
-                    switch position {
-                    case .liveEdge:
-                        self.state.live.followsLatest = true
-                        self.publish(position: .bottom(animated: false), reset: true)
-                    case .message(let id):
-                        self.state.live.followsLatest = false
-                        if let rowID = self.rowID(forServerID: id) {
-                            self.publish(
-                                position: .reveal(rowID, animated: false, highlight: true),
-                                reset: true)
-                        } else {
-                            self.state.repositionFailure = .message(id)
-                            self.publish(position: .bottom(animated: false), reset: true)
-                        }
-                    case .unread:
-                        break  // Resolved above, before publishing the initial window.
-                    }
+                    self.state.live.followsLatest = true
+                    self.publish(position: .bottom(animated: false), reset: true)
                 }
             } catch is CancellationError {
                 if generation == requestGeneration {
@@ -371,6 +360,39 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func retryInitial() async { await loadInitial(position: lastInitialPosition) }
+
+    /// Notifications and links can outlive their target. An unavailable anchor is
+    /// not an empty conversation: open latest history and retain the missing-target banner.
+    private func loadMessageEntry(id: MessageID, generation requestGeneration: Int) async throws {
+        var needsLatest = false
+        do {
+            try await fetchSnapshot(
+                query: aroundQuery(for: .message(id)), mode: .replace(latest: false),
+                generation: requestGeneration
+            ) {}
+            needsLatest = window.messages.isEmpty || isActivityTargetDeleted(id)
+        } catch let error as APIError {
+            switch error {
+            case .http(status: 404, body: _), .invalidResponse(statusCode: 404):
+                needsLatest = true
+            default:
+                throw error
+            }
+        }
+        if needsLatest {
+            try await fetchSnapshot(
+                query: liveEdgeQuery, mode: .replace(latest: true), generation: requestGeneration
+            ) {}
+        }
+        state.content = .ready
+        state.live.followsLatest = needsLatest
+        if !needsLatest, let rowID = rowID(forServerID: id) {
+            publish(position: .reveal(rowID, animated: false, highlight: true), reset: true)
+        } else {
+            state.repositionFailure = .message(id)
+            publish(position: .bottom(animated: false), reset: true)
+        }
+    }
 
     private enum UnreadEntryError: Error { case stalledCursor }
 
