@@ -136,8 +136,8 @@ struct ChatDetailView: View {
                 fetchUnreadMentions: { scope in
                     try await store.unreadMentions(chatID: chat.id, threadID: scope)
                 },
-                fetchUnreadReactions: { scope in
-                    try await store.unreadReactions(chatID: chat.id, threadID: scope)
+                fetchUnreadReactions: { scope, after in
+                    try await store.unreadReactions(chatID: chat.id, threadID: scope, after: after)
                 },
                 acknowledgeReactions: { scope, readThrough in
                     try await store.acknowledgeReactions(
@@ -469,7 +469,7 @@ struct ChatDetailView: View {
         }
         .buttonStyle(.plain)
         .padding()
-        .background(.regularMaterial, in: Capsule())
+        .modifier(ChatGlassSurface(cornerRadius: 32, isInteractive: true))
         .padding(.horizontal, 12).padding(.bottom, 8)
     }
 

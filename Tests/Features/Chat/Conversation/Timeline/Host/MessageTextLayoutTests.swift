@@ -12,6 +12,27 @@ import XCTest
 
 @MainActor
 final class MessageTextLayoutTests: XCTestCase {
+    func testRawURLFillsLinesInsteadOfWrappingAtPunctuation() {
+        let source =
+            "https://www.shireyishunjian.com/main/forum.php?mod=viewthread&tid=342860&extra=&mobile=2"
+        for width: CGFloat in [240, 360, 480] {
+            let layout = MessageTextLayout(
+                attributedText: MessageTextContent.attributedText(
+                    text: source, mentions: [], currentUserID: 1, isOutgoing: true,
+                    font: .systemFont(ofSize: 14)))
+            _ = layout.geometry(for: width)
+            let glyphs = layout.layoutManager.glyphRange(for: layout.textContainer)
+            layout.layoutManager.enumerateLineFragments(forGlyphRange: glyphs) {
+                _, used, _, range, _ in
+                if NSMaxRange(range) < NSMaxRange(glyphs) {
+                    XCTAssertGreaterThan(
+                        used.maxX, width - 18,
+                        "Raw URLs should fill each non-final line at width \(width).")
+                }
+            }
+        }
+    }
+
     func testMentionPaddingDoesNotLeaveAnEmptyPillAtLineWrap() throws {
         let mentions = try JSONDecoder().decode(
             [MentionInfo].self, from: Data(#"[{"uid":2,"username":"崩溃","gender":0}]"#.utf8))
@@ -1083,60 +1104,126 @@ final class MessageTextLayoutTests: XCTestCase {
         XCTAssertEqual(feedback(rebound), AppLanguage.localized("Copy"))
     }
 
-    func testPlainFencesInheritBubbleContrastWhileKnownTokenlessCodeUsesSyntaxTheme() throws {
+    func testFencedCodeKeepsReadableContrastAcrossBubbleDirectionsAndThemes() throws {
+        func contrast(_ first: [CGFloat], _ second: [CGFloat]) -> CGFloat {
+            func luminance(_ rgba: [CGFloat]) -> CGFloat {
+                let rgb = rgba.prefix(3).map { channel in
+                    channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+                }
+                return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722
+            }
+            let a = luminance(first)
+            let b = luminance(second)
+            return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+        }
         for outgoing in [false, true] {
-            for language in [nil, "not-a-real-language", "markdown"] as [String?] {
+            for language in [nil, "not-a-real-language", "javascript"] as [String?] {
                 let rendered = try fencedCode(
-                    "plainidentifier", language: language, outgoing: outgoing)
-                let body = try XCTUnwrap(
-                    rendered.body.attribute(.foregroundColor, at: 0, effectiveRange: nil)
-                        as? BubbleNativeColor)
-                let code = try XCTUnwrap(
-                    rendered.attachment.attributedCode.attribute(
-                        .foregroundColor, at: 0, effectiveRange: nil) as? BubbleNativeColor)
+                    "// comment\nconst answer = \"hello\";\nplainidentifier",
+                    language: language, outgoing: outgoing
+                ).attachment
                 for dark in [false, true] {
-                    XCTAssertEqual(try rgba(code, dark: dark), try rgba(body, dark: dark))
+                    let background = try rgba(rendered.backgroundColor, dark: dark)
+                    XCTAssertEqual(
+                        background[3], 1, "Fenced code must not depend on bubble compositing.")
+                    let code = rendered.attributedCode
+                    var colors: [BubbleNativeColor] = []
+                    code.enumerateAttribute(
+                        .foregroundColor, in: NSRange(location: 0, length: code.length)
+                    ) {
+                        value, _, _ in
+                        if let color = value as? BubbleNativeColor { colors.append(color) }
+                    }
+                    for color in colors {
+                        XCTAssertGreaterThanOrEqual(
+                            contrast(try rgba(color, dark: dark), background), 3,
+                            "Code must stay legible: sent=\(outgoing), dark=\(dark), language=\(language ?? "plain")"
+                        )
+                    }
+                    XCTAssertGreaterThanOrEqual(
+                        contrast(
+                            try rgba(rendered.headerForeground, dark: dark),
+                            try rgba(rendered.headerBackground, dark: dark)), 4.5)
                 }
             }
         }
-        let incoming = try fencedCode("plainidentifier", language: "javascript", outgoing: false)
-        let outgoing = try fencedCode("plainidentifier", language: "JS", outgoing: true)
-        for dark in [false, true] {
-            let first = try XCTUnwrap(
-                incoming.attachment.attributedCode.attribute(
-                    .foregroundColor, at: 0, effectiveRange: nil) as? BubbleNativeColor)
-            let second = try XCTUnwrap(
-                outgoing.attachment.attributedCode.attribute(
-                    .foregroundColor, at: 0, effectiveRange: nil) as? BubbleNativeColor)
-            XCTAssertEqual(try rgba(first, dark: dark), try rgba(second, dark: dark))
-            XCTAssertNotEqual(try rgba(second, dark: dark), try rgba(.white, dark: dark))
-        }
     }
 
-    func testCodeViewportReuseAndThemeChangesKeepBubbleDerivedSurface() throws {
+    func testCodeViewportReuseAndThemeChangesRenderContextualSurfaces() throws {
         let viewport = MessageCodeScrollView()
+        viewport.frame = CGRect(x: 0, y: 0, width: 300, height: 130)
+        #if os(macOS)
+            let window = NSWindow(
+                contentRect: viewport.frame, styleMask: [.borderless], backing: .buffered,
+                defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = viewport
+            window.orderFront(nil)
+            defer { window.close() }
+        #endif
+        var surfaces: [[CGFloat]] = []
         for outgoing in [false, true, false] {
-            let rendered = try fencedCode("plainidentifier", language: nil, outgoing: outgoing)
-            let foreground = try XCTUnwrap(
-                rendered.body.attribute(.foregroundColor, at: 0, effectiveRange: nil)
-                    as? BubbleNativeColor)
+            // Reuse the same cached attachment through appearance changes.
+            let rendered = try fencedCode(
+                "// comment\nconst answer = \"hello\";\nplainidentifier",
+                language: "javascript", outgoing: outgoing)
             for dark in [false, true, false] {
                 #if os(macOS)
-                    viewport.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                     viewport.apply(rendered.attachment)
+                    viewport.layoutSubtreeIfNeeded()
+                    window.displayIfNeeded()
+                    let bitmap = try XCTUnwrap(
+                        viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds))
+                    viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
+                    let point = CGPoint(
+                        x: viewport.contentView.frame.maxX - 12,
+                        y: viewport.contentView.frame.maxY - 12)
+                    let painted = try rgba(
+                        XCTUnwrap(
+                            bitmap.colorAt(
+                                x: Int(
+                                    point.x * CGFloat(bitmap.pixelsWide) / viewport.bounds.width),
+                                y: Int(
+                                    point.y * CGFloat(bitmap.pixelsHigh) / viewport.bounds.height))),
+                        dark: dark)
+                    XCTAssertEqual(
+                        painted[3], 1, accuracy: 0.01,
+                        "Native clip backing must not leave the code panel transparent.")
+                    // Native display bitmaps are color-managed; check visible
+                    // surface properties rather than pinning raw RGB bytes.
+                    if outgoing && dark {
+                        XCTAssertGreaterThan(painted[2], painted[0] * 2)
+                        XCTAssertLessThan(
+                            painted[0], 0.4, "Sent code must not acquire a white backing.")
+                    } else if dark {
+                        XCTAssertLessThan(painted.prefix(3).max()!, 0.4)
+                    } else {
+                        XCTAssertGreaterThan(painted.prefix(3).min()!, 0.8)
+                    }
+                    let image = NSImage(size: viewport.bounds.size)
+                    image.addRepresentation(bitmap)
+                    let attachment = XCTAttachment(
+                        data: try XCTUnwrap(image.tiffRepresentation),
+                        uniformTypeIdentifier: "public.tiff")
+                    attachment.name = "Code-sent-\(outgoing)-dark-\(dark)"
+                    attachment.lifetime = .keepAlways
+                    add(attachment)
                 #else
                     viewport.overrideUserInterfaceStyle = dark ? .dark : .light
                     viewport.apply(rendered.attachment, allowsSelection: true)
                 #endif
-                let background = try XCTUnwrap(viewport.backgroundColor)
-                let actual = try rgba(background, dark: dark)
-                var expected = try rgba(foreground, dark: dark)
-                expected[3] *= 0.08
-                for (actual, expected) in zip(actual, expected) {
-                    XCTAssertEqual(actual, expected, accuracy: 0.001)
-                }
+                surfaces.append(try rgba(XCTUnwrap(viewport.backgroundColor), dark: dark))
             }
         }
+        XCTAssertNotEqual(surfaces[0], surfaces[1], "Received panels must follow the theme.")
+        XCTAssertNotEqual(surfaces[3], surfaces[4], "Sent panels must follow the theme.")
+        XCTAssertEqual(
+            surfaces[0], surfaces[3], "Light-mode sent and received panels share the same surface.")
+        XCTAssertNotEqual(
+            surfaces[1], surfaces[4], "Dark-mode sent and received panels remain distinct.")
+        XCTAssertEqual(
+            surfaces[0], surfaces[6], "Reusing a sent viewport must restore received styling.")
     }
 
     func testIgnoredNestedSyntaxScopesInheritTokenColorAndDiffBackgroundIsTokenOnly() throws {

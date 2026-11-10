@@ -45,6 +45,7 @@ final class MessageTextLayout {
         textContainer.lineFragmentPadding = 0
         textContainer.widthTracksTextView = false
         textContainer.heightTracksTextView = false
+        layoutManager.delegate = layoutManager
         layoutManager.addTextContainer(textContainer)
         storage.addLayoutManager(layoutManager)
         update(attributedText: attributedText, metadata: metadata)
@@ -326,7 +327,7 @@ final class MessageTextLayout {
     }
 }
 
-final class MessageMentionLayoutManager: NSLayoutManager {
+final class MessageMentionLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     var revealedSpoilers: Set<Int> = [] {
         didSet {
             if revealedSpoilers != oldValue { resetSpoilerParticles() }
@@ -334,6 +335,18 @@ final class MessageMentionLayoutManager: NSLayoutManager {
     }
     var particlePhase: CGFloat = 0
     private var spoilerFields: [Int: MessageSpoilerParticleField] = [:]
+
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        shouldBreakLineByWordBeforeCharacterAt charIndex: Int
+    ) -> Bool {
+        guard let textStorage, charIndex > 0, charIndex < textStorage.length else { return true }
+        // Treat a raw URL as one word: when it exceeds a line, TextKit falls
+        // back to character wrapping instead of preferring URL punctuation.
+        return
+            !(textStorage.attribute(.bubbleRawURL, at: charIndex, effectiveRange: nil) != nil
+            && textStorage.attribute(.bubbleRawURL, at: charIndex - 1, effectiveRange: nil) != nil)
+    }
 
     func resetSpoilerParticles() { spoilerFields.removeAll(keepingCapacity: true) }
 
@@ -434,6 +447,7 @@ final class MessageMentionLayoutManager: NSLayoutManager {
 
 extension NSAttributedString.Key {
     static let bubbleURL = NSAttributedString.Key("ChahuaURL")
+    static let bubbleRawURL = NSAttributedString.Key("ChahuaRawURL")
     static let bubbleBodyFont = NSAttributedString.Key("ChahuaBodyFont")
     static let bubbleMentionID = NSAttributedString.Key("ChahuaMentionID")
     static let bubbleMentionTint = NSAttributedString.Key("ChahuaMentionTint")

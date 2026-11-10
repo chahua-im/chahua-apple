@@ -808,19 +808,32 @@
             case .bottom(let animated):
                 if let index = rows.indices.last { prepareScrollTarget(index) }
                 scroll(to: bottomOrigin, animated: animated, requestID: request.id)
-            case .reveal(let id, let animated, _), .readBoundary(let id, let animated):
+            case .reveal(let id, let animated, _), .reaction(let id, let animated, _),
+                .readBoundary(let id, let animated):
                 guard let index = rows.firstIndex(where: { $0.id == id }) else {
                     finishRequest(id: request.id)
                     return
                 }
                 prepareScrollTarget(index)
-                if case .reveal(_, _, true) = request.intent, beginHighlight { highlightRow(id) }
+                if beginHighlight {
+                    switch request.intent {
+                    case .reveal(_, _, true), .reaction(_, _, true):
+                        highlightRow(id)
+                    default:
+                        break
+                    }
+                }
                 let frame = tableView.rect(ofRow: index)
                 let target: NSPoint
                 if case .readBoundary = request.intent {
                     target = constrainedOrigin(
                         y: frame.maxY - scrollView.contentView.bounds.height
                             + scrollView.contentInsets.bottom)
+                } else if case .reaction = request.intent {
+                    let region = preparedRows[id]?.layout.reactionRegion(in: frame) ?? frame
+                    target = constrainedOrigin(
+                        y: region.midY - scrollView.contentInsets.top
+                            - unobscuredDocumentRect.height / 2)
                 } else {
                     target = constrainedOrigin(
                         y: id == .unreadSeparator
@@ -1210,12 +1223,21 @@
             let hasVisibleRows =
                 range.location != NSNotFound && range.length > 0 && range.location < rows.count
             var visibleMessageIDs: [MessageID] = []
+            var visibleReactionMessageIDs: [MessageID] = []
             if hasVisibleRows, !unobscured.isEmpty {
                 for index in range.location..<min(NSMaxRange(range), rows.count) {
                     guard let id = rows[index].messageID,
                         unobscured.intersects(tableView.rect(ofRow: index))
                     else { continue }
                     visibleMessageIDs.append(id)
+                    if let region = preparedRows[rows[index].id]?.layout.reactionRegion(
+                        in: tableView.rect(ofRow: index))
+                    {
+                        let intersection = region.intersection(unobscured)
+                        if intersection.width > 0 && intersection.height > 0 {
+                            visibleReactionMessageIDs.append(id)
+                        }
+                    }
                 }
             }
             settledPosition = capturePosition()
@@ -1225,7 +1247,8 @@
                 distanceToTop: max(0, unobscured.minY),
                 distanceToBottom: max(0, tableView.bounds.maxY - unobscured.maxY),
                 height: unobscured.height,
-                visibleMessageIDs: visibleMessageIDs)
+                visibleMessageIDs: visibleMessageIDs,
+                visibleReactionMessageIDs: visibleReactionMessageIDs)
             let revision = installedRevision
             let geometry = installedGeometry
             let environment = layoutEnvironment

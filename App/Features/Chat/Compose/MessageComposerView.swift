@@ -711,10 +711,10 @@ struct MessageComposerView: View {
         performImageOperation(opensDialog: true) {
             var urls: [URL] = []
             defer { ComposerImageAcquisition.removeTemporary(urls) }
-            for provider in providers where ComposerImageAcquisition.supports(provider) {
+            for provider in providers where ComposerPastePolicy.supports(provider) {
                 let url = try await ComposerImageAcquisition.materialize(provider)
                 urls.append(url)
-                if ComposerImageAcquisition.isFile(provider, materializedURL: url) {
+                if ComposerPastePolicy.isFile(provider, materializedURL: url) {
                     guard let onImportFiles else { throw APIError.unavailable }
                     try await onImportFiles([url])
                 } else {

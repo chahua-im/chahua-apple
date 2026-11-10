@@ -26,6 +26,14 @@ struct TimelineRowLayout {
         size: .zero, frames: [:], textGeometry: nil, mediaFrames: [], reactionFrames: [])
 
     func frame(for section: TimelineSectionID) -> CGRect? { frames[section] }
+
+    /// Row-local reaction geometry shared by native visibility and reveal handling.
+    func reactionRegion(in rowFrame: CGRect) -> CGRect? {
+        guard let frame = frames[.reactions], frame.width > 0, frame.height > 0 else {
+            return nil
+        }
+        return frame.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+    }
 }
 
 enum TimelineRowMetrics {

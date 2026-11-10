@@ -4,6 +4,8 @@ import Foundation
 enum TimelineScrollIntent: Equatable {
     case bottom(animated: Bool)
     case reveal(TimelineRowID, animated: Bool, highlight: Bool)
+    /// Centers the reaction region, falling back to the row when it has no reactions.
+    case reaction(TimelineRowID, animated: Bool, highlight: Bool)
     /// Places the last-read row immediately above the unobscured viewport's bottom.
     case readBoundary(TimelineRowID, animated: Bool)
 }
@@ -36,6 +38,9 @@ struct TimelineViewport: Equatable {
     /// Confirmed rows intersecting the unobscured viewport, in timeline order.
     /// Partial/tall rows count; rows wholly behind floating chrome do not.
     var visibleMessageIDs: [MessageID] = []
+    /// Confirmed messages whose prepared reaction region has positive-area overlap
+    /// with the unobscured viewport. Message-body visibility alone does not count.
+    var visibleReactionMessageIDs: [MessageID] = []
 
     static let empty = TimelineViewport(
         firstVisibleIndex: nil,

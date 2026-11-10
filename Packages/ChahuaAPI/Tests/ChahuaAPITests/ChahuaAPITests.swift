@@ -92,7 +92,8 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(
             mentions.messageIds,
             [MessageID(9_007_199_254_740_995), MessageID(9_007_199_254_740_993)])
-        let reactions = try await client.unreadReactions(chatID: "42", threadID: threadID)
+        let reactions = try await client.unreadReactions(
+            chatID: "42", threadID: threadID, after: boundary)
         XCTAssertEqual(reactions.messageIds, [MessageID(9_007_199_254_740_993)])
         XCTAssertEqual(reactions.readThrough, boundary)
         let ack = try await client.acknowledgeReactions(
@@ -100,7 +101,7 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(
             ack.unreadReactions, 2, "Activity arriving after the snapshot remains unread.")
         _ = try await client.unreadMentions(chatID: "42", threadID: nil)
-        _ = try await client.unreadReactions(chatID: "42", threadID: nil)
+        _ = try await client.unreadReactions(chatID: "42", threadID: nil, after: nil)
         _ = try await client.acknowledgeReactions(chatID: "42", threadID: nil, readThrough: nil)
 
         let recorded = requests.values
@@ -108,12 +109,17 @@ final class ChahuaAPITests: XCTestCase {
         for request in recorded {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
         }
-        for request in recorded.prefix(2) {
-            XCTAssertEqual(
-                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?
-                    .queryItems,
-                [URLQueryItem(name: "threadId", value: threadID.description)])
-        }
+        XCTAssertEqual(
+            URLComponents(url: try XCTUnwrap(recorded[0].url), resolvingAgainstBaseURL: false)?
+                .queryItems,
+            [URLQueryItem(name: "threadId", value: threadID.description)])
+        XCTAssertEqual(
+            URLComponents(url: try XCTUnwrap(recorded[1].url), resolvingAgainstBaseURL: false)?
+                .queryItems,
+            [
+                URLQueryItem(name: "threadId", value: threadID.description),
+                URLQueryItem(name: "after", value: boundary),
+            ])
         let body = try XCTUnwrap(
             JSONSerialization.jsonObject(with: requestBody(recorded[2])) as? [String: String])
         XCTAssertEqual(body, ["threadId": threadID.description, "readThrough": boundary])

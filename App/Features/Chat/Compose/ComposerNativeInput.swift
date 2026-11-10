@@ -325,9 +325,7 @@ protocol ComposerNativeInput: AnyObject {
                 }
                 guard
                     let type = item.types.first(where: {
-                        guard let type = UTType($0.rawValue) else { return false }
-                        return type.conforms(to: .data) && !type.conforms(to: .text)
-                            && !type.conforms(to: .url)
+                        ComposerPastePolicy.isAttachmentDataType($0.rawValue)
                     }), let data = item.data(forType: type)
                 else { return nil }
                 let provider = NSItemProvider()
@@ -1235,7 +1233,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
             _ textPasteConfigurationSupporting: any UITextPasteConfigurationSupporting,
             transform item: any UITextPasteItem
         ) {
-            guard ComposerImageAcquisition.supports(item.itemProvider)
+            guard ComposerPastePolicy.supports(item.itemProvider)
             else {
                 if previousPasteDelegate?.textPasteConfigurationSupporting?(
                     textPasteConfigurationSupporting, transform: item) == nil

@@ -740,6 +740,121 @@
                 "Pending rows cannot advance read progress.")
         }
 
+        func testReactionVisibilityAndRevealUseReactionRegionNotTallMessageBody() async throws {
+            let messages = try (0..<12).map { index in
+                try TimelineTestFixtures.message(
+                    id: UInt64(index + 1), senderID: 2, at: index,
+                    text: index == 4 || index == 7
+                        ? String(
+                            repeating: "Tall message body must not count as a reaction. ", count: 80
+                        )
+                        : "Message \(index)",
+                    fields: index == 4 || index == 7
+                        ? ["reactions": [["emoji": "👍", "count": 1, "reactedByMe": false]]] : [:])
+            }
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
+                messageStore: ConversationMessageStore(),
+                fetchUnreadReactions: { _, _ in
+                    .init(messageIds: [messages[4].id, messages[7].id], readThrough: "snapshot")
+                },
+                acknowledgeReactions: { _, _ in .init(unreadReactions: 0) })
+            let controller = TimelineCollectionViewController(model: model, actions: .init())
+            controller.headerInset = 64
+            controller.composerInset = 80
+            let parent = UIViewController()
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = parent
+            window.makeKeyAndVisible()
+            parent.addChild(controller)
+            parent.view.addSubview(controller.view)
+            controller.view.frame = CGRect(x: 0, y: 0, width: 400, height: 400)
+            controller.didMove(toParent: parent)
+            defer {
+                model.close()
+                window.isHidden = true
+            }
+            await model.loadInitial()
+            controller.viewDidLayoutSubviews()
+            try await Task.sleep(for: .milliseconds(300))
+            let collection = try XCTUnwrap(
+                controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+            func index(_ message: Int) throws -> Int {
+                try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[message].id })
+            }
+            func frame(_ message: Int) throws -> CGRect {
+                try XCTUnwrap(
+                    collection.layoutAttributesForItem(
+                        at: .init(item: try index(message), section: 0))
+                ).frame
+            }
+            func region(_ message: Int) throws -> CGRect {
+                let row = model.rows[try index(message)]
+                return try XCTUnwrap(
+                    TimelineTestFixtures.layout(
+                        row: row, width: 400, parent: controller, cache: TimelineLayoutCache()
+                    )
+                    .reactionRegion(in: try frame(message)))
+            }
+            func show(top: CGFloat) {
+                controller.scrollViewWillBeginDragging(collection)
+                collection.setContentOffset(
+                    CGPoint(x: 0, y: top - controller.headerInset), animated: false)
+                collection.layoutIfNeeded()
+                controller.scrollViewDidScroll(collection)
+                controller.scrollViewDidEndDragging(collection, willDecelerate: false)
+            }
+            let reaction = try region(4)
+            let usableHeight: CGFloat = 400 - controller.headerInset - controller.composerInset
+            XCTAssertGreaterThan(try frame(4).height, usableHeight * 2)
+            await model.jumpToMessage(messages[4].id)
+            try await Task.sleep(for: .milliseconds(400))
+            XCTAssertEqual(
+                try frame(4).midY,
+                collection.contentOffset.y + controller.headerInset + usableHeight / 2, accuracy: 1,
+                "Ordinary message reveals retain row centering, even for tall messages.")
+            show(top: try frame(4).midY)
+            model.setReadTrackingActive(true)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(model.unreadReactionJumpCount, 2, "A tall body is not a reaction.")
+            show(top: reaction.minY - usableHeight - 1)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(
+                model.unreadReactionJumpCount, 2, "Composer-covered reactions do not count.")
+            show(top: reaction.maxY + 1)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(
+                model.unreadReactionJumpCount, 2, "Header-covered reactions do not count.")
+            show(top: reaction.minY - usableHeight + 1)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(model.unreadReactionJumpCount, 1, "One visible reaction pixel counts.")
+
+            await model.jumpToNextReaction()
+            try await Task.sleep(for: .milliseconds(900))
+            XCTAssertEqual(
+                try region(7).midY,
+                collection.contentOffset.y + controller.headerInset + usableHeight / 2, accuracy: 1)
+            XCTAssertEqual(model.unreadReactionJumpCount, 0)
+
+            // A reaction target removed since the snapshot still reveals its message.
+            let snapshot = model.updates.value
+            model.updates.send(
+                .init(
+                    revision: snapshot.revision, windowRevision: snapshot.windowRevision,
+                    rows: snapshot.rows, animateFollowing: false,
+                    pendingScroll: .init(
+                        id: 10_000,
+                        intent: .reaction(
+                            model.rows[try index(5)].id, animated: false, highlight: true))))
+            controller.viewDidLayoutSubviews()
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertEqual(
+                try frame(5).midY,
+                collection.contentOffset.y + controller.headerInset + usableHeight / 2, accuracy: 1)
+        }
+
         func testRowHeightsFollowWidthAndDynamicTypeWhileReadingHistory() async throws {
             let messages = try (0..<15).map {
                 try TimelineTestFixtures.message(

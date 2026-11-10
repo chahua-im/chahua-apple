@@ -21,7 +21,7 @@ final class ComposerAttachmentState: ObservableObject {
     @Published private(set) var dropRequest: DropRequest?
 
     func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
-        let attachments = providers.filter { ComposerImageAcquisition.supports($0) }
+        let attachments = providers.filter { ComposerPastePolicy.supports($0) }
         guard !isAcquiring, dropRequest == nil, !attachments.isEmpty else { return false }
         dropRequest = DropRequest(providers: attachments)
         return true
@@ -90,32 +90,10 @@ enum ComposerImageAcquisition {
         for url in urls { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
     }
 
-    static func isFile(_ provider: NSItemProvider, materializedURL: URL) -> Bool {
-        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            let type = UTType(filenameExtension: materializedURL.pathExtension)
-            return type?.conforms(to: .image) != true && type?.conforms(to: .movie) != true
-        }
-        return !provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
-            && !provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier)
-    }
-
-    static func supports(_ provider: NSItemProvider) -> Bool {
-        provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
-            || provider.registeredTypeIdentifiers.contains {
-                guard let type = UTType($0) else { return false }
-                return type.conforms(to: .data) && !type.conforms(to: .text)
-                    && !type.conforms(to: .url)
-            }
-    }
-
     static func materialize(_ provider: NSItemProvider) async throws -> URL {
         try Task.checkCancellation()
-        if !provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
-            let type = provider.registeredTypeIdentifiers.first(where: {
-                guard let type = UTType($0) else { return false }
-                return type.conforms(to: .data) && !type.conforms(to: .text)
-                    && !type.conforms(to: .url)
-            })
+        if let type = ComposerPastePolicy.attachmentTypeIdentifier(for: provider),
+            type != UTType.fileURL.identifier
         {
             let suggestedName = provider.suggestedName
             return try await withCheckedThrowingContinuation { continuation in

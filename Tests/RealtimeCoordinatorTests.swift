@@ -1693,7 +1693,7 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
     {
         throw UnexpectedActivityCall.unread
     }
-    func unreadReactions(chatID: String, threadID: MessageID?) async throws
+    func unreadReactions(chatID: String, threadID: MessageID?, after: String?) async throws
         -> UnreadReactionIDsResponse
     {
         throw UnexpectedActivityCall.unread

@@ -308,7 +308,7 @@ struct ComposerAttachmentDialog: View {
         let mediaProviders = providers.filter { provider in
             !provider.hasItemConformingToTypeIdentifier(
                 ComposerMediaGallery.slotDragType.identifier)
-                && ComposerImageAcquisition.supports(provider)
+                && ComposerPastePolicy.supports(provider)
         }
         guard !mediaProviders.isEmpty else { return false }
         input.settleNativeInput()

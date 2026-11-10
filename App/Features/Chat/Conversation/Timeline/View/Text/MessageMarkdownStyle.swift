@@ -48,10 +48,6 @@ enum MessageMarkdownStyle {
         translucent(foreground, opacity: 0.10)
     }
 
-    static func codeBlockBackground(foreground: BubbleNativeColor) -> BubbleNativeColor {
-        translucent(foreground, opacity: 0.08)
-    }
-
     // Resolve the source inside the provider, never in the creating cell's appearance.
     private static func translucent(_ foreground: BubbleNativeColor, opacity: CGFloat)
         -> BubbleNativeColor
@@ -72,63 +68,93 @@ enum MessageMarkdownStyle {
         #endif
     }
 
-    // highlight.js 11.12.0 github/github-dark, scoped to fenced code in the PWA.
-    // Only token additions/deletions paint a background; the block surface is currentColor.
-    static let codeForeground = color(light: 0x24292E, dark: 0xC9D1D9)
-    private static let comment = color(light: 0x6A737D, dark: 0x8B949E)
-    private static let keyword = color(light: 0xD73A49, dark: 0xFF7B72)
-    private static let string = color(light: 0x032F62, dark: 0xA5D6FF)
-    private static let constant = color(light: 0x005CC5, dark: 0x79C0FF)
-    private static let title = color(light: 0x6F42C1, dark: 0xD2A8FF)
-    private static let variable = color(light: 0xE36209, dark: 0xFFA657)
-    private static let tag = color(light: 0x22863A, dark: 0x7EE787)
-    private static let section = color(light: 0x005CC5, dark: 0x1F6FEB)
-    private static let bullet = color(light: 0x735C0F, dark: 0xF2CC60)
-    private static let addition = color(light: 0x22863A, dark: 0xAFF5B4)
-    private static let additionBackground = color(light: 0xF0FFF4, dark: 0x033A16)
-    private static let deletion = color(light: 0xB31D28, dark: 0xFFDCD7)
-    private static let deletionBackground = color(light: 0xFFEEF0, dark: 0x67060C)
+    // GitHub/GitHub Dark tokens follow the panel's light/dark appearance.
+    static let incomingCode = CodePalette(outgoing: false)
+    static let outgoingCode = CodePalette(outgoing: true)
 
-    static func applyHighlight(_ kind: String, to value: NSMutableAttributedString, range: NSRange)
-    {
-        let root = kind.prefix(while: { $0 != "." })
-        let foreground: BubbleNativeColor?
-        if kind == "variable.language" || kind.hasPrefix("variable.language.") {
-            foreground = keyword
-        } else {
-            switch root {
-            case "doctag", "keyword", "template-tag", "template-variable", "type":
+    struct CodePalette {
+        let background: BubbleNativeColor
+        let headerBackground: BubbleNativeColor
+        let headerForeground: BubbleNativeColor
+        let foreground: BubbleNativeColor
+        private let comment: BubbleNativeColor
+        private let keyword: BubbleNativeColor
+        private let string: BubbleNativeColor
+        private let constant: BubbleNativeColor
+        private let title: BubbleNativeColor
+        private let variable: BubbleNativeColor
+        private let tag: BubbleNativeColor
+        private let section: BubbleNativeColor
+        private let bullet: BubbleNativeColor
+        private let addition: BubbleNativeColor
+        private let additionBackground: BubbleNativeColor
+        private let deletion: BubbleNativeColor
+        private let deletionBackground: BubbleNativeColor
+
+        init(outgoing: Bool) {
+            // Light-mode panels share the PWA's primary-tinted neutral surface.
+            // Dark-mode sent panels retain their blue treatment and light tokens.
+            background = color(light: 0xE4EBF5, dark: outgoing ? 0x163F6B : 0x232B36)
+            headerBackground = color(light: 0xCCDCEE, dark: outgoing ? 0x123458 : 0x24354B)
+            headerForeground = color(light: 0x1E5690, dark: outgoing ? 0xFFFFFF : 0x79C0FF)
+            foreground = color(light: 0x24292E, dark: 0xC9D1D9)
+            comment = color(light: 0x6A737D, dark: outgoing ? 0xB2BDCA : 0x8B949E)
+            keyword = color(light: 0xD73A49, dark: 0xFF7B72)
+            string = color(light: 0x032F62, dark: 0xA5D6FF)
+            constant = color(light: 0x005CC5, dark: 0x79C0FF)
+            title = color(light: 0x6F42C1, dark: 0xD2A8FF)
+            variable = color(light: 0xE36209, dark: 0xFFA657)
+            tag = color(light: 0x22863A, dark: 0x7EE787)
+            section = color(light: 0x005CC5, dark: outgoing ? 0x79C0FF : 0x1F6FEB)
+            bullet = color(light: 0x735C0F, dark: 0xF2CC60)
+            addition = color(light: 0x22863A, dark: 0xAFF5B4)
+            additionBackground = color(light: 0xF0FFF4, dark: 0x033A16)
+            deletion = color(light: 0xB31D28, dark: 0xFFDCD7)
+            deletionBackground = color(light: 0xFFEEF0, dark: 0x67060C)
+        }
+
+        func applyHighlight(_ kind: String, to value: NSMutableAttributedString, range: NSRange) {
+            let root = kind.prefix(while: { $0 != "." })
+            let foreground: BubbleNativeColor?
+            if kind == "variable.language" || kind.hasPrefix("variable.language.") {
                 foreground = keyword
-            case "title": foreground = title
-            case "attr", "attribute", "literal", "meta", "number", "operator", "variable",
-                "selector-attr", "selector-class", "selector-id":
-                foreground = constant
-            case "regexp", "string": foreground = string
-            case "built_in", "symbol": foreground = variable
-            case "comment", "code", "formula": foreground = comment
-            case "name", "quote", "selector-tag", "selector-pseudo": foreground = tag
-            case "subst", "emphasis", "strong": foreground = codeForeground
-            case "section": foreground = section
-            case "bullet": foreground = bullet
-            case "addition": foreground = addition
-            case "deletion": foreground = deletion
-            default: foreground = nil  // Ignored CSS scopes inherit their enclosing token.
+            } else {
+                switch root {
+                case "doctag", "keyword", "template-tag", "template-variable", "type":
+                    foreground = keyword
+                case "title": foreground = title
+                case "attr", "attribute", "literal", "meta", "number", "operator", "variable",
+                    "selector-attr", "selector-class", "selector-id":
+                    foreground = constant
+                case "regexp", "string": foreground = string
+                case "built_in", "symbol": foreground = variable
+                case "comment", "code", "formula": foreground = comment
+                case "name", "quote", "selector-tag", "selector-pseudo": foreground = tag
+                case "subst", "emphasis", "strong": foreground = self.foreground
+                case "section": foreground = section
+                case "bullet": foreground = bullet
+                case "addition": foreground = addition
+                case "deletion": foreground = deletion
+                default: foreground = nil  // Ignored CSS scopes inherit their enclosing token.
+                }
             }
-        }
-        if let foreground { value.addAttribute(.foregroundColor, value: foreground, range: range) }
-        if root == "addition" || root == "deletion" {
-            value.addAttribute(
-                .backgroundColor,
-                value: root == "addition" ? additionBackground : deletionBackground,
-                range: range)
-        }
-        if root == "section" || root == "strong" || root == "emphasis" {
-            value.enumerateAttribute(.font, in: range) { current, subrange, _ in
-                guard let current = current as? BubbleNativeFont else { return }
+            if let foreground {
+                value.addAttribute(.foregroundColor, value: foreground, range: range)
+            }
+            if root == "addition" || root == "deletion" {
                 value.addAttribute(
-                    .font,
-                    value: font(current, bold: root != "emphasis", italic: root == "emphasis"),
-                    range: subrange)
+                    .backgroundColor,
+                    value: root == "addition" ? additionBackground : deletionBackground,
+                    range: range)
+            }
+            if root == "section" || root == "strong" || root == "emphasis" {
+                value.enumerateAttribute(.font, in: range) { current, subrange, _ in
+                    guard let current = current as? BubbleNativeFont else { return }
+                    value.addAttribute(
+                        .font,
+                        value: font(current, bold: root != "emphasis", italic: root == "emphasis"),
+                        range: subrange)
+                }
             }
         }
     }
@@ -171,13 +197,15 @@ final class MessageCodeAttachment: NSTextAttachment {
     static let horizontalPadding: CGFloat = 10
     static let verticalPadding: CGFloat = 8
 
-    init(code: String, language: String?, fontSize: CGFloat, foreground: BubbleNativeColor) {
+    init(code: String, language: String?, fontSize: CGFloat, isOutgoing: Bool) {
         self.language = language
         self.code = code
-        backgroundColor = MessageMarkdownStyle.codeBlockBackground(foreground: foreground)
+        let palette =
+            isOutgoing ? MessageMarkdownStyle.outgoingCode : MessageMarkdownStyle.incomingCode
+        backgroundColor = palette.background
         headerFont = .systemFont(ofSize: fontSize * 0.75)
-        headerForeground = foreground
-        headerBackground = foreground.withAlphaComponent(0.20)
+        headerForeground = palette.headerForeground
+        headerBackground = palette.headerBackground
         headerHeight = max(20, ceil(fontSize * 1.2))
         let highlighted = MarkdownCodeHighlight.supports(language: language)
         let font = BubbleNativeFont.monospacedSystemFont(ofSize: fontSize * 0.92, weight: .regular)
@@ -189,7 +217,7 @@ final class MessageCodeAttachment: NSTextAttachment {
             string: code.isEmpty ? " " : code,
             attributes: [
                 .font: font,
-                .foregroundColor: highlighted ? MessageMarkdownStyle.codeForeground : foreground,
+                .foregroundColor: palette.foreground,
                 .paragraphStyle: paragraph,
             ])
         if highlighted {
@@ -197,7 +225,7 @@ final class MessageCodeAttachment: NSTextAttachment {
                 let range = NSIntersectionRange(
                     span.range, NSRange(location: 0, length: value.length))
                 if range.length > 0 {
-                    MessageMarkdownStyle.applyHighlight(span.kind, to: value, range: range)
+                    palette.applyHighlight(span.kind, to: value, range: range)
                 }
             }
         }

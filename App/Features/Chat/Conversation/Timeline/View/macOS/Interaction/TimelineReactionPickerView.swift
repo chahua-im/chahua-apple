@@ -668,6 +668,7 @@
 
     /// A native thought-bubble anchor preserves the source message and the
     /// original picker-close target without rendering a hosted SwiftUI snapshot.
+    /// Only these floating shapes use glass; the keyboard keeps its content material.
     @MainActor
     final class TimelineReactionPickerPlaceholder: NSView {
         var onClose: (() -> Void)?
@@ -683,13 +684,24 @@
                 NSRect(x: 49, y: 56, width: 14, height: 14),
                 NSRect(x: 64, y: 70, width: 6, height: 6),
             ] {
-                let material = NSVisualEffectView(frame: rect)
-                material.material = .popover
-                material.state = .active
-                material.blendingMode = .withinWindow
-                material.wantsLayer = true
-                material.layer?.cornerRadius = rect.width / 2
-                material.layer?.masksToBounds = true
+                let material: NSView
+                if #available(macOS 26, *) {
+                    let glass = NSGlassEffectView(frame: rect)
+                    glass.cornerRadius = rect.width / 2
+                    glass.style = .regular
+                    if #available(macOS 27, *) { glass.effectIsInteractive = true }
+                    material = glass
+                } else {
+                    let effect = NSVisualEffectView(frame: rect)
+                    effect.material = .popover
+                    effect.state = .active
+                    effect.blendingMode = .withinWindow
+                    effect.wantsLayer = true
+                    effect.layer?.cornerRadius = rect.width / 2
+                    effect.layer?.masksToBounds = true
+                    material = effect
+                }
+                material.setAccessibilityElement(false)
                 addSubview(material)
             }
             let face = NSImageView(frame: NSRect(x: 0, y: 0, width: 64, height: 64))

@@ -418,6 +418,124 @@
                 "Pending rows cannot advance read progress.")
         }
 
+        func testReactionVisibilityAndRevealUseReactionRegionNotTallMessageBody() async throws {
+            let messages = try (0..<12).map { index in
+                try TimelineTestFixtures.message(
+                    id: UInt64(index + 1), senderID: 2, at: index,
+                    text: index == 4 || index == 7
+                        ? String(
+                            repeating: "Tall message body must not count as a reaction. ", count: 80
+                        )
+                        : "Message \(index)",
+                    fields: index == 4 || index == 7
+                        ? ["reactions": [["emoji": "👍", "count": 1, "reactedByMe": false]]] : [:])
+            }
+            let page = try TimelineTestFixtures.page(messages)
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: HistorySource(initial: page, older: page),
+                messageStore: ConversationMessageStore(),
+                fetchUnreadReactions: { _, _ in
+                    .init(messageIds: [messages[4].id, messages[7].id], readThrough: "snapshot")
+                },
+                acknowledgeReactions: { _, _ in .init(unreadReactions: 0) })
+            let controller = TimelineTableViewController(model: model)
+            controller.headerInset = 96
+            controller.composerInset = 80
+            controller.view.frame = NSRect(x: 0, y: 0, width: 400, height: 400)
+            let window = mountForDisplay(controller)
+            defer {
+                model.close()
+                window.close()
+            }
+            await model.loadInitial()
+            try await waitForDisplay(controller, model: model)
+            let scroll = try XCTUnwrap(timelineScrollView(in: controller.view))
+            let table = try XCTUnwrap(scroll.documentView as? NSTableView)
+            func index(_ message: Int) throws -> Int {
+                try XCTUnwrap(model.rows.firstIndex { $0.messageID == messages[message].id })
+            }
+            func frame(_ message: Int) throws -> CGRect {
+                table.rect(ofRow: try index(message))
+            }
+            func region(_ message: Int) throws -> CGRect {
+                let row = model.rows[try index(message)]
+                return try XCTUnwrap(
+                    TimelineTestFixtures.layout(
+                        row: row, width: table.bounds.width, parent: controller,
+                        cache: TimelineLayoutCache()
+                    ).reactionRegion(in: try frame(message)))
+            }
+            func show(top: CGFloat) {
+                NotificationCenter.default.post(
+                    name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: top - controller.headerInset))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                NotificationCenter.default.post(
+                    name: NSScrollView.didLiveScrollNotification, object: scroll)
+                NotificationCenter.default.post(
+                    name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+            }
+            // Bring the tall row into view so its final-width preparation has settled.
+            await model.jumpToMessage(messages[4].id)
+            try await waitForDisplay(controller, model: model) {
+                model.updates.value.pendingScroll == nil
+            }
+            let reaction = try region(4)
+            let usableHeight =
+                scroll.documentVisibleRect.height - controller.headerInset
+                - controller.composerInset
+            XCTAssertGreaterThan(try frame(4).height, usableHeight * 2)
+            XCTAssertEqual(
+                try frame(4).midY,
+                scroll.documentVisibleRect.minY + controller.headerInset + usableHeight / 2,
+                accuracy: 1,
+                "Ordinary message reveals retain row centering, even for tall messages.")
+            show(top: try frame(4).midY)
+            model.setReadTrackingActive(true)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(model.unreadReactionJumpCount, 2, "A tall body is not a reaction.")
+            show(top: reaction.minY - usableHeight - 1)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(
+                model.unreadReactionJumpCount, 2, "Composer-covered reactions do not count.")
+            show(top: reaction.maxY + 1)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(
+                model.unreadReactionJumpCount, 2, "Header-covered reactions do not count.")
+            show(top: reaction.minY - usableHeight + 1)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(model.unreadReactionJumpCount, 1, "One visible reaction pixel counts.")
+
+            await model.jumpToNextReaction()
+            try await waitForDisplay(controller, model: model) {
+                model.updates.value.pendingScroll == nil
+            }
+            XCTAssertEqual(
+                try region(7).midY,
+                scroll.documentVisibleRect.minY + controller.headerInset + usableHeight / 2,
+                accuracy: 1)
+            try await Task.sleep(for: .milliseconds(650))
+            XCTAssertEqual(model.unreadReactionJumpCount, 0)
+
+            // A reaction target removed since the snapshot still reveals its message.
+            let snapshot = model.updates.value
+            model.updates.send(
+                .init(
+                    revision: snapshot.revision, windowRevision: snapshot.windowRevision,
+                    rows: snapshot.rows, animateFollowing: false,
+                    pendingScroll: .init(
+                        id: 10_000,
+                        intent: .reaction(
+                            model.rows[try index(5)].id, animated: false, highlight: true))))
+            controller.viewDidLayout()
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertEqual(
+                try frame(5).midY,
+                scroll.documentVisibleRect.minY + controller.headerInset + usableHeight / 2,
+                accuracy: 1)
+        }
+
         func testUserScrollLoadsHistoryButLayoutDoesNot() async throws {
             try await checkHistoryScroll(legacyMouse: false)
         }

@@ -897,10 +897,11 @@
                     lastStartedRequestID = request.id
                     activeRequest = request
                     userScrolling = false
-                    if case .reveal(let id, _, let highlight) = request.intent, highlight,
-                        rows.contains(where: { $0.id == id })
-                    {
-                        highlightRow(id)
+                    switch request.intent {
+                    case .reveal(let id, _, true), .reaction(let id, _, true):
+                        if rows.contains(where: { $0.id == id }) { highlightRow(id) }
+                    default:
+                        break
                     }
                 }
                 guard retarget || scrollAnimation == nil else { return }
@@ -987,7 +988,8 @@
             case .bottom(let animated):
                 if let index = rows.indices.last { prepareScrollTarget(index) }
                 scroll(to: bottomOffset, animated: animated, requestID: request.id)
-            case .reveal(let id, let animated, _), .readBoundary(let id, let animated):
+            case .reveal(let id, let animated, _), .reaction(let id, let animated, _),
+                .readBoundary(let id, let animated):
                 guard let index = rows.firstIndex(where: { $0.id == id }) else {
                     finishRequest(id: request.id)
                     return
@@ -1005,6 +1007,9 @@
                 let target: CGFloat
                 if case .readBoundary = request.intent {
                     target = frame.maxY - collectionView.bounds.height + insets.bottom
+                } else if case .reaction = request.intent {
+                    let region = preparedRows[id]?.layout.reactionRegion(in: frame) ?? frame
+                    target = region.midY - height / 2 - insets.top
                 } else {
                     target =
                         id == .unreadSeparator
@@ -1136,8 +1141,21 @@
             let visibleItems = items ?? visibleItems()
             position = capturePosition(visibleItems: visibleItems)
             let visible = visibleItems.map(\.indexPath.item)
-            let visibleMessageIDs = visibleItems.sorted { $0.indexPath < $1.indexPath }
+            let orderedItems = visibleItems.sorted { $0.indexPath < $1.indexPath }
+            let visibleMessageIDs =
+                orderedItems
                 .compactMap { rows[$0.indexPath.item].messageID }
+            let unobscured = unobscuredViewport
+            let visibleReactionMessageIDs =
+                orderedItems
+                .compactMap { item -> MessageID? in
+                    let row = rows[item.indexPath.item]
+                    guard let id = row.messageID,
+                        let region = preparedRows[row.id]?.layout.reactionRegion(in: item.frame)
+                    else { return nil }
+                    let intersection = region.intersection(unobscured)
+                    return intersection.width > 0 && intersection.height > 0 ? id : nil
+                }
             let top = max(
                 0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top)
             let height = max(
@@ -1150,7 +1168,8 @@
                 distanceToTop: top,
                 distanceToBottom: max(0, collectionView.contentSize.height - top - height),
                 height: height,
-                visibleMessageIDs: visibleMessageIDs)
+                visibleMessageIDs: visibleMessageIDs,
+                visibleReactionMessageIDs: visibleReactionMessageIDs)
             viewportHandoffGeneration += 1
             let generation = viewportHandoffGeneration
             let revision = installedRevision

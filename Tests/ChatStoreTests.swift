@@ -3723,7 +3723,7 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
         guard !unreadMentionsResults.isEmpty else { throw UnexpectedActivityCall.missingResult }
         return try unreadMentionsResults.removeFirst().get()
     }
-    func unreadReactions(chatID: String, threadID: MessageID?) async throws
+    func unreadReactions(chatID: String, threadID: MessageID?, after: String?) async throws
         -> UnreadReactionIDsResponse
     {
         guard !unreadReactionsResults.isEmpty else { throw UnexpectedActivityCall.missingResult }

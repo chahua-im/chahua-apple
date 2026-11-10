@@ -524,20 +524,14 @@ struct ChatGlassSurface: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        #if os(macOS)
-            content.modifier(MacChatGlassSurface(cornerRadius: cornerRadius))
-        #else
-            let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            if #available(macOS 26, iOS 26, *) {
-                content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
-            } else {
-                // TODO: Design dedicated title-bar/tab chrome for iOS versions without
-                // Liquid Glass. Retain this functional material fallback until then.
-                content
-                    .background(.regularMaterial, in: shape)
-                    .overlay { shape.strokeBorder(.primary.opacity(0.08)) }
-            }
-        #endif
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(macOS 26, iOS 26, *) {
+            content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            content
+                .background(.regularMaterial, in: shape)
+                .overlay { shape.strokeBorder(.primary.opacity(0.08)) }
+        }
     }
 }
 

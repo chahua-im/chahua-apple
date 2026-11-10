@@ -267,6 +267,11 @@ struct MessageTextContent {
                     )
                     append(value, attributes)
                 case .link(let destination, let children):
+                    if children.count == 1, case .text(let label) = children[0],
+                        label == destination
+                    {
+                        attributes[.bubbleRawURL] = true
+                    }
                     if let url = URL(string: destination),
                         ["http", "https"].contains(url.scheme?.lowercased() ?? "")
                     {
@@ -319,7 +324,7 @@ struct MessageTextContent {
                     }
                     let attachment = MessageCodeAttachment(
                         code: code, language: language, fontSize: font.pointSize,
-                        foreground: foreground)
+                        isOutgoing: isOutgoing)
                     attributes[.attachment] = attachment
                     attributes[.bubbleCodeBlock] = attachment
                     // Attachment height is its own measured no-wrap TextKit height.

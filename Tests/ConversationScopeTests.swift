@@ -120,7 +120,7 @@ final class ConversationScopeTests: XCTestCase {
                 if receiptRequests == 2 { reconnectedReceipt.fulfill() }
                 return MessageID(1)
             },
-            fetchUnreadReactions: { _ in
+            fetchUnreadReactions: { _, _ in
                 reactionRequests += 1
                 if reactionRequests == 2 { reconnectedReactions.fulfill() }
                 return .init(messageIds: [MessageID(1)], readThrough: "snapshot")
@@ -175,7 +175,7 @@ final class ConversationScopeTests: XCTestCase {
                 mentions += 1
                 return .init(messageIds: [MessageID(2)])
             },
-            fetchUnreadReactions: { _ in
+            fetchUnreadReactions: { _, _ in
                 reactions += 1
                 return .init(messageIds: [MessageID(3)], readThrough: "snapshot")
             })

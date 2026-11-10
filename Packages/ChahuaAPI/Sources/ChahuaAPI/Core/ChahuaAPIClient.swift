@@ -103,8 +103,8 @@ public protocol ChahuaAPIClient: SocialAPIClient, GroupAPIClient {
     func unreadMentions(chatID: String, threadID: MessageID?) async throws
         -> UnreadMentionIDsResponse
 
-    /// Returns unread reaction targets and the opaque snapshot boundary for acknowledgement.
-    func unreadReactions(chatID: String, threadID: MessageID?) async throws
+    /// Returns unread reaction targets after an opaque boundary and a snapshot for acknowledgement.
+    func unreadReactions(chatID: String, threadID: MessageID?, after: String?) async throws
         -> UnreadReactionIDsResponse
 
     /// Acknowledges the queried snapshot; omit `readThrough` only when leaving the conversation.

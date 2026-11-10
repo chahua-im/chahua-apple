@@ -1535,7 +1535,8 @@ final class ChatStore: ObservableObject {
             refreshVisibleActivity(
                 chatID: payload.chatId, threadID: payload.threadRootId?.description,
                 mentions: payload.notificationType != .reaction,
-                reactions: payload.notificationType == .reaction)
+                reactions: payload.notificationType == .reaction,
+                reactionMessageID: payload.notificationType == .reaction ? payload.messageId : nil)
         case .readReceiptChanged(let payload):
             if payload.privacyChanged == true || payload.readerUid == nil
                 || payload.readerUid != currentUserProfile?.uid
@@ -2424,11 +2425,13 @@ final class ChatStore: ObservableObject {
     }
 
     private func refreshVisibleActivity(
-        chatID: String, threadID: String?, mentions: Bool = true, reactions: Bool = true
+        chatID: String, threadID: String?, mentions: Bool = true, reactions: Bool = true,
+        reactionMessageID: MessageID? = nil
     ) {
         for model in visibleTimelines()
         where model.chatID == chatID && model.threadID == threadID {
-            model.refreshUnreadActivity(mentions: mentions, reactions: reactions)
+            model.refreshUnreadActivity(
+                mentions: mentions, reactions: reactions, reactionMessageID: reactionMessageID)
         }
     }
 
@@ -2441,13 +2444,13 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func unreadReactions(chatID: String, threadID: String?) async throws
+    func unreadReactions(chatID: String, threadID: String?, after: String?) async throws
         -> UnreadReactionIDsResponse
     {
         guard foregroundActive else { throw CancellationError() }
         let root = try activityThreadID(threadID)
         return try await performGroupRequest(generation: generation) {
-            try await apiClient.unreadReactions(chatID: chatID, threadID: root)
+            try await apiClient.unreadReactions(chatID: chatID, threadID: root, after: after)
         }
     }
 

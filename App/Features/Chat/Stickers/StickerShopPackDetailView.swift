@@ -369,7 +369,7 @@ struct StickerShopPackDetailView: View {
         .padding(.trailing, 8)
         .padding(.vertical, 8)
         .frame(minHeight: 64)
-        .background(.regularMaterial, in: Capsule())
+        .modifier(ChatGlassSurface(cornerRadius: 32, isInteractive: true))
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
     }

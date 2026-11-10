@@ -40,7 +40,24 @@
         private let chrome = MessageImageDetailMacContainer()
         private let closeButton = NSButton()
         private let moreButton = NSButton()
-        private let headerBackground = NSVisualEffectView()
+        private let headerBackground: NSView = {
+            if #available(macOS 26, *) {
+                let glass = NSGlassEffectView()
+                glass.style = .regular
+                glass.cornerRadius = 24
+                return glass
+            }
+            let effect = NSVisualEffectView()
+            effect.material = .menu
+            effect.blendingMode = .withinWindow
+            effect.state = .active
+            effect.wantsLayer = true
+            effect.layer?.cornerRadius = 24
+            effect.layer?.masksToBounds = true
+            return effect
+        }()
+        private let headerContent = NSView()
+        private var buttonGlassSurfaces: [(button: NSButton, glass: NSView)] = []
         private let titleLabel = NSTextField(labelWithString: "")
         private let timeLabel = NSTextField(labelWithString: "")
         private var saveTask: Task<Void, Never>?
@@ -115,19 +132,20 @@
             configureButton(
                 moreButton, symbol: "ellipsis", label: AppLanguage.localized("More"),
                 action: #selector(showImageMenu))
-            headerBackground.material = .menu
-            headerBackground.blendingMode = .withinWindow
-            headerBackground.state = .active
-            headerBackground.wantsLayer = true
-            headerBackground.layer?.cornerRadius = 24
-            headerBackground.layer?.masksToBounds = true
+            // This viewer already owns native gestures and buttons. Keep its floating
+            // chrome native too, with transparent content inside the system glass.
+            if #available(macOS 26, *), let glass = headerBackground as? NSGlassEffectView {
+                glass.contentView = headerContent
+            } else {
+                headerBackground.addSubview(headerContent)
+            }
             chrome.addSubview(headerBackground)
             titleLabel.stringValue = gallery.conversationTitle ?? AppLanguage.localized("Image")
             titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
             titleLabel.textColor = .white
             titleLabel.alignment = .center
             titleLabel.lineBreakMode = .byTruncatingTail
-            headerBackground.addSubview(titleLabel)
+            headerContent.addSubview(titleLabel)
             if let sentAt = gallery.sentAt {
                 timeLabel.stringValue = sentAt.formatted(
                     .dateTime.locale(AppLanguage.selected.locale)
@@ -137,7 +155,7 @@
             timeLabel.textColor = .secondaryLabelColor
             timeLabel.alignment = .center
             timeLabel.lineBreakMode = .byTruncatingTail
-            headerBackground.addSubview(timeLabel)
+            headerContent.addSubview(timeLabel)
             configureButton(
                 previousButton, symbol: "chevron.left",
                 label: AppLanguage.localized("Previous image"),
@@ -260,8 +278,20 @@
             button.isBordered = false
             button.contentTintColor = .white
             button.wantsLayer = true
-            button.layer?.backgroundColor = NSColor(white: 0.15, alpha: 0.8).cgColor
-            button.layer?.cornerRadius = 20
+            if #available(macOS 26, *) {
+                let glass = NSGlassEffectView()
+                glass.style = .regular
+                glass.cornerRadius = 20
+                if #available(macOS 27, *) { glass.effectIsInteractive = true }
+                // A sibling behind the transparent button preserves its native cell,
+                // hit region and key-view behavior without painting over the effect.
+                glass.setAccessibilityHidden(true)
+                chrome.addSubview(glass)
+                buttonGlassSurfaces.append((button, glass))
+            } else {
+                button.layer?.backgroundColor = NSColor(white: 0.15, alpha: 0.8).cgColor
+                button.layer?.cornerRadius = 20
+            }
             button.target = self
             button.action = action
             button.toolTip = label
@@ -302,6 +332,9 @@
             nextButton.isEnabled = canPage && selectedIndex + 1 < gallery.items.count
             previousButton.isHidden = gallery.items.count == 1
             nextButton.isHidden = gallery.items.count == 1
+            for surface in buttonGlassSurfaces {
+                surface.glass.isHidden = surface.button.isHidden
+            }
             countLabel.stringValue = AppLanguage.localized(
                 "\(selectedIndex + 1) of \(gallery.items.count)")
             countLabel.isHidden = gallery.items.count == 1
@@ -341,7 +374,8 @@
             let headerWidth = min(360, max(0, bounds.width - 152))
             headerBackground.frame = CGRect(
                 x: (bounds.width - headerWidth) / 2, y: headerTop, width: headerWidth, height: 48)
-            // NSVisualEffectView is unflipped: the title is the upper row.
+            headerContent.frame = headerBackground.bounds
+            // The transparent content view is unflipped: the title is the upper row.
             titleLabel.frame = CGRect(
                 x: 12, y: gallery.sentAt == nil ? 14 : 25,
                 width: max(0, headerWidth - 24), height: 20)
@@ -352,6 +386,9 @@
             previousButton.frame = CGRect(x: 16, y: bounds.midY - 20, width: 40, height: 40)
             nextButton.frame = CGRect(
                 x: max(16, bounds.width - 56), y: bounds.midY - 20, width: 40, height: 40)
+            for surface in buttonGlassSurfaces {
+                surface.glass.frame = surface.button.frame
+            }
             fileNameLabel.frame = CGRect(
                 x: 32, y: max(64, bounds.height - 37), width: max(0, bounds.width - 64), height: 20)
             let toastWidth = min(480, max(24, bounds.width - 48))

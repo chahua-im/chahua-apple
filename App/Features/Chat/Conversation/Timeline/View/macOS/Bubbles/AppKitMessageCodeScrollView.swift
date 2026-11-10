@@ -13,6 +13,14 @@
 
         override var isFlipped: Bool { true }
 
+        override func resetCursorRects() {
+            super.resetCursorRects()
+            guard let attachment else { return }
+            addCursorRect(
+                CGRect(x: 0, y: 0, width: bounds.width, height: attachment.headerHeight),
+                cursor: .arrow)
+        }
+
         init() {
             let storage = NSTextStorage()
             let manager = NSLayoutManager()
@@ -28,6 +36,9 @@
             layer?.cornerRadius = 8
             layer?.masksToBounds = true
             drawsBackground = true
+            // The scroll view paints the code surface. NSClipView's default
+            // opaque backing otherwise covers it (and white sent code disappears).
+            contentView.drawsBackground = false
             hasHorizontalScroller = true
             hasVerticalScroller = false
             autohidesScrollers = true
@@ -74,6 +85,7 @@
                 codeView.textStorage?.setAttributedString(attachment.attributedCode)
                 languageLabel.stringValue = attachment.language ?? ""
                 self.attachment = attachment
+                window?.invalidateCursorRects(for: self)
                 // Replacing NSTextStorage can move AppKit's insertion point to the
                 // end of the new string. Reset after replacement, never before it.
                 resetInteraction()
@@ -109,6 +121,8 @@
         override func draw(_ dirtyRect: NSRect) {
             super.draw(dirtyRect)
             if let attachment {
+                attachment.backgroundColor.setFill()
+                bounds.fill()
                 attachment.headerBackground.setFill()
                 CGRect(x: 0, y: 0, width: bounds.width, height: attachment.headerHeight).fill()
             }

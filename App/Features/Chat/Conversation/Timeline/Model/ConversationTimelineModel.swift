@@ -119,13 +119,17 @@ final class ConversationTimelineModel: ObservableObject {
     private let fetchUnreadMentions:
         (@MainActor (String?) async throws -> UnreadMentionIDsResponse)?
     private let fetchUnreadReactions:
-        (@MainActor (String?) async throws -> UnreadReactionIDsResponse)?
+        (@MainActor (String?, String?) async throws -> UnreadReactionIDsResponse)?
     private let acknowledgeReactions:
         (@MainActor (String?, String?) async throws -> UnreadReactionsAckResponse)?
     private var mentionTargets: Set<MessageID> = []
     private var dismissedMentionTargets: Set<MessageID> = []
     private var reactionTargets: Set<MessageID> = []
-    private var acknowledgedReactionTargets: Set<MessageID> = []
+    private var visitedReactionTargets: Set<MessageID> = []
+    private var reactionReadThrough: String?
+    private var reactionDwellTasks: [MessageID: Task<Void, Never>] = [:]
+    private var reactionAckTask: Task<Void, Never>?
+    private var reactionSessionEntered = false
     // Activity revisions are independent of history pagination and repositioning.
     private var activityRevision = 0
     private var mentionTask: Task<Void, Never>?
@@ -153,7 +157,9 @@ final class ConversationTimelineModel: ObservableObject {
         markRead: (@MainActor (MessageID) async throws -> Void)? = nil,
         fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)? = nil,
         fetchUnreadMentions: (@MainActor (String?) async throws -> UnreadMentionIDsResponse)? = nil,
-        fetchUnreadReactions: (@MainActor (String?) async throws -> UnreadReactionIDsResponse)? =
+        fetchUnreadReactions: (
+            @MainActor (String?, String?) async throws -> UnreadReactionIDsResponse
+        )? =
             nil,
         acknowledgeReactions:
             (@MainActor (String?, String?) async throws -> UnreadReactionsAckResponse)? = nil
@@ -198,6 +204,9 @@ final class ConversationTimelineModel: ObservableObject {
             reactionsDirty = true
             mentionsChanged = true
             reactionsChanged = true
+            cancelUnreadActivity()
+            reactionReadThrough = nil
+            visitedReactionTargets.removeAll()
             cancelReadReceipt(clear: false)
         }
     }
@@ -292,7 +301,8 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func close(acknowledgingActivity: Bool = false) {
-        let shouldAcknowledge = acknowledgingActivity && readTrackingActive
+        let shouldAcknowledge = acknowledgingActivity && reactionSessionEntered && !accountWasReset
+        let pendingAck = reactionAckTask
         setReadTrackingActive(false)
         cancelReadReceipt(clear: true)
         resetUnreadActivity()
@@ -310,6 +320,7 @@ final class ConversationTimelineModel: ObservableObject {
                         startReactionRefresh()
                     }
                 }
+                await pendingAck?.value
                 guard !Task.isCancelled, activityRevision == revision else { return }
                 _ = try? await acknowledgeReactions(scope, nil)
             }
@@ -494,6 +505,7 @@ final class ConversationTimelineModel: ObservableObject {
         guard !active || !accountWasReset else { return }
         guard readTrackingActive != active else { return }
         if active {
+            reactionSessionEntered = true
             activityRevision &+= 1
             leaveReactionTask?.cancel()
         }
@@ -501,6 +513,7 @@ final class ConversationTimelineModel: ObservableObject {
         if active {
             refreshReadReceipt(changed: false, mask: receiptMask & ~receiptFresh)
             refreshUnreadActivity(changed: false)
+            completeReactionViewing()
         } else {
             cancelReadReceipt(clear: false)
         }
@@ -537,8 +550,13 @@ final class ConversationTimelineModel: ObservableObject {
 
     /// Lifecycle calls share loaded results; scoped changes coalesce into one more request.
     func refreshUnreadActivity(
-        mentions: Bool = true, reactions: Bool = true, changed: Bool = true
+        mentions: Bool = true, reactions: Bool = true, changed: Bool = true,
+        reactionMessageID: MessageID? = nil
     ) {
+        if let reactionMessageID {
+            visitedReactionTargets.remove(reactionMessageID)
+            reactionDwellTasks.removeValue(forKey: reactionMessageID)?.cancel()
+        }
         if mentions, isGroupChat, fetchUnreadMentions != nil {
             if changed {
                 mentionsDirty = true
@@ -600,43 +618,45 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func startReactionRefresh() {
-        guard reactionTask == nil, leaveReactionTask == nil, reactionsDirty, readTrackingActive,
-            let fetchUnreadReactions
+        guard reactionTask == nil, reactionAckTask == nil, leaveReactionTask == nil,
+            reactionsDirty, readTrackingActive, let fetchUnreadReactions
         else { return }
         let revision = activityRevision
         reactionTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 reactionTask = nil
-                if revision != activityRevision { startReactionRefresh() }
+                if revision != activityRevision {
+                    startReactionRefresh()
+                } else {
+                    completeReactionViewing()
+                }
             }
             while readTrackingActive, revision == activityRevision, !Task.isCancelled,
                 reactionsDirty
             {
                 reactionsDirty = false
                 do {
-                    let response = try await fetchUnreadReactions(threadID)
+                    let response = try await fetchUnreadReactions(threadID, reactionReadThrough)
                     guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
                         return
                     }
-                    reactionTargets.formUnion(
-                        response.messageIds.lazy.filter { !self.isActivityTargetDeleted($0) })
-                    acknowledgedReactionTargets.subtract(response.messageIds)
-                    publishActivityCounts()
-                    // Never acknowledge a failed GET, or a response from an inactive session.
-                    if let acknowledgeReactions {
-                        let ack = try await acknowledgeReactions(threadID, response.readThrough)
-                        guard readTrackingActive, revision == activityRevision, !Task.isCancelled
-                        else {
-                            return
+                    // A delta can contain a newer reaction on an already visited message.
+                    for id in response.messageIds {
+                        visitedReactionTargets.remove(id)
+                        reactionDwellTasks.removeValue(forKey: id)?.cancel()
+                        if isActivityTargetDeleted(id) {
+                            visitedReactionTargets.insert(id)
+                        } else {
+                            reactionTargets.insert(id)
                         }
-                        if ack.unreadReactions > 0 { reactionsDirty = true }
-                        acknowledgedReactionTargets.formUnion(
-                            reactionTargets.intersection(response.messageIds))
-                        dismissVisibleActivityTargets()
                     }
+                    reactionReadThrough = response.readThrough
+                    publishActivityCounts()
+                    updateReactionDwell()
                     if !reactionsDirty { reactionsChanged = false }
                 } catch {
+                    guard revision == activityRevision, !Task.isCancelled else { return }
                     if !reactionsDirty {
                         reactionsDirty = true
                         return
@@ -646,14 +666,89 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
+    private func completeReactionViewing() {
+        guard readTrackingActive, reactionSessionEntered, !reactionsDirty, !reactionsChanged,
+            reactionTask == nil, reactionAckTask == nil, leaveReactionTask == nil,
+            reactionTargets.isEmpty, !visitedReactionTargets.isEmpty,
+            let boundary = reactionReadThrough, let acknowledgeReactions
+        else { return }
+        let revision = activityRevision
+        reactionAckTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                reactionAckTask = nil
+                // Notifications during the write wait for it before querying a delta.
+                startReactionRefresh()
+                if revision != activityRevision { completeReactionViewing() }
+            }
+            guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+                return
+            }
+            do {
+                let response = try await acknowledgeReactions(threadID, boundary)
+                guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+                    return
+                }
+                visitedReactionTargets.removeAll()
+                // Keep reactionReadThrough: acknowledgement does not reset the query window.
+                if response.unreadReactions > 0 {
+                    reactionsDirty = true
+                    reactionsChanged = true
+                }
+            } catch {
+                // Retain the viewed targets and boundary; lifecycle reentry retries the write.
+            }
+        }
+    }
+
+    private func cancelReactionDwell() {
+        for task in reactionDwellTasks.values { task.cancel() }
+        reactionDwellTasks.removeAll()
+    }
+
+    private var visibleReactionTargets: Set<MessageID> {
+        guard readTrackingActive, state.content == .ready, pendingScroll == nil,
+            viewportRevision == snapshotRevision, lastViewport.isValid(forRowCount: rows.count)
+        else { return [] }
+        return reactionTargets.intersection(lastViewport.visibleReactionMessageIDs)
+    }
+
+    private func updateReactionDwell() {
+        let visible = visibleReactionTargets
+        for id in reactionDwellTasks.keys where !visible.contains(id) {
+            reactionDwellTasks.removeValue(forKey: id)?.cancel()
+        }
+        let revision = activityRevision
+        for id in visible where reactionDwellTasks[id] == nil {
+            reactionDwellTasks[id] = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                guard let self, revision == activityRevision, !Task.isCancelled,
+                    visibleReactionTargets.contains(id)
+                else { return }
+                reactionDwellTasks.removeValue(forKey: id)
+                dismissReactionTarget(id)
+            }
+        }
+    }
+
+    private func dismissReactionTarget(_ id: MessageID) {
+        reactionDwellTasks.removeValue(forKey: id)?.cancel()
+        visitedReactionTargets.insert(id)
+        reactionTargets.remove(id)
+        publishActivityCounts()
+        completeReactionViewing()
+    }
+
     private func cancelUnreadActivity() {
         activityRevision &+= 1
+        cancelReactionDwell()
         if mentionTask != nil { mentionsDirty = true }
         if reactionTask != nil { reactionsDirty = true }
         // Keep cancelled tasks until their callbacks return: clients may ignore cancellation.
         mentionTask?.cancel()
         reactionTask?.cancel()
         leaveReactionTask?.cancel()
+        reactionAckTask?.cancel()
     }
 
     private func resetUnreadActivity() {
@@ -665,7 +760,9 @@ final class ConversationTimelineModel: ObservableObject {
         mentionTargets.removeAll()
         dismissedMentionTargets.removeAll()
         reactionTargets.removeAll()
-        acknowledgedReactionTargets.removeAll()
+        visitedReactionTargets.removeAll()
+        reactionReadThrough = nil
+        reactionSessionEntered = false
         publishActivityCounts()
     }
 
@@ -683,31 +780,22 @@ final class ConversationTimelineModel: ObservableObject {
     private func removeActivityTargets(_ ids: Set<MessageID>) {
         dismissedMentionTargets.formUnion(ids)
         mentionTargets.subtract(ids)
+        visitedReactionTargets.formUnion(reactionTargets.intersection(ids))
         reactionTargets.subtract(ids)
-        acknowledgedReactionTargets.subtract(ids)
+        for id in ids { reactionDwellTasks.removeValue(forKey: id)?.cancel() }
+        completeReactionViewing()
         publishActivityCounts()
     }
 
-    /// Visibility alone is not a read acknowledgement. Mentions use the message
-    /// cursor; reactions use the server's opaque snapshot boundary.
+    /// Ordinary cursor reads dismiss mentions; reactions are independent viewport reads.
     private func dismissVisibleActivityTargets() {
-        guard readTrackingActive, state.content == .ready, pendingScroll == nil,
-            viewportRevision == snapshotRevision,
-            lastViewport.isValid(forRowCount: rows.count),
-            !mentionTargets.isEmpty || !reactionTargets.isEmpty
-        else { return }
-        let visible = Set(lastViewport.visibleMessageIDs)
-        let mentions = mentionTargets.intersection(visible).filter { id in
-            readWatermark.map { $0 >= id } == true
+        if let readWatermark {
+            let mentions = mentionTargets.filter { $0 <= readWatermark }
+            dismissedMentionTargets.formUnion(mentions)
+            mentionTargets.subtract(mentions)
+            publishActivityCounts()
         }
-        let reactions = reactionTargets.intersection(visible)
-            .intersection(acknowledgedReactionTargets)
-        guard !mentions.isEmpty || !reactions.isEmpty else { return }
-        dismissedMentionTargets.formUnion(mentions)
-        mentionTargets.subtract(mentions)
-        reactionTargets.subtract(reactions)
-        acknowledgedReactionTargets.subtract(reactions)
-        publishActivityCounts()
+        updateReactionDwell()
     }
 
     func jumpToNextMention() async { await jumpToNextActivity(mention: true) }
@@ -722,20 +810,26 @@ final class ConversationTimelineModel: ObservableObject {
         while readTrackingActive, revision == activityRevision,
             let id = (mention ? mentionTargets : reactionTargets).min()
         {
-            let outcome = await jumpToMessage(id)
+            let outcome = await jumpToMessage(id, atReactions: !mention)
             guard readTrackingActive, revision == activityRevision else { return }
             switch outcome {
             case .failed:
                 return
             case .missing:
-                removeActivityTargets([id])
+                if mention {
+                    removeActivityTargets([id])
+                } else {
+                    dismissReactionTarget(id)
+                }
             case .reached:
                 if mention {
                     dismissedMentionTargets.insert(id)
                     mentionTargets.remove(id)
                 } else {
-                    reactionTargets.remove(id)
-                    acknowledgedReactionTargets.remove(id)
+                    if window.messages.first(where: { $0.id == id })?.reactions.isEmpty == true {
+                        dismissReactionTarget(id)
+                        continue
+                    }
                 }
                 publishActivityCounts()
                 return
@@ -979,7 +1073,9 @@ final class ConversationTimelineModel: ObservableObject {
         _ viewport: TimelineViewport, reason: TimelineViewportChangeReason, revision: Int
     ) {
         if revision == snapshotRevision, !viewport.isValid(forRowCount: rows.count) {
+            viewportRevision = nil
             cancelReadCandidate()
+            cancelReactionDwell()
         }
         guard revision == snapshotRevision, viewport.isValid(forRowCount: rows.count) else {
             return
@@ -1082,7 +1178,9 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     @discardableResult
-    func jumpToMessage(_ id: MessageID, atReadBoundary: Bool = false) async
+    func jumpToMessage(
+        _ id: MessageID, atReadBoundary: Bool = false, atReactions: Bool = false
+    ) async
         -> TimelineMessageJumpOutcome
     {
         switch state.content {
@@ -1101,7 +1199,9 @@ final class ConversationTimelineModel: ObservableObject {
             requestScroll(
                 atReadBoundary
                     ? .readBoundary(rowID, animated: true)
-                    : .reveal(rowID, animated: true, highlight: true))
+                    : atReactions
+                        ? .reaction(rowID, animated: true, highlight: true)
+                        : .reveal(rowID, animated: true, highlight: true))
             return .reached
         }
         state.content = .repositioning(.message(id))
@@ -1117,7 +1217,9 @@ final class ConversationTimelineModel: ObservableObject {
                     publish(
                         position: atReadBoundary
                             ? .readBoundary(rowID, animated: false)
-                            : .reveal(rowID, animated: false, highlight: true), reset: true)
+                            : atReactions
+                                ? .reaction(rowID, animated: false, highlight: true)
+                                : .reveal(rowID, animated: false, highlight: true), reset: true)
                 } else {
                     state.repositionFailure = .message(id)
                     publish(position: .bottom(animated: false), reset: true)
@@ -1539,6 +1641,7 @@ final class ConversationTimelineModel: ObservableObject {
     private func invalidateRequests() {
         canReuseLatestWindowAfterPendingChange = false
         cancelReadCandidate()
+        cancelReactionDwell()
         readSendTask?.cancel()
         viewportRevision = nil
         generation &+= 1
@@ -1601,6 +1704,7 @@ final class ConversationTimelineModel: ObservableObject {
             snapshotRevision &+= 1
             viewportRevision = nil
             cancelReadCandidate()
+            cancelReactionDwell()
         }
         if let position { issueScroll(position) }
         guard changed || position != nil else { return }
@@ -1647,6 +1751,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
     private func issueScroll(_ intent: TimelineScrollIntent) {
         cancelReadCandidate()
+        cancelReactionDwell()
         viewportRevision = nil
         scrollRequestID &+= 1
         pendingScroll = .init(id: scrollRequestID, intent: intent)

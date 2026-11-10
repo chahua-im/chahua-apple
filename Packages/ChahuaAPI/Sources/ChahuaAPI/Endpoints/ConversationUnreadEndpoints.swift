@@ -17,13 +17,17 @@ extension ChahuaClient {
         )
     }
 
-    public func unreadReactions(chatID: String, threadID: MessageID?) async throws
+    public func unreadReactions(chatID: String, threadID: MessageID?, after: String?) async throws
         -> UnreadReactionIDsResponse
     {
-        try await send(
+        var query = activityQuery(threadID: threadID)
+        if let after {
+            query.append(URLQueryItem(name: "after", value: after))
+        }
+        return try await send(
             HTTPRequestSpec(
                 method: .get, path: ["chats", chatID, "reactions"],
-                query: activityQuery(threadID: threadID)),
+                query: query),
             decoding: UnreadReactionIDsResponse.self
         )
     }

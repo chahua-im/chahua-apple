@@ -5,7 +5,7 @@
     import SwiftUI
 
     /// Desktop context menu: the original message stays in the timeline. Only the
-    /// compact reaction/action surfaces use menu material, never the window backdrop.
+    /// compact reaction/action surfaces use glass (legacy menu material), never the window backdrop.
     @MainActor
     final class TimelineActionOverlayView: NSView, NSPopoverDelegate {
         var onDismiss: (() -> Void)?
@@ -595,36 +595,51 @@
         override var isFlipped: Bool { true }
     }
 
+    /// Keep the frame-view menu's native controls and event ownership; a SwiftUI
+    /// material host would introduce a second interaction tree just for its backdrop.
     private final class TimelineMenuSurface: NSView {
-        private let cover = NSView()
+        private var cover: NSView?
         private let usesOpaqueBackground: Bool
         override var isFlipped: Bool { true }
 
         init(cornerRadius: CGFloat, opaque: Bool = false) {
             usesOpaqueBackground = opaque
             super.init(frame: .zero)
-            if !opaque {
-                let effect = NSVisualEffectView()
-                effect.material = .menu
-                effect.blendingMode = .withinWindow
-                effect.state = .active
-                effect.autoresizingMask = [.width, .height]
-                addSubview(effect)
-            }
             wantsLayer = true
-            layer?.cornerRadius = cornerRadius
-            layer?.masksToBounds = true
-            cover.wantsLayer = true
-            cover.autoresizingMask = [.width, .height]
-            addSubview(cover)
-            updateColor()
+            if #available(macOS 26, *) {
+                clipsToBounds = false
+                let glass = NSGlassEffectView(frame: bounds)
+                glass.cornerRadius = cornerRadius
+                glass.style = .regular
+                if #available(macOS 27, *) { glass.effectIsInteractive = true }
+                glass.autoresizingMask = [.width, .height]
+                glass.setAccessibilityElement(false)
+                addSubview(glass)
+            } else {
+                if !opaque {
+                    let effect = NSVisualEffectView(frame: bounds)
+                    effect.material = .menu
+                    effect.blendingMode = .withinWindow
+                    effect.state = .active
+                    effect.autoresizingMask = [.width, .height]
+                    addSubview(effect)
+                }
+                layer?.cornerRadius = cornerRadius
+                layer?.masksToBounds = true
+                let cover = NSView(frame: bounds)
+                cover.wantsLayer = true
+                cover.autoresizingMask = [.width, .height]
+                addSubview(cover)
+                self.cover = cover
+                updateColor()
+            }
         }
 
         required init?(coder: NSCoder) { nil }
 
         override func layout() {
             super.layout()
-            cover.frame = bounds
+            cover?.frame = bounds
         }
 
         override func viewDidChangeEffectiveAppearance() {
@@ -633,6 +648,7 @@
         }
 
         private func updateColor() {
+            guard let cover else { return }
             let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             cover.layer?.backgroundColor =
                 NSColor(white: dark ? 0.12 : 1, alpha: usesOpaqueBackground ? 1 : 0.65).cgColor

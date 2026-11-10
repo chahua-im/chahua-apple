@@ -285,7 +285,7 @@ struct ComposerMediaGallery: View {
             }
             .menuStyle(.borderlessButton)
             .frame(width: optionButtonSize, height: optionButtonSize)
-            .background(.regularMaterial, in: Circle())
+            .modifier(ChatGlassSurface(cornerRadius: optionButtonSize / 2, isInteractive: true))
             .menuIndicator(.hidden)
             .disabled(!isEnabled)
             .accessibilityLabel("Options for \(attachment.fileName)")

@@ -2,7 +2,7 @@
     import AppKit
     import SwiftUI
 
-    /// AppKit owns the native table; SwiftUI owns the shared floating-chrome backdrop.
+    /// AppKit owns the native table; SwiftUI owns the floating-chrome surfaces.
     struct ConversationTimelineView: View {
         @Environment(\.chatHeaderInset) private var chatHeaderInset
         let model: ConversationTimelineModel
@@ -21,10 +21,11 @@
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .top) {
-                if chatHeaderInset > 0 {
-                    // Keep the material in the parent SwiftUI graph, above native
-                    // rows but below the outer title/pin overlays. No additional
-                    // NSHostingView is needed for the macOS AppKit boundary.
+                if #available(macOS 26, *) {
+                    // Liquid Glass samples the rows directly; a second material
+                    // beneath it would wash out the content it is meant to reveal.
+                    EmptyView()
+                } else if chatHeaderInset > 0 {
                     ChatHeaderBackdrop(edge: .top, strength: .light)
                         .frame(height: chatHeaderInset + 24)
                 }
