@@ -22,6 +22,7 @@
         private var originView: BubbleLabel?
         private var forwardedCardView: TimelineForwardedCardView?
         private var mediaView: TimelineMediaView?
+        private var linkPreviewViews: [TimelineLinkPreviewView] = []
         private var voiceView: (UIView & UIContentView)?
         private var voiceController: VoicePlaybackController?
         private var textView: UIKitMessageTextView?
@@ -177,6 +178,7 @@
                 mediaView?.isHidden = true
             }
             configureAudio()
+            configureLinkPreviews()
             if localFrames[.text] != nil, let geometry = binding.layout.textGeometry {
                 let view: UIKitMessageTextView
                 if let textView {
@@ -256,6 +258,10 @@
             replyView?.isHidden = true
             mediaView?.clear()
             mediaView?.isHidden = true
+            for view in linkPreviewViews {
+                view.clear()
+                view.isHidden = true
+            }
             clearAudio()
             textView?.clear()
             textView?.isHidden = true
@@ -275,6 +281,7 @@
             mediaView?.setVisible(visible && mediaView?.isHidden == false)
             textView?.setVisible(visible && textView?.isHidden == false)
             metadataView?.setVisible(visible && metadataView?.isHidden == false)
+            for view in linkPreviewViews where !view.isHidden { view.setVisible(visible) }
             if !visible, let controller = voiceController {
                 // UIKit hosting configuration may be updated in a SwiftUI view pass.
                 DispatchQueue.main.async { [weak self, weak controller] in
@@ -288,9 +295,12 @@
         }
 
         func refreshMediaVisibility() {
-            guard visible, mediaView?.isHidden == false else { return }
+            guard visible else { return }
             // Scrolling within a tall row does not change the bubble's visibility.
-            mediaView?.refreshViewportVisibility()
+            if mediaView?.isHidden == false { mediaView?.refreshViewportVisibility() }
+            for view in linkPreviewViews where !view.isHidden {
+                view.refreshViewportVisibility()
+            }
         }
 
         override func didMoveToWindow() {
@@ -310,6 +320,11 @@
             forwardedCardView?.frame = localFrames[.forwardedCard] ?? .zero
             mediaView?.frame = localFrames[.media] ?? .zero
             voiceView?.frame = localFrames[.audio] ?? .zero
+            if let binding, let bubble = binding.layout.frames[.bubble] {
+                for (view, frame) in zip(linkPreviewViews, binding.layout.linkPreviewFrames) {
+                    view.frame = frame.offsetBy(dx: -bubble.minX, dy: -bubble.minY)
+                }
+            }
             textView?.frame = localFrames[.text] ?? .zero
             metadataView?.frame = localFrames[.metadata] ?? .zero
             standaloneView?.frame = localFrames[.standalone] ?? .zero
@@ -351,7 +366,9 @@
             }
             let sticker =
                 row.entry.messageType == .sticker && row.entry.remoteMessage?.isDeleted != true
-            let mediaOnly = localFrames[.media] != nil && localFrames[.text] == nil
+            let mediaOnly =
+                localFrames[.media] != nil && localFrames[.text] == nil
+                && localFrames[.linkPreviews] == nil
             return !sticker
                 && (!mediaOnly || binding.presentation.reply != nil
                     || binding.presentation.title != nil || binding.presentation.originLabel != nil)
@@ -378,7 +395,9 @@
             }
             let sticker =
                 row.entry.messageType == .sticker && row.entry.remoteMessage?.isDeleted != true
-            let mediaOnly = localFrames[.media] != nil && localFrames[.text] == nil
+            let mediaOnly =
+                localFrames[.media] != nil && localFrames[.text] == nil
+                && localFrames[.linkPreviews] == nil
             let tail =
                 !sticker && !mediaOnly
                 && (row.groupPosition == .single || row.groupPosition == .last)
@@ -431,6 +450,44 @@
             sections.addSubview(view)
             mediaView = view
             return view
+        }
+
+        private func configureLinkPreviews() {
+            guard let binding, case .message(let row) = binding.presentation.row else { return }
+            let previews = binding.presentation.linkPreviews
+            let count = min(3, min(previews.count, binding.layout.linkPreviewFrames.count))
+            while linkPreviewViews.count < count {
+                let view = TimelineLinkPreviewView(frame: .zero)
+                sections.addSubview(view)
+                linkPreviewViews.append(view)
+            }
+            for (index, view) in linkPreviewViews.enumerated() {
+                guard index < count else {
+                    view.clear()
+                    view.isHidden = true
+                    continue
+                }
+                let preview = previews[index]
+                view.isHidden = false
+                view.configure(
+                    preview, outgoing: row.isOutgoing,
+                    environment: binding.presentation.environment,
+                    mediaContext: binding.mediaContext,
+                    enabled: !binding.context.isInteractionPreview
+                        && !binding.actions.isSelectingMessages
+                        && !binding.actions.interactionContext.isReadOnly
+                        && binding.actions.openLink != nil)
+                view.onActivate = { [weak self] in
+                    guard let binding = self?.binding,
+                        !binding.context.isInteractionPreview,
+                        !binding.actions.isSelectingMessages,
+                        !binding.actions.interactionContext.isReadOnly,
+                        let url = URL(string: preview.url)
+                    else { return }
+                    binding.actions.openLink?(url)
+                }
+                view.setVisible(visible)
+            }
         }
 
         private func configureAudio() {
@@ -494,6 +551,9 @@
             headerView?.accessibilityCustomActions = accessibilityCustomActions
             replyView?.accessibilityCustomActions = accessibilityCustomActions
             mediaView?.accessibilityCustomActions = accessibilityCustomActions
+            for view in linkPreviewViews {
+                view.accessibilityCustomActions = accessibilityCustomActions
+            }
             textView?.rowAccessibilityActions = accessibilityCustomActions
             metadataView?.rowAccessibilityActions = accessibilityCustomActions
             standaloneView?.accessibilityCustomActions = accessibilityCustomActions

@@ -71,7 +71,12 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
             mentions: single ? first.mentions : [], message: single ? first.message : nil,
             replyRootId: threadID, sticker: single ? first.sticker : nil,
             forwardedFrom: origin, forwardedBundleId: single ? first.forwardedBundleId : nil,
-            forwardedPreview: preview)
+            forwardedPreview: preview,
+            metadata: single
+                ? first.metadata.map {
+                    MessageMetadataResponse(
+                        linkPreviews: $0.linkPreviews.filter { $0.status == .ready })
+                } : nil)
     }
 }
 

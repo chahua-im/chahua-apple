@@ -99,6 +99,8 @@ final class ConversationTimelineModel: ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     private var olderTask: Task<Void, Never>?
     private var newerTask: Task<Void, Never>?
+    private var linkPreviewExpiryTask: Task<Void, Never>?
+    private var linkPreviewExpiry: Date?
     private var accountResetObservation: AnyCancellable?
     // A committed pending publication invalidates the host's viewport revision before reveal runs.
     private var canReuseLatestWindowAfterPendingChange = false
@@ -308,6 +310,9 @@ final class ConversationTimelineModel: ObservableObject {
         resetUnreadActivity()
         invalidateRequests()
         observation = nil
+        linkPreviewExpiryTask?.cancel()
+        linkPreviewExpiryTask = nil
+        linkPreviewExpiry = nil
         if shouldAcknowledge, let acknowledgeReactions {
             let revision = activityRevision
             let scope = threadID
@@ -1687,6 +1692,7 @@ final class ConversationTimelineModel: ObservableObject {
             state.live.pendingLiveCount = deferredCreates.count
         }
         let entries = timelineEntries()
+        scheduleLinkPreviewExpiry(in: entries)
         let changed = entries != lastEntries || reset
         if changed {
             // Keep tombstones in the window for pagination and acknowledgement
@@ -1714,6 +1720,36 @@ final class ConversationTimelineModel: ObservableObject {
                 animateFollowing: animateFollowing, pendingScroll: pendingScroll))
     }
 
+    /// A single local wakeup removes expired skeletons even when no server event arrives.
+    /// This never fetches previews or mutates the authoritative message/cache.
+    private func scheduleLinkPreviewExpiry(in entries: [ConversationTimelineEntry]) {
+        let now = Date()
+        var next: Date?
+        for entry in entries {
+            guard let message = entry.remoteMessage, !message.isDeleted,
+                let previews = message.metadata?.linkPreviews
+            else { continue }
+            for preview in previews where preview.status == .pending {
+                guard let expiry = preview.expiresAt, expiry > now else { continue }
+                if next.map({ expiry < $0 }) ?? true { next = expiry }
+            }
+        }
+        guard next != linkPreviewExpiry else { return }
+        linkPreviewExpiryTask?.cancel()
+        linkPreviewExpiry = next
+        linkPreviewExpiryTask = nil
+        guard let next else { return }
+        linkPreviewExpiryTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(max(0, next.timeIntervalSinceNow))) } catch {
+                return
+            }
+            guard let self, !Task.isCancelled else { return }
+            linkPreviewExpiry = nil
+            linkPreviewExpiryTask = nil
+            publish()
+        }
+    }
+
     /// Confirmed messages in server (ID) order, then unacknowledged sends in outbox order.
     /// Both runs are already ordered, so this is a concatenation, not a sort.
     private func timelineEntries() -> [ConversationTimelineEntry] {
@@ -1731,7 +1767,11 @@ final class ConversationTimelineModel: ObservableObject {
         let pending = messageStore.pending(chatID: chatID, threadID: threadID)
         var entries: [ConversationTimelineEntry] = []
         entries.reserveCapacity(confirmed.count + pending.count)
-        entries.append(contentsOf: confirmed.lazy.map(ConversationTimelineEntry.remote))
+        let now = Date()
+        entries.append(
+            contentsOf: confirmed.lazy.map {
+                .remote($0.projectingExpiredLinkPreviews(at: now))
+            })
         for item in pending {
             // A realtime echo can confirm a send before the outbox drops it from pending.
             guard window.index(of: .clientGenerated(item.clientGeneratedID)) == nil,

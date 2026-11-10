@@ -169,13 +169,15 @@ public struct ForwardedMessageResponse: Codable, Hashable, Sendable {
     public let mentions: [MentionInfo]
     public let forwardedBundleId: String?
     public let forwardedPreview: ForwardedMessagesPreviewResponse?
+    public let metadata: MessageMetadataResponse?
 
     public init(
         originalMessageId: MessageID, originalChatId: String, message: String?,
         messageType: MessageType, sender: User, originalCreatedAt: Date,
         sticker: MessageStickerResponse? = nil, reply: ForwardedReplyResponse? = nil,
         attachments: [AttachmentResponse] = [], mentions: [MentionInfo] = [],
-        forwardedBundleId: String? = nil, forwardedPreview: ForwardedMessagesPreviewResponse? = nil
+        forwardedBundleId: String? = nil, forwardedPreview: ForwardedMessagesPreviewResponse? = nil,
+        metadata: MessageMetadataResponse? = nil
     ) {
         self.originalMessageId = originalMessageId
         self.originalChatId = originalChatId
@@ -189,6 +191,7 @@ public struct ForwardedMessageResponse: Codable, Hashable, Sendable {
         self.mentions = mentions
         self.forwardedBundleId = forwardedBundleId
         self.forwardedPreview = forwardedPreview
+        self.metadata = metadata
     }
 
     public init(from decoder: any Decoder) throws {
@@ -206,6 +209,7 @@ public struct ForwardedMessageResponse: Codable, Hashable, Sendable {
         forwardedBundleId = try c.decodeIfPresent(String.self, forKey: .forwardedBundleId)
         forwardedPreview = try c.decodeIfPresent(
             ForwardedMessagesPreviewResponse.self, forKey: .forwardedPreview)
+        metadata = try c.decodeIfPresent(MessageMetadataResponse.self, forKey: .metadata)
     }
 
     /// A captured value only: never resolves or refreshes the original live message.
@@ -222,6 +226,6 @@ public struct ForwardedMessageResponse: Codable, Hashable, Sendable {
             sender: sender, createdAt: originalCreatedAt, hasAttachments: !attachments.isEmpty,
             attachments: attachments, mentions: mentions, message: message,
             replyToMessage: replyPreview, sticker: sticker, forwardedBundleId: forwardedBundleId,
-            forwardedPreview: forwardedPreview)
+            forwardedPreview: forwardedPreview, metadata: metadata)
     }
 }

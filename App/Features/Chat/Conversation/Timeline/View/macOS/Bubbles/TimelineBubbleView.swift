@@ -22,6 +22,8 @@
         private var voiceView: NSHostingView<VoiceMessageBubbleView>?
         private var voiceController: VoicePlaybackController?
         private var textView: AppKitMessageTextView?
+        private var linkPreviewViews: [TimelineLinkPreviewView] = []
+        private var linkPreviewFrames: [CGRect] = []
         private var metadataView: TimelineMetadataView?
         private var standaloneView: BubbleStandaloneView?
         private var threadView: TimelineThreadFooterButton?
@@ -173,6 +175,7 @@
                 mediaView?.isHidden = true
             }
             configureAudio()
+            configureLinkPreviews()
             if localFrames[.text] != nil, let geometry = binding.layout.textGeometry {
                 let view: AppKitMessageTextView
                 if let textView {
@@ -265,6 +268,11 @@
             originalReplyView?.isHidden = true
             forwardedCardView?.isHidden = true
             localFrames.removeAll(keepingCapacity: true)
+            linkPreviewFrames.removeAll(keepingCapacity: true)
+            for view in linkPreviewViews {
+                view.clear()
+                view.isHidden = true
+            }
             visible = false
             headerView?.clear()
             headerView?.isHidden = true
@@ -291,6 +299,9 @@
             mediaView?.setVisible(visible && mediaView?.isHidden == false)
             textView?.setVisible(visible && textView?.isHidden == false)
             metadataView?.setVisible(visible && metadataView?.isHidden == false)
+            for view in linkPreviewViews {
+                view.setVisible(visible && !view.isHidden)
+            }
             if !visible, let controller = voiceController {
                 // Native row visibility is updated inside NSViewRepresentable.updateNSView.
                 // Teardown must publish only after that SwiftUI update completes.
@@ -319,6 +330,9 @@
             forwardedCardView?.frame = localFrames[.forwardedCard] ?? .zero
             mediaView?.frame = localFrames[.media] ?? .zero
             voiceView?.frame = localFrames[.audio] ?? .zero
+            for (view, frame) in zip(linkPreviewViews, linkPreviewFrames) {
+                view.frame = frame
+            }
             textView?.frame = localFrames[.text] ?? .zero
             metadataView?.frame = localFrames[.metadata] ?? .zero
             standaloneView?.frame = localFrames[.standalone] ?? .zero
@@ -337,7 +351,9 @@
             }
             let sticker =
                 row.entry.messageType == .sticker && row.entry.remoteMessage?.isDeleted != true
-            let mediaOnly = localFrames[.media] != nil && localFrames[.text] == nil
+            let mediaOnly =
+                localFrames[.media] != nil && localFrames[.text] == nil
+                && localFrames[.linkPreviews] == nil
             return !sticker
                 && (!mediaOnly || binding.presentation.reply != nil
                     || binding.presentation.title != nil || binding.presentation.originLabel != nil)
@@ -374,7 +390,9 @@
             }
             let sticker =
                 row.entry.messageType == .sticker && row.entry.remoteMessage?.isDeleted != true
-            let mediaOnly = localFrames[.media] != nil && localFrames[.text] == nil
+            let mediaOnly =
+                localFrames[.media] != nil && localFrames[.text] == nil
+                && localFrames[.linkPreviews] == nil
             let tail =
                 !sticker && !mediaOnly
                 && (row.groupPosition == .single || row.groupPosition == .last)
@@ -429,6 +447,42 @@
             mediaView = view
             return view
         }
+        private func configureLinkPreviews() {
+            guard let binding, case .message(let row) = binding.presentation.row else { return }
+            let bubble = binding.layout.frames[.bubble] ?? .zero
+            linkPreviewFrames = binding.layout.linkPreviewFrames.prefix(3).map {
+                $0.offsetBy(dx: -bubble.minX, dy: -bubble.minY)
+            }
+            let previews = binding.presentation.linkPreviews
+            let count = min(linkPreviewFrames.count, previews.count)
+            while linkPreviewViews.count < count {
+                let view = TimelineLinkPreviewView(frame: .zero)
+                sections.addSubview(view)
+                linkPreviewViews.append(view)
+            }
+            for (index, view) in linkPreviewViews.enumerated() {
+                guard index < count else {
+                    view.clear()
+                    view.isHidden = true
+                    continue
+                }
+                view.isHidden = false
+                view.configure(
+                    previews[index], outgoing: row.isOutgoing,
+                    bodySize: binding.presentation.environment.bodySize,
+                    captionSize: binding.presentation.environment.captionSize,
+                    displayScale: binding.presentation.environment.displayScale,
+                    rightToLeft: binding.presentation.environment.layoutDirection == .rightToLeft,
+                    mediaContext: binding.mediaContext,
+                    enabled: !binding.context.isInteractionPreview
+                        && !binding.actions.isSelectingMessages
+                        && !binding.actions.interactionContext.isReadOnly
+                        && binding.actions.openLink != nil)
+                view.onActivate = { [weak self] url in self?.binding?.actions.openLink?(url) }
+                view.setVisible(visible)
+            }
+        }
+
         private func configureAudio() {
             guard let binding, localFrames[.audio] != nil,
                 case .message(let row) = binding.presentation.row
@@ -524,6 +578,214 @@
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    /// Native cards preserve the measured bubble's cached geometry without adding
+    /// per-card SwiftUI hosts and their measured AttributeGraph/layout overhead.
+    @MainActor
+    private final class TimelineLinkPreviewView: NSButton {
+        var onActivate: ((URL) -> Void)?
+        private let headline = BubbleLabel()
+        private let domain = BubbleLabel()
+        private let initial = BubbleLabel()
+        private let imageView = TimelineImageView(frame: .zero)
+        private let stripe = CALayer()
+        private let tile = CALayer()
+        private let titleSkeleton = CALayer()
+        private let domainSkeleton = CALayer()
+        private var url: URL?
+        private var imageURL: URL?
+        private var imageAvailable = false
+        private var outgoing = false
+        private var pending = false
+        private var thumbnailSize: CGFloat = 36
+        private var rightToLeft = false
+
+        override var isFlipped: Bool { true }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            title = ""
+            isBordered = false
+            setButtonType(.momentaryPushIn)
+            target = self
+            action = #selector(activate)
+            wantsLayer = true
+            layer?.cornerRadius = 4
+            layer?.masksToBounds = true
+            for decoration in [stripe, tile, titleSkeleton, domainSkeleton] {
+                decoration.actions = [
+                    "bounds": NSNull(), "position": NSNull(), "backgroundColor": NSNull(),
+                    "hidden": NSNull(),
+                ]
+                layer?.addSublayer(decoration)
+            }
+            tile.cornerRadius = 4
+            titleSkeleton.cornerRadius = 3
+            domainSkeleton.cornerRadius = 3
+            imageView.showsPlaceholderChrome = false
+            imageView.layer?.cornerRadius = 4
+            addSubview(initial)
+            addSubview(imageView)
+            addSubview(headline)
+            addSubview(domain)
+            setAccessibilityRole(.link)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        func configure(
+            _ preview: MessageLinkPreview, outgoing: Bool, bodySize: CGFloat,
+            captionSize: CGFloat, displayScale: CGFloat, rightToLeft: Bool,
+            mediaContext: AppMediaContext?, enabled: Bool
+        ) {
+            url = URL(string: preview.url)
+            self.outgoing = outgoing
+            self.rightToLeft = rightToLeft
+            pending = preview.status == .pending
+            thumbnailSize = TimelineLinkPreviewMetrics.thumbnailSize(bodySize: bodySize)
+            let hostname = url?.host ?? preview.url
+            headline.stringValue = preview.title.flatMap { $0.isEmpty ? nil : $0 } ?? hostname
+            domain.stringValue = hostname
+            initial.stringValue = hostname.first.map { String($0).uppercased() } ?? "?"
+            headline.font = .systemFont(ofSize: bodySize * 0.875, weight: .semibold)
+            domain.font = .systemFont(ofSize: captionSize)
+            initial.font = .systemFont(ofSize: bodySize, weight: .semibold)
+            initial.alignment = .center
+            headline.alignment = rightToLeft ? .right : .left
+            domain.alignment = rightToLeft ? .right : .left
+            headline.isHidden = pending
+            domain.isHidden = pending
+            initial.isHidden = pending || imageAvailable
+            titleSkeleton.isHidden = !pending
+            domainSkeleton.isHidden = !pending
+            isEnabled = enabled && url != nil && preview.status != .unavailable
+            if !pending, let image = preview.image, let imageURL = URL(string: image.url) {
+                if self.imageURL != imageURL { imageAvailable = false }
+                self.imageURL = imageURL
+                imageView.onImageAvailabilityChanged = { [weak self] available in
+                    guard let self else { return }
+                    self.imageAvailable = available
+                    self.initial.isHidden = available || self.pending
+                }
+                imageView.isHidden = false
+                imageView.configure(
+                    url: imageURL, contentMode: .fill, animates: false,
+                    showsBlurredBackdrop: false,
+                    thumbnailPixelSize: CGSize(
+                        width: thumbnailSize * displayScale, height: thumbnailSize * displayScale),
+                    mediaContext: mediaContext)
+                initial.isHidden = pending || imageAvailable
+            } else {
+                imageView.clear()
+                imageView.isHidden = true
+                imageURL = nil
+                imageAvailable = false
+                initial.isHidden = pending
+            }
+            setAccessibilityLabel(
+                pending
+                    ? "Loading link preview, \(hostname)"
+                    : "\(headline.stringValue), \(hostname)")
+            setAccessibilityURL(url)
+            updateColors()
+            window?.invalidateCursorRects(for: self)
+            needsLayout = true
+        }
+
+        func setVisible(_ visible: Bool) {
+            imageView.setVisible(visible && !imageView.isHidden)
+        }
+
+        func clear() {
+            url = nil
+            imageURL = nil
+            imageAvailable = false
+            onActivate = nil
+            isEnabled = false
+            imageView.clear()
+            headline.stringValue = ""
+            domain.stringValue = ""
+            initial.stringValue = ""
+            setAccessibilityLabel(nil)
+            setAccessibilityURL(nil)
+        }
+
+        override func layout() {
+            super.layout()
+            stripe.frame = CGRect(x: 0, y: 0, width: min(3, bounds.width), height: bounds.height)
+            let size = min(thumbnailSize, max(0, bounds.height - 12), max(0, bounds.width - 20))
+            let thumbnail = CGRect(
+                x: rightToLeft ? bounds.width - 10 - size : 10,
+                y: (bounds.height - size) / 2, width: size, height: size)
+            tile.frame = thumbnail
+            imageView.frame = thumbnail
+            let initialHeight = lineHeight(initial.font)
+            initial.frame = CGRect(
+                x: thumbnail.minX, y: thumbnail.midY - initialHeight / 2,
+                width: size, height: initialHeight)
+            let textX: CGFloat = rightToLeft ? 10 : thumbnail.maxX + 8
+            let textWidth = max(0, bounds.width - size - 28)
+            let titleHeight = lineHeight(headline.font)
+            let domainHeight = lineHeight(domain.font)
+            let textY = (bounds.height - titleHeight - domainHeight) / 2
+            headline.frame = CGRect(
+                x: textX, y: textY, width: textWidth, height: titleHeight)
+            domain.frame = CGRect(
+                x: textX, y: textY + titleHeight, width: textWidth, height: domainHeight)
+            let titleWidth = textWidth * 0.76
+            let domainWidth = textWidth * 0.46
+            titleSkeleton.frame = CGRect(
+                x: rightToLeft ? textX + textWidth - titleWidth : textX,
+                y: textY + titleHeight * 0.2, width: titleWidth, height: titleHeight * 0.6)
+            domainSkeleton.frame = CGRect(
+                x: rightToLeft ? textX + textWidth - domainWidth : textX,
+                y: textY + titleHeight + domainHeight * 0.2,
+                width: domainWidth, height: domainHeight * 0.6)
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard isEnabled, !isHidden, bounds.contains(convert(point, from: superview)) else {
+                return nil
+            }
+            return self
+        }
+
+        override func resetCursorRects() {
+            if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+        }
+
+        override func viewDidChangeEffectiveAppearance() {
+            super.viewDidChangeEffectiveAppearance()
+            updateColors()
+        }
+
+        @objc private func activate() {
+            if isEnabled, let url { onActivate?(url) }
+        }
+
+        private func lineHeight(_ font: NSFont?) -> CGFloat {
+            guard let font else { return 0 }
+            return ceil(font.ascender - font.descender + font.leading)
+        }
+
+        private func updateColors() {
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                let foreground: NSColor = outgoing ? .white : .labelColor
+                headline.textColor = foreground
+                domain.textColor = outgoing ? .white.withAlphaComponent(0.8) : .secondaryLabelColor
+                initial.textColor = .white
+                stripe.backgroundColor =
+                    (outgoing ? NSColor.white.withAlphaComponent(0.55) : .systemBlue).cgColor
+                layer?.backgroundColor =
+                    (outgoing ? NSColor.black : .systemBlue).withAlphaComponent(0.1).cgColor
+                tile.backgroundColor =
+                    (pending
+                    ? foreground.withAlphaComponent(0.1) : NSColor.systemOrange).cgColor
+                titleSkeleton.backgroundColor = foreground.withAlphaComponent(0.1).cgColor
+                domainSkeleton.backgroundColor = foreground.withAlphaComponent(0.1).cgColor
+            }
+        }
     }
 
     @MainActor

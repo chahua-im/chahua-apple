@@ -2,7 +2,7 @@ import CoreGraphics
 
 enum TimelineSectionID: Hashable {
     case avatar, title, bubble, reply, originalReply, origin, forwardedCard, media, audio, text,
-        metadata, reactions, thread, standalone
+        metadata, reactions, thread, standalone, linkPreviews
 }
 
 struct TimelineRowLayout {
@@ -17,6 +17,7 @@ struct TimelineRowLayout {
     var replyContentFrames: [CGRect] = []
     var originalReplyContentFrames: [CGRect] = []
     var forwardedCardLayout: TimelineForwardedCardLayout?
+    var linkPreviewFrames: [CGRect] = []
     var standaloneSymbolSize: CGSize = .zero
     var standaloneLabelGap: CGFloat = 0
     /// Footer-local icon, reply label and trailing chevron rectangles.

@@ -19,6 +19,36 @@ public struct SavedMessageResponse: Codable, Hashable, Sendable, Identifiable {
     public let sticker: SavedStickerSnapshot?
     public let forwardedBundleId: String?
     public let canLocateContext: Bool
+    public let metadata: MessageMetadataResponse?
+
+    public init(
+        id: String, originalMessageId: MessageID, originalChatId: String,
+        originalThreadRootId: MessageID? = nil, originalReplyToMessageId: MessageID? = nil,
+        originalSenderUid: Int32, originalCreatedAt: Date, savedAt: Date,
+        messageType: MessageType, message: String? = nil, mentions: [MentionInfo] = [],
+        attachments: [SavedAttachmentSnapshot] = [], sender: User, chat: SavedChatSnapshot,
+        sticker: SavedStickerSnapshot? = nil, forwardedBundleId: String? = nil,
+        canLocateContext: Bool, metadata: MessageMetadataResponse? = nil
+    ) {
+        self.id = id
+        self.originalMessageId = originalMessageId
+        self.originalChatId = originalChatId
+        self.originalThreadRootId = originalThreadRootId
+        self.originalReplyToMessageId = originalReplyToMessageId
+        self.originalSenderUid = originalSenderUid
+        self.originalCreatedAt = originalCreatedAt
+        self.savedAt = savedAt
+        self.messageType = messageType
+        self.message = message
+        self.mentions = mentions
+        self.attachments = attachments
+        self.sender = sender
+        self.chat = chat
+        self.sticker = sticker
+        self.forwardedBundleId = forwardedBundleId
+        self.canLocateContext = canLocateContext
+        self.metadata = metadata
+    }
 
     /// Reuses captured-record rendering without reading or subscribing to a live chat.
     public var capturedRecord: ForwardedMessageResponse {
@@ -37,7 +67,7 @@ public struct SavedMessageResponse: Codable, Hashable, Sendable, Identifiable {
                 AttachmentResponse(
                     id: $0.id, url: $0.url, kind: $0.kind, size: $0.size,
                     fileName: $0.fileName, width: $0.width, height: $0.height)
-            }, mentions: mentions, forwardedBundleId: forwardedBundleId)
+            }, mentions: mentions, forwardedBundleId: forwardedBundleId, metadata: metadata)
     }
 }
 

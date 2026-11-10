@@ -51,7 +51,8 @@ struct TimelineLayoutEngine {
         let sticker = row.entry.messageType == .sticker && !deleted
         let audio = row.entry.messageType == .audio && !deleted
         let supported = [.text, .file, .placeholder].contains(row.entry.messageType) && !deleted
-        let hasBody = supported && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasBody =
+            (supported || audio) && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let remote =
             supported && !placeholder ? row.entry.presentationMessage?.attachments ?? [] : []
         let local: [LocalOutgoingAttachment]
@@ -160,13 +161,16 @@ struct TimelineLayoutEngine {
             } ?? 0
         let preferredAudio =
             audio ? VoiceMessageBubbleMetrics.preferredWidth(bodySize: e.bodySize) : 0
+        let preferredPreviews: CGFloat = p.linkPreviews.isEmpty ? 0 : 284 * max(1, e.bodySize / 17)
         let preferred = max(
             preferredMedia?.width ?? 0, preferredAudio, preferredText,
-            metadata.map { $0.size.width + 24 } ?? 0, preferredTitle)
+            metadata.map { $0.size.width + 24 } ?? 0, preferredTitle, preferredPreviews)
         var b = min(
             bubbleWidthLimit,
             pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
-        if hasBody, !hasMedia, let metadata, p.originLabel == nil, p.originalReply == nil {
+        if hasBody, !hasMedia, p.linkPreviews.isEmpty, let metadata, p.originLabel == nil,
+            p.originalReply == nil
+        {
             let bodyWidth = min(b, max(1, b - 24))
             let footerOutset = min(metadata.textTrailingOutset, max(0, (b - bodyWidth) / 2))
             let original = textMeasurer.geometry(for: bodyWidth + footerOutset)
@@ -315,9 +319,28 @@ struct TimelineLayoutEngine {
                 x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: audioHeight)
             height += audioHeight + 8
         }
+        var linkPreviewFrames: [CGRect] = []
+        if !p.linkPreviews.isEmpty {
+            if height == 0 { height += 8 }
+            if hasMedia { height += 6 }
+            let cardHeight = pixel(
+                TimelineLinkPreviewMetrics.height(bodySize: e.bodySize, captionSize: e.captionSize),
+                e)
+            let start = height
+            for _ in p.linkPreviews {
+                linkPreviewFrames.append(
+                    CGRect(
+                        x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
+                        height: cardHeight))
+                height += cardHeight + 4
+            }
+            frames[.linkPreviews] = CGRect(
+                x: bubbleX + inset, y: bubbleY + start, width: innerWidth,
+                height: height - start - 4)
+        }
         let plainText =
             hasBody && p.title == nil && p.reply == nil && p.originLabel == nil
-            && p.originalReply == nil && !hasMedia && p.threadLabel == nil
+            && p.originalReply == nil && !hasMedia && p.threadLabel == nil && p.linkPreviews.isEmpty
         var geometry: MessageTextGeometry?
         // Omitting the sender title removes only that row and its gap, not the
         // bubble's outer text padding.
@@ -344,10 +367,12 @@ struct TimelineLayoutEngine {
                     -TimelineRowMetrics.textVerticalInset,
                     opticalShift.rounded() / scale))
             height +=
-                (hasMedia
-                    ? 4
-                    : p.reply == nil && p.title == nil
-                        ? TimelineRowMetrics.textVerticalInset : 0)
+                (!p.linkPreviews.isEmpty || audio
+                    ? 0
+                    : hasMedia
+                        ? 4
+                        : p.reply == nil && p.title == nil
+                            ? TimelineRowMetrics.textVerticalInset : 0)
                 + shift
             frames[.text] = CGRect(
                 x: bubbleX + inset, y: bubbleY + height,
@@ -367,7 +392,7 @@ struct TimelineLayoutEngine {
         if let metadata {
             if let cardLayout = forwardedCardLayout, let card = frames[.forwardedCard] {
                 frames[.metadata] = cardLayout.metadataFrame.offsetBy(dx: card.minX, dy: card.minY)
-            } else if audio, let audioFrame = frames[.audio] {
+            } else if audio, !hasBody, p.linkPreviews.isEmpty, let audioFrame = frames[.audio] {
                 // The SwiftUI duration reserves this trailing region. Both use
                 // the same metrics, including narrow-width metadata scaling.
                 let metrics = p.voiceMetrics
@@ -473,6 +498,7 @@ struct TimelineLayoutEngine {
             replyContentFrames: replyContentFrames,
             originalReplyContentFrames: originalReplyContentFrames,
             forwardedCardLayout: forwardedCardLayout,
+            linkPreviewFrames: linkPreviewFrames.map { rounded($0, e) },
             standaloneSymbolSize: displayedSymbolSize,
             standaloneLabelGap: standaloneGap, threadContentFrames: threadContentFrames)
     }

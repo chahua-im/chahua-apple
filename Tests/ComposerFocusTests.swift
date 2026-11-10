@@ -1,6 +1,7 @@
 import ChahuaAPI
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import chahua_apple
@@ -47,6 +48,51 @@ final class ComposerFocusTests: XCTestCase {
         let afterStop = changes
         playback.stop()
         XCTAssertEqual(changes, afterStop)
+    }
+
+    func testURLPasteWithTitleMetadataStaysText() async throws {
+        let h = try await mount(text: "link: ")
+        h.state.onImportImages = { _ in XCTFail("A copied URL must not import media.") }
+        try await pause()
+        try h.selectEnd()
+        let url = try XCTUnwrap(URL(string: "https://example.com/path?key=value"))
+        #if os(macOS)
+            let board = NSPasteboard.general
+            let saved = (board.pasteboardItems ?? []).map { item in
+                let copy = NSPasteboardItem()
+                for type in item.types {
+                    if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+                }
+                return copy
+            }
+            defer {
+                board.clearContents()
+                board.writeObjects(saved)
+            }
+            let item = NSPasteboardItem()
+            item.setString(url.absoluteString, forType: .URL)
+            item.setString("Example page", forType: .init("public.url-name"))
+            board.clearContents()
+            board.writeObjects([item])
+            try h.focusedEditor().paste(nil)
+        #else
+            let saved = UIPasteboard.general.items
+            defer { UIPasteboard.general.items = saved }
+            UIPasteboard.general.items = [
+                [
+                    UTType.url.identifier: url,
+                    "public.url-name": "Example page",
+                ]
+            ]
+            let editor = try XCTUnwrap(h.focusedEditor() as? UITextView)
+            editor.paste(nil)
+        #endif
+        let expected = "link: " + url.absoluteString
+        try await waitUntil {
+            h.state.text == expected || h.state.attachments.error != nil
+        }
+        XCTAssertEqual(h.state.text, expected)
+        XCTAssertNil(h.state.attachments.error)
     }
 
     #if os(macOS)
@@ -242,12 +288,19 @@ final class ComposerFocusTests: XCTestCase {
 
             let format = UIGraphicsImageRendererFormat()
             format.scale = 1
-            UIPasteboard.general.image = UIGraphicsImageRenderer(
+            let image = UIGraphicsImageRenderer(
                 size: CGSize(width: 16, height: 12), format: format
             ).image { context in
                 UIColor.red.setFill()
                 context.fill(CGRect(x: 0, y: 0, width: 16, height: 12))
             }
+            UIPasteboard.general.items = [
+                [
+                    "public.url-name": "Image preview",
+                    UTType.utf8PlainText.identifier: "Image",
+                    UTType.png.identifier: try XCTUnwrap(image.pngData()),
+                ]
+            ]
             editor.paste(nil)
             await fulfillment(of: [imported], timeout: 3)
             XCTAssertEqual(

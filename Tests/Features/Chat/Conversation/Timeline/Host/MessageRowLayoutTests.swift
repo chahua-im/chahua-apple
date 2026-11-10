@@ -7,6 +7,149 @@
 
     @MainActor
     final class MessageRowLayoutTests: XCTestCase {
+        func testNativeLinkCardOpensStoredDestinationAndClearsOnReuse() async throws {
+            let destination = "https://example.com/article?tag=one#section"
+            let message = try TimelineTestFixtures.message(
+                id: 1, at: 1,
+                fields: [
+                    "message": "Both worth reading:\n\(destination)",
+                    "metadata": [
+                        "linkPreviews": [
+                            ["url": destination, "status": "ready", "title": "How sync works"],
+                            [
+                                "url": "https://fieldnotes.example.org/glass", "status": "ready",
+                                "title": "Designing with glass",
+                            ],
+                            [
+                                "url": "https://example.org/pending", "status": "pending",
+                                "expiresAt": "2099-01-01T00:00:00Z",
+                            ],
+                        ]
+                    ],
+                ])
+            let environment = TimelineLayoutEnvironment.current(timelineWidth: 420)
+            let native = TimelineRowView(frame: .zero)
+            var opened: URL?
+            var actions = TimelineBubbleActions()
+            actions.openLink = { opened = $0 }
+            func bind(_ message: MessageResponse, outgoing: Bool) -> TimelineRowLayout {
+                let row = TimelineRow.message(
+                    .init(
+                        entry: .remote(message), isOutgoing: outgoing, groupPosition: .single,
+                        showsSenderName: false))
+                let presentation = TimelineRowPresentation.make(
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
+                let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+                native.frame = CGRect(origin: .zero, size: layout.size)
+                native.bind(
+                    .init(
+                        presentation: presentation, layout: layout,
+                        context: .init(currentUserID: 1),
+                        actions: actions, mediaContext: nil))
+                return layout
+            }
+            let layout = bind(message, outgoing: false)
+            let window = NSWindow(
+                contentRect: CGRect(origin: .zero, size: layout.size),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = native
+            window.orderFront(nil)
+            native.setVisible(true)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(50))
+            native.layoutSubtreeIfNeeded()
+            func buttons(in view: NSView) -> [NSButton] {
+                (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
+            }
+            let card = try XCTUnwrap(
+                buttons(in: native).first {
+                    $0.accessibilityURL()?.absoluteString == destination
+                })
+            card.performClick(nil)
+            XCTAssertEqual(opened?.absoluteString, destination)
+            let plain = try TimelineTestFixtures.message(id: 2, at: 2, text: "No preview")
+            _ = bind(plain, outgoing: false)
+            opened = nil
+            card.performClick(nil)
+            XCTAssertNil(opened)
+            XCTAssertTrue(card.isHidden)
+        }
+
+        func testLinkCardsStayBetweenMediaAndCaptionAndFilterUnavailableStates() throws {
+            for type in [MessageType.text, .file, .audio] {
+                for bodySize: CGFloat in [17, 34] {
+                    let message = try TimelineTestFixtures.message(
+                        id: 1, at: 1, type: type, text: "Caption https://example.com/a",
+                        fields: [
+                            "hasAttachments": type != .text,
+                            "attachments": type == .text
+                                ? []
+                                : [
+                                    [
+                                        "id": "media", "url": "https://media.example/item",
+                                        "kind": type == .audio ? "audio/ogg" : "image/png",
+                                        "size": 900, "fileName": "item", "width": 400,
+                                        "height": 300,
+                                    ]
+                                ],
+                            "metadata": [
+                                "linkPreviews": [
+                                    ["url": "https://example.com/hidden", "status": "unavailable"],
+                                    [
+                                        "url": "https://example.com/expired", "status": "pending",
+                                        "expiresAt": "2000-01-01T00:00:00Z",
+                                    ],
+                                    [
+                                        "url": "https://example.com/a", "status": "ready",
+                                        "title": "A",
+                                    ],
+                                    [
+                                        "url": "https://example.com/b", "status": "ready",
+                                        "title": "B",
+                                    ],
+                                    [
+                                        "url": "https://example.com/c", "status": "ready",
+                                        "title": "C",
+                                    ],
+                                    [
+                                        "url": "https://example.com/d", "status": "ready",
+                                        "title": "D",
+                                    ],
+                                ]
+                            ],
+                        ])
+                    let row = TimelineRow.message(
+                        .init(
+                            entry: .remote(message), isOutgoing: true, groupPosition: .single,
+                            showsSenderName: false))
+                    let environment = TimelineLayoutEnvironment.current(
+                        timelineWidth: 360, bodySize: bodySize, captionSize: bodySize * 12 / 17)
+                    let presentation = TimelineRowPresentation.make(
+                        row: row, currentUserID: 1, isThreadTimeline: false,
+                        environment: environment)
+                    XCTAssertEqual(
+                        presentation.linkPreviews.map(\.url),
+                        [
+                            "https://example.com/a", "https://example.com/b",
+                            "https://example.com/c",
+                        ])
+                    let layout = TimelineLayoutEngine().layout(
+                        presentation, environment: environment)
+                    let first = try XCTUnwrap(layout.linkPreviewFrames.first)
+                    let last = try XCTUnwrap(layout.linkPreviewFrames.last)
+                    let caption = try XCTUnwrap(layout.frames[.text])
+                    let bubble = try XCTUnwrap(layout.frames[.bubble])
+                    if let media = layout.frames[type == .audio ? .audio : .media] {
+                        XCTAssertGreaterThanOrEqual(first.minY, media.maxY)
+                    }
+                    XCTAssertGreaterThanOrEqual(caption.minY, last.maxY)
+                    for frame in layout.linkPreviewFrames { XCTAssertTrue(bubble.contains(frame)) }
+                    XCTAssertLessThanOrEqual(caption.maxY, bubble.maxY + 1)
+                }
+            }
+        }
+
         func testVoiceDurationSharesTimestampRowWithoutOverlapAtNarrowAndLargeTextSizes() throws {
             let message = try TimelineTestFixtures.message(
                 id: 1, at: 1, type: .audio,

@@ -270,7 +270,7 @@ protocol ComposerNativeInput: AnyObject {
         override func readSelection(
             from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType
         ) -> Bool {
-            if importMedia(from: pasteboard) { return true }
+            if importMedia(from: pasteboard) || pasteURLs(from: pasteboard) { return true }
             return super.readSelection(from: pasteboard, type: type)
         }
 
@@ -302,7 +302,23 @@ protocol ComposerNativeInput: AnyObject {
         }
 
         override func paste(_ sender: Any?) {
-            if !importMedia(from: .general) { super.paste(sender) }
+            if !importMedia(from: .general), !pasteURLs(from: .general) { super.paste(sender) }
+        }
+
+        private func pasteURLs(from pasteboard: NSPasteboard) -> Bool {
+            guard isEditable, let items = pasteboard.pasteboardItems, !items.isEmpty else {
+                return false
+            }
+            // AppKit can paste the page title as a link label. This plain-text
+            // composer needs the address itself so sending does not lose the URL.
+            var text = ""
+            for (index, item) in items.enumerated() {
+                guard let url = item.string(forType: .URL) else { return false }
+                if index > 0 { text.append("\n") }
+                text.append(url)
+            }
+            insertText(text, replacementRange: selectedRange())
+            return true
         }
 
         private func importMedia(from pasteboard: NSPasteboard) -> Bool {
@@ -324,16 +340,16 @@ protocol ComposerNativeInput: AnyObject {
                     return provider
                 }
                 guard
-                    let type = item.types.first(where: {
-                        ComposerPastePolicy.isAttachmentDataType($0.rawValue)
-                    }), let data = item.data(forType: type)
+                    let identifier = ComposerPastePolicy.attachmentDataTypeIdentifier(
+                        in: item.types.lazy.map(\.rawValue)),
+                    let data = item.data(forType: .init(identifier))
                 else { return nil }
                 let provider = NSItemProvider()
                 provider.suggestedName =
                     "attachment."
-                    + (UTType(type.rawValue)?.preferredFilenameExtension ?? "bin")
+                    + (UTType(identifier)?.preferredFilenameExtension ?? "bin")
                 provider.registerDataRepresentation(
-                    forTypeIdentifier: type.rawValue, visibility: .all
+                    forTypeIdentifier: identifier, visibility: .all
                 ) { completion in
                     completion(data, nil)
                     return nil
@@ -1235,6 +1251,21 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         ) {
             guard ComposerPastePolicy.supports(item.itemProvider)
             else {
+                if item.itemProvider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+                    // Preserve the address, not a rich link's display title.
+                    // UIKit still owns insertion, selection and undo for the string result.
+                    item.itemProvider.loadObject(ofClass: NSURL.self) { value, _ in
+                        let address = (value as? NSURL)?.absoluteString
+                        DispatchQueue.main.async {
+                            if let address {
+                                item.setResult(string: address)
+                            } else {
+                                item.setDefaultResult()
+                            }
+                        }
+                    }
+                    return
+                }
                 if previousPasteDelegate?.textPasteConfigurationSupporting?(
                     textPasteConfigurationSupporting, transform: item) == nil
                 {

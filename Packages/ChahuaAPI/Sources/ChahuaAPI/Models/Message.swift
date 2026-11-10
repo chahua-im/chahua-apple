@@ -23,6 +23,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
     /// Missing wire values decode as an empty array.
     public private(set) var mentions: [MentionInfo]
     public private(set) var message: String?
+    public private(set) var metadata: MessageMetadataResponse?
     public let replyRootId: String?
     public private(set) var replyToMessage: MessagePreview?
     public private(set) var sticker: MessageStickerResponse?
@@ -42,7 +43,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         sticker: MessageStickerResponse? = nil, threadInfo: ThreadInfo? = nil,
         forwardedFrom: ForwardedFromInfo? = nil, forwardedBundleId: String? = nil,
         forwardedPreview: ForwardedMessagesPreviewResponse? = nil,
-        systemKind: SystemMessageKind? = nil, systemLinks: SystemMessageLinks? = nil
+        systemKind: SystemMessageKind? = nil, systemLinks: SystemMessageLinks? = nil,
+        metadata: MessageMetadataResponse? = nil
     ) {
         self.id = id
         self.chatId = chatId
@@ -57,6 +59,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         self.reactions = reactions
         self.mentions = mentions
         self.message = message
+        self.metadata = metadata
         self.replyRootId = replyRootId
         self.replyToMessage = replyToMessage
         self.sticker = sticker
@@ -83,6 +86,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         reactions = try container.decode([ReactionSummary].self, forKey: .reactions)
         mentions = try container.decodeIfPresent([MentionInfo].self, forKey: .mentions) ?? []
         message = try container.decodeIfPresent(String.self, forKey: .message)
+        metadata = try container.decodeIfPresent(MessageMetadataResponse.self, forKey: .metadata)
         replyRootId = try container.decodeIfPresent(String.self, forKey: .replyRootId)
         replyToMessage = try container.decodeIfPresent(MessagePreview.self, forKey: .replyToMessage)
         sticker = try container.decodeIfPresent(MessageStickerResponse.self, forKey: .sticker)
@@ -137,6 +141,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         var copy = self
         copy.isDeleted = true
         copy.message = nil
+        copy.metadata = nil
         copy.sticker = nil
         copy.hasAttachments = false
         copy.attachments = []
@@ -172,7 +177,22 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         }
         var copy = self
         copy.message = text
+        // Until the server publishes replacement metadata, old URLs must not keep their cards.
+        copy.metadata = nil
         copy.isEdited = true
+        return copy
+    }
+
+    /// A local display projection only; expiration does not edit or refresh the server record.
+    public func projectingExpiredLinkPreviews(at now: Date) -> Self {
+        guard let metadata,
+            metadata.linkPreviews.contains(where: {
+                $0.status == .pending && $0.expiresAt.map { $0 <= now } == true
+            })
+        else { return self }
+        var copy = self
+        copy.metadata = MessageMetadataResponse(
+            linkPreviews: metadata.linkPreviews.map { $0.projectingExpired(at: now) })
         return copy
     }
 }

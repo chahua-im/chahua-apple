@@ -8,6 +8,63 @@ import XCTest
 final class ConversationTimelineModelTests: XCTestCase {
     private var cancellables: Set<AnyCancellable> = []
 
+    func testPendingPreviewExpiresLocallyAndFullUpdateRestoresReadyWithoutEditing() async throws {
+        let deadline = Date(timeIntervalSince1970: ceil(Date().timeIntervalSince1970) + 1)
+        let formatter = ISO8601DateFormatter()
+        let pending = try TimelineTestFixtures.message(
+            id: 1, at: 1, text: "https://example.com/article",
+            fields: [
+                "metadata": [
+                    "linkPreviews": [
+                        [
+                            "url": "https://example.com/article", "status": "pending",
+                            "expiresAt": formatter.string(from: deadline),
+                        ]
+                    ]
+                ]
+            ])
+        let source = ScriptedTimelineSource(pages: [
+            .success(try TimelineTestFixtures.page([pending]))
+        ])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: true,
+            source: source, messageStore: source.store)
+        defer { model.close() }
+        await model.open()
+        XCTAssertEqual(remoteMessages(model).first?.metadata?.linkPreviews.first?.status, .pending)
+        let expired = expectation(description: "Pending card expires without a network request")
+        var fulfilled = false
+        let observation = model.updates.sink { snapshot in
+            guard !fulfilled,
+                snapshot.rows.contains(where: {
+                    guard case .message(let row) = $0 else { return false }
+                    return row.entry.remoteMessage?.metadata?.linkPreviews.first?.status
+                        == .unavailable
+                })
+            else { return }
+            fulfilled = true
+            expired.fulfill()
+        }
+        defer { observation.cancel() }
+        await fulfillment(of: [expired], timeout: 4)
+        XCTAssertEqual(source.queries.count, 1)
+        let ready = try TimelineTestFixtures.message(
+            id: 1, at: 1, text: "https://example.com/article",
+            fields: [
+                "metadata": [
+                    "linkPreviews": [
+                        [
+                            "url": "https://example.com/article", "status": "ready",
+                            "title": "Article",
+                        ]
+                    ]
+                ]
+            ])
+        source.store.apply(.messageUpdated(ready))
+        XCTAssertEqual(remoteMessages(model).first?.metadata?.linkPreviews.first?.title, "Article")
+        XCTAssertEqual(remoteMessages(model).first?.isEdited, false)
+    }
+
     func testRevokedReceiptCannotBeRestoredByLateResponse() async throws {
         let source = ScriptedTimelineSource(pages: [.success(try livePage(ids: 1...2))])
         var release: CheckedContinuation<MessageID?, Never>?

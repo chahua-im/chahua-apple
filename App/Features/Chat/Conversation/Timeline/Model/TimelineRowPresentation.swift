@@ -17,6 +17,7 @@ enum RowSectionKey: Hashable {
     case reply(MessagePreview)
     case media([CGSize], category: String)
     case audio
+    case linkPreviews(Int)
     case sticker(CGSize)
     case metadata(CGSize, overlay: Bool)
     case reaction(emoji: String, count: Int64, reactors: Int)
@@ -38,6 +39,7 @@ struct TimelineRowPresentation {
     let originalReply: MessagePreview?
     let forwardedCardLines: [String]
     let preparedText: MessageTextContent.PreparedText?
+    let linkPreviews: [MessageLinkPreview]
     let metadata: MessageMetadata?
     let metadataIsOverlay: Bool
     let threadLabel: String?
@@ -49,7 +51,7 @@ struct TimelineRowPresentation {
     var voiceMetrics: VoiceMessageBubbleMetrics {
         .init(
             bodySize: environment.bodySize, captionSize: environment.captionSize,
-            metadataSize: metadata?.size ?? .zero)
+            metadataSize: preparedText == nil ? metadata?.size ?? .zero : .zero)
     }
 
     /// Resolve only the source identifier here; playback owns all file/network I/O.
@@ -90,6 +92,7 @@ struct TimelineRowPresentation {
         var originalReply: MessagePreview?
         var forwardedCardLines: [String] = []
         var preparedText: MessageTextContent.PreparedText?
+        var linkPreviews: [MessageLinkPreview] = []
         var metadata: MessageMetadata?
         var overlay = false
         var threadLabel: String?
@@ -182,6 +185,13 @@ struct TimelineRowPresentation {
                         // glyph widths even when the plain summary is unchanged.
                         sections.append(.reply(reply))
                     }
+                    if !sticker && !card && !placeholder {
+                        linkPreviews = Array(
+                            (remote?.metadata?.linkPreviews ?? []).filter {
+                                $0.isVisible(at: Date())
+                            }.prefix(3))
+                        sections.append(.linkPreviews(linkPreviews.count))
+                    }
                     let text =
                         placeholder
                         ? MessageSummaryContent.placeholderLabel(message.entry.text)
@@ -198,7 +208,9 @@ struct TimelineRowPresentation {
                     } else {
                         dimensions = (remote?.attachments ?? []).map(\.mediaDimensions)
                     }
-                    overlay = sticker || (!audio && !dimensions.isEmpty && !hasBody)
+                    overlay =
+                        sticker
+                        || (!audio && !dimensions.isEmpty && !hasBody && linkPreviews.isEmpty)
                     if sticker {
                         sections.append(
                             .sticker(
@@ -207,6 +219,17 @@ struct TimelineRowPresentation {
                                     height: Int(message.entry.sticker?.media.height ?? 0))))
                     } else if audio {
                         sections.append(.audio)
+                        if hasBody {
+                            preparedText = MessageTextContent.PreparedText(
+                                text: text, mentions: remote?.mentions ?? [],
+                                currentUserID: currentUserID, isOutgoing: message.isOutgoing,
+                                fontSize: environment.bodySize)
+                            sections.append(
+                                .body(
+                                    text,
+                                    mentionLabels: MessageMentions.names(in: remote?.mentions ?? [])
+                                        .values.sorted()))
+                        }
                     } else {
                         if hasBody {
                             preparedText = MessageTextContent.PreparedText(
@@ -277,6 +300,7 @@ struct TimelineRowPresentation {
             row: row, environment: environment, title: title, reply: reply,
             originLabel: originLabel, originalReply: originalReply,
             forwardedCardLines: forwardedCardLines, preparedText: preparedText,
+            linkPreviews: linkPreviews,
             metadata: metadata,
             metadataIsOverlay: overlay, threadLabel: threadLabel, standaloneText: standaloneText,
             systemContent: systemContent,
