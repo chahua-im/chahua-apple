@@ -62,21 +62,38 @@
             func buttons(in view: NSView) -> [NSButton] {
                 (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons(in: $0) }
             }
+            func messageText(in view: NSView) -> AppKitMessageTextView? {
+                if let text = view as? AppKitMessageTextView { return text }
+                for child in view.subviews {
+                    if let text = messageText(in: child) { return text }
+                }
+                return nil
+            }
             let card = try XCTUnwrap(
                 buttons(in: native).first {
                     $0.accessibilityURL()?.absoluteString == destination
                 })
+            let text = try XCTUnwrap(messageText(in: native))
+            XCTAssertGreaterThanOrEqual(
+                native.convert(card.bounds, from: card).minY,
+                native.convert(text.bounds, from: text).maxY)
+            let footer = try XCTUnwrap(layout.frames[.metadata])
+            XCTAssertGreaterThanOrEqual(
+                footer.minY, try XCTUnwrap(layout.linkPreviewFrames.last).maxY)
+            XCTAssertTrue(try XCTUnwrap(layout.textGeometry).metadataFrame.isEmpty)
             card.performClick(nil)
             XCTAssertEqual(opened?.absoluteString, destination)
             let plain = try TimelineTestFixtures.message(id: 2, at: 2, text: "No preview")
-            _ = bind(plain, outgoing: false)
+            let plainLayout = bind(plain, outgoing: false)
+            XCTAssertNil(plainLayout.frames[.metadata])
+            XCTAssertFalse(try XCTUnwrap(plainLayout.textGeometry).metadataFrame.isEmpty)
             opened = nil
             card.performClick(nil)
             XCTAssertNil(opened)
             XCTAssertTrue(card.isHidden)
         }
 
-        func testLinkCardsStayBetweenMediaAndCaptionAndFilterUnavailableStates() throws {
+        func testLinkCardsFollowCaptionAndFilterUnavailableStates() throws {
             for type in [MessageType.text, .file, .audio] {
                 for bodySize: CGFloat in [17, 34] {
                     let message = try TimelineTestFixtures.message(
@@ -141,11 +158,15 @@
                     let caption = try XCTUnwrap(layout.frames[.text])
                     let bubble = try XCTUnwrap(layout.frames[.bubble])
                     if let media = layout.frames[type == .audio ? .audio : .media] {
-                        XCTAssertGreaterThanOrEqual(first.minY, media.maxY)
+                        XCTAssertGreaterThanOrEqual(caption.minY, media.maxY)
                     }
-                    XCTAssertGreaterThanOrEqual(caption.minY, last.maxY)
+                    XCTAssertGreaterThanOrEqual(first.minY, caption.maxY)
                     for frame in layout.linkPreviewFrames { XCTAssertTrue(bubble.contains(frame)) }
-                    XCTAssertLessThanOrEqual(caption.maxY, bubble.maxY + 1)
+                    XCTAssertLessThanOrEqual(last.maxY, bubble.maxY)
+                    let footer = try XCTUnwrap(layout.frames[.metadata])
+                    XCTAssertGreaterThanOrEqual(footer.minY, last.maxY)
+                    XCTAssertTrue(bubble.contains(footer))
+                    XCTAssertTrue(try XCTUnwrap(layout.textGeometry).metadataFrame.isEmpty)
                 }
             }
         }

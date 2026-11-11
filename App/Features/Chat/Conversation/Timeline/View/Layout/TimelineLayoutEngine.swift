@@ -73,13 +73,16 @@ struct TimelineLayoutEngine {
                 : BubbleMediaLayout.size(for: local, availableWidth: bubbleWidthLimit)
         let hasMedia = preferredMedia != nil
         let metadata = p.metadata
+        // Link cards separate the body from its footer. Do not reserve or draw a
+        // second timestamp inside TextKit when a native footer follows the cards.
+        let textMetadata = p.linkPreviews.isEmpty ? metadata : nil
         var preferredText: CGFloat = 0
         if hasBody {
             textMeasurer.update(
                 attributedText: p.preparedText!.makeMeasurementText(
                     mentions: row.entry.remoteMessage?.mentions ?? [], fontSize: e.bodySize),
-                metadata: metadata)
-            preferredText = textMeasurer.idealWidth + 24 - (metadata?.textTrailingOutset ?? 0)
+                metadata: textMetadata)
+            preferredText = textMeasurer.idealWidth + 24 - (textMetadata?.textTrailingOutset ?? 0)
         }
         var labelFont = BubbleNativeFont.systemFont(ofSize: e.bodySize)
         if deleted {
@@ -319,25 +322,6 @@ struct TimelineLayoutEngine {
                 x: bubbleX + inset, y: bubbleY + height, width: innerWidth, height: audioHeight)
             height += audioHeight + 8
         }
-        var linkPreviewFrames: [CGRect] = []
-        if !p.linkPreviews.isEmpty {
-            if height == 0 { height += 8 }
-            if hasMedia { height += 6 }
-            let cardHeight = pixel(
-                TimelineLinkPreviewMetrics.height(bodySize: e.bodySize, captionSize: e.captionSize),
-                e)
-            let start = height
-            for _ in p.linkPreviews {
-                linkPreviewFrames.append(
-                    CGRect(
-                        x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
-                        height: cardHeight))
-                height += cardHeight + 4
-            }
-            frames[.linkPreviews] = CGRect(
-                x: bubbleX + inset, y: bubbleY + start, width: innerWidth,
-                height: height - start - 4)
-        }
         let plainText =
             hasBody && p.title == nil && p.reply == nil && p.originLabel == nil
             && p.originalReply == nil && !hasMedia && p.threadLabel == nil && p.linkPreviews.isEmpty
@@ -345,14 +329,14 @@ struct TimelineLayoutEngine {
         // Omitting the sender title removes only that row and its gap, not the
         // bubble's outer text padding.
         if hasBody {
-            let footerOutset = min(metadata?.textTrailingOutset ?? 0, max(0, inset))
+            let footerOutset = min(textMetadata?.textTrailingOutset ?? 0, max(0, inset))
             geometry = textMeasurer.geometry(for: innerWidth + footerOutset)
             // Snap the allocated extent before snapping its origin below. Rounding
             // both edges independently can shorten the native drawing surface at
             // fractional display scales while its installed text geometry stays tall.
             let textHeight = pixel(geometry!.size.height, e)
             let footerDrop = min(
-                metadata?.textBaselineDrop ?? 0,
+                textMetadata?.textBaselineDrop ?? 0,
                 max(0, geometry!.metadataFrame.maxY - geometry!.bodyBounds.maxY))
             let bodyHeight = textHeight - footerDrop
             // Center painted text, not the taller TextKit line allocation or the footer.
@@ -367,7 +351,7 @@ struct TimelineLayoutEngine {
                     -TimelineRowMetrics.textVerticalInset,
                     opticalShift.rounded() / scale))
             height +=
-                (!p.linkPreviews.isEmpty || audio
+                (audio
                     ? 0
                     : hasMedia
                         ? 4
@@ -388,6 +372,26 @@ struct TimelineLayoutEngine {
                 x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
                 height: pixel(max(labelSize.height, displayedSymbolSize.height), e))
             height += frames[.standalone]!.height + 8
+        }
+        var linkPreviewFrames: [CGRect] = []
+        // Both native hosts place link cards after the message's text section.
+        if !p.linkPreviews.isEmpty {
+            if height == 0 { height += 8 }
+            if hasMedia && !hasBody { height += 6 }
+            let cardHeight = pixel(
+                TimelineLinkPreviewMetrics.height(bodySize: e.bodySize, captionSize: e.captionSize),
+                e)
+            let start = height
+            for _ in p.linkPreviews {
+                linkPreviewFrames.append(
+                    CGRect(
+                        x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
+                        height: cardHeight))
+                height += cardHeight + 4
+            }
+            frames[.linkPreviews] = CGRect(
+                x: bubbleX + inset, y: bubbleY + start, width: innerWidth,
+                height: height - start - 4)
         }
         if let metadata {
             if let cardLayout = forwardedCardLayout, let card = frames[.forwardedCard] {
@@ -415,8 +419,12 @@ struct TimelineLayoutEngine {
                     x: media.maxX - outerInset - pillWidth,
                     y: max(media.minY, media.maxY - outerInset - pillHeight), width: pillWidth,
                     height: pillHeight)
-            } else if !hasBody {
-                if !hasMedia && !audio && p.reply == nil && p.title == nil { height += 8 }
+            } else if !hasBody || !p.linkPreviews.isEmpty {
+                if p.linkPreviews.isEmpty,
+                    !hasMedia && !audio && p.reply == nil && p.title == nil
+                {
+                    height += 8
+                }
                 let size = scaled(metadata.size, width: innerWidth)
                 let metadataHeight = pixel(size.height, e)
                 frames[.metadata] = CGRect(

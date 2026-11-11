@@ -190,7 +190,6 @@ struct TimelineRowPresentation {
                             (remote?.metadata?.linkPreviews ?? []).filter {
                                 $0.isVisible(at: Date())
                             }.prefix(3))
-                        sections.append(.linkPreviews(linkPreviews.count))
                     }
                     let text =
                         placeholder
@@ -251,6 +250,9 @@ struct TimelineRowPresentation {
                         sections.append(
                             .media(
                                 dimensions, category: dimensions.count > 1 ? "gallery" : "single"))
+                    }
+                    if !sticker && !card && !placeholder {
+                        sections.append(.linkPreviews(linkPreviews.count))
                     }
                     let formatter = Self.formatter(
                         .time, locale: environment.localeIdentifier + "@hours=h23",
