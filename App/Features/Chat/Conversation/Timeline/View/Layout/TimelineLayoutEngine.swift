@@ -374,15 +374,22 @@ struct TimelineLayoutEngine {
             height += frames[.standalone]!.height + 8
         }
         var linkPreviewFrames: [CGRect] = []
+        var linkPreviewDescriptionHeights: [CGFloat] = []
         // Both native hosts place link cards after the message's text section.
         if !p.linkPreviews.isEmpty {
             if height == 0 { height += 8 }
             if hasMedia && !hasBody { height += 6 }
-            let cardHeight = pixel(
-                TimelineLinkPreviewMetrics.height(bodySize: e.bodySize, captionSize: e.captionSize),
-                e)
             let start = height
-            for _ in p.linkPreviews {
+            for preview in p.linkPreviews {
+                let descriptionHeight = pixel(
+                    TimelineLinkPreviewMetrics.descriptionHeight(
+                        preview.status == .ready ? preview.description : nil,
+                        cardWidth: innerWidth, bodySize: e.bodySize), e)
+                linkPreviewDescriptionHeights.append(descriptionHeight)
+                let cardHeight = pixel(
+                    TimelineLinkPreviewMetrics.height(
+                        bodySize: e.bodySize, captionSize: e.captionSize,
+                        descriptionHeight: descriptionHeight), e)
                 linkPreviewFrames.append(
                     CGRect(
                         x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
@@ -507,6 +514,7 @@ struct TimelineLayoutEngine {
             originalReplyContentFrames: originalReplyContentFrames,
             forwardedCardLayout: forwardedCardLayout,
             linkPreviewFrames: linkPreviewFrames.map { rounded($0, e) },
+            linkPreviewDescriptionHeights: linkPreviewDescriptionHeights,
             standaloneSymbolSize: displayedSymbolSize,
             standaloneLabelGap: standaloneGap, threadContentFrames: threadContentFrames)
     }

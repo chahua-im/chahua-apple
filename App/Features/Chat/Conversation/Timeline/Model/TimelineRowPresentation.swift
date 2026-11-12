@@ -17,7 +17,7 @@ enum RowSectionKey: Hashable {
     case reply(MessagePreview)
     case media([CGSize], category: String)
     case audio
-    case linkPreviews(Int)
+    case linkPreviews([MessageLinkPreview])
     case sticker(CGSize)
     case metadata(CGSize, overlay: Bool)
     case reaction(emoji: String, count: Int64, reactors: Int)
@@ -252,7 +252,7 @@ struct TimelineRowPresentation {
                                 dimensions, category: dimensions.count > 1 ? "gallery" : "single"))
                     }
                     if !sticker && !card && !placeholder {
-                        sections.append(.linkPreviews(linkPreviews.count))
+                        sections.append(.linkPreviews(linkPreviews))
                     }
                     let formatter = Self.formatter(
                         .time, locale: environment.localeIdentifier + "@hours=h23",

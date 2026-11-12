@@ -437,7 +437,6 @@ struct AuthenticatedShell: View {
                                     ? selectedTitle
                                     : openedThread?.title ?? AppLanguage.localized("Thread"),
                                 subtitle: threadPath.isEmpty ? headerSubtitle : nil,
-                                isMuted: threadPath.isEmpty && headerChatIsMuted,
                                 onBack: !threadPath.isEmpty
                                     ? popThread : isSplit ? nil : { selectConversation(nil) },
                                 onClose: nil,
@@ -449,8 +448,11 @@ struct AuthenticatedShell: View {
                                     }
                                     : infoAction,
                                 onSearch: searchAction,
-                                onToggleMute: threadPath.isEmpty && selectedInfoChat != nil
-                                    ? { Task { await toggleHeaderMute() } } : nil,
+                                notificationChat: headerNotificationChat,
+                                notificationDefaults: chatStore.state.notificationDefaults,
+                                onUpdateNotifications: { chat, request in
+                                    Task { await updateHeaderNotifications(chat, request: request) }
+                                },
                                 isUpdatingMute: isUpdatingHeaderMute,
                                 isInspectorPresented: showsInspector,
                                 onForward: forwardThreadAction?.conversation == headerThreadKey
@@ -522,7 +524,6 @@ struct AuthenticatedShell: View {
                                                 ?? AppLanguage.localized("Thread")
                                             : selectedTitle,
                                         subtitle: key.threadID == nil ? headerSubtitle : nil,
-                                        isMuted: key.threadID == nil && headerChatIsMuted,
                                         onBack: { popPhoneConversation(key) },
                                         onOpenInfo: infoAction,
                                         onSearch: searchAction,
@@ -811,25 +812,28 @@ struct AuthenticatedShell: View {
         }
     }
 
-    private func toggleHeaderMute() async {
-        guard !isUpdatingHeaderMute, !isSigningOut, let chat = selectedInfoChat,
+    private func updateHeaderNotifications(
+        _ chat: ChatListItem, request: UpdateNotificationSettingRequest?
+    ) async {
+        guard !isUpdatingHeaderMute, !isSigningOut,
             chatStore.currentUserProfile?.uid == me.uid
         else { return }
         isUpdatingHeaderMute = true
         defer { isUpdatingHeaderMute = false }
         do {
-            let wasMuted = headerChatIsMuted
-            try await chatStore.loadNotificationDefaults()
-            guard !isSigningOut, chatStore.currentUserProfile?.uid == me.uid,
-                let defaults = chatStore.state.notificationDefaults
-            else { return }
-            let mode: NotificationSettingMode
-            if wasMuted {
-                mode = defaults.mutedByDefault(kind: chat.kind) ? .alwaysUnmuted : .inherit
+            let resolved: UpdateNotificationSettingRequest
+            if let request {
+                resolved = request
             } else {
-                mode = .alwaysMuted
+                try await chatStore.loadNotificationDefaults()
+                guard let defaults = chatStore.state.notificationDefaults else {
+                    throw APIError.unavailable
+                }
+                resolved = .init(
+                    mode: defaults.mutedByDefault(kind: chat.kind) ? .alwaysUnmuted : .inherit)
             }
-            try await chatStore.setNotificationSetting(chatID: chat.id, request: .init(mode: mode))
+            guard !isSigningOut, chatStore.currentUserProfile?.uid == me.uid else { return }
+            try await chatStore.setNotificationSetting(chatID: chat.id, request: resolved)
         } catch is CancellationError {
         } catch {
             navigationError = error.localizedDescription
@@ -1238,10 +1242,9 @@ struct AuthenticatedShell: View {
         ChatPresenceDisplay.subtitle(for: selectedInfoChat, in: chatStore.state)
     }
 
-    private var headerChatIsMuted: Bool {
-        guard selectedConversationID?.threadID == nil else { return false }
-        return searchableChat?.notificationMuted(defaults: chatStore.state.notificationDefaults)
-            == true
+    private var headerNotificationChat: ChatListItem? {
+        guard threadPath.isEmpty, let chat = selectedInfoChat else { return nil }
+        return chatStore.notificationChatSnapshot(chat)
     }
 
     private var visibleConversation: ConversationKey? {

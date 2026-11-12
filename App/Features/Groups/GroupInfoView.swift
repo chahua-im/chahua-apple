@@ -566,12 +566,6 @@ struct GroupInfoView: View {
         notificationChat.notificationMuted(defaults: store.state.notificationDefaults)
     }
 
-    private var isMutedForever: Bool {
-        let current = notificationChat
-        return current.notificationPermanentlyMuted(defaults: store.state.notificationDefaults)
-            || NotificationMuteDeadline.isIndefinite(current.mutedUntil)
-    }
-
     private var notificationButtonTitle: LocalizedStringKey {
         let current = notificationChat
         let defaults = store.state.notificationDefaults
@@ -587,34 +581,10 @@ struct GroupInfoView: View {
 
     private var notificationMenu: some View {
         Menu {
-            if isMuted {
-                Button("Unmute", systemImage: "bell") {
-                    Task { await updateNotifications(nil) }
-                }
-            } else {
-                Menu("Mute for…", systemImage: "bell.badge") {
-                    muteDuration("Mute for 1 hour", seconds: 3_600)
-                    muteDuration("Mute for 8 hours", seconds: 28_800)
-                    muteDuration("Mute for 1 day", seconds: 86_400)
-                    muteDuration("Mute for 7 days", seconds: 604_800)
-                }
-            }
-            Menu("Customize", systemImage: "slider.horizontal.3") {
-                notificationChoice(
-                    "Always notify", mode: .alwaysUnmuted,
-                    selected: notificationChat.muteOverride == false)
-                notificationChoice(
-                    "Always mute", mode: .alwaysMuted,
-                    selected: notificationChat.muteOverride == true)
-                notificationChoice(
-                    "Use account default", mode: .inherit,
-                    selected: notificationChat.muteOverride == nil)
-            }
-            if !isMutedForever {
-                Divider()
-                Button("Mute forever", systemImage: "bell.slash", role: .destructive) {
-                    Task { await updateNotifications(.init(mode: .alwaysMuted)) }
-                }
+            ChatNotificationMenuContent(
+                chat: notificationChat, defaults: store.state.notificationDefaults
+            ) { request in
+                Task { await updateNotifications(request) }
             }
         } label: {
             GroupInfoActionLabel(
@@ -625,27 +595,6 @@ struct GroupInfoView: View {
         .accessibilityIdentifier("group-notification-settings")
         .accessibilityLabel("Notification settings")
         .disabled(isLeaving || isUpdatingNotifications || isChangingRelationship)
-    }
-
-    private func muteDuration(_ title: LocalizedStringKey, seconds: Int) -> some View {
-        Button(title) {
-            Task {
-                await updateNotifications(.init(mode: .temporarilyMuted, durationSeconds: seconds))
-            }
-        }
-    }
-
-    private func notificationChoice(
-        _ title: LocalizedStringKey, mode: NotificationSettingMode, selected: Bool
-    ) -> some View {
-        Button {
-            Task { await updateNotifications(.init(mode: mode)) }
-        } label: {
-            HStack {
-                Text(title)
-                if selected { Image(systemName: "checkmark") }
-            }
-        }
     }
 
     /// A nil request is Unmute: remove an override only when the default already notifies.

@@ -560,6 +560,24 @@
                     item["isDeleted"] = name == "System"
                     objects.append(item)
                 }
+                let description = """
+                    How we trimmed launch work, lazy-loaded the sidebar \
+                    and moved sync off the main thread.
+                    """
+                for (outgoing, summary): (Bool, String?) in [
+                    (false, description), (true, description), (false, nil),
+                ] {
+                    let destination = "https://blog.example.net/perf"
+                    var item = object(
+                        index: objects.count, text: "Worth a read before Friday\n\(destination)")
+                    item["sender"] = sender(outgoing ? 1 : 2)
+                    var preview: [String: Any] = [
+                        "url": destination, "status": "ready", "title": "Cutting cold start by 40%",
+                    ]
+                    preview["description"] = summary
+                    item["metadata"] = ["linkPreviews": [preview]]
+                    objects.append(item)
+                }
                 if let count = ProcessInfo.processInfo.environment["CHAHUA_PERFORMANCE_ROWS"]
                     .flatMap(Int.init)
                 {

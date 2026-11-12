@@ -24,16 +24,19 @@ public struct MessageLinkPreview: Codable, Hashable, Sendable {
     public let status: Status
     public let expiresAt: Date?
     public let title: String?
+    /// Optional plain-text summary; older responses omit this field.
+    public let description: String?
     public let image: Image?
 
     public init(
         url: String, status: Status, expiresAt: Date? = nil, title: String? = nil,
-        image: Image? = nil
+        description: String? = nil, image: Image? = nil
     ) {
         self.url = url
         self.status = status
         self.expiresAt = expiresAt
         self.title = title
+        self.description = description
         self.image = image
     }
 
@@ -48,7 +51,8 @@ public struct MessageLinkPreview: Codable, Hashable, Sendable {
     func projectingExpired(at now: Date) -> Self {
         guard status == .pending, let expiresAt, expiresAt <= now else { return self }
         return Self(
-            url: url, status: .unavailable, expiresAt: expiresAt, title: title, image: image)
+            url: url, status: .unavailable, expiresAt: expiresAt, title: title,
+            description: description, image: image)
     }
 }
 

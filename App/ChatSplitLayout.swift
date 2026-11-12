@@ -1,3 +1,4 @@
+import ChahuaAPI
 import SwiftUI
 
 #if os(macOS)
@@ -197,13 +198,14 @@ struct ChatSplitLayout<Sidebar: View, Detail: View>: View {
 struct ChatFloatingHeader<Avatar: View>: View {
     let title: String
     var subtitle: String?
-    var isMuted = false
     var onBack: (() -> Void)?
     var onClose: (() -> Void)?
     var onOpenInfo: (() -> Void)?
     /// Search lives on the info page; the header only binds ⌘F, with no visible button.
     var onSearch: (() -> Void)?
-    var onToggleMute: (() -> Void)?
+    var notificationChat: ChatListItem?
+    var notificationDefaults: NotificationSettingsResponse?
+    var onUpdateNotifications: ((ChatListItem, UpdateNotificationSettingRequest?) -> Void)?
     var isUpdatingMute = false
     var isInspectorPresented = false
     var onForward: (() -> Void)?
@@ -224,6 +226,10 @@ struct ChatFloatingHeader<Avatar: View>: View {
         #else
             false
         #endif
+    }
+
+    private var isMuted: Bool {
+        notificationChat?.notificationMuted(defaults: notificationDefaults) == true
     }
 
     var body: some View {
@@ -262,12 +268,29 @@ struct ChatFloatingHeader<Avatar: View>: View {
             if let onSearch {
                 wideControl("Search messages", systemImage: "magnifyingglass", action: onSearch)
             }
-            if let onToggleMute {
-                wideControl(
-                    isMuted ? "Unmute" : "Mute",
-                    systemImage: isMuted ? "bell.slash" : "bell",
-                    action: onToggleMute
-                )
+            if let notificationChat, let onUpdateNotifications {
+                Menu {
+                    ChatNotificationMenuContent(
+                        chat: notificationChat, defaults: notificationDefaults
+                    ) { request in
+                        onUpdateNotifications(notificationChat, request)
+                    }
+                } label: {
+                    Image(systemName: isMuted ? "bell.slash" : "bell")
+                        .font(.system(size: 18))
+                        .frame(
+                            width: usesDesktopChrome ? 32 : 40,
+                            height: usesDesktopChrome ? 32 : 44
+                        )
+                        .contentShape(Rectangle())
+                }
+                #if os(macOS)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                #endif
+                .buttonStyle(.plain)
+                .accessibilityLabel("Notification settings")
+                .accessibilityIdentifier("chat-notification-settings")
                 .disabled(isUpdatingMute)
             }
             if let onOpenInfo {

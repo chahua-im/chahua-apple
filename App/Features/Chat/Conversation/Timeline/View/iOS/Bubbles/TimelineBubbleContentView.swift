@@ -455,7 +455,9 @@
         private func configureLinkPreviews() {
             guard let binding, case .message(let row) = binding.presentation.row else { return }
             let previews = binding.presentation.linkPreviews
-            let count = min(3, min(previews.count, binding.layout.linkPreviewFrames.count))
+            let count = min(
+                3, previews.count, binding.layout.linkPreviewFrames.count,
+                binding.layout.linkPreviewDescriptionHeights.count)
             while linkPreviewViews.count < count {
                 let view = TimelineLinkPreviewView(frame: .zero)
                 sections.addSubview(view)
@@ -471,6 +473,7 @@
                 view.isHidden = false
                 view.configure(
                     preview, outgoing: row.isOutgoing,
+                    descriptionHeight: binding.layout.linkPreviewDescriptionHeights[index],
                     environment: binding.presentation.environment,
                     mediaContext: binding.mediaContext,
                     enabled: !binding.context.isInteractionPreview

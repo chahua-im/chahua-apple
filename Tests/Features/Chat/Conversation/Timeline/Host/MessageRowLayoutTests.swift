@@ -9,13 +9,20 @@
     final class MessageRowLayoutTests: XCTestCase {
         func testNativeLinkCardOpensStoredDestinationAndClearsOnReuse() async throws {
             let destination = "https://example.com/article?tag=one#section"
+            let description = """
+                How we trimmed launch work, lazy-loaded the sidebar \
+                and moved sync off the main thread.
+                """
             let message = try TimelineTestFixtures.message(
                 id: 1, at: 1,
                 fields: [
                     "message": "Both worth reading:\n\(destination)",
                     "metadata": [
                         "linkPreviews": [
-                            ["url": destination, "status": "ready", "title": "How sync works"],
+                            [
+                                "url": destination, "status": "ready",
+                                "title": "Cutting cold start by 40%", "description": description,
+                            ],
                             [
                                 "url": "https://fieldnotes.example.org/glass", "status": "ready",
                                 "title": "Designing with glass",
@@ -23,6 +30,7 @@
                             [
                                 "url": "https://example.org/pending", "status": "pending",
                                 "expiresAt": "2099-01-01T00:00:00Z",
+                                "description": description,
                             ],
                         ]
                     ],
@@ -73,6 +81,69 @@
                 buttons(in: native).first {
                     $0.accessibilityURL()?.absoluteString == destination
                 })
+            func labels(in view: NSView) -> [NSTextField] {
+                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { labels(in: $0) }
+            }
+            let summary = try XCTUnwrap(
+                labels(in: card).first { $0.stringValue == description })
+            let headline = try XCTUnwrap(
+                labels(in: card).first { $0.stringValue == "Cutting cold start by 40%" })
+            let domain = try XCTUnwrap(
+                labels(in: card).first { $0.stringValue == "example.com" })
+            XCTAssertFalse(summary.isHidden)
+            XCTAssertGreaterThanOrEqual(summary.frame.minY, headline.frame.maxY)
+            XCTAssertGreaterThanOrEqual(domain.frame.minY, summary.frame.maxY)
+            XCTAssertTrue(card.bounds.contains(summary.frame))
+            let font = try XCTUnwrap(summary.font)
+            XCTAssertLessThanOrEqual(
+                summary.frame.height, ceil(font.ascender - font.descender + font.leading) * 3)
+            XCTAssertTrue(card.accessibilityLabel()?.contains(description) == true)
+            XCTAssertEqual(layout.linkPreviewFrames[1].height, layout.linkPreviewFrames[2].height)
+            // Inspect painted glyphs, not just the allocated multiline rectangle.
+            let scale: CGFloat = 2
+            let width = Int(ceil(summary.bounds.width * scale))
+            let height = Int(ceil(summary.bounds.height * scale))
+            let context = try XCTUnwrap(
+                CGContext(
+                    data: nil, width: width, height: height, bitsPerComponent: 8,
+                    bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                        | CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.clear(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
+            let cell = try XCTUnwrap(summary.cell)
+            context.translateBy(x: 0, y: CGFloat(height))
+            context.scaleBy(x: scale, y: -scale)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+            cell.drawInterior(withFrame: summary.bounds, in: summary)
+            NSGraphicsContext.restoreGraphicsState()
+            let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
+            var paintedLines = 0
+            var previousRowHadInk = false
+            for y in 0..<height {
+                var rowHasInk = false
+                for x in 0..<width where pixels[y * context.bytesPerRow + x * 4 + 3] > 32 {
+                    rowHasInk = true
+                    break
+                }
+                if rowHasInk && !previousRowHadInk { paintedLines += 1 }
+                previousRowHadInk = rowHasInk
+            }
+            XCTAssertGreaterThan(
+                paintedLines, 1, "A multiline description must paint wrapped lines.")
+            XCTAssertLessThanOrEqual(
+                paintedLines, 3, "Description ink must fit the three-line limit.")
+            let bitmap = try XCTUnwrap(card.bitmapImageRepForCachingDisplay(in: card.bounds))
+            card.cacheDisplay(in: card.bounds, to: bitmap)
+            let attachment = XCTAttachment(
+                data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+            attachment.name = "Native link preview with wrapped description"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            _ = bind(message, outgoing: true)
+            native.layoutSubtreeIfNeeded()
+            XCTAssertFalse(summary.isHidden)
             let text = try XCTUnwrap(messageText(in: native))
             XCTAssertGreaterThanOrEqual(
                 native.convert(card.bounds, from: card).minY,
@@ -83,6 +154,21 @@
             XCTAssertTrue(try XCTUnwrap(layout.textGeometry).metadataFrame.isEmpty)
             card.performClick(nil)
             XCTAssertEqual(opened?.absoluteString, destination)
+            let describedHeight = card.frame.height
+            let compact = try TimelineTestFixtures.message(
+                id: 1, at: 1,
+                fields: [
+                    "message": "Both worth reading:\n\(destination)",
+                    "metadata": [
+                        "linkPreviews": [
+                            ["url": destination, "status": "ready", "title": "How sync works"]
+                        ]
+                    ],
+                ])
+            _ = bind(compact, outgoing: false)
+            native.layoutSubtreeIfNeeded()
+            XCTAssertTrue(summary.isHidden)
+            XCTAssertLessThan(card.frame.height, describedHeight)
             let plain = try TimelineTestFixtures.message(id: 2, at: 2, text: "No preview")
             let plainLayout = bind(plain, outgoing: false)
             XCTAssertNil(plainLayout.frames[.metadata])
@@ -94,6 +180,10 @@
         }
 
         func testLinkCardsFollowCaptionAndFilterUnavailableStates() throws {
+            let description = """
+                How we trimmed launch work, lazy-loaded the sidebar \
+                and moved sync off the main thread.
+                """
             for type in [MessageType.text, .file, .audio] {
                 for bodySize: CGFloat in [17, 34] {
                     let message = try TimelineTestFixtures.message(
@@ -120,6 +210,7 @@
                                     [
                                         "url": "https://example.com/a", "status": "ready",
                                         "title": "A",
+                                        "description": description,
                                     ],
                                     [
                                         "url": "https://example.com/b", "status": "ready",
@@ -128,6 +219,7 @@
                                     [
                                         "url": "https://example.com/c", "status": "ready",
                                         "title": "C",
+                                        "description": " \n ",
                                     ],
                                     [
                                         "url": "https://example.com/d", "status": "ready",
@@ -167,6 +259,9 @@
                     XCTAssertGreaterThanOrEqual(footer.minY, last.maxY)
                     XCTAssertTrue(bubble.contains(footer))
                     XCTAssertTrue(try XCTUnwrap(layout.textGeometry).metadataFrame.isEmpty)
+                    XCTAssertGreaterThan(
+                        first.height, layout.linkPreviewFrames[1].height)
+                    XCTAssertEqual(layout.linkPreviewFrames[1].height, last.height)
                 }
             }
         }
