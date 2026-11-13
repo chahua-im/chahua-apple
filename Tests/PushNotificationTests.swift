@@ -37,7 +37,8 @@ final class PushNotificationTests: XCTestCase {
         }.value
         await fulfillment(of: [completed], timeout: 2)
 
-        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
         appDelegate.coordinator = notifications
         notifications.setSession(uid: 1)
         let route = try XCTUnwrap(notifications.takeNavigation())
@@ -51,7 +52,8 @@ final class PushNotificationTests: XCTestCase {
         let previousDelegate = center.delegate
         defer { center.delegate = previousDelegate }
         let appDelegate = PushAppDelegate()
-        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
         appDelegate.coordinator = notifications
         let delegate: any UNUserNotificationCenterDelegate = appDelegate
         let response = try XCTUnwrap(
@@ -75,7 +77,8 @@ final class PushNotificationTests: XCTestCase {
 
     func testQuickReplyQueuesThreadTargetAndRejectsBlankText() async throws {
         let recorder = QuickReplyRecorder()
-        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
         notifications.setQuickReplySender { uid, route, text in
             await recorder.append(.init(uid: uid, route: route, text: text))
         }
@@ -104,7 +107,8 @@ final class PushNotificationTests: XCTestCase {
         let recorder = QuickReplyRecorder()
         let completion = QuickReplyCompletion()
         let notifications = PushNotificationCoordinator(
-            api: nil, namespace: namespace, defaults: defaults)
+            api: nil, namespace: namespace, defaults: defaults,
+            authorizationStatusProvider: { .authorized })
         notifications.setQuickReplySender { uid, route, text in
             await recorder.append(.init(uid: uid, route: route, text: text))
         }
@@ -138,7 +142,8 @@ final class PushNotificationTests: XCTestCase {
         defaults.set(registration, forKey: "APNsRegistration." + namespace)
         let recorder = QuickReplyRecorder()
         let notifications = PushNotificationCoordinator(
-            api: nil, namespace: namespace, defaults: defaults)
+            api: nil, namespace: namespace, defaults: defaults,
+            authorizationStatusProvider: { .authorized })
         notifications.setQuickReplySender { uid, route, text in
             await recorder.append(.init(uid: uid, route: route, text: text))
         }
@@ -172,7 +177,8 @@ final class PushNotificationTests: XCTestCase {
     func testSignedAPNsEnvironmentOverridesBuildMetadata() {
         let notifications = PushNotificationCoordinator(
             api: nil, namespace: UUID().uuidString,
-            environment: "development", signedEntitlement: "production")
+            environment: "development", signedEntitlement: "production",
+            authorizationStatusProvider: { .authorized })
         XCTAssertEqual(notifications.configuredEnvironment, .sandbox)
         XCTAssertEqual(notifications.signedEnvironment, .production)
         XCTAssertEqual(notifications.apnsEnvironment, .production)
@@ -188,7 +194,8 @@ final class PushNotificationTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let api = PushSubscriptionStore()
         let notifications = PushNotificationCoordinator(
-            api: api, namespace: suite, defaults: defaults, environment: "development")
+            api: api, namespace: suite, defaults: defaults, environment: "development",
+            authorizationStatusProvider: { .authorized })
         notifications.setSession(uid: 1)
         notifications.didRegister(deviceToken: Data([1, 2]))
         await notifications.disableNotifications()
@@ -198,13 +205,18 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertFalse(subscribed)
 
         let restored = PushNotificationCoordinator(
-            api: api, namespace: suite, defaults: defaults, environment: "development")
+            api: api, namespace: suite, defaults: defaults, environment: "development",
+            authorizationStatusProvider: { .authorized })
         restored.setSession(uid: 1)
+        await restored.refreshAuthorization()
+        XCTAssertEqual(restored.authorizationStatus, .authorized)
         restored.didRegister(deviceToken: Data([1, 2]))
         await restored.refreshAuthorization()
         XCTAssertTrue(restored.notificationsDisabled)
         XCTAssertFalse(restored.isRegistered)
         XCTAssertFalse(restored.isRegistering)
+        let restoredSubscription = await api.isSubscribed
+        XCTAssertFalse(restoredSubscription)
     }
 
     func testFailedUnsubscribeDoesNotClaimDisabledAndCanBeRetried() async throws {
@@ -214,7 +226,8 @@ final class PushNotificationTests: XCTestCase {
         let api = PushSubscriptionStore()
         await api.setFailUnsubscribe(true)
         let notifications = PushNotificationCoordinator(
-            api: api, namespace: suite, defaults: defaults, environment: "development")
+            api: api, namespace: suite, defaults: defaults, environment: "development",
+            authorizationStatusProvider: { .authorized })
         notifications.setSession(uid: 1)
         notifications.didRegister(deviceToken: Data([1, 2]))
         await notifications.disableNotifications()
@@ -288,7 +301,8 @@ final class PushNotificationTests: XCTestCase {
     }
 
     func testColdLaunchRouteIsClaimedOnceAndAccountSwitchDiscardsOldRoute() throws {
-        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
         let route = try XCTUnwrap(
             PushNotificationRoute(userInfo: [
                 "wettyChat": [
@@ -306,7 +320,8 @@ final class PushNotificationTests: XCTestCase {
     }
 
     func testForegroundSuppressionRequiresSameConversationInActiveScene() throws {
-        let notifications = PushNotificationCoordinator(api: nil, namespace: UUID().uuidString)
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
         let route = try XCTUnwrap(
             PushNotificationRoute(userInfo: [
                 "wettyChat": [

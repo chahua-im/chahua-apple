@@ -14,6 +14,8 @@ Detail-menu verification: in both DM and group information, confirm duration and
 
 **Settings → Push Notifications** separates the device's **Enable Push Notifications** switch from the **Notification Settings** group, whose **Direct messages / Groups** rows show each account default as On/Off. Open a category to manage its default and server-counted exception list. Exceptions support search when adding from active or archived chats, paging, individual removal, and confirmed bulk removal. Changes synchronize across clients; reconnect refreshes defaults, and a single nearest-expiry timer updates mute indicators without polling. Tap the push-switch row five times consecutively to reveal **Debug** authorization, APNs, registration details, and recovery actions; leaving the page hides them again. Permission-denied help and operation errors remain visible without unlocking Debug.
 
+Disabling device push persists across relaunch and ignores late APNs token callbacks, even while system permission remains granted. Only a successful explicit authorization request clears that opt-out.
+
 Tap an individual exception to edit it; the exception list has no inline Remove action. The detail sheet offers **Remove from exceptions**, then **Notifications → Always On / Always Off** with a checkmark on the draft selection. **X** cancels without saving; the toolbar **checkmark** saves. Removal immediately restores the account default and closes the sheet.
 
 **Add exception** lists chats with a 40-point avatar and display name, using the same avatar fallback as the existing exception list. The entire row remains clickable; search and adding behavior are unchanged. Manually check DM and group rows, including a chat without an avatar.

@@ -38,6 +38,7 @@ final class PushNotificationCoordinator: ObservableObject {
     }
     private let api: (any PushSubscriptionProviding)?
     private let center: UNUserNotificationCenter
+    private let authorizationStatusProvider: @MainActor @Sendable () async -> UNAuthorizationStatus
     private let defaults: UserDefaults
     private let storageKey: String
     private let environment: APNsEnvironment?
@@ -65,10 +66,15 @@ final class PushNotificationCoordinator: ObservableObject {
         center: UNUserNotificationCenter = .current(), defaults: UserDefaults = .standard,
         environment: String? = Bundle.main.object(forInfoDictionaryKey: "ChahuaAPNSEnvironment")
             as? String,
-        signedEntitlement: String? = nil
+        signedEntitlement: String? = nil,
+        authorizationStatusProvider: (@MainActor @Sendable () async -> UNAuthorizationStatus)? = nil
     ) {
         self.api = api
         self.center = center
+        self.authorizationStatusProvider =
+            authorizationStatusProvider ?? {
+                await center.notificationSettings().authorizationStatus
+            }
         self.defaults = defaults
         storageKey = "APNsRegistration." + namespace
         notificationsDisabled = defaults.bool(forKey: storageKey + ".disabled")
@@ -162,9 +168,9 @@ final class PushNotificationCoordinator: ObservableObject {
 
     func refreshAuthorization() async {
         let requestGeneration = generation
-        let settings = await center.notificationSettings()
+        let status = await authorizationStatusProvider()
         guard !Task.isCancelled, requestGeneration == generation else { return }
-        authorizationStatus = settings.authorizationStatus
+        authorizationStatus = status
         guard uid != nil, !isSigningOut, !isUnregistering, !notificationsDisabled, api != nil else {
             return
         }
