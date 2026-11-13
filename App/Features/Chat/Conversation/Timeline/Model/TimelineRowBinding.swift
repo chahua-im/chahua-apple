@@ -43,9 +43,10 @@ struct TimelineBubbleActions {
     var toggleReaction: ((TimelineMessageRow, String) -> Void)?
     var pendingReactionMessageIDs: Set<MessageID> = []
     var interactionContext = MessageInteractionContext()
-    var modifiablePendingMessageIDs: Set<String> = []
-    var blockPendingMessage: ((PendingOutgoingMessage) -> Void)?
-    var revokePendingMessage: ((PendingOutgoingMessage) -> Void)?
+    var editablePendingMessageIDs: Set<String> = []
+    var cancellablePendingMessageIDs: Set<String> = []
+    var editPendingMessage: ((PendingOutgoingMessage) -> Void)?
+    var cancelPendingMessage: ((PendingOutgoingMessage) -> Void)?
     var isSelectingMessages = false
     var selectedMessageIDs: Set<MessageID> = []
     var toggleMessageSelection: ((MessageResponse) -> Void)?
@@ -97,10 +98,11 @@ extension TimelineBubbleActions {
             && (openFailedMessage == nil) == (other.openFailedMessage == nil)
             && (openContextMenu == nil) == (other.openContextMenu == nil)
             && (toggleReaction == nil) == (other.toggleReaction == nil)
-            && (blockPendingMessage == nil) == (other.blockPendingMessage == nil)
-            && (revokePendingMessage == nil) == (other.revokePendingMessage == nil)
+            && (editPendingMessage == nil) == (other.editPendingMessage == nil)
+            && (cancelPendingMessage == nil) == (other.cancelPendingMessage == nil)
             && pendingReactionMessageIDs == other.pendingReactionMessageIDs
-            && modifiablePendingMessageIDs == other.modifiablePendingMessageIDs
+            && editablePendingMessageIDs == other.editablePendingMessageIDs
+            && cancellablePendingMessageIDs == other.cancellablePendingMessageIDs
             && interactionContext == other.interactionContext
             && isSelectingMessages == other.isSelectingMessages
             && selectedMessageIDs == other.selectedMessageIDs
@@ -111,6 +113,18 @@ extension TimelineBubbleActions {
             && isSelectionBusy == other.isSelectionBusy
             && (removeSelectedMessage == nil) == (other.removeSelectedMessage == nil)
             && (openAttachment == nil) == (other.openAttachment == nil)
+    }
+
+    func canEditPendingMessage(_ pending: PendingOutgoingMessage) -> Bool {
+        editablePendingMessageIDs.contains(pending.clientGeneratedID)
+            && editPendingMessage != nil
+            && pending.messageType == .text
+            && pending.forwardRequest == nil
+    }
+
+    func canCancelPendingMessage(_ pending: PendingOutgoingMessage) -> Bool {
+        cancellablePendingMessageIDs.contains(pending.clientGeneratedID)
+            && cancelPendingMessage != nil
     }
 
     func pinContext(for row: TimelineMessageRow, base: MessageInteractionContext)

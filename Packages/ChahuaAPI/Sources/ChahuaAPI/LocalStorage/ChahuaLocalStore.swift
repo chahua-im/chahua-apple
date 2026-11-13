@@ -24,21 +24,24 @@ public final class ChahuaLocalStore: Sendable {
 
     public func restore() async throws -> [LocalConversationSnapshot] {
         try await database.write { db in
-            let interrupted = try Row.fetchAll(
-                db,
-                sql:
-                    "SELECT DISTINCT chat_id, thread_id FROM outgoing_message WHERE state = 'sending'"
-            )
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET state = 'queued', dispatch_claimed = 1 WHERE state = 'sending'"
-            )
-            for row in interrupted { try Self.bump(db, Self.key(row)) }
-            return try Row.fetchAll(
+            let keys = try Row.fetchAll(
                 db,
                 sql: "SELECT chat_id, thread_id FROM local_conversation ORDER BY chat_id, thread_id"
             )
-            .map { try Self.snapshot(db, Self.key($0), directory: self.directory) }
+            .map(Self.key)
+            for key in keys {
+                let froze = try Self.freezeLegacyClaims(db, key, directory: self.directory)
+                try db.execute(
+                    sql: """
+                        UPDATE outgoing_message SET state = 'queued',
+                            dispatch_claimed = CASE WHEN state = 'sending' THEN 1 ELSE dispatch_claimed END
+                        WHERE chat_id = ? AND thread_id = ?
+                        AND (state = 'sending' OR (state = 'failed' AND mutation_retryable = 1))
+                        """,
+                    arguments: [key.chatID, key.threadID ?? ""])
+                if db.changesCount > 0 || froze { try Self.bump(db, key) }
+            }
+            return try keys.map { try Self.snapshot(db, $0, directory: self.directory) }
         }
     }
 
@@ -378,102 +381,161 @@ public final class ChahuaLocalStore: Sendable {
         return try await database.write { db in
             try Self.ensure(db, key)
             let before = try Self.snapshot(db, key, directory: self.directory)
-            let matching =
-                before.composingItem?.clientGeneratedID == itemID
-                ? before.composingItem
-                : before.outgoing.first { $0.clientGeneratedID == itemID }
-            guard let item = matching,
-                !item.dispatchClaimed,
-                let index = item.attachments.firstIndex(where: {
+            guard
+                let item = (before.outgoing + [before.composingItem].compactMap { $0 })
+                    .first(where: { $0.clientGeneratedID == itemID }), !item.isCancelled
+            else { return before }
+            var originals = item.attachments
+            var intent = item.intentAttachments
+            var changed = false
+            // Checkpoints belong to a slot generation, never to a captured position or revision.
+            // The frozen create is intentionally not touched, even when its local slot is borrowed.
+            let belongsToIntent =
+                intent.map { selection in
+                    selection.contains {
+                        if case .local(let slot) = $0 {
+                            return slot.id == attachment.id
+                                && slot.generation == attachment.generation
+                        }
+                        return false
+                    }
+                } ?? true
+            if belongsToIntent,
+                let index = originals.firstIndex(where: {
                     $0.id == attachment.id && $0.generation == attachment.generation
-                })
-            else { return before }
-            let old = item.attachments[index]
-            guard old.sourcePath == attachment.sourcePath, old.previewPath == attachment.previewPath
-            else { return before }
-            guard old.isAudio == attachment.isAudio, old.isFile == attachment.isFile else {
-                throw LocalStorageError.invalidAttachments
+                }), let merged = try Self.mergeCheckpoint(attachment, into: originals[index])
+            {
+                originals[index] = merged
+                changed = true
             }
-            if old.isAudio || old.isFile {
-                guard attachment.preparedPath == old.preparedPath,
-                    attachment.mimeType == old.mimeType,
-                    attachment.fileName == old.fileName, attachment.byteCount == old.byteCount,
-                    attachment.width == old.width, attachment.height == old.height
-                else {
-                    throw LocalStorageError.invalidAttachments
-                }
+            if var selection = intent,
+                let index = selection.firstIndex(where: {
+                    if case .local(let slot) = $0 {
+                        return slot.id == attachment.id && slot.generation == attachment.generation
+                    }
+                    return false
+                }), case .local(let old) = selection[index],
+                let merged = try Self.mergeCheckpoint(attachment, into: old)
+            {
+                selection[index] = .local(merged)
+                intent = selection
+                changed = true
             }
-            // A late preparation completion cannot roll back a successful PUT.
-            guard old.attachmentID == nil || old.attachmentID == attachment.attachmentID else {
-                return before
+            guard changed else { return before }
+            try Self.validateAttachments(originals, directory: self.directory, requireSource: false)
+            if let intent {
+                try Self.validateEditAttachments(
+                    intent, directory: self.directory, requireSource: false)
             }
-            // Workers may finish after a reorder. Merge their content checkpoint into
-            // the latest durable position rather than restoring their captured order.
-            var updated = attachment
-            updated.position = old.position
-            guard updated != old else { return before }
-            var slots = item.attachments
-            slots[index] = updated
-            try Self.validateAttachments(slots, directory: self.directory, requireSource: false)
-            // Sent voice/files use the message retry sheet. Persist failure with the upload
-            // checkpoint; blocked drafts retain per-attachment retry without stopping workers.
             let state =
                 !item.isBlocked && (item.messageType == .audio || item.messageType == .file)
-                    && updated.error != nil
+                    && attachment.error != nil && item.confirmedMessage == nil
                 ? LocalOutgoingMessage.State.failed : item.state
             try db.execute(
                 sql:
-                    "UPDATE outgoing_message SET attachments = ?, state = ? WHERE client_generated_id = ?",
+                    "UPDATE outgoing_message SET attachments = ?, intent_attachments = ?, state = ? WHERE client_generated_id = ?",
                 arguments: [
-                    try Self.encodeAttachments(slots, directory: self.directory), state.rawValue,
-                    itemID,
+                    try Self.encodeAttachments(originals, directory: self.directory),
+                    try intent.map {
+                        try Self.encodeEditAttachments($0, directory: self.directory)
+                    },
+                    state.rawValue, itemID,
                 ])
             try Self.bump(db, key)
             return try Self.snapshot(db, key, directory: self.directory)
         }
     }
 
-    public func blockTail(
-        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64
+    public func editOutgoing(
+        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64,
+        text: String, attachments: [LocalEditAttachment]
     ) async throws -> LocalConversationSnapshot {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await database.write { db in
             try Self.ensure(db, key)
+            _ = try Self.freezeLegacyClaims(db, key, directory: self.directory)
             let before = try Self.snapshot(db, key, directory: self.directory)
-            let item = try Self.editableTail(
+            let item = try Self.releasedItem(
                 before, itemID: itemID, expectedRevision: expectedRevision)
-            guard item.forwardRequest == nil,
-                item.messageType == .text || item.messageType == .file
-            else {
+            guard item.forwardRequest == nil, item.messageType == .text else {
                 throw LocalStorageError.unsupportedMessageType
             }
-            guard !item.isBlocked else { return before }
-            let revision = max(before.draft.editRevision, item.editRevision) + 1
-            let date = Date()
+            guard !trimmed.isEmpty || !attachments.isEmpty else {
+                throw LocalStorageError.blankMessage
+            }
+            let existing =
+                (item.intentAttachments ?? item.attachments.map(LocalEditAttachment.local))
+                .compactMap { selection -> LocalOutgoingAttachment? in
+                    if case .local(let slot) = selection { return slot }
+                    return nil
+                }
+            let knownServer = Set(
+                (item.confirmedMessage?.attachments ?? [])
+                    + (item.intentAttachments ?? []).compactMap {
+                        if case .server(let attachment) = $0 { return attachment }
+                        return nil
+                    })
+            let selection = try attachments.enumerated().map { position, proposed in
+                switch proposed {
+                case .local(var slot):
+                    if let old = existing.first(where: { $0.id == slot.id }) {
+                        guard old.generation == slot.generation,
+                            old.sourcePath == slot.sourcePath, old.previewPath == slot.previewPath
+                        else { throw LocalStorageError.staleDraft }
+                        slot = old
+                    }
+                    slot.position = position
+                    return LocalEditAttachment.local(slot)
+                case .server(let attachment):
+                    guard knownServer.contains(attachment) else {
+                        throw LocalStorageError.invalidAttachments
+                    }
+                    return .server(attachment)
+                }
+            }
+            try Self.validateEditAttachments(selection, directory: self.directory)
+            // A failed, already-claimed PATCH must replay before the newly submitted intent.
+            let state: LocalOutgoingMessage.State =
+                item.confirmedMessage == nil && item.dispatchClaimed && item.state == .sending
+                ? .sending : .queued
             try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET is_blocked = 1, state = 'queued', edit_revision = ?, updated_at = ? WHERE client_generated_id = ?",
-                arguments: [revision, date.timeIntervalSince1970, itemID])
-            try Self.writeRevision(db, key, revision, date)
+                sql: """
+                    UPDATE outgoing_message SET text = ?, intent_attachments = ?, edit_revision = ?,
+                        state = ?, mutation_retryable = 0, speaking_restriction = NULL, updated_at = ?
+                    WHERE client_generated_id = ?
+                    """,
+                arguments: [
+                    trimmed, try Self.encodeEditAttachments(selection, directory: self.directory),
+                    item.editRevision + 1, state.rawValue, Date().timeIntervalSince1970, itemID,
+                ])
             try Self.bump(db, key)
             return try Self.snapshot(db, key, directory: self.directory)
         }
     }
 
-    public func revokeTail(
+    public func cancelOutgoing(
         chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64
     ) async throws -> LocalConversationSnapshot {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         return try await database.write { db in
             try Self.ensure(db, key)
+            _ = try Self.freezeLegacyClaims(db, key, directory: self.directory)
             let before = try Self.snapshot(db, key, directory: self.directory)
-            let item = try Self.editableTail(
+            let item = try Self.releasedItem(
                 before, itemID: itemID, expectedRevision: expectedRevision)
-            try db.execute(
-                sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?",
-                arguments: [itemID])
-            try Self.writeRevision(
-                db, key, max(before.draft.editRevision, item.editRevision) + 1, Date())
+            if item.dispatchClaimed || item.confirmedMessage != nil {
+                try db.execute(
+                    sql: """
+                        UPDATE outgoing_message SET is_cancelled = 1, edit_revision = edit_revision + 1,
+                            state = 'queued', mutation_retryable = 0, speaking_restriction = NULL
+                        WHERE client_generated_id = ?
+                        """, arguments: [itemID])
+            } else {
+                try db.execute(
+                    sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?",
+                    arguments: [itemID])
+            }
             try Self.bump(db, key)
             return try Self.snapshot(db, key, directory: self.directory)
         }
@@ -485,18 +547,27 @@ public final class ChahuaLocalStore: Sendable {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         return try await database.write { db in
             try Self.ensure(db, key)
+            let froze = try Self.freezeLegacyClaims(db, key, directory: self.directory)
             let before = try Self.snapshot(db, key, directory: self.directory)
-            guard let head = before.outgoing.first, head.state == .queued, head.isReadyForDispatch
+            guard
+                let head = before.outgoing.first(where: {
+                    $0.confirmedMessage == nil && !$0.isCancelled
+                }), head.state == .queued, head.isReadyForDispatch
             else {
-                return LocalOutgoingClaim(snapshot: before, message: nil)
+                if froze { try Self.bump(db, key) }
+                return LocalOutgoingClaim(
+                    snapshot: try Self.snapshot(db, key, directory: self.directory), message: nil)
             }
+            try Self.freeze(db, head)
             try db.execute(
                 sql:
                     "UPDATE outgoing_message SET state = 'sending', dispatch_claimed = 1 WHERE client_generated_id = ?",
                 arguments: [head.clientGeneratedID])
             try Self.bump(db, key)
             let snapshot = try Self.snapshot(db, key, directory: self.directory)
-            return LocalOutgoingClaim(snapshot: snapshot, message: snapshot.outgoing.first)
+            return LocalOutgoingClaim(
+                snapshot: snapshot,
+                message: snapshot.outgoing.first { $0.clientGeneratedID == head.clientGeneratedID })
         }
     }
 
@@ -509,7 +580,7 @@ public final class ChahuaLocalStore: Sendable {
             try Self.ensure(db, key)
             try db.execute(
                 sql:
-                    "UPDATE outgoing_message SET state = 'failed', speaking_restriction = ? WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND is_blocked = 0 AND (state != 'failed' OR speaking_restriction IS NOT ?)",
+                    "UPDATE outgoing_message SET state = 'failed', speaking_restriction = ? WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND is_blocked = 0 AND confirmed_message IS NULL AND is_cancelled = 0 AND (state != 'failed' OR speaking_restriction IS NOT ?)",
                 arguments: [
                     speakingRestriction?.rawValue, chatID, threadID ?? "", clientGeneratedID,
                     speakingRestriction?.rawValue,
@@ -534,15 +605,34 @@ public final class ChahuaLocalStore: Sendable {
             var changed = false
             for item in selected where item.state != .sending {
                 var slots = item.attachments
+                var selection = item.intentAttachments
                 if !item.dispatchClaimed {
                     for index in slots.indices { slots[index].error = nil }
                 }
-                guard item.state == .failed || slots != item.attachments else { continue }
+                if var intent = selection {
+                    for index in intent.indices {
+                        if case .local(var slot) = intent[index] {
+                            slot.error = nil
+                            intent[index] = .local(slot)
+                        }
+                    }
+                    selection = intent
+                }
+                guard
+                    item.state == .failed || slots != item.attachments
+                        || selection != item.intentAttachments
+                else { continue }
                 try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET state = 'queued', attachments = ?, speaking_restriction = NULL WHERE client_generated_id = ?",
+                    sql: """
+                        UPDATE outgoing_message SET state = 'queued', attachments = ?,
+                            intent_attachments = ?, mutation_retryable = 0, speaking_restriction = NULL
+                        WHERE client_generated_id = ?
+                        """,
                     arguments: [
                         try Self.encodeAttachments(slots, directory: self.directory),
+                        try selection.map {
+                            try Self.encodeEditAttachments($0, directory: self.directory)
+                        },
                         item.clientGeneratedID,
                     ])
                 changed = true
@@ -552,18 +642,389 @@ public final class ChahuaLocalStore: Sendable {
         }
     }
 
-    public func acknowledge(chatID: String, threadID: String? = nil, clientGeneratedID: String)
-        async throws -> LocalConversationSnapshot
+    public func acceptCreate(_ message: MessageResponse, published: Bool) async throws
+        -> LocalOutgoingTransition
+    {
+        let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
+        return try await database.write { db in
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            guard
+                let item = before.outgoing.first(where: {
+                    $0.clientGeneratedID == message.clientGeneratedId
+                })
+            else {
+                let exists =
+                    try Bool.fetchOne(
+                        db,
+                        sql:
+                            "SELECT EXISTS(SELECT 1 FROM outgoing_message WHERE client_generated_id = ?)",
+                        arguments: [message.clientGeneratedId]) ?? false
+                guard !exists else { throw LocalStorageError.staleDraft }
+                return LocalOutgoingTransition(
+                    snapshot: before, clientGeneratedID: message.clientGeneratedId,
+                    disposition: .completed)
+            }
+            try Self.validateIdentity(message, item: item)
+            if item.dispatchClaimed && item.frozenCreate == nil && item.intentAttachments != nil {
+                throw LocalStorageError.corruptRecord
+            }
+            try Self.freeze(db, item)
+            let frozenRevision = item.frozenCreate?.revision ?? item.editRevision
+            // Realtime can confirm a PATCH before the held create HTTP response returns.
+            // Never let that older response replace the acknowledged mutation.
+            let replace =
+                item.confirmedMessage == nil
+                || (item.acknowledgedRevision <= frozenRevision && !item.isPublished)
+            try db.execute(
+                sql: """
+                    UPDATE outgoing_message SET confirmed_message = ?, is_published = ?,
+                        acknowledged_revision = ?, dispatch_claimed = 1,
+                        state = ?, mutation_retryable = ?
+                    WHERE client_generated_id = ?
+                    """,
+                arguments: [
+                    try JSONEncoder().encode(replace ? message : item.confirmedMessage!),
+                    item.isPublished || published, max(item.acknowledgedRevision, frozenRevision),
+                    item.state == .failed && (item.isCancelled || item.claimedPatch != nil)
+                        ? "failed" : "queued",
+                    item.mutationRetryable, item.clientGeneratedID,
+                ])
+            try Self.bump(db, key)
+            return try Self.transition(
+                db, key, itemID: item.clientGeneratedID, directory: self.directory)
+        }
+    }
+
+    public func claimPatch(chatID: String, threadID: String? = nil, itemID: String) async throws
+        -> LocalOutgoingPatchClaim
     {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         return try await database.write { db in
             try Self.ensure(db, key)
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }),
+                item.confirmedMessage != nil, item.isPublished, !item.isCancelled,
+                item.state != .failed, item.editRevision > item.acknowledgedRevision
+            else { return LocalOutgoingPatchClaim(snapshot: before, patch: nil) }
+            let patch: LocalClaimedPatch
+            if let claimed = item.claimedPatch {
+                patch = claimed
+            } else {
+                let selection =
+                    item.intentAttachments ?? item.attachments.map(LocalEditAttachment.local)
+                guard
+                    selection.allSatisfy({
+                        if case .local(let slot) = $0 {
+                            return slot.attachmentID != nil && slot.error == nil
+                        }
+                        return true
+                    })
+                else { return LocalOutgoingPatchClaim(snapshot: before, patch: nil) }
+                guard item.forwardRequest == nil, item.messageType == .text else {
+                    throw LocalStorageError.unsupportedMessageType
+                }
+                patch = LocalClaimedPatch(
+                    text: item.text,
+                    attachmentIDs: selection.map {
+                        switch $0 {
+                        case .local(let slot): return slot.attachmentID!
+                        case .server(let attachment): return attachment.id
+                        }
+                    }, revision: item.editRevision)
+            }
             try db.execute(
                 sql:
-                    "DELETE FROM outgoing_message WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND is_blocked = 0",
-                arguments: [chatID, threadID ?? "", clientGeneratedID])
-            if db.changesCount > 0 { try Self.bump(db, key) }
+                    "UPDATE outgoing_message SET claimed_patch = ?, state = 'sending', mutation_retryable = 0 WHERE client_generated_id = ?",
+                arguments: [try JSONEncoder().encode(patch), itemID])
+            try Self.bump(db, key)
+            return LocalOutgoingPatchClaim(
+                snapshot: try Self.snapshot(db, key, directory: self.directory), patch: patch)
+        }
+    }
+
+    public func acceptPatch(_ message: MessageResponse, itemID: String, revision: Int64)
+        async throws
+        -> LocalOutgoingTransition
+    {
+        let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
+        return try await database.write { db in
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            guard revision >= 0, message.clientGeneratedId == itemID else {
+                throw LocalStorageError.staleDraft
+            }
+            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }) else {
+                let exists =
+                    try Bool.fetchOne(
+                        db,
+                        sql:
+                            "SELECT EXISTS(SELECT 1 FROM outgoing_message WHERE client_generated_id = ?)",
+                        arguments: [itemID]) ?? false
+                guard !exists else { throw LocalStorageError.staleDraft }
+                return LocalOutgoingTransition(
+                    snapshot: before, clientGeneratedID: itemID, disposition: .completed)
+            }
+            try Self.validateIdentity(message, item: item)
+            guard let confirmed = item.confirmedMessage, confirmed.id == message.id else {
+                throw LocalStorageError.staleDraft
+            }
+            if revision <= item.acknowledgedRevision {
+                let disposition: LocalOutgoingDisposition =
+                    item.isCancelled
+                    ? .cancelled
+                    : item.isPublished && item.acknowledgedRevision == item.editRevision
+                        && item.claimedPatch == nil ? .completed : .retained
+                return LocalOutgoingTransition(
+                    snapshot: before, clientGeneratedID: itemID, disposition: disposition)
+            }
+            guard item.claimedPatch?.revision == revision else {
+                throw LocalStorageError.staleDraft
+            }
+            try db.execute(
+                sql: """
+                    UPDATE outgoing_message SET confirmed_message = ?, acknowledged_revision = ?,
+                        claimed_patch = NULL, state = ?, mutation_retryable = ?
+                    WHERE client_generated_id = ?
+                    """,
+                arguments: [
+                    try JSONEncoder().encode(item.isCancelled ? confirmed : message),
+                    max(item.acknowledgedRevision, revision),
+                    item.isCancelled ? item.state.rawValue : "queued",
+                    item.isCancelled && item.mutationRetryable, itemID,
+                ])
+            try Self.bump(db, key)
+            return try Self.transition(db, key, itemID: itemID, directory: self.directory)
+        }
+    }
+
+    public func acceptDelete(chatID: String, threadID: String? = nil, itemID: String) async throws
+        -> LocalOutgoingTransition
+    {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        return try await database.write { db in
+            try Self.ensure(db, key)
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }),
+                item.confirmedMessage != nil
+            else { throw LocalStorageError.staleDraft }
+            try db.execute(
+                sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?",
+                arguments: [itemID])
+            try Self.bump(db, key)
+            return LocalOutgoingTransition(
+                snapshot: try Self.snapshot(db, key, directory: self.directory),
+                clientGeneratedID: itemID, disposition: .cancelled)
+        }
+    }
+
+    public func finalizeOutgoing(
+        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64
+    ) async throws -> LocalConversationSnapshot {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        return try await database.write { db in
+            try Self.ensure(db, key)
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }),
+                item.confirmedMessage != nil, item.isPublished, !item.isCancelled,
+                item.editRevision == expectedRevision,
+                item.acknowledgedRevision == expectedRevision,
+                item.claimedPatch == nil
+            else { return before }
+            try db.execute(
+                sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?",
+                arguments: [itemID])
+            try Self.bump(db, key)
             return try Self.snapshot(db, key, directory: self.directory)
+        }
+    }
+
+    public func failMutation(
+        chatID: String, threadID: String? = nil, itemID: String, patchRevision: Int64?,
+        retryable: Bool
+    ) async throws -> LocalConversationSnapshot {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        return try await database.write { db in
+            try Self.ensure(db, key)
+            let before = try Self.snapshot(db, key, directory: self.directory)
+            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }) else {
+                return before
+            }
+            if let patchRevision {
+                guard !item.isCancelled, item.claimedPatch?.revision == patchRevision else {
+                    return before
+                }
+            } else {
+                guard item.isCancelled else { return before }
+            }
+            try db.execute(
+                sql:
+                    "UPDATE outgoing_message SET state = 'failed', mutation_retryable = ? WHERE client_generated_id = ?",
+                arguments: [retryable, itemID])
+            try Self.bump(db, key)
+            return try Self.snapshot(db, key, directory: self.directory)
+        }
+    }
+
+    private static func releasedItem(
+        _ snapshot: LocalConversationSnapshot, itemID: String, expectedRevision: Int64
+    ) throws -> LocalOutgoingMessage {
+        guard let item = snapshot.outgoing.first(where: { $0.clientGeneratedID == itemID }),
+            !item.isCancelled, item.editRevision == expectedRevision
+        else { throw LocalStorageError.staleDraft }
+        return item
+    }
+
+    private static func validateIdentity(_ message: MessageResponse, item: LocalOutgoingMessage)
+        throws
+    {
+        guard message.chatId == item.chatID, message.replyRootId == item.threadID,
+            message.clientGeneratedId == item.clientGeneratedID,
+            message.sender.uid == item.senderID,
+            item.confirmedMessage.map({ $0.id == message.id }) ?? true
+        else { throw LocalStorageError.staleDraft }
+    }
+
+    private static func transition(
+        _ db: Database, _ key: ConversationKey, itemID: String, directory: URL
+    ) throws -> LocalOutgoingTransition {
+        let snapshot = try snapshot(db, key, directory: directory)
+        guard let item = snapshot.outgoing.first(where: { $0.clientGeneratedID == itemID }) else {
+            throw LocalStorageError.staleDraft
+        }
+        let disposition: LocalOutgoingDisposition =
+            item.isCancelled
+            ? .cancelled
+            : item.isPublished && item.acknowledgedRevision == item.editRevision
+                && item.claimedPatch == nil
+                ? .completed : .retained
+        return LocalOutgoingTransition(
+            snapshot: snapshot, clientGeneratedID: itemID, disposition: disposition)
+    }
+
+    private static func freezeLegacyClaims(
+        _ db: Database, _ key: ConversationKey, directory: URL
+    ) throws -> Bool {
+        guard
+            try Bool.fetchOne(
+                db,
+                sql: """
+                    SELECT EXISTS(SELECT 1 FROM outgoing_message
+                        WHERE chat_id = ? AND thread_id = ? AND frozen_create IS NULL
+                        AND (dispatch_claimed = 1 OR state = 'sending'))
+                    """, arguments: [key.chatID, key.threadID ?? ""]) == true
+        else { return false }
+        let items = try snapshot(db, key, directory: directory).outgoing
+        var changed = false
+        for item in items
+        where (item.dispatchClaimed || item.state == .sending) && item.frozenCreate == nil {
+            // Legacy claimed rows had no separate intent. A missing checkpoint or a
+            // post-claim selection cannot be used to guess the original POST payload.
+            guard item.intentAttachments == nil else { throw LocalStorageError.corruptRecord }
+            if !item.dispatchClaimed {
+                try db.execute(
+                    sql:
+                        "UPDATE outgoing_message SET dispatch_claimed = 1 WHERE client_generated_id = ?",
+                    arguments: [item.clientGeneratedID])
+            }
+            try freeze(db, item)
+            changed = true
+        }
+        return changed
+    }
+
+    private static func freeze(_ db: Database, _ item: LocalOutgoingMessage) throws {
+        guard item.frozenCreate == nil else { return }
+        guard !item.isBlocked, item.isReadyForDispatch,
+            item.forwardRequest != nil || item.messageType != .text
+                || !item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !(item.intentAttachments ?? item.attachments.map(LocalEditAttachment.local))
+                    .isEmpty
+        else { throw LocalStorageError.corruptRecord }
+        let frozen = LocalFrozenCreate(
+            body: item.forwardRequest == nil ? item.body : nil,
+            forwardRequest: item.forwardRequest, revision: item.editRevision)
+        try db.execute(
+            sql:
+                "UPDATE outgoing_message SET frozen_create = ? WHERE client_generated_id = ? AND frozen_create IS NULL",
+            arguments: [try JSONEncoder().encode(frozen), item.clientGeneratedID])
+    }
+
+    private static func mergeCheckpoint(
+        _ proposed: LocalOutgoingAttachment, into old: LocalOutgoingAttachment
+    ) throws -> LocalOutgoingAttachment? {
+        guard old.sourcePath == proposed.sourcePath, old.previewPath == proposed.previewPath else {
+            return nil
+        }
+        guard old.isAudio == proposed.isAudio, old.isFile == proposed.isFile else {
+            throw LocalStorageError.invalidAttachments
+        }
+        if old.isAudio || old.isFile {
+            guard proposed.preparedPath == old.preparedPath, proposed.mimeType == old.mimeType,
+                proposed.fileName == old.fileName, proposed.byteCount == old.byteCount,
+                proposed.width == old.width, proposed.height == old.height
+            else { throw LocalStorageError.invalidAttachments }
+        }
+        guard old.attachmentID == nil || old.attachmentID == proposed.attachmentID else {
+            return nil
+        }
+        var merged = proposed
+        merged.position = old.position
+        return merged == old ? nil : merged
+    }
+
+    private static func validateEditAttachments(
+        _ selection: [LocalEditAttachment], directory: URL, requireSource: Bool = true
+    ) throws {
+        guard selection.count <= 20 else { throw LocalStorageError.invalidAttachments }
+        var slotIDs = Set<String>()
+        var uploadedIDs = Set<String>()
+        for (position, selected) in selection.enumerated() {
+            switch selected {
+            case .local(var slot):
+                let mimeType = slot.mimeType.lowercased()
+                guard !slot.isFile, !slot.isAudio,
+                    mimeType.hasPrefix("image/") || mimeType.hasPrefix("video/"),
+                    slot.position == position, slotIDs.insert(slot.id).inserted
+                else { throw LocalStorageError.invalidAttachments }
+                if let id = slot.attachmentID, !uploadedIDs.insert(id).inserted {
+                    throw LocalStorageError.invalidAttachments
+                }
+                slot.position = 0
+                try validateAttachments([slot], directory: directory, requireSource: requireSource)
+            case .server(let attachment):
+                let kind = attachment.kind.lowercased()
+                guard !attachment.id.isEmpty, kind.hasPrefix("image") || kind.hasPrefix("video"),
+                    !attachment.url.isEmpty, attachment.size > 0,
+                    uploadedIDs.insert(attachment.id).inserted
+                else { throw LocalStorageError.invalidAttachments }
+            }
+        }
+    }
+
+    private static func encodeEditAttachments(
+        _ selection: [LocalEditAttachment], directory: URL
+    ) throws -> Data {
+        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        let stored = try selection.map { selected in
+            switch selected {
+            case .server: return selected
+            case .local(let slot):
+                return .local(try mapPaths(slot) { try relativePath($0, root: root) })
+            }
+        }
+        return try JSONEncoder().encode(stored)
+    }
+
+    private static func decodeEditAttachments(_ data: Data, directory: URL) throws
+        -> [LocalEditAttachment]
+    {
+        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        return try JSONDecoder().decode([LocalEditAttachment].self, from: data).map { selected in
+            switch selected {
+            case .server: return selected
+            case .local(let slot):
+                return .local(
+                    try mapPaths(slot) { try absolutePath($0, directory: directory, root: root) })
+            }
         }
     }
 
@@ -677,48 +1138,52 @@ public final class ChahuaLocalStore: Sendable {
 
     // SQLite stores account-relative references; the public worker/UI model uses absolute URLs.
     // Application containers can relocate while the account directory and database survive.
+    private static func mapPaths(
+        _ attachment: LocalOutgoingAttachment, transform: (String) throws -> String
+    ) rethrows -> LocalOutgoingAttachment {
+        var slot = attachment
+        slot.sourcePath = try transform(slot.sourcePath)
+        slot.previewPath = try transform(slot.previewPath)
+        slot.preparedPath = try slot.preparedPath.map(transform)
+        return slot
+    }
+
+    private static func relativePath(_ path: String, root: String) throws -> String {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        guard path.hasPrefix("/"), resolved.hasPrefix(root) else {
+            throw LocalStorageError.invalidAttachments
+        }
+        return String(resolved.dropFirst(root.count))
+    }
+
+    private static func absolutePath(_ path: String, directory: URL, root: String) throws -> String
+    {
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else {
+            throw LocalStorageError.corruptRecord
+        }
+        let url = directory.appendingPathComponent(path).standardizedFileURL
+        guard url.resolvingSymlinksInPath().path.hasPrefix(root) else {
+            throw LocalStorageError.corruptRecord
+        }
+        return url.path
+    }
+
     private static func encodeAttachments(_ attachments: [LocalOutgoingAttachment], directory: URL)
         throws -> Data
     {
         let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        func relative(_ path: String) throws -> String {
-            let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
-                .path
-            guard path.hasPrefix("/"), resolved.hasPrefix(root) else {
-                throw LocalStorageError.invalidAttachments
-            }
-            return String(resolved.dropFirst(root.count))
-        }
-        let stored = try attachments.map { attachment in
-            var slot = attachment
-            slot.sourcePath = try relative(slot.sourcePath)
-            slot.previewPath = try relative(slot.previewPath)
-            slot.preparedPath = try slot.preparedPath.map(relative)
-            return slot
-        }
-        return try JSONEncoder().encode(stored)
+        return try JSONEncoder().encode(
+            attachments.map {
+                try mapPaths($0) { try relativePath($0, root: root) }
+            })
     }
 
     private static func decodeAttachments(_ data: Data, directory: URL) throws
         -> [LocalOutgoingAttachment]
     {
         let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        func absolute(_ path: String) throws -> String {
-            guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..")
-            else { throw LocalStorageError.corruptRecord }
-            let url = directory.appendingPathComponent(path).standardizedFileURL
-            guard url.resolvingSymlinksInPath().path.hasPrefix(root) else {
-                throw LocalStorageError.corruptRecord
-            }
-            return url.path
-        }
         return try JSONDecoder().decode([LocalOutgoingAttachment].self, from: data).map {
-            attachment in
-            var slot = attachment
-            slot.sourcePath = try absolute(slot.sourcePath)
-            slot.previewPath = try absolute(slot.previewPath)
-            slot.preparedPath = try slot.preparedPath.map(absolute)
-            return slot
+            try mapPaths($0) { try absolutePath($0, directory: directory, root: root) }
         }
     }
 
@@ -756,6 +1221,18 @@ public final class ChahuaLocalStore: Sendable {
             let forward = try (row["forward_request"] as Data?).map {
                 try JSONDecoder().decode(LocalForwardRequest.self, from: $0)
             }
+            let frozen = try (row["frozen_create"] as Data?).map {
+                try JSONDecoder().decode(LocalFrozenCreate.self, from: $0)
+            }
+            let intent = try (row["intent_attachments"] as Data?).map {
+                try decodeEditAttachments($0, directory: directory)
+            }
+            let confirmed = try (row["confirmed_message"] as Data?).map {
+                try JSONDecoder().decode(MessageResponse.self, from: $0)
+            }
+            let patch = try (row["claimed_patch"] as Data?).map {
+                try JSONDecoder().decode(LocalClaimedPatch.self, from: $0)
+            }
             let speakingRestriction = try (row["speaking_restriction"] as String?).map {
                 guard let mode = SpeakingMode(rawValue: $0) else {
                     throw LocalStorageError.corruptRecord
@@ -783,7 +1260,7 @@ public final class ChahuaLocalStore: Sendable {
                     throw LocalStorageError.corruptRecord
                 }
             }
-            return LocalOutgoingMessage(
+            let item = LocalOutgoingMessage(
                 clientGeneratedID: row["client_generated_id"], chatID: key.chatID,
                 threadID: key.threadID, senderID: sender, text: row["text"],
                 replyToMessage: try decodeReply(row["reply_to_message"]),
@@ -792,7 +1269,56 @@ public final class ChahuaLocalStore: Sendable {
                 state: state, attachments: attachments, isBlocked: row["is_blocked"],
                 editRevision: row["edit_revision"], compressionEnabled: row["compression_enabled"],
                 dispatchClaimed: row["dispatch_claimed"], sticker: sticker, forwardRequest: forward,
-                speakingRestriction: speakingRestriction)
+                speakingRestriction: speakingRestriction, frozenCreate: frozen,
+                intentAttachments: intent, confirmedMessage: confirmed,
+                isPublished: row["is_published"], isCancelled: row["is_cancelled"],
+                acknowledgedRevision: row["acknowledged_revision"], claimedPatch: patch,
+                mutationRetryable: row["mutation_retryable"])
+            try validateAttachments(attachments, directory: directory, requireSource: false)
+            if let intent {
+                guard !item.isBlocked, item.forwardRequest == nil, item.messageType == .text else {
+                    throw LocalStorageError.corruptRecord
+                }
+                try validateEditAttachments(intent, directory: directory, requireSource: false)
+            }
+            guard item.editRevision >= 0, item.acknowledgedRevision >= -1,
+                item.acknowledgedRevision <= item.editRevision,
+                !item.isBlocked || (frozen == nil && confirmed == nil && !item.isCancelled),
+                confirmed != nil
+                    || (item.acknowledgedRevision == -1 && !item.isPublished && patch == nil)
+            else { throw LocalStorageError.corruptRecord }
+            if let frozen {
+                guard (frozen.body == nil) != (frozen.forwardRequest == nil),
+                    frozen.revision >= 0, frozen.revision <= item.editRevision,
+                    frozen.forwardRequest == item.forwardRequest
+                else { throw LocalStorageError.corruptRecord }
+                if let body = frozen.body {
+                    guard body.clientGeneratedId == item.clientGeneratedID,
+                        body.messageType == item.messageType,
+                        body.replyToId == item.replyToMessage?.id,
+                        body.stickerId == item.sticker?.id,
+                        body.attachmentIds.allSatisfy({ !$0.isEmpty }),
+                        Set(body.attachmentIds).count == body.attachmentIds.count,
+                        body.messageType != .text || body.message?.isEmpty == false
+                            || !body.attachmentIds.isEmpty
+                    else { throw LocalStorageError.corruptRecord }
+                }
+            }
+            if let confirmed {
+                guard frozen != nil, item.acknowledgedRevision >= frozen!.revision else {
+                    throw LocalStorageError.corruptRecord
+                }
+                try validateIdentity(confirmed, item: item)
+            }
+            if let patch {
+                guard confirmed != nil, item.isPublished,
+                    patch.revision > item.acknowledgedRevision, patch.revision <= item.editRevision,
+                    !patch.text.isEmpty || !patch.attachmentIDs.isEmpty,
+                    patch.attachmentIDs.allSatisfy({ !$0.isEmpty }),
+                    Set(patch.attachmentIDs).count == patch.attachmentIDs.count
+                else { throw LocalStorageError.corruptRecord }
+            }
+            return item
         }
         let composing = items.last?.isBlocked == true ? items.last : nil
         guard items.filter(\.isBlocked).count == (composing == nil ? 0 : 1) else {

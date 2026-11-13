@@ -53,24 +53,13 @@ struct TimelineLayoutEngine {
         let supported = [.text, .file, .placeholder].contains(row.entry.messageType) && !deleted
         let hasBody =
             (supported || audio) && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let remote =
-            supported && !placeholder ? row.entry.presentationMessage?.attachments ?? [] : []
-        let local: [LocalOutgoingAttachment]
-        if supported && !placeholder, case .pending(let pending) = row.entry,
-            pending.forwardRequest == nil
-        {
-            local = pending.attachments
-        } else {
-            local = []
-        }
-        let mediaCount = local.isEmpty ? remote.count : local.count
+        let attachments = supported && !placeholder ? row.entry.mediaAttachments : []
+        let mediaCount = attachments.count
         let fileMessage = row.entry.messageType == .file
         let preferredMedia =
             fileMessage && mediaCount > 0
             ? CGSize(width: min(284, bubbleWidthLimit), height: CGFloat(mediaCount) * 82 - 2)
-            : local.isEmpty
-                ? BubbleMediaLayout.size(for: remote, availableWidth: bubbleWidthLimit)
-                : BubbleMediaLayout.size(for: local, availableWidth: bubbleWidthLimit)
+            : BubbleMediaLayout.size(for: attachments, availableWidth: bubbleWidthLimit)
         let hasMedia = preferredMedia != nil
         let metadata = p.metadata
         // Link cards separate the body from its footer. Do not reserve or draw a
@@ -293,12 +282,7 @@ struct TimelineLayoutEngine {
                     CGRect(x: 0, y: CGFloat($0) * 82, width: b, height: 80)
                 }
             } else if mediaCount > 1 {
-                if !local.isEmpty,
-                    let gallery = BubbleMediaLayout.gallery(for: local, resolvedWidth: b)
-                {
-                    mediaHeight = gallery.size.height
-                    mediaFrames = gallery.cells.map(\.frame)
-                } else if let gallery = BubbleMediaLayout.gallery(for: remote, resolvedWidth: b) {
+                if let gallery = BubbleMediaLayout.gallery(for: attachments, resolvedWidth: b) {
                     mediaHeight = gallery.size.height
                     mediaFrames = gallery.cells.map(\.frame)
                 } else {

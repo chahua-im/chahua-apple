@@ -200,12 +200,8 @@ struct TimelineRowPresentation {
                     let dimensions: [CGSize]
                     if audio || card || placeholder {
                         dimensions = []
-                    } else if case .pending(let pending) = message.entry,
-                        pending.forwardRequest == nil
-                    {
-                        dimensions = pending.attachments.map(\.mediaDimensions)
                     } else {
-                        dimensions = (remote?.attachments ?? []).map(\.mediaDimensions)
+                        dimensions = message.entry.mediaAttachments.map(\.mediaDimensions)
                     }
                     overlay =
                         sticker

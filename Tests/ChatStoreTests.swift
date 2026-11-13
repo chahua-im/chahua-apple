@@ -14,6 +14,522 @@ import XCTest
 
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    #if os(macOS)
+        private func formControls(in view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap { formControls(in: $0) }
+        }
+
+        private func clickForm(_ point: NSPoint, in view: NSView) throws {
+            let window = try XCTUnwrap(view.window)
+            let local = NSPoint(
+                x: point.x, y: view.isFlipped ? point.y : view.bounds.height - point.y)
+            let location = view.convert(local, to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: type, location: location, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                        clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                window.sendEvent(event)
+            }
+        }
+
+        private func captureForm(_ view: NSView, name: String) throws {
+            view.layoutSubtreeIfNeeded()
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let image = NSImage(size: view.bounds.size)
+            image.addRepresentation(bitmap)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        func testNativeInspectorResizeRetainsDirtyEditorUntilConfirmedExit() async throws {
+            let api = FakeChatAPI()
+            let info = GroupInfoResponse(
+                id: "group", name: "Saved name", myRole: .admin, kind: .group)
+            await api.setConversationPageMetadata(group: info)
+            let store = try inviteStore(api)
+            defer { store.reset() }
+            _ = try await store.groupInfo(chatID: "group")
+            let exitGuard = FormExitGuard()
+            let owner = UUID()
+            var showsEditor = true
+            func surface(frozen: Bool) -> some View {
+                ChatInspectorLayout(isPresented: .constant(true), freezesPresentation: frozen) {
+                    Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+                } inspector: {
+                    NavigationStack {
+                        if showsEditor {
+                            GroupEditingView(
+                                store: store, exitGuard: exitGuard, exitOwner: owner, info: info,
+                                onUpdated: { _ in }, onBack: {})
+                        } else {
+                            GroupInfoView(
+                                chat: .init(
+                                    id: "group", name: "Saved name", unreadCount: 0,
+                                    archived: false, kind: .group),
+                                currentUserID: 1, store: store, exitGuard: exitGuard,
+                                onLeave: {}, onSearch: {}, isInspector: true)
+                        }
+                    }
+                }
+                .formDiscardConfirmation(exitGuard)
+            }
+            let host = NSHostingController(rootView: surface(frozen: false))
+            host.sizingOptions = []
+            host.view.frame = CGRect(x: 0, y: 0, width: 1400, height: 850)
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 1400, height: 850),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.setContentSize(NSSize(width: 1400, height: 850))
+            window.makeKeyAndOrderFront(nil)
+            let observation = exitGuard.$isProtected.dropFirst().sink { protected in
+                DispatchQueue.main.async { host.rootView = surface(frozen: protected) }
+            }
+            defer {
+                observation.cancel()
+                window.contentViewController = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            let field = try XCTUnwrap(
+                formControls(in: host.view).compactMap { $0 as? NSTextField }
+                    .first { $0.isEditable && $0.stringValue == "Saved name" })
+            field.stringValue = "Draft survives resizing"
+            field.delegate?.controlTextDidChange?(
+                Notification(name: NSControl.textDidChangeNotification, object: field))
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(exitGuard.isProtected)
+            window.setContentSize(NSSize(width: 750, height: 850))
+            try await Task.sleep(for: .milliseconds(200))
+            XCTAssertTrue(
+                window.sheets.isEmpty, "A dirty inline form must not migrate to a new sheet")
+            XCTAssertTrue(formControls(in: host.view).contains { $0 === field })
+            XCTAssertEqual(field.stringValue, "Draft survives resizing")
+            try captureForm(host.view, name: "Narrow inspector preserves the mounted dirty draft")
+            exitGuard.requestExit {
+                showsEditor = false
+                exitGuard.unregister(owner: owner)
+                host.rootView = surface(frozen: false)
+            }
+            exitGuard.confirmDiscard()
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertFalse(exitGuard.isProtected)
+            XCTAssertFalse(
+                window.sheets.isEmpty, "The latest narrow layout applies after permitted exit")
+            let writes = await api.recordedGroupUpdateBodies()
+            XCTAssertTrue(writes.isEmpty, "Discard must not save the group")
+        }
+
+        func testNativeGroupFieldSavesAdvanceOnlyTheirOwnBaselines() async throws {
+            let api = FakeChatAPI()
+            let initial = GroupInfoResponse(
+                id: "group", name: "Saved name", description: "Saved description",
+                myRole: .admin, kind: .group, speakingMode: .unrestricted)
+            await api.setConversationPageMetadata(group: initial)
+            let store = try inviteStore(api)
+            defer { store.reset() }
+            _ = try await store.groupInfo(chatID: "group")
+            let exitGuard = FormExitGuard()
+            let owner = UUID()
+            var exits = 0
+            let root = NavigationStack {
+                GroupEditingView(
+                    store: store, exitGuard: exitGuard, exitOwner: owner, info: initial,
+                    onUpdated: { _ in }, onBack: { exits += 1 })
+            }
+            .formDiscardConfirmation(exitGuard)
+            let host = NSHostingController(rootView: root.frame(width: 700, height: 1000))
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 700, height: 1000),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                window.contentViewController = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            let name = try XCTUnwrap(
+                formControls(in: host.view).compactMap { $0 as? NSTextField }
+                    .first { $0.isEditable && $0.stringValue == "Saved name" })
+            name.stringValue = "New name"
+            name.delegate?.controlTextDidChange?(
+                Notification(name: NSControl.textDidChangeNotification, object: name))
+            let description = try XCTUnwrap(
+                formControls(in: host.view).compactMap { $0 as? NSTextView }
+                    .first { $0.isEditable && $0.string == "Saved description" })
+            description.string = "Unsaved description"
+            description.didChangeText()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(exitGuard.isProtected)
+            try clickForm(NSPoint(x: 75, y: 105), in: host.view)
+            await api.waitForGroupUpdateRequests(1)
+            exitGuard.requestExit { exits += 1 }
+            XCTAssertFalse(exitGuard.showsDiscardConfirmation, "A held write refuses exit")
+            await api.finishGroupUpdate(0, with: .failure(APIError.unavailable))
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(exitGuard.isProtected)
+            XCTAssertEqual(name.stringValue, "New name")
+            try clickForm(NSPoint(x: 75, y: 105), in: host.view)
+            await api.waitForGroupUpdateRequests(2)
+            await api.finishGroupUpdate(
+                1,
+                with: .success(
+                    .init(
+                        id: "group", name: "New name", description: "Saved description",
+                        myRole: .admin, kind: .group, speakingMode: .unrestricted)))
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(exitGuard.isProtected, "Saving name must not clear the description draft")
+            exitGuard.requestExit { exits += 1 }
+            XCTAssertTrue(exitGuard.showsDiscardConfirmation)
+            try await Task.sleep(for: .milliseconds(100))
+            try captureForm(host.view, name: "Partially saved group form retains description")
+            exitGuard.cancelDiscard()
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertEqual(exits, 0)
+            XCTAssertEqual(description.string, "Unsaved description")
+            try clickForm(NSPoint(x: 90, y: 326), in: host.view)
+            await api.waitForGroupUpdateRequests(3)
+            await api.finishGroupUpdate(
+                2,
+                with: .success(
+                    .init(
+                        id: "group", name: "New name", description: "Unsaved description",
+                        myRole: .admin, kind: .group, speakingMode: .unrestricted)))
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertFalse(exitGuard.isProtected)
+            let writes = await api.recordedGroupUpdateBodies()
+            XCTAssertEqual(writes.map(\.name), ["New name", "New name", nil])
+            XCTAssertEqual(writes.map(\.description), [nil, nil, "Unsaved description"])
+        }
+
+        func testNativeInvitationCreationResetsDirtyExpiryOnlyAfterSuccess() async throws {
+            let api = FakeChatAPI()
+            await api.setConversationPageMetadata(
+                group: .init(
+                    id: "group", myRole: .admin, kind: .group))
+            let store = try inviteStore(api)
+            defer { store.reset() }
+            let exitGuard = FormExitGuard()
+            let owner = UUID()
+            let root = NavigationStack {
+                GroupInvitesView(
+                    store: store, exitGuard: exitGuard, exitOwner: owner,
+                    chatID: "group", onBack: {})
+            }
+            .formDiscardConfirmation(exitGuard)
+            let host = NSHostingController(rootView: root.frame(width: 700, height: 800))
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 700, height: 800),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                window.contentViewController = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(250))
+            try clickForm(NSPoint(x: 253, y: 362), in: host.view)
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(exitGuard.isProtected)
+            try captureForm(host.view, name: "Invitation draft with expiry")
+            try clickForm(NSPoint(x: 300, y: 401), in: host.view)
+            await api.waitForInviteCreateRequests(1)
+            exitGuard.requestExit {}
+            XCTAssertFalse(exitGuard.showsDiscardConfirmation)
+            await api.finishInviteCreate(0, with: .failure(APIError.unavailable))
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(exitGuard.isProtected)
+            try captureForm(host.view, name: "Invitation failure retains draft")
+            try clickForm(NSPoint(x: 230, y: 428), in: host.view)
+            await api.waitForInviteCreateRequests(2)
+            await api.finishInviteCreate(1, with: .success(try invitePreview().invite))
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertFalse(exitGuard.isProtected)
+            try captureForm(host.view, name: "Invitation success clears draft")
+            let writes = await api.recordedInviteCreateBodies()
+            XCTAssertEqual(writes.count, 2)
+            XCTAssertTrue(writes.allSatisfy { $0.expiresAt != nil })
+        }
+    #endif
+
+    private func invitePreview(
+        code: String = "code", canJoin: Bool = true, member: Bool = false,
+        used: Bool = false, expired: Bool = false, revoked: Bool = false
+    ) throws -> GroupInvitePreview {
+        var invite: [String: Any] = [
+            "id": "invite-\(code)", "chatId": "group", "code": code,
+            "createdAt": "2026-01-01T00:00:00Z", "inviteType": "targeted", "targetUid": 1,
+        ]
+        if used { invite["usedAt"] = "2026-01-02T00:00:00Z" }
+        if expired { invite["expiresAt"] = "2000-01-01T00:00:00Z" }
+        if revoked { invite["revokedAt"] = "2026-01-02T00:00:00Z" }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "alreadyMember": member, "canJoin": canJoin,
+            "chat": [
+                "id": "group", "name": "Preview", "kind": "group",
+                "createdAt": "2025-03-04T00:00:00Z", "speakingMode": "repliesOnly",
+            ],
+            "invite": invite,
+        ])
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(GroupInvitePreview.self, from: data)
+    }
+
+    private func inviteStore(_ api: FakeChatAPI, uid: Int32 = 1) throws -> ChatStore {
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                """
+                {"uid":\(uid),"username":"Account \(uid)","gender":0,"stickerPackOrder":[],"permissions":[]}
+                """.utf8))
+        return store
+    }
+
+    func testNativeInvitationPreviewShowsDeniedMemberAndInactiveStates() async throws {
+        for (name, preview) in [
+            ("Eligible", try invitePreview()),
+            ("Denied", try invitePreview(canJoin: false)),
+            ("Used member", try invitePreview(canJoin: false, member: true, used: true)),
+            ("Expired", try invitePreview(expired: true)),
+            ("Revoked", try invitePreview(revoked: true)),
+        ] {
+            let api = FakeChatAPI()
+            let store = try inviteStore(api)
+            defer { store.reset() }
+            var navigated = false
+            let root = NavigationStack {
+                JoinGroupView(
+                    store: store, exitGuard: FormExitGuard(), initialCode: "code",
+                    onOpenChat: { _ in navigated = true })
+            }
+            #if os(macOS)
+                let host = NSHostingController(rootView: root)
+                let window = NSWindow(
+                    contentRect: CGRect(x: 0, y: 0, width: 560, height: 700),
+                    styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentViewController = host
+                window.makeKeyAndOrderFront(nil)
+                defer {
+                    window.contentViewController = nil
+                    window.close()
+                }
+            #else
+                let scene = try XCTUnwrap(
+                    UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+                let host = UIHostingController(rootView: root)
+                let window = UIWindow(windowScene: scene)
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                defer {
+                    window.isHidden = true
+                    window.rootViewController = nil
+                }
+            #endif
+            await api.waitForInvitePreviewRequests(1)
+            await api.finishInvitePreview(0, with: .success(preview))
+            try await Task.sleep(for: .milliseconds(200))
+            XCTAssertFalse(navigated)
+            let redemptions = await api.recordedInviteRedeemCodes()
+            XCTAssertTrue(redemptions.isEmpty)
+            #if os(macOS)
+                host.view.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(
+                    host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+                let image = NSImage(size: host.view.bounds.size)
+                image.addRepresentation(bitmap)
+            #else
+                host.view.layoutIfNeeded()
+                let image = UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+                    host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true)
+                }
+            #endif
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Invitation preview — \(name)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    func testJoinInvalidInputClearsPreviousPermissionAndRestrictedErrorsFailClosed() async throws {
+        for status in [400, 404, 410, 403] {
+            let api = FakeChatAPI()
+            let store = try inviteStore(api)
+            defer { store.reset() }
+            let model = JoinGroupModel(store: store, initialCode: "code")
+            let lookup = Task { await model.loadPreview() }
+            await api.waitForInvitePreviewRequests(1)
+            await api.finishInvitePreview(
+                0, with: .failure(APIError.invalidResponse(statusCode: status)))
+            await lookup.value
+            XCTAssertFalse(model.canSubmit)
+            XCTAssertFalse(model.canRetryPreview)
+            XCTAssertNotNil(model.error)
+            XCTAssertEqual(model.input, "code")
+            model.input = "https://host/not-an-invitation"
+            await model.loadPreview()
+            XCTAssertNil(model.preview)
+            XCTAssertNil(model.error)
+            XCTAssertFalse(model.canSubmit)
+            let reads = await api.recordedInvitePreviewCodes()
+            XCTAssertEqual(reads, ["code"])
+            model.cancel()
+        }
+    }
+
+    func testJoinPreviewDenialsNeverRedeemAndUsedMembersOpenWithoutWrite() async throws {
+        for preview in [
+            try invitePreview(canJoin: false),
+            try invitePreview(expired: true),
+            try invitePreview(revoked: true),
+            try invitePreview(canJoin: false, used: true),
+            try invitePreview(canJoin: false, member: true, used: true),
+        ] {
+            let api = FakeChatAPI()
+            let store = try inviteStore(api)
+            defer { store.reset() }
+            let model = JoinGroupModel(store: store, initialCode: "code")
+            let lookup = Task { await model.loadPreview() }
+            await api.waitForInvitePreviewRequests(1)
+            await api.finishInvitePreview(0, with: .success(preview))
+            await lookup.value
+            let shouldOpen = preview.alreadyMember
+            XCTAssertEqual(model.canSubmit, shouldOpen)
+            let result = await model.submit()
+            XCTAssertEqual(result?.id, shouldOpen ? "group" : nil)
+            let writes = await api.recordedInviteRedeemCodes()
+            XCTAssertTrue(writes.isEmpty)
+            XCTAssertEqual(model.completed, shouldOpen)
+            model.cancel()
+        }
+    }
+
+    func testJoinEligiblePreviewRedeemsExactlyOnceAndRetainsInputDuringWrite() async throws {
+        let api = FakeChatAPI()
+        let store = try inviteStore(api)
+        defer { store.reset() }
+        let model = JoinGroupModel(store: store, initialCode: "code")
+        let lookup = Task { await model.loadPreview() }
+        await api.waitForInvitePreviewRequests(1)
+        await api.finishInvitePreview(0, with: .success(try invitePreview()))
+        await lookup.value
+        XCTAssertTrue(model.canSubmit)
+        let submit = Task { await model.submit() }
+        await api.waitForInviteRedeemRequests(1)
+        XCTAssertEqual(model.input, "code")
+        XCTAssertTrue(model.isSubmitting)
+        let duplicate = await model.submit()
+        XCTAssertNil(duplicate)
+        await api.finishInviteRedemption(0, with: .success(.init(id: "group", kind: .group)))
+        let result = await submit.value
+        XCTAssertEqual(result?.id, "group")
+        XCTAssertTrue(model.completed)
+        let writes = await api.recordedInviteRedeemCodes()
+        XCTAssertEqual(writes, ["code"])
+        model.cancel()
+    }
+
+    func testJoinLatePreviewCannotReplaceNewCodeOrAccount() async throws {
+        let api = FakeChatAPI()
+        let store = try inviteStore(api)
+        defer { store.reset() }
+        let model = JoinGroupModel(store: store, initialCode: "old")
+        let old = Task { await model.loadPreview() }
+        await api.waitForInvitePreviewRequests(1)
+        model.input = "new"
+        let new = Task { await model.loadPreview() }
+        await api.waitForInvitePreviewRequests(2)
+        await api.finishInvitePreview(1, with: .success(try invitePreview(code: "new")))
+        await new.value
+        await api.finishInvitePreview(0, with: .success(try invitePreview(code: "old")))
+        await old.value
+        XCTAssertEqual(model.preview?.invite.code, "new")
+        XCTAssertTrue(model.canSubmit)
+        store.reset()
+        XCTAssertFalse(model.canSubmit)
+        let result = await model.submit()
+        XCTAssertNil(result)
+        let writes = await api.recordedInviteRedeemCodes()
+        XCTAssertTrue(writes.isEmpty)
+        model.cancel()
+    }
+
+    func testJoinSessionReplacementRejectsHeldPreview() async throws {
+        let api = FakeChatAPI()
+        let store = try inviteStore(api)
+        defer { store.reset() }
+        let model = JoinGroupModel(store: store, initialCode: "code")
+        let lookup = Task { await model.loadPreview() }
+        await api.waitForInvitePreviewRequests(1)
+        store.reset()
+        await api.finishInvitePreview(0, with: .success(try invitePreview()))
+        await lookup.value
+        XCTAssertNil(model.preview)
+        XCTAssertFalse(model.canSubmit)
+        model.cancel()
+    }
+
+    func testJoinForbiddenAndConflictRefreshEligibilityWithoutSecondRedemption() async throws {
+        for status in [403, 409] {
+            let api = FakeChatAPI()
+            let store = try inviteStore(api)
+            defer { store.reset() }
+            let model = JoinGroupModel(store: store, initialCode: "code")
+            let lookup = Task { await model.loadPreview() }
+            await api.waitForInvitePreviewRequests(1)
+            await api.finishInvitePreview(0, with: .success(try invitePreview()))
+            await lookup.value
+            let submit = Task { await model.submit() }
+            await api.waitForInviteRedeemRequests(1)
+            await api.finishInviteRedemption(
+                0, with: .failure(APIError.invalidResponse(statusCode: status)))
+            await api.waitForInvitePreviewRequests(2)
+            await api.finishInvitePreview(1, with: .success(try invitePreview(canJoin: false)))
+            let result = await submit.value
+            XCTAssertNil(result)
+            XCTAssertFalse(model.canSubmit)
+            XCTAssertEqual(model.input, "code")
+            let writes = await api.recordedInviteRedeemCodes()
+            XCTAssertEqual(writes, ["code"])
+            model.cancel()
+        }
+    }
+
+    func testJoinTransientPreviewFailureRetainsInputAndRetryRestoresEligibility() async throws {
+        let api = FakeChatAPI()
+        let store = try inviteStore(api)
+        defer { store.reset() }
+        let model = JoinGroupModel(store: store, initialCode: "code")
+        let lookup = Task { await model.loadPreview() }
+        await api.waitForInvitePreviewRequests(1)
+        await api.finishInvitePreview(0, with: .failure(APIError.unavailable))
+        await lookup.value
+        XCTAssertEqual(model.input, "code")
+        XCTAssertFalse(model.canSubmit)
+        XCTAssertTrue(model.canRetryPreview)
+        let retry = Task { await model.retryPreview() }
+        await api.waitForInvitePreviewRequests(2)
+        await api.finishInvitePreview(1, with: .success(try invitePreview()))
+        await retry.value
+        XCTAssertTrue(model.canSubmit)
+        XCTAssertNil(model.error)
+        model.cancel()
+    }
+
     func testMembershipVisibilityPrunesOnlyGroupRootAnnouncementsAndRestoresHistory() async throws {
         let base = try TimelineTestFixtures.message(id: 1, at: 1)
         func message(
@@ -1489,14 +2005,27 @@ final class ChatStoreTests: XCTestCase {
         await api.setSaveResult(try decoder.decode(SavedMessageResponse.self, from: snapshotData))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "saved-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        let preferenceSuite = "BootstrapPreferences.\(UUID().uuidString)"
+        let preferenceDefaults = try XCTUnwrap(UserDefaults(suiteName: preferenceSuite))
+        addTeardownBlock { preferenceDefaults.removePersistentDomain(forName: preferenceSuite) }
+        preferenceDefaults.set(false, forKey: "chat.list.showThreadsInMessages")
+        preferenceDefaults.set(true, forKey: "chat.timeline.showAllAvatars")
         let root = AppCompositionRoot(
             apiClient: api, realtimeProvider: api,
             credentialLoginClient: PrototypeCredentialLoginClient(),
             tokenStorage: InMemorySessionTokenStorage(token: "isolated-test-token"),
             mediaNamespace: directory.lastPathComponent,
+            preferenceDefaults: preferenceDefaults,
             localStoreFactory: { uid in
                 try ChahuaLocalStore(directory: directory.appendingPathComponent(String(uid)))
             })
+        var authenticatedPreferences: [(Int32, ConversationDisplayValues)] = []
+        let preferenceObservation = root.sessionModel.$state.sink { state in
+            if case .authenticated(let me) = state {
+                authenticatedPreferences.append((me.uid, root.chatStore.displayPreferences.values))
+            }
+        }
+        defer { preferenceObservation.cancel() }
         defer {
             root.realtimeCoordinator.setSession(uid: nil)
             root.chatStore.currentUserProfile = nil
@@ -1514,6 +2043,10 @@ final class ChatStoreTests: XCTestCase {
             return XCTFail("The stored test session did not restore")
         }
         XCTAssertEqual(first.uid, 1)
+        let firstValues = ConversationDisplayValues(
+            showThreadsInMessages: false, showAllAvatars: true, showDmDetails: true)
+        XCTAssertEqual(root.chatStore.displayPreferences.values, firstValues)
+        XCTAssertEqual(authenticatedPreferences.first?.1, firstValues)
         let saved = root.chatStore.savedMessages
         await saved.ensure(chatID: "chat")
         #if os(iOS)
@@ -1595,12 +2128,22 @@ final class ChatStoreTests: XCTestCase {
             return XCTFail("The replacement test account did not authenticate")
         }
         XCTAssertEqual(second.uid, 2)
+        XCTAssertEqual(root.chatStore.displayPreferences.activeUID, 2)
+        XCTAssertEqual(root.chatStore.displayPreferences.values, ConversationDisplayValues())
+        XCTAssertEqual(authenticatedPreferences.last?.1, ConversationDisplayValues())
+        root.chatStore.displayPreferences.setShowDmDetails(false, for: 2)
         XCTAssertTrue(saved.items.isEmpty)
         XCTAssertFalse(saved.hasLoaded(chatID: "chat"))
         await saved.ensure(chatID: "chat")
         XCTAssertTrue(saved.hasLoaded(chatID: "chat"))
         XCTAssertFalse(saved.isSaved(chatID: "chat", messageID: message.id))
         XCTAssertNil(saved.scopeError(chatID: "chat"))
+        await api.setAuthenticatedProfile(try profile(1))
+        await root.sessionModel.signIn(candidateJWT: "isolated-return-token")
+        XCTAssertEqual(root.chatStore.displayPreferences.activeUID, 1)
+        XCTAssertEqual(root.chatStore.displayPreferences.values, firstValues)
+        XCTAssertEqual(authenticatedPreferences.map(\.0), [1, 2, 1])
+        XCTAssertEqual(authenticatedPreferences.last?.1, firstValues)
     }
 
     #if os(macOS)
@@ -1673,6 +2216,9 @@ final class ChatStoreTests: XCTestCase {
             window.contentViewController = host
             window.setContentSize(CGSize(width: 600, height: 650))
             host.view.frame = CGRect(x: 0, y: 0, width: 600, height: 650)
+            let overlayHost = TimelineInteractionOverlayHostView(frame: host.view.bounds)
+            overlayHost.autoresizingMask = [.width, .height]
+            host.view.addSubview(overlayHost)
             window.makeKeyAndOrderFront(nil)
             window.orderFrontRegardless()
             defer {
@@ -2196,6 +2742,136 @@ final class ChatStoreTests: XCTestCase {
         let persisted = try await harness.localStore.restore()
         XCTAssertEqual(
             persisted.first { $0.chatID == "chat" }?.draft.text, text, file: file, line: line)
+    }
+
+    func testLatestQueuedEditOwnsRealtimeAndHistoryUntilMutationCompletes() async throws {
+        let api = FakeChatAPI()
+        await api.setConversationPageMetadata(
+            group: .init(
+                id: "chat", myRole: .admin, kind: .group, speakingMode: .unrestricted))
+        let h = try await openDraftHarness(api: api)
+        _ = try await h.store.groupInfo(chatID: "chat")
+        h.store.drafts.setDraftText("original queued text", chatID: "chat")
+        let sent = await h.store.drafts.submitDraft(chatID: "chat")
+        XCTAssertTrue(sent)
+        let item = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        _ = try await h.localStore.claimNext(chatID: "chat")
+        _ = try await h.queue.editOutgoing(
+            chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision,
+            text: "latest queued edit", attachments: [])
+        let original = try TimelineTestFixtures.message(
+            id: 11, at: 11, text: "original queued text", clientGeneratedID: item.clientGeneratedID)
+        await h.store.applyRealtimeEvent(.message(original), currentUserID: 1)
+        await h.store.applyRealtimeEvent(
+            .messageUpdated(original.replacingMessageText("obsolete server body")), currentUserID: 1
+        )
+        XCTAssertEqual(
+            h.store.conversationMessages.pending(chatID: "chat").map(\.body.message),
+            ["latest queued edit"])
+        let other = try TimelineTestFixtures.message(
+            id: 12, senderID: 2, at: 12, text: "other message")
+        let page = ListMessagesResponse(
+            messages: [original, other], olderCursor: MessageID(9), newerCursor: MessageID(13),
+            nextCursor: MessageID(8), prevCursor: MessageID(14),
+            membershipMessagePolicy: .init(visibility: .members, canView: true),
+            chatSettings: .init(showMembershipMessages: true))
+        await api.appendMessageResult(chatID: "chat", page: page)
+        let filtered = try await h.store.fetchMessages(chatID: "chat")
+        XCTAssertEqual(filtered.messages.map(\.id), [other.id])
+        XCTAssertEqual(filtered.olderCursor, page.olderCursor)
+        XCTAssertEqual(filtered.newerCursor, page.newerCursor)
+        XCTAssertEqual(filtered.nextCursor, page.nextCursor)
+        XCTAssertEqual(filtered.prevCursor, page.prevCursor)
+        XCTAssertEqual(filtered.membershipMessagePolicy, page.membershipMessagePolicy)
+        XCTAssertEqual(filtered.chatSettings, page.chatSettings)
+        XCTAssertEqual(
+            h.store.conversationMessages.pending(chatID: "chat").map(\.clientGeneratedID),
+            [item.clientGeneratedID])
+
+        let edited = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        _ = try await h.queue.cancelOutgoing(
+            chatID: "chat", itemID: edited.clientGeneratedID, expectedRevision: edited.editRevision)
+        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
+        await h.store.applyRealtimeEvent(.messageDeleted(original), currentUserID: 1)
+        await h.store.applyRealtimeEvent(.message(original), currentUserID: 1)
+        await h.store.applyRealtimeEvent(.messageUpdated(original), currentUserID: 1)
+        await api.appendMessageResult(chatID: "chat", page: page)
+        let afterDeletion = try await h.store.fetchMessages(chatID: "chat")
+        XCTAssertEqual(afterDeletion.messages.map(\.id), [other.id])
+        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
+        XCTAssertNil(h.store.pendingListPreviews[ConversationKey(chatID: "chat")])
+    }
+
+    func testLeasedConfirmedMessageCanSubmitSameIdentityWithoutConsumingOrdinaryDraft() async throws
+    {
+        let api = FakeChatAPI(chatResults: [
+            .success(
+                .init(chats: [
+                    .init(id: "chat", unreadCount: 0, archived: false, kind: .group)
+                ]))
+        ])
+        await api.setConversationPageMetadata(
+            group: .init(
+                id: "chat", myRole: .admin, kind: .group, speakingMode: .unrestricted))
+        let h = try await openDraftHarness(api: api)
+        await h.store.loadActiveChats()
+        _ = try await h.store.groupInfo(chatID: "chat")
+        h.store.drafts.setDraftText("original", chatID: "chat")
+        let sent = await h.store.drafts.submitDraft(chatID: "chat")
+        XCTAssertTrue(sent)
+        let pending = try XCTUnwrap(h.store.conversationMessages.pending(chatID: "chat").first)
+        let session = try await h.queue.beginPendingEdit(pending)
+        defer { h.queue.endPendingEdit(session) }
+        h.store.drafts.setDraftText("ordinary draft", chatID: "chat")
+        let reply = try TimelineTestFixtures.message(id: 4, senderID: 2, at: 4).replyPreview
+        h.store.drafts.setDraftReply(reply, chatID: "chat")
+        _ = try await h.localStore.claimNext(chatID: "chat")
+        let remote = try TimelineTestFixtures.message(
+            id: 11, at: 11, text: "original", clientGeneratedID: pending.clientGeneratedID)
+        await h.store.applyRealtimeEvent(.message(remote), currentUserID: 1)
+        XCTAssertTrue(session.isValid)
+        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
+        func currentPreview() -> MessagePreview? {
+            h.store.state.chats.first { $0.id == "chat" }?.lastMessage
+        }
+        XCTAssertEqual(currentPreview()?.message, "original")
+        try await h.queue.submitPendingEdit(session, text: "edited after confirmation")
+        XCTAssertEqual(
+            h.store.conversationMessages.pending(chatID: "chat").map(\.clientGeneratedID),
+            [pending.clientGeneratedID])
+        XCTAssertEqual(
+            h.store.conversationMessages.pending(chatID: "chat").map(\.body.message),
+            ["edited after confirmation"])
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "ordinary draft")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), reply)
+        await api.appendMessageResult(chatID: "chat", page: .init(messages: [remote]))
+        let staleHistory = try await h.store.fetchMessages(chatID: "chat")
+        XCTAssertTrue(staleHistory.messages.isEmpty)
+
+        let latest = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        try await h.queue.cancelOutgoing(
+            chatID: "chat", itemID: latest.clientGeneratedID,
+            expectedRevision: latest.editRevision)
+        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
+        XCTAssertNil(currentPreview()?.message)
+        XCTAssertEqual(currentPreview()?.isDeleted, true)
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "ordinary draft")
+        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), reply)
+        XCTAssertEqual(
+            h.queue.snapshots[ConversationKey(chatID: "chat")]?.outgoing.first?
+                .confirmedMessage?.isDeleted, false,
+            "Local suppression must not invent authoritative server deletion")
+
+        await api.appendChatResult(
+            .init(chats: [
+                .init(
+                    id: "chat", lastMessageAt: remote.createdAt, unreadCount: 0,
+                    lastMessage: remote.replyPreview, archived: false, kind: .group)
+            ]))
+        await h.store.refreshActiveChats()
+        await h.store.applyRealtimeEvent(.messageUpdated(remote), currentUserID: 1)
+        XCTAssertNil(currentPreview()?.message)
+        XCTAssertEqual(currentPreview()?.isDeleted, true)
     }
 
     func testHistoryIngressAcknowledgesDurablePendingBeforeReturningSnapshot() async throws {
@@ -3333,12 +4009,115 @@ private final class DraftStorageProbe {
 }
 
 actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
+    private var groupUpdateBodies: [UpdateGroupBody] = []
+    private var pendingGroupUpdates: [Int: CheckedContinuation<GroupInfoResponse, Error>] = [:]
+    private var groupUpdateObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var inviteCreateBodies: [CreateGroupInviteBody] = []
+    private var pendingInviteCreates: [Int: CheckedContinuation<GroupInvite, Error>] = [:]
+    private var inviteCreateObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func updateGroup(chatID: String, body: UpdateGroupBody) async throws -> GroupInfoResponse {
+        let index = groupUpdateBodies.count
+        groupUpdateBodies.append(body)
+        return try await withCheckedThrowingContinuation {
+            pendingGroupUpdates[index] = $0
+            for count in groupUpdateObservers.keys.filter({ $0 <= groupUpdateBodies.count }) {
+                groupUpdateObservers.removeValue(forKey: count)?.resume()
+            }
+        }
+    }
+
+    func waitForGroupUpdateRequests(_ count: Int) async {
+        if groupUpdateBodies.count >= count { return }
+        await withCheckedContinuation { groupUpdateObservers[count] = $0 }
+    }
+
+    func finishGroupUpdate(_ index: Int, with result: Result<GroupInfoResponse, Error>) {
+        pendingGroupUpdates.removeValue(forKey: index)?.resume(with: result)
+    }
+
+    func recordedGroupUpdateBodies() -> [UpdateGroupBody] { groupUpdateBodies }
+
+    func listGroupInvites(chatID: String) async throws -> GroupInvitesPage {
+        try JSONDecoder().decode(GroupInvitesPage.self, from: Data(#"{"invites":[]}"#.utf8))
+    }
+
+    func createGroupInvite(body: CreateGroupInviteBody) async throws -> GroupInvite {
+        let index = inviteCreateBodies.count
+        inviteCreateBodies.append(body)
+        return try await withCheckedThrowingContinuation {
+            pendingInviteCreates[index] = $0
+            for count in inviteCreateObservers.keys.filter({ $0 <= inviteCreateBodies.count }) {
+                inviteCreateObservers.removeValue(forKey: count)?.resume()
+            }
+        }
+    }
+
+    func waitForInviteCreateRequests(_ count: Int) async {
+        if inviteCreateBodies.count >= count { return }
+        await withCheckedContinuation { inviteCreateObservers[count] = $0 }
+    }
+
+    func finishInviteCreate(_ index: Int, with result: Result<GroupInvite, Error>) {
+        pendingInviteCreates.removeValue(forKey: index)?.resume(with: result)
+    }
+
+    func recordedInviteCreateBodies() -> [CreateGroupInviteBody] { inviteCreateBodies }
     var chatQueries: [ListChatsQuery] = []
     private var threadQueries: [ListThreadsQuery] = []
     private var receiptVisibility: ReadReceiptVisibility = .friends
     private var receiptOverrides: [Int32: FriendReadReceiptOverride] = [:]
     private var bulkDeleteResults: [Result<BulkDeletedPayload, Error>] = []
     private var bulkDeleteIDs: [[MessageID]] = []
+    private var invitePreviewCodes: [String] = []
+    private var inviteRedeemCodes: [String] = []
+    private var pendingInvitePreviews: [Int: CheckedContinuation<GroupInvitePreview, Error>] = [:]
+    private var pendingInviteRedemptions: [Int: CheckedContinuation<GroupInfoResponse, Error>] = [:]
+    private var invitePreviewObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var inviteRedeemObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func previewGroupInvite(code: String) async throws -> GroupInvitePreview {
+        let index = invitePreviewCodes.count
+        invitePreviewCodes.append(code)
+        return try await withCheckedThrowingContinuation {
+            pendingInvitePreviews[index] = $0
+            for count in invitePreviewObservers.keys.filter({ $0 <= invitePreviewCodes.count }) {
+                invitePreviewObservers.removeValue(forKey: count)?.resume()
+            }
+        }
+    }
+
+    func redeemGroupInvite(code: String) async throws -> GroupInfoResponse {
+        let index = inviteRedeemCodes.count
+        inviteRedeemCodes.append(code)
+        return try await withCheckedThrowingContinuation {
+            pendingInviteRedemptions[index] = $0
+            for count in inviteRedeemObservers.keys.filter({ $0 <= inviteRedeemCodes.count }) {
+                inviteRedeemObservers.removeValue(forKey: count)?.resume()
+            }
+        }
+    }
+
+    func waitForInvitePreviewRequests(_ count: Int) async {
+        if invitePreviewCodes.count >= count { return }
+        await withCheckedContinuation { invitePreviewObservers[count] = $0 }
+    }
+
+    func waitForInviteRedeemRequests(_ count: Int) async {
+        if inviteRedeemCodes.count >= count { return }
+        await withCheckedContinuation { inviteRedeemObservers[count] = $0 }
+    }
+
+    func finishInvitePreview(_ index: Int, with result: Result<GroupInvitePreview, Error>) {
+        pendingInvitePreviews.removeValue(forKey: index)?.resume(with: result)
+    }
+
+    func finishInviteRedemption(_ index: Int, with result: Result<GroupInfoResponse, Error>) {
+        pendingInviteRedemptions.removeValue(forKey: index)?.resume(with: result)
+    }
+
+    func recordedInvitePreviewCodes() -> [String] { invitePreviewCodes }
+    func recordedInviteRedeemCodes() -> [String] { inviteRedeemCodes }
 
     private var stickerDiscoveryRequests:
         [(query: String?, sort: StickerPackSort, limit: Int, offset: Int)] = []
@@ -3741,6 +4520,10 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
 
     func appendMessageResult(chatID: String, page: ListMessagesResponse) {
         messageResults[chatID, default: []].append(.success(page))
+    }
+
+    func appendChatResult(_ page: ListChatsResponse) {
+        chatResults.append(.success(page))
     }
 
     func authenticate(candidateJWT: String) async throws -> MeResponse {

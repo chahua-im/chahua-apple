@@ -9,10 +9,9 @@
         @AppStorage(MessageTextSizePreference.storageKey)
         private var messageTextSize = MessageTextSizePreference.defaultValue
         @AppStorage(AppLanguage.storageKey) private var appLanguage = AppLanguage.system.rawValue
-        @AppStorage(ConversationTimelinePreferences.showAllAvatarsStorageKey)
-        private var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars
-        @AppStorage(ConversationTimelinePreferences.showDmDetailsStorageKey)
-        private var showDmDetails = ConversationTimelinePreferences.defaultShowDmDetails
+        @Environment(\.conversationDisplayValues) private var displayValues
+        private var showAllAvatars: Bool { displayValues.showAllAvatars }
+        private var showDmDetails: Bool { displayValues.showDmDetails }
         let model: ConversationTimelineModel
         var actions = TimelineBubbleActions()
         var mediaContext: AppMediaContext?

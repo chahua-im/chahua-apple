@@ -42,7 +42,7 @@ The shared [SettingsEditorControls](../../App/Features/Notifications/SettingsEdi
 - Keep the bridge limited to the active editor. Do not swizzle methods or use private APIs; do not change other Settings pages' navigation.
 - Keep draft validation, save/error state, and confirmation handling in shared SwiftUI. The UIKit bridge exists only because native interactive Back interception cannot be expressed by the SwiftUI dismissal guard alone; split layouts do not emulate phone gestures.
 
-This is a behavioral convention and reference implementation, not a requirement to add a generic form framework. Reuse the existing implementation/pattern when another explicit-save page needs it.
+The shared [FormExitGuard](../../App/DesignSystem/Components/FormExitGuard.swift) owns only presentation-scoped exit decisions, not validation, saving or draft storage. Settings controls retain their toolbar, split-layout preference and account-only contract; group forms register stable owners fenced by UID and session revision. Unregister an owner when its actual destination closes, not when a child picker temporarily covers it. Clean exits execute immediately, writes block exits, and dirty exits capture one identity-checked discard action. Reuse the native navigation bridge and shared alert rather than introducing another exit controller or gesture system.
 
 ## Sign-out confirmation
 

@@ -17,6 +17,7 @@
                     }
                 }
                 .toolbarBackground(.hidden, for: .windowToolbar)
+                .modifier(TimelineInteractionOverlayRoot())
         }
 
         private var titleBand: some ToolbarContent {

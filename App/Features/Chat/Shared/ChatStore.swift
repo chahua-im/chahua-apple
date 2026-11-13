@@ -56,6 +56,7 @@ final class ChatStore: ObservableObject {
     @Published private(set) var memberSpeakingModesByChatID:
         [String: [Int32: MemberSpeakingModeResponse]] = [:]
     @Published private(set) var sessionRevision = 0
+    let displayPreferences: ConversationDisplayPreferences
     @Published private(set) var messageUpdateError: String?
     private var groupInfoRevisions: [String: Int] = [:]
     private var groupInfoInvalidations = Set<String>()
@@ -248,12 +249,11 @@ final class ChatStore: ObservableObject {
                 updateBackBadgeEligibility()
             }
             // Pending rows carry the sender captured in their projection.
-            for key in outgoingQueue.snapshots.keys
-            where !outgoingQueue.pendingMessages(chatID: key.chatID, threadID: key.threadID).isEmpty
-            {
+            for (key, snapshot) in outgoingQueue.snapshots {
                 conversationMessages.replacePending(
                     chatID: key.chatID, threadID: key.threadID,
-                    with: pendingProjection(chatID: key.chatID, threadID: key.threadID))
+                    with: pendingProjection(chatID: key.chatID, threadID: key.threadID),
+                    cancelledClientGeneratedIDs: cancelledOutgoingIDs(in: snapshot))
             }
         }
     }
@@ -447,11 +447,14 @@ final class ChatStore: ObservableObject {
 
     init(
         apiClient: any ChahuaAPIClient, outgoingQueue: OutgoingMessageQueue,
+        displayPreferences: ConversationDisplayPreferences? = nil,
         onInvalidToken: @escaping @MainActor @Sendable () async -> Void
     ) {
         self.apiClient = apiClient
         self.onInvalidToken = onInvalidToken
         self.outgoingQueue = outgoingQueue
+        self.displayPreferences =
+            displayPreferences ?? ConversationDisplayPreferences(namespace: "injected")
         drafts = ChatDraftStore(outgoingQueue: outgoingQueue)
         reactions = MessageReactionController(
             apiClient: apiClient, messageStore: conversationMessages, onInvalidToken: onInvalidToken
@@ -474,23 +477,113 @@ final class ChatStore: ObservableObject {
     private func applyOutgoingEvent(_ event: OutgoingQueueEvent) {
         switch event {
         case .snapshot(let snapshot):
-            guard installOutgoingSnapshot(snapshot) else { return }
+            let key = snapshot.conversationKey
+            guard snapshot.revision >= outgoingRevisions[key, default: -1] else { return }
             conversationMessages.replacePending(
                 chatID: snapshot.chatID, threadID: snapshot.threadID,
-                with: pendingProjection(chatID: snapshot.chatID, threadID: snapshot.threadID))
-        case .acknowledged(let snapshot, let message):
+                with: pendingProjection(chatID: snapshot.chatID, threadID: snapshot.threadID),
+                cancelledClientGeneratedIDs: cancelledOutgoingIDs(in: snapshot))
+            _ = installOutgoingSnapshot(snapshot)
+        case .delivered(let snapshot, let message), .updated(let snapshot, let message),
+            .deleted(let snapshot, let message):
             if let snapshot {
                 _ = installOutgoingSnapshot(snapshot)
             } else {
                 updatePendingListPreview(
                     for: .init(chatID: message.chatId, threadID: message.replyRootId))
             }
+            let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
+            let pending = pendingProjection(chatID: key.chatID, threadID: key.threadID)
+            if case .deleted = event {
+                conversationMessages.replacePending(
+                    chatID: key.chatID, threadID: key.threadID, with: pending)
+                applyMessageDeletion(message)
+                return
+            }
+            // A later local edit/cancellation can win while an earlier server
+            // completion is awaiting its main-actor handoff.
+            let cancelled =
+                outgoingQueue.snapshots[key]?.outgoing.contains {
+                    $0.clientGeneratedID == message.clientGeneratedId && $0.isCancelled
+                } ?? false
+            guard !cancelled,
+                !pending.contains(where: { $0.clientGeneratedID == message.clientGeneratedId })
+            else {
+                conversationMessages.replacePending(
+                    chatID: key.chatID, threadID: key.threadID, with: pending)
+                return
+            }
+            let normalized =
+                currentUserProfile.map {
+                    message.normalizedForRealtime(currentUserID: $0.uid)
+                } ?? message
+            if case .delivered = event {
+                applyMessageCreation(
+                    normalized, currentUserID: currentUserProfile?.uid ?? message.sender.uid,
+                    replacingPending: pending)
+            } else {
+                conversationMessages.replacePending(
+                    chatID: key.chatID, threadID: key.threadID, with: pending,
+                    acknowledging: normalized)
+                applyMessageUpdate(normalized, isNew: true)
+            }
+        }
+    }
+
+    private func applyMessageCreation(
+        _ message: MessageResponse, currentUserID: Int32,
+        replacingPending pending: [PendingOutgoingMessage]? = nil
+    ) {
+        if let pending {
             conversationMessages.replacePending(
                 chatID: message.chatId, threadID: message.replyRootId,
-                with: pendingProjection(chatID: message.chatId, threadID: message.replyRootId),
-                acknowledging: message)
-            receivePreview(message, isNew: true)
+                with: pending, acknowledging: message)
+        } else {
+            conversationMessages.apply(.message(message))
         }
+        pins.applyRealtimeEvent(.message(message))
+        let isOwnMembershipAnnouncement =
+            message.replyRootId == nil
+            && ((message.systemKind == .memberJoined && message.sender.uid == currentUserID)
+                || (message.systemKind == .memberAdded
+                    && message.systemLinks?.uid == currentUserID))
+        if !isOwnMembershipAnnouncement { receivePreview(message, isNew: true) }
+        if message.replyRootId == nil, !message.isDeleted, !isOwnMembershipAnnouncement {
+            let hiddenMembership =
+                message.systemKind?.isMembership == true
+                && conversationMessages.hidesMembershipMessages(chatID: message.chatId)
+            if !hiddenMembership,
+                !updateBackBadgeEstimate({
+                    $0.receive(
+                        chatID: message.chatId, messageID: message.id.rawValue,
+                        isOwn: message.sender.uid == currentUserID)
+                }),
+                uncertainBackBadgeChats.insert(message.chatId).inserted
+            {
+                invalidateBackBadgeEstimate()
+            }
+        }
+    }
+
+    private func applyMessageUpdate(_ message: MessageResponse, isNew: Bool = false) {
+        conversationMessages.apply(.messageUpdated(message))
+        pins.applyRealtimeEvent(.messageUpdated(message))
+        receivePreview(message, isNew: isNew)
+        if !conversationStateReady(chatID: message.chatId, threadID: message.replyRootId) {
+            reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId))
+        }
+        refreshVisibleActivity(
+            chatID: message.chatId, threadID: message.replyRootId,
+            mentions: true, reactions: false)
+    }
+
+    private func applyMessageDeletion(_ message: MessageResponse) {
+        let redacted = message.redactedForDeletion()
+        drafts.redactReplyTargets([message.id], chatID: message.chatId)
+        conversationMessages.apply(.messageDeleted(redacted))
+        pins.applyRealtimeEvent(.messageDeleted(redacted))
+        receivePreview(redacted, isNew: false)
+        reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId))
     }
 
     @discardableResult
@@ -499,6 +592,12 @@ final class ChatStore: ObservableObject {
         guard snapshot.revision >= outgoingRevisions[key, default: -1] else { return false }
         outgoingRevisions[key] = snapshot.revision
         drafts.install(snapshot)
+        if snapshot.outgoing.contains(where: \.isCancelled) {
+            redactCancelledListPreviews(in: \.chats, chatID: key.chatID)
+            redactCancelledListPreviews(in: \.archivedChats, chatID: key.chatID)
+            redactCancelledListPreviews(in: \.threads, chatID: key.chatID)
+            redactCancelledListPreviews(in: \.archivedThreads, chatID: key.chatID)
+        }
         updatePendingListPreview(for: key)
         return true
     }
@@ -509,6 +608,31 @@ final class ChatStore: ObservableObject {
         ).max {
             $0.enqueuedAt == $1.enqueuedAt
                 ? $0.enqueueSequence < $1.enqueueSequence : $0.enqueuedAt < $1.enqueuedAt
+        }
+    }
+
+    private func cancelledOutgoingIDs(in snapshot: LocalConversationSnapshot) -> Set<String> {
+        Set(snapshot.outgoing.lazy.filter(\.isCancelled).map(\.clientGeneratedID))
+    }
+
+    private func redactCancelledListPreviews(
+        in path: WritableKeyPath<ChatState, [ChatListItem]>, chatID: String
+    ) {
+        for index in state[keyPath: path].indices where state[keyPath: path][index].id == chatID {
+            let current = state[keyPath: path][index]
+            let filtered = displayFilteredSnapshot(current)
+            if filtered != current { state[keyPath: path][index] = filtered }
+        }
+    }
+
+    private func redactCancelledListPreviews(
+        in path: WritableKeyPath<ChatState, [ThreadListItem]>, chatID: String
+    ) {
+        for index in state[keyPath: path].indices where state[keyPath: path][index].chatId == chatID
+        {
+            let current = state[keyPath: path][index]
+            let filtered = displayFilteredSnapshot(current)
+            if filtered != current { state[keyPath: path][index] = filtered }
         }
     }
 
@@ -537,7 +661,7 @@ final class ChatStore: ObservableObject {
                 state: state, replyToMessage: message.replyToMessage,
                 attachments: message.attachments, dispatchClaimed: message.dispatchClaimed,
                 editRevision: message.editRevision, sticker: message.sticker,
-                forwardRequest: message.forwardRequest
+                forwardRequest: message.forwardRequest, intentAttachments: message.intentAttachments
             )
         }
     }
@@ -746,7 +870,7 @@ final class ChatStore: ObservableObject {
                 if let policy = chat.membershipMessagePolicy {
                     acceptMembershipPolicy(policy, chatID: chat.id)
                 }
-                chats.append(membershipFilteredSnapshot(chat))
+                chats.append(displayFilteredSnapshot(chat))
             }
             cursor = response.nextCursor
             if let cursor, !cursors.insert(cursor).inserted { throw APIError.unavailable }
@@ -769,7 +893,9 @@ final class ChatStore: ObservableObject {
                 throw CancellationError()
             }
             for thread in response.threads where thread.archived == archived {
-                if seen.insert(thread.conversationKey).inserted { threads.append(thread) }
+                if seen.insert(thread.conversationKey).inserted {
+                    threads.append(displayFilteredSnapshot(thread))
+                }
             }
             cursor = response.nextCursor
             if let cursor, !cursors.insert(cursor).inserted {
@@ -1019,7 +1145,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func install(_ chat: ChatListItem, replaceUnreadEstimate: Bool = true) {
-        let chat = membershipFilteredSnapshot(chat)
+        let chat = displayFilteredSnapshot(chat)
         let previousExpiry = self.chat(id: chat.id)?.mutedUntil
         if replaceUnreadEstimate {
             replaceBackBadgeSnapshot(chat)
@@ -1052,6 +1178,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func install(_ thread: ThreadListItem) {
+        let thread = displayFilteredSnapshot(thread)
         conversationReadStates[thread.conversationKey] = .init(
             lastReadMessageId: thread.lastReadMessageId, unreadCount: thread.unreadCount,
             unreadMentions: thread.unreadMentions, unreadReactions: thread.unreadReactions)
@@ -1303,6 +1430,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func receivePreview(_ message: MessageResponse, isNew: Bool) {
+        guard !conversationMessages.isCancelledOutgoing(message) else { return }
         let key = ConversationKey(
             chatID: message.chatId, threadID: message.replyRootId?.description)
         if key.threadID == nil, message.systemKind?.isMembership == true,
@@ -1371,7 +1499,10 @@ final class ChatStore: ObservableObject {
     }
 
     func applyRealtimeEvent(_ event: RealtimeServerEvent, currentUserID: Int32) async {
-        pins.applyRealtimeEvent(event)
+        switch event {
+        case .message, .messageUpdated, .messageDeleted: break
+        default: pins.applyRealtimeEvent(event)
+        }
         switch event {
         case .groupSpeakingModeChanged(let response):
             acceptGroupSpeakingMode(response)
@@ -1399,53 +1530,21 @@ final class ChatStore: ObservableObject {
         case .message(let message):
             let requestGeneration = generation
             let normalized = message.normalizedForRealtime(currentUserID: currentUserID)
-            let handled = await outgoingQueue.acceptAcknowledgement(normalized)
-            guard generation == requestGeneration else { return }
-            if !handled { conversationMessages.apply(.message(normalized)) }
-            let isOwnMembershipAnnouncement =
-                normalized.replyRootId == nil
-                && ((normalized.systemKind == .memberJoined
-                    && normalized.sender.uid == currentUserID)
-                    || (normalized.systemKind == .memberAdded
-                        && normalized.systemLinks?.uid == currentUserID))
-            if !isOwnMembershipAnnouncement { receivePreview(normalized, isNew: true) }
-            if normalized.replyRootId == nil, !normalized.isDeleted, !isOwnMembershipAnnouncement {
-                let hiddenMembership =
-                    normalized.systemKind?.isMembership == true
-                    && conversationMessages.hidesMembershipMessages(chatID: normalized.chatId)
-                if !hiddenMembership,
-                    !updateBackBadgeEstimate({
-                        $0.receive(
-                            chatID: normalized.chatId, messageID: normalized.id.rawValue,
-                            isOwn: normalized.sender.uid == currentUserID)
-                    }),
-                    uncertainBackBadgeChats.insert(normalized.chatId).inserted
-                {
-                    invalidateBackBadgeEstimate()
-                }
-            }
+            let disposition = await outgoingQueue.acceptAcknowledgement(normalized)
+            guard generation == requestGeneration, disposition == .unrelated else { return }
+            applyMessageCreation(normalized, currentUserID: currentUserID)
         case .messageUpdated(let message):
-            conversationMessages.apply(
-                .messageUpdated(message.normalizedForRealtime(currentUserID: currentUserID)))
-            receivePreview(
-                message.normalizedForRealtime(currentUserID: currentUserID), isNew: false)
-            if !conversationStateReady(
-                chatID: message.chatId, threadID: message.replyRootId?.description)
-            {
-                reconcileRow(
-                    .init(chatID: message.chatId, threadID: message.replyRootId?.description))
-            }
-            refreshVisibleActivity(
-                chatID: message.chatId, threadID: message.replyRootId?.description,
-                mentions: true, reactions: false)
+            let requestGeneration = generation
+            let normalized = message.normalizedForRealtime(currentUserID: currentUserID)
+            let disposition = await outgoingQueue.acceptAcknowledgement(normalized)
+            guard generation == requestGeneration, disposition == .unrelated else { return }
+            applyMessageUpdate(normalized)
         case .messageDeleted(let message):
-            drafts.redactReplyTargets([message.id], chatID: message.chatId)
-            conversationMessages.apply(
-                .messageDeleted(
-                    message.normalizedForRealtime(currentUserID: currentUserID)
-                        .redactedForDeletion()))
-            receivePreview(message.redactedForDeletion(), isNew: false)
-            reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId?.description))
+            let requestGeneration = generation
+            let normalized = message.normalizedForRealtime(currentUserID: currentUserID)
+            let disposition = await outgoingQueue.acceptDeletion(normalized)
+            guard generation == requestGeneration, disposition == .unrelated else { return }
+            applyMessageDeletion(normalized)
         case .reactionUpdated(let payload):
             conversationMessages.apply(
                 .reactionUpdated(
@@ -1456,9 +1555,18 @@ final class ChatStore: ObservableObject {
                         }
                     )))
         case .messagesBulkDeleted(let payload):
-            drafts.redactReplyTargets(Set(payload.messageIds), chatID: payload.chatId)
-            conversationMessages.apply(event)
+            let requestGeneration = generation
             let ids = Set(payload.messageIds)
+            for snapshot in outgoingQueue.snapshots.values where snapshot.chatID == payload.chatId {
+                for item in snapshot.outgoing {
+                    guard let confirmed = item.confirmedMessage, ids.contains(confirmed.id)
+                    else { continue }
+                    _ = await outgoingQueue.acceptDeletion(confirmed.redactedForDeletion())
+                    guard generation == requestGeneration else { return }
+                }
+            }
+            drafts.redactReplyTargets(ids, chatID: payload.chatId)
+            conversationMessages.apply(event)
             if let current = chat(id: payload.chatId), let preview = current.lastMessage,
                 ids.contains(preview.id)
             {
@@ -1646,10 +1754,9 @@ final class ChatStore: ObservableObject {
             guard generation == requestGeneration else { return false }
             // Commit redaction only after server acceptance: deleted IDs are
             // tombstoned throughout the shared cache and cannot safely roll back.
-            drafts.redactReplyTargets([message.id], chatID: message.chatId)
-            conversationMessages.apply(.messageDeleted(message.redactedForDeletion()))
-            receivePreview(message.redactedForDeletion(), isNew: false)
-            reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId?.description))
+            let disposition = await outgoingQueue.acceptDeletion(message.redactedForDeletion())
+            guard generation == requestGeneration else { return false }
+            if disposition == .unrelated { applyMessageDeletion(message) }
             return true
         } catch {
             guard generation == requestGeneration else { return false }
@@ -2071,6 +2178,7 @@ final class ChatStore: ObservableObject {
     }
 
     func reconcileVisibleTimelines() async {
+        if foregroundActive { outgoingQueue.resynchronizePublications() }
         let models = visibleTimelines()
         let requestGeneration = generation
         let groupIDs = Set(groupInfoByChatID.keys).union(
@@ -2757,13 +2865,36 @@ final class ChatStore: ObservableObject {
         invalidateMembershipVisibility(chatID: chatID)
     }
 
-    private func membershipFilteredSnapshot(_ chat: ChatListItem) -> ChatListItem {
-        let chat = membershipPolicies[chat.id].map { chat.withMembershipMessagePolicy($0) } ?? chat
+    private func displayFilteredSnapshot(_ chat: ChatListItem) -> ChatListItem {
+        var chat = membershipPolicies[chat.id].map { chat.withMembershipMessagePolicy($0) } ?? chat
+        if let preview = chat.lastMessage, !preview.isDeleted,
+            conversationMessages.isCancelledOutgoing(preview, chatID: chat.id)
+        {
+            chat = chat.withPreview(preview.redactedForDeletion())
+        }
         guard chat.kind == .group, chat.lastMessage?.systemKind?.isMembership == true,
             conversationMessages.hidesMembershipMessages(chatID: chat.id)
                 || chat.membershipMessagePolicy?.canView == false
         else { return chat }
         return chat.withPreview(nil)
+    }
+
+    private func displayFilteredSnapshot(_ thread: ThreadListItem) -> ThreadListItem {
+        let root = thread.threadRootMessage
+        let hideRoot =
+            !root.isDeleted
+            && conversationMessages.isCancelledOutgoing(root, chatID: thread.chatId)
+        let reply = thread.lastReply
+        let hideReply =
+            reply.map {
+                !$0.isDeleted
+                    && conversationMessages.isCancelledOutgoing(
+                        $0, chatID: thread.chatId, threadID: root.id.description)
+            } ?? false
+        guard hideRoot || hideReply else { return thread }
+        return thread.withActivity(
+            root: hideRoot ? root.redactedForDeletion() : nil,
+            lastReply: hideReply ? reply?.redactedForDeletion() : nil)
     }
 
     private func invalidateMembershipVisibility(chatID: String? = nil) {
@@ -2778,8 +2909,8 @@ final class ChatStore: ObservableObject {
                 $0.isGroupChat && $0.threadID == nil && (chatID == nil || $0.chatID == chatID)
             }.map(\.chatID))
         if let chatID { chatIDs.insert(chatID) }
-        state.chats = state.chats.map(membershipFilteredSnapshot)
-        state.archivedChats = state.archivedChats.map(membershipFilteredSnapshot)
+        state.chats = state.chats.map(displayFilteredSnapshot)
+        state.archivedChats = state.archivedChats.map(displayFilteredSnapshot)
         invalidateConversationWatches()
         for id in chatIDs {
             let key = ConversationKey(chatID: id)
@@ -3375,9 +3506,20 @@ final class ChatStore: ObservableObject {
                 }
                 let acceptedSettingsRevision = membershipSettingsRevision
                 let acceptedPolicyRevision = membershipPolicyRevisions[chatID, default: 0]
-                for message in response.messages {
-                    _ = await outgoingQueue.acceptAcknowledgement(message)
+                var visibleMessages: [MessageResponse]?
+                for (index, message) in response.messages.enumerated() {
+                    let disposition =
+                        message.isDeleted
+                        ? await outgoingQueue.acceptDeletion(message)
+                        : await outgoingQueue.acceptAcknowledgement(message)
                     guard generation == requestGeneration else { throw CancellationError() }
+                    if disposition == .suppress {
+                        if visibleMessages == nil {
+                            visibleMessages = Array(response.messages[..<index])
+                        }
+                    } else {
+                        visibleMessages?.append(message)
+                    }
                 }
                 if tracksVisibility {
                     guard membershipSettingsRevision == acceptedSettingsRevision,
@@ -3390,10 +3532,14 @@ final class ChatStore: ObservableObject {
                     && (response.membershipMessagePolicy != nil
                         || chat(id: chatID)?.kind == .group
                         || groupInfoByChatID[chatID]?.kind == .group)
-                guard isGroupRoot, conversationMessages.hidesMembershipMessages(chatID: chatID)
-                else { return response }
+                let hidesMembership =
+                    isGroupRoot
+                    && conversationMessages.hidesMembershipMessages(chatID: chatID)
+                guard visibleMessages != nil || hidesMembership else { return response }
+                let messages = visibleMessages ?? response.messages
                 return .init(
-                    messages: response.messages.filter { $0.systemKind?.isMembership != true },
+                    messages: hidesMembership
+                        ? messages.filter { $0.systemKind?.isMembership != true } : messages,
                     olderCursor: response.olderCursor, newerCursor: response.newerCursor,
                     nextCursor: response.nextCursor, prevCursor: response.prevCursor,
                     membershipMessagePolicy: response.membershipMessagePolicy,
@@ -3638,6 +3784,7 @@ final class ChatStore: ObservableObject {
     }
 
     func reset() {
+        displayPreferences.activate(uid: nil)
         generation += 1
         sessionRevision += 1
         backBadgeFallbackTask?.cancel()

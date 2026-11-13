@@ -39,6 +39,7 @@ final class AppCompositionRoot {
         credentialLoginClient: any CredentialLoginProviding,
         tokenStorage: any SessionTokenStorage,
         mediaNamespace: String = "injected",
+        preferenceDefaults: UserDefaults = .standard,
         localStoreFactory: @escaping @Sendable (Int32) async throws -> ChahuaLocalStore
     ) {
         let sessionModel = AuthSessionModel(
@@ -54,7 +55,10 @@ final class AppCompositionRoot {
             apiClient: apiClient, localStoreFactory: localStoreFactory, onInvalidToken: invalidToken
         )
         chatStore = ChatStore(
-            apiClient: apiClient, outgoingQueue: outgoingQueue, onInvalidToken: invalidToken)
+            apiClient: apiClient, outgoingQueue: outgoingQueue,
+            displayPreferences: ConversationDisplayPreferences(
+                defaults: preferenceDefaults, namespace: mediaNamespace),
+            onInvalidToken: invalidToken)
         mediaContext = AppMediaContext(namespace: mediaNamespace)
         realtimeCoordinator = RealtimeCoordinator(
             provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
@@ -91,9 +95,11 @@ final class AppCompositionRoot {
                 // Session replacement resets account-owned stores; bind the new
                 // profile only after that reset, before any feature can load.
                 self.realtimeCoordinator.setSession(uid: me.uid)
+                self.chatStore.displayPreferences.activate(uid: me.uid)
                 self.chatStore.currentUserProfile = me
                 self.notifications.setSession(uid: me.uid)
             } else {
+                self.chatStore.displayPreferences.activate(uid: nil)
                 self.chatStore.currentUserProfile = nil
                 self.realtimeCoordinator.setSession(uid: nil)
                 if case .signedOut = state { self.notifications.setSession(uid: nil) }

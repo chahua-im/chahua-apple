@@ -8,8 +8,12 @@
     @MainActor
     final class MessageOverlayLayoutTests: XCTestCase {
         func testMenuKeepsMessageInPlaceAndDismissesOnOutsideClick() async throws {
-            for (outgoing, dark, width) in [
-                (false, false, 900.0), (true, true, 900.0), (false, false, 360.0),
+            let previousTickSource = TimelineDisplayScheduler.tickSource
+            TimelineDisplayScheduler.tickSource = .runLoop
+            defer { TimelineDisplayScheduler.tickSource = previousTickSource }
+            for (outgoing, dark, width, hasWindowChrome) in [
+                (false, false, 900.0, true), (true, true, 900.0, true),
+                (false, false, 360.0, true), (false, false, 560.0, false),
             ] {
                 let message = try TimelineTestFixtures.message(
                     id: 1, senderID: outgoing ? 1 : 2, at: 0,
@@ -21,17 +25,19 @@
                     chatID: "chat", currentUserID: 1, isGroupChat: true, source: source,
                     messageStore: ConversationMessageStore())
                 await model.loadInitial()
-                let host = TimelineViewController(model: model)
-                host.configure(
-                    actions: .init(), interactionContext: .init(canWrite: true, isAdmin: true),
-                    mediaContext: nil, colorScheme: dark ? .dark : .light,
-                    messageTextSize: MessageTextSizePreference.defaultValue,
-                    appLanguage: AppLanguage.selected.rawValue,
-                    showAllAvatars: ConversationTimelinePreferences.defaultShowAllAvatars,
-                    showDmDetails: ConversationTimelinePreferences.defaultShowDmDetails,
-                    unreadBadgeColor: .default,
-                    headerInset: 0, composerInset: 0, isSplitResizing: false,
-                    isWideChatLayout: false)
+                let timeline = ConversationTimelineView(
+                    model: model, loadsInitialAutomatically: false,
+                    interactionContext: .init(canWrite: true, isAdmin: true)
+                )
+                .preferredColorScheme(dark ? .dark : .light)
+                let host = NSHostingController(
+                    rootView: Group {
+                        if hasWindowChrome {
+                            timeline.modifier(MacConversationWindowChrome())
+                        } else {
+                            timeline.modifier(TimelineInteractionOverlayRoot())
+                        }
+                    })
                 let size = CGSize(width: width, height: 650)
                 let window = NSWindow(
                     contentRect: CGRect(origin: .zero, size: size),
@@ -45,10 +51,15 @@
                 window.makeKeyAndOrderFront(nil)
                 window.orderFrontRegardless()
                 defer {
-                    host.tearDown()
+                    window.contentViewController = nil
                     window.close()
                 }
                 host.view.layoutSubtreeIfNeeded()
+                let loadDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+                while textViews(in: host.view).isEmpty, ContinuousClock.now < loadDeadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                    host.view.layoutSubtreeIfNeeded()
+                }
                 let original = try XCTUnwrap(textViews(in: host.view).first)
                 let frameView = try XCTUnwrap(window.contentView?.superview)
                 let originalFrame = original.convert(original.bounds, to: frameView)
@@ -71,6 +82,13 @@
                     original.convert(original.bounds, to: frameView), originalFrame,
                     "Opening the menu must not move or resize the message.")
                 XCTAssertTrue(copyAction.isEnabled)
+                // The supported content hierarchy must receive clicks on menu actions.
+                let content = try XCTUnwrap(window.contentView)
+                let copyPoint = copyAction.convert(
+                    CGPoint(x: copyAction.bounds.midX, y: copyAction.bounds.midY),
+                    to: content.superview)
+                let hit = content.hitTest(copyPoint)
+                XCTAssertTrue(hit === copyAction || hit?.isDescendant(of: copyAction) == true)
 
                 // A click over native title-bar chrome dismisses the menu,
                 // without also activating the close button.

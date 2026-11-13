@@ -24,6 +24,7 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     var sticker: MessageStickerResponse? = nil
     /// Captured forwarding content is immutable, including confirmed replacements.
     var forwardRequest: LocalForwardRequest? = nil
+    var intentAttachments: [LocalEditAttachment]? = nil
 
     var id: String { clientGeneratedID }
     var messageType: MessageType {

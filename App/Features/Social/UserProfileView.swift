@@ -15,6 +15,7 @@ struct UserProfileView: View {
     @ObservedObject var store: ChatStore
     // Modal owners clear their own selection; NavigationStack's dismiss can target a push instead.
     var onClose: (() -> Void)? = nil
+    var requestContext: FriendRequestProfileContext? = nil
     let onOpenChat: (ChatListItem) -> Void
 
     @State private var user: MemberSummary?
@@ -28,8 +29,32 @@ struct UserProfileView: View {
     @State private var confirmation: SafetyAction?
     @State private var loadRevision = 0
     @State private var reloadPending = false
+    @State private var presentationSessionRevision: Int
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+
+    init(
+        uid: Int32, currentUserID: Int32, store: ChatStore,
+        onClose: (() -> Void)? = nil,
+        requestContext: FriendRequestProfileContext? = nil,
+        onOpenChat: @escaping (ChatListItem) -> Void
+    ) {
+        self.uid = uid
+        self.currentUserID = currentUserID
+        self.store = store
+        self.onClose = onClose
+        self.requestContext = requestContext
+        self.onOpenChat = onOpenChat
+        _presentationSessionRevision = State(initialValue: store.sessionRevision)
+    }
+
+    var visibleRequestContext: FriendRequestProfileContext? {
+        guard store.currentUserProfile?.uid == currentUserID,
+            store.sessionRevision == presentationSessionRevision,
+            requestContext?.peerUID == uid
+        else { return nil }
+        return requestContext
+    }
 
     private enum SafetyAction: String, Identifiable {
         case remove = "Remove friend"
@@ -122,6 +147,11 @@ struct UserProfileView: View {
     private var profileContents: some View {
         if let user {
             profileHero(user)
+        }
+        if let context = visibleRequestContext {
+            requestDetails(context)
+        }
+        if user != nil {
             actionCards
             if uid != currentUserID {
                 if hasRelationshipStatus {
@@ -157,6 +187,38 @@ struct UserProfileView: View {
                 usesCompactProfileCard ? actionBackground : cardBackground,
                 in: RoundedRectangle(cornerRadius: usesCompactProfileCard ? 12 : 20))
         }
+    }
+
+    private func requestDetails(_ context: FriendRequestProfileContext) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Request details").font(.headline)
+            if let question = context.question {
+                Text("Question").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Text(verbatim: question)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            Text(
+                context.question != nil
+                    ? LocalizedStringKey("Answer") : LocalizedStringKey("Message")
+            )
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            if let message = context.message, !message.isEmpty {
+                Text(verbatim: message)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else {
+                Text("No message").foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(usesCompactProfileCard ? 14 : 20)
+        .background(
+            usesCompactProfileCard ? actionBackground : cardBackground,
+            in: RoundedRectangle(cornerRadius: usesCompactProfileCard ? 12 : 20)
+        )
+        .accessibilityIdentifier("friend-request-details")
     }
 
     private var usesCompactProfileCard: Bool {

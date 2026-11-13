@@ -1089,11 +1089,12 @@
                     ? nil : { [weak self] in self?.actions.toggleReaction?($0, $1) },
                 pendingReactionMessageIDs: actions.pendingReactionMessageIDs,
                 interactionContext: actions.interactionContext,
-                modifiablePendingMessageIDs: actions.modifiablePendingMessageIDs,
-                blockPendingMessage: actions.blockPendingMessage == nil
-                    ? nil : { [weak self] in self?.actions.blockPendingMessage?($0) },
-                revokePendingMessage: actions.revokePendingMessage == nil
-                    ? nil : { [weak self] in self?.actions.revokePendingMessage?($0) },
+                editablePendingMessageIDs: actions.editablePendingMessageIDs,
+                cancellablePendingMessageIDs: actions.cancellablePendingMessageIDs,
+                editPendingMessage: actions.editPendingMessage == nil
+                    ? nil : { [weak self] in self?.actions.editPendingMessage?($0) },
+                cancelPendingMessage: actions.cancelPendingMessage == nil
+                    ? nil : { [weak self] in self?.actions.cancelPendingMessage?($0) },
                 isSelectingMessages: actions.isSelectingMessages,
                 selectedMessageIDs: actions.selectedMessageIDs,
                 toggleMessageSelection: actions.toggleMessageSelection == nil

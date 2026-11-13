@@ -33,6 +33,39 @@ extension LocalOutgoingAttachment: BubbleMediaAttachment {
     }
 }
 
+extension LocalEditAttachment: BubbleMediaAttachment {
+    var id: String {
+        switch self {
+        case .local(let attachment): attachment.id
+        case .server(let attachment): attachment.id
+        }
+    }
+
+    var mediaDimensions: CGSize {
+        switch self {
+        case .local(let attachment): attachment.mediaDimensions
+        case .server(let attachment): attachment.mediaDimensions
+        }
+    }
+
+    var isFilePresentation: Bool {
+        switch self {
+        case .local(let attachment): attachment.isFilePresentation
+        case .server(let attachment): attachment.isFilePresentation
+        }
+    }
+}
+
+extension ConversationTimelineEntry {
+    /// A submitted selection is authoritative even when it is explicitly empty.
+    var mediaAttachments: [LocalEditAttachment] {
+        if case .pending(let pending) = self, pending.forwardRequest == nil {
+            return pending.intentAttachments ?? pending.attachments.map(LocalEditAttachment.local)
+        }
+        return (presentationMessage?.attachments ?? []).map(LocalEditAttachment.server)
+    }
+}
+
 enum BubbleMediaLayout {
     struct Cell<Attachment: BubbleMediaAttachment>: Hashable {
         let attachment: Attachment

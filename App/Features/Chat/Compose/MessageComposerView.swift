@@ -19,10 +19,17 @@ struct MessageComposerView: View {
     var replyFocusRequest = 0
     var onCancelReply: (() -> Void)? = nil
     var onOpenReply: ((MessageID) -> Void)? = nil
-    var editingMessage: MessageResponse? = nil
+    var isEditing = false
+    var initialEditText = ""
+    var hasEditChanges: ((String) -> Bool)? = nil
+    var editIdentity: String? = nil
+    var editMentionNames: [Int32: String] = [:]
+    var allowsEditingMedia = false
+    var editExitGuard: FormExitGuard? = nil
     var onCancelEdit: (() -> Void)? = nil
+    var onEscapeEdit: ((String) -> Void)? = nil
     var onRequestEditLastMessage: (() -> Bool)? = nil
-    var attachments: [LocalOutgoingAttachment] = []
+    var attachments: [ComposerMediaItem] = []
     var attachmentProgress: [String: Double] = [:]
     var compressionEnabled = true
     var onImportImages: (([URL]) async throws -> Void)? = nil
@@ -66,9 +73,12 @@ struct MessageComposerView: View {
     @State private var showsAttachmentDialog = false
     @State private var attachmentCaption = ""
     @State private var attachmentSubmitted = false
+    @State private var attachmentDialogEditIdentity: String?
     @State private var isSubmitting = false
     @State private var showsStickerPicker = false
     @State private var stickerPickerStoleFocus = false
+    @State private var acquisitionTask: Task<Void, Never>?
+    @State private var acquisitionGeneration = UUID()
 
     private var isAcquiring: Bool {
         #if os(iOS)
@@ -91,24 +101,25 @@ struct MessageComposerView: View {
 
     private var canSubmit: Bool {
         isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
+            && (!isEditing || input.isComposing || editHasChanges(text))
     }
     // The binding intentionally excludes native IME preedit; it still enables
     // explicit Send, which commits the visible marked text before submitting.
     private var hasText: Bool { input.isComposing || !(input.editorText ?? text).isEmpty }
-    private var hasContent: Bool { hasText || (editingMessage == nil && !attachments.isEmpty) }
+    private var hasContent: Bool { hasText || !attachments.isEmpty }
     private var canAcquire: Bool {
         isEnabled && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
-            && editingMessage == nil && (onImportImages != nil || onImportFiles != nil)
+            && (!isEditing || allowsEditingMedia) && (onImportImages != nil || onImportFiles != nil)
             && !isCameraPresented
     }
     private var canPickSticker: Bool {
-        canSubmit && editingMessage == nil && stickerLibrary != nil && onSendSticker != nil
+        canSubmit && !isEditing && stickerLibrary != nil && onSendSticker != nil
     }
-    private var showsVoiceButton: Bool { !hasContent && editingMessage == nil }
+    private var showsVoiceButton: Bool { !hasContent && !isEditing }
     private var showsVoiceControl: Bool { showsVoiceButton || voiceRecorder.isActive }
     private var canStartVoice: Bool {
         isEnabled && canSend && !isAcquiring && !isSubmitting && !voiceRecorder.isActive
-            && !hasContent && editingMessage == nil && onSendVoice != nil
+            && !hasContent && !isEditing && onSendVoice != nil
             && !showsPhotos && !showsFiles && !showsAttachmentDialog
             && !isCameraPresented
     }
@@ -234,13 +245,20 @@ struct MessageComposerView: View {
                             showsPhotos = true
                         }
                         .disabled(onImportImages == nil)
-                        Button("Files", systemImage: "folder") {
-                            dismissStickerPicker(restoreFocus: false)
-                            input.settleNativeInput()
-                            isInputFocused = false
-                            showsFiles = true
+                        if !attachments.isEmpty {
+                            Button("Attachments", systemImage: "photo.on.rectangle") {
+                                presentAttachmentDialog()
+                            }
                         }
-                        .disabled(onImportFiles == nil)
+                        if !isEditing {
+                            Button("Files", systemImage: "folder") {
+                                dismissStickerPicker(restoreFocus: false)
+                                input.settleNativeInput()
+                                isInputFocused = false
+                                showsFiles = true
+                            }
+                            .disabled(onImportFiles == nil)
+                        }
                     } label: {
                         Image(systemName: "paperclip")
                             .font(.system(size: 20))
@@ -260,15 +278,15 @@ struct MessageComposerView: View {
                     #endif
                     .disabled(!canAcquire)
                     .accessibilityLabel(
-                        editingMessage == nil
+                        !isEditing || allowsEditingMedia
                             ? "Add attachments" : "Attachments cannot be changed while editing"
                     )
                     .modifier(ChatGlassSurface(cornerRadius: 22))
                 }
 
                 VStack(spacing: 0) {
-                    if let editing = editingMessage {
-                        editMarker(editing)
+                    if isEditing {
+                        editMarker
                     } else if let reply = replyToMessage {
                         replyMarker(reply)
                     }
@@ -307,8 +325,12 @@ struct MessageComposerView: View {
                                 .onKeyPress(.escape) {
                                     guard !input.isComposing else { return .ignored }
                                     if input.onMentionKey?(.dismiss) == true { return .handled }
-                                    if let editing = editingMessage, text == editing.message {
-                                        onCancelEdit?()
+                                    if isEditing {
+                                        if let onEscapeEdit {
+                                            onEscapeEdit(text)
+                                        } else if text == initialEditText {
+                                            onCancelEdit?()
+                                        }
                                     } else if replyToMessage != nil {
                                         onCancelReply?()
                                     } else {
@@ -320,7 +342,7 @@ struct MessageComposerView: View {
                                     guard !input.isComposing else { return .ignored }
                                     if input.onMentionKey?(.up) == true { return .handled }
                                     guard !hasText, attachments.isEmpty, replyToMessage == nil,
-                                        editingMessage == nil,
+                                        !isEditing,
                                         onRequestEditLastMessage?() == true
                                     else { return .ignored }
                                     return .handled
@@ -439,7 +461,9 @@ struct MessageComposerView: View {
                     let shouldPresentCamera = presentsCameraAfterAttachmentDialog
                     presentsCameraAfterAttachmentDialog = false
                 #endif
-                if !attachmentSubmitted { text = attachmentCaption }
+                if !attachmentSubmitted, attachmentDialogEditIdentity == editIdentity {
+                    text = attachmentCaption
+                }
                 attachmentCaption = ""
                 input.receiveExternalText(text)
                 #if os(macOS)
@@ -459,7 +483,8 @@ struct MessageComposerView: View {
             ComposerAttachmentDialog(
                 text: $attachmentCaption, attachments: attachments, progress: attachmentProgress,
                 compressionEnabled: compressionEnabled, isEnabled: isEnabled,
-                canSend: canSend, isAcquiring: isAcquiring, attachmentError: imageError,
+                canSend: canSend && (!isEditing || editHasChanges(attachmentCaption)),
+                isAcquiring: isAcquiring, attachmentError: imageError,
                 onCompositionChanged: onCompositionChanged,
                 onRemove: { id in performImageOperation { try await onRemoveAttachment?(id) } },
                 onRetry: { id in performImageOperation { try await onRetryAttachment?(id) } },
@@ -484,7 +509,10 @@ struct MessageComposerView: View {
                     defer { attachmentState.isAcquiring = false }
                     try await onDiscardAttachments()
                 },
-                onSearchMembers: onSearchMembers
+                onSearchMembers: onSearchMembers,
+                isEditing: isEditing, allowsCompressionChanges: !isEditing,
+                onEscapeEdit: { onEscapeEdit?(attachmentCaption) },
+                editExitGuard: editExitGuard
             )
         }
         #if os(iOS)
@@ -568,6 +596,10 @@ struct MessageComposerView: View {
             Text(voiceRecorder.error ?? "")
         }
         .onDisappear {
+            acquisitionTask?.cancel()
+            acquisitionGeneration = UUID()
+            attachmentState.prepareForEditing = nil
+            attachmentState.cancelEditingWork = nil
             voiceRecorder.discard()
             #if os(iOS)
                 if let capturedPhotoURL {
@@ -582,9 +614,11 @@ struct MessageComposerView: View {
             if phase == .background { voiceRecorder.suspend() }
         }
         .onAppear {
-            input.setMentionNames(MessageMentions.names(in: editingMessage?.mentions ?? []))
+            input.setMentionNames(editMentionNames)
             input.receiveExternalText(text)
             voiceRecorder.setSceneActive(scenePhase == .active)
+            attachmentState.prepareForEditing = prepareForEditing
+            attachmentState.cancelEditingWork = cancelEditingWork
         }
         .onChange(of: text) { _, text in
             input.receiveExternalText(text)
@@ -593,10 +627,16 @@ struct MessageComposerView: View {
         .onChange(of: isInputFocused) { _, focused in
             if focused { dismissStickerPicker(restoreFocus: false) }
         }
-        .onChange(of: editingMessage?.id) { _, id in
-            input.setMentionNames(MessageMentions.names(in: editingMessage?.mentions ?? []))
+        .onChange(of: editIdentity) { _, _ in
+            cancelEditingWork()
+            if showsAttachmentDialog {
+                attachmentSubmitted = true
+                showsAttachmentDialog = false
+            }
+            input.setMentionNames(editMentionNames)
             dismissStickerPicker(restoreFocus: false)
-            if id != nil { voiceRecorder.discard() }
+            voiceRecorder.discard()
+            input.receiveExternalText(text)
         }
         .onChange(of: isEnabled) { _, enabled in
             if !enabled {
@@ -609,7 +649,7 @@ struct MessageComposerView: View {
             importProviders(providers)
         }
         .onChange(of: attachments.map(\.id)) { oldIDs, newIDs in
-            if newIDs.contains(where: { !oldIDs.contains($0) }) {
+            if !isEditing, newIDs.contains(where: { !oldIDs.contains($0) }) {
                 voiceRecorder.discard()
                 if !showsAttachmentDialog { presentAttachmentDialog() }
             }
@@ -633,14 +673,26 @@ struct MessageComposerView: View {
         let restoresInputFocus = isInputFocused
         attachmentState.isAcquiring = true
         imageError = nil
-        Task {
+        let generation = acquisitionGeneration
+        acquisitionTask = Task {
             defer {
-                attachmentState.isAcquiring = false
+                if generation == acquisitionGeneration { attachmentState.isAcquiring = false }
                 if restoresInputFocus && isEnabled && !showsAttachmentDialog && !opensDialog {
                     isInputFocused = true
                 }
             }
-            do { try await operation() } catch { imageError = error.localizedDescription }
+            do {
+                try await operation()
+                if generation == acquisitionGeneration, !Task.isCancelled,
+                    opensDialog, !showsAttachmentDialog
+                {
+                    presentAttachmentDialog()
+                }
+            } catch {
+                if generation == acquisitionGeneration, !Task.isCancelled {
+                    imageError = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -660,16 +712,20 @@ struct MessageComposerView: View {
                 dismissStickerPicker(restoreFocus: false)
                 isInputFocused = false
             }
+            let generation = acquisitionGeneration
             isRequestingCameraPermission = true
             Task {
                 let granted = await cameraPermissionGranted()
+                guard generation == acquisitionGeneration else { return }
                 isRequestingCameraPermission = false
                 guard granted else {
                     imageError =
                         "Camera access is disabled. Enable Camera in Settings to take a photo."
                     return
                 }
-                guard isEnabled && !isSubmitting && !voiceRecorder.isActive else { return }
+                guard generation == acquisitionGeneration,
+                    isEnabled && !isSubmitting && !voiceRecorder.isActive
+                else { return }
                 if showsAttachmentDialog {
                     presentsCameraAfterAttachmentDialog = true
                     showsAttachmentDialog = false
@@ -714,6 +770,7 @@ struct MessageComposerView: View {
             for provider in providers where ComposerPastePolicy.supports(provider) {
                 let url = try await ComposerImageAcquisition.materialize(provider)
                 urls.append(url)
+                try Task.checkCancellation()
                 if ComposerPastePolicy.isFile(provider, materializedURL: url) {
                     guard let onImportFiles else { throw APIError.unavailable }
                     try await onImportFiles([url])
@@ -768,14 +825,15 @@ struct MessageComposerView: View {
         .padding(.top, 12)
     }
 
-    private func editMarker(_ message: MessageResponse) -> some View {
+    private var editMarker: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Edit message")
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
-                MessageSummaryText(message.replyPreview, fontSize: fontSize * 12 / 15)
-                    .dynamicTypeSize(.large)
+                Text(initialEditText)
+                    .font(.system(size: fontSize * 12 / 15))
+                    .foregroundStyle(.secondary)
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -846,6 +904,7 @@ struct MessageComposerView: View {
         guard !input.isComposing else { return }
         // The modal owns its edits until send or dismissal, not the compose bar.
         attachmentCaption = text
+        attachmentDialogEditIdentity = editIdentity
         attachmentSubmitted = false
         dismissStickerPicker(restoreFocus: false)
         isInputFocused = false
@@ -857,7 +916,7 @@ struct MessageComposerView: View {
         if input.onMentionKey?(.accept) == true { return }
         guard canSubmit,
             input.prepareSubmission(
-                allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty)
+                allowEmptyUnfocused: !attachments.isEmpty)
         else { return }
         sendCommittedText()
     }
@@ -865,14 +924,14 @@ struct MessageComposerView: View {
     private func submit() {
         guard canSubmit,
             input.prepareExplicitSubmission(
-                allowEmptyUnfocused: editingMessage == nil && !attachments.isEmpty)
+                allowEmptyUnfocused: !attachments.isEmpty)
         else { return }
         sendCommittedText()
     }
 
     private func sendCommittedText() {
         _ = input.onMentionKey?(.dismiss)
-        if editingMessage == nil, !attachments.isEmpty {
+        if !isEditing, !attachments.isEmpty {
             presentAttachmentDialog()
             return
         }
@@ -882,6 +941,45 @@ struct MessageComposerView: View {
             _ = await onSubmit(submittedText)
             isSubmitting = false
         }
+    }
+
+    private func editHasChanges(_ text: String) -> Bool {
+        hasEditChanges?(text)
+            ?? (text.trimmingCharacters(in: .whitespacesAndNewlines)
+                != initialEditText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func prepareForEditing() async throws {
+        guard input.prepareForEditing() else { throw APIError.unavailable }
+        let task = acquisitionTask
+        cancelAcquisition()
+        if let task { await task.value }
+    }
+
+    private func cancelEditingWork() {
+        voiceRecorder.discard()
+        cancelAcquisition()
+    }
+
+    private func cancelAcquisition() {
+        dismissStickerPicker(restoreFocus: false)
+        acquisitionGeneration = UUID()
+        acquisitionTask?.cancel()
+        acquisitionTask = nil
+        attachmentState.isAcquiring = false
+        _ = attachmentState.takeDrop()
+        selectedPhotos = []
+        showsPhotos = false
+        showsFiles = false
+        #if os(iOS)
+            showsCamera = false
+            isRequestingCameraPermission = false
+            presentsCameraAfterAttachmentDialog = false
+            if let capturedPhotoURL {
+                ComposerImageAcquisition.removeTemporary([capturedPhotoURL])
+                self.capturedPhotoURL = nil
+            }
+        #endif
     }
 }
 

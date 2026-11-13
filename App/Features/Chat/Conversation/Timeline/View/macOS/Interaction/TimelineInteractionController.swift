@@ -21,6 +21,7 @@
         private var overlay: TimelineActionOverlayView?
         private var dismissingOverlay: TimelineActionOverlayView?
         private weak var overlayWindow: NSWindow?
+        private weak var overlayHost: TimelineInteractionOverlayHostView?
         private weak var previousFirstResponder: NSResponder?
         private var keyMonitor: Any?
 
@@ -80,7 +81,7 @@
         ) {
             guard target == nil, row.entry.messageType != .system,
                 let window = timelineView.window, let content = window.contentView,
-                let overlayHost = content.superview,
+                let overlayHost = TimelineInteractionOverlayHostView.find(in: content),
                 !timelineView.isHiddenOrHasHiddenAncestor,
                 let live = liveRow(for: row.entry.stableKey), live.entry.messageType != .system
             else { return }
@@ -96,19 +97,18 @@
                 previousFirstResponder = owner
             }
             overlayWindow = window
+            self.overlayHost = overlayHost
             let overlay = TimelineActionOverlayView()
             overlay.onDismiss = { [weak self] in self?.dismiss() }
             overlay.onReaction = { [weak self] emoji in self?.react(emoji) }
             overlay.onAction = { [weak self] action in self?.perform(action) }
-            overlay.onBlock = { [weak self] in self?.modifyPending(revoke: false) }
-            overlay.onRevoke = { [weak self] in self?.modifyPending(revoke: true) }
+            overlay.onEditPending = { [weak self] in self?.modifyPending(cancel: false) }
+            overlay.onCancelPending = { [weak self] in self?.modifyPending(cancel: true) }
             self.overlay = overlay
             overlay.frame = overlayHost.bounds
             overlay.autoresizingMask = [.width, .height]
-            // SwiftUI's content host cannot accept native children, and its bounds
-            // exclude native title-bar controls. The window's common frame view is
-            // the only same-window host above both SwiftUI chrome and the title bar;
-            // no auxiliary key window is created or kept alive after the chat closes.
+            // SwiftUI supplies an app-owned, window-wide native container. Never
+            // attach children to NSHostingView or AppKit's private theme frame.
             overlayHost.addSubview(overlay, positioned: .above, relativeTo: nil)
             refresh()
             guard self.overlay === overlay else { return }
@@ -154,8 +154,8 @@
             guard let row = liveRow(for: target.key), row.entry.messageType != .system,
                 let timelineView, !timelineView.isHiddenOrHasHiddenAncestor,
                 let window = timelineView.window, window === overlayWindow,
-                let content = window.contentView, let overlayHost = content.superview, let overlay,
-                overlay.superview === overlayHost
+                let content = window.contentView, let overlayHost, let overlay,
+                overlayHost.window === window, overlay.superview === overlayHost
             else {
                 dismiss(animated: false)
                 return
@@ -193,6 +193,7 @@
             overlay = nil
             previousFirstResponder = nil
             overlayWindow = nil
+            overlayHost = nil
             dismissingOverlay = dismissedOverlay
             if let dismissedOverlay, animated {
                 dismissedOverlay.dismiss { [weak self, weak dismissedOverlay] in
@@ -351,17 +352,16 @@
             }
         }
 
-        private func modifyPending(revoke: Bool) {
+        private func modifyPending(cancel: Bool) {
             guard let row = selectedRow else {
                 dismiss()
                 return
             }
-            guard case .pending(let pending) = row.entry, !pending.dispatchClaimed,
-                actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID),
-                revoke
-                    || ([.text, .file].contains(pending.body.messageType)
-                        && pending.forwardRequest == nil),
-                let operation = revoke ? actions.revokePendingMessage : actions.blockPendingMessage
+            guard case .pending(let pending) = row.entry,
+                cancel
+                    ? actions.canCancelPendingMessage(pending)
+                    : actions.canEditPendingMessage(pending),
+                let operation = cancel ? actions.cancelPendingMessage : actions.editPendingMessage
             else {
                 refresh()
                 return

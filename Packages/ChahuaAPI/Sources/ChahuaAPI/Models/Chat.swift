@@ -172,6 +172,7 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
     public let name: String?
     public let description: String?
     public let avatar: String?
+    public let createdAt: Date?
     public let mutedUntil: Date?
     public let muteOverride: Bool?
     public let isMuted: Bool?
@@ -204,7 +205,8 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
 
     public init(
         id: String, name: String? = nil, description: String? = nil, avatar: String? = nil,
-        mutedUntil: Date? = nil, muteOverride: Bool? = nil, isMuted: Bool? = nil,
+        createdAt: Date? = nil, mutedUntil: Date? = nil, muteOverride: Bool? = nil,
+        isMuted: Bool? = nil,
         myRole: GroupRole? = nil, kind: ChatKind,
         peer: MemberSummary? = nil, speakingMode: SpeakingMode? = nil,
         mySpeakingMode: SpeakingMode? = nil, effectiveSpeakingMode: SpeakingMode? = nil,
@@ -214,6 +216,7 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
         self.name = name
         self.description = description
         self.avatar = avatar
+        self.createdAt = createdAt
         self.mutedUntil = mutedUntil
         self.muteOverride = muteOverride
         self.isMuted = isMuted
@@ -232,6 +235,7 @@ public struct GroupInfoResponse: Codable, Hashable, Sendable {
         name = try container.decodeIfPresent(String.self, forKey: .name)
         description = try container.decodeIfPresent(String.self, forKey: .description)
         avatar = try container.decodeIfPresent(String.self, forKey: .avatar)
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
         mutedUntil = try container.decodeIfPresent(Date.self, forKey: .mutedUntil)
         muteOverride = try container.decodeIfPresent(Bool.self, forKey: .muteOverride)
         isMuted = try container.decodeIfPresent(Bool.self, forKey: .isMuted)

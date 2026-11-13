@@ -19,6 +19,9 @@ final class ComposerAttachmentState: ObservableObject {
     @Published var isAcquiring = false
     @Published var error: String?
     @Published private(set) var dropRequest: DropRequest?
+    /// Installed by the mounted composer; invoked before changing draft ownership.
+    var prepareForEditing: (() async throws -> Void)?
+    var cancelEditingWork: (() -> Void)?
 
     func acceptDrop(_ providers: [NSItemProvider]) -> Bool {
         let attachments = providers.filter { ComposerPastePolicy.supports($0) }

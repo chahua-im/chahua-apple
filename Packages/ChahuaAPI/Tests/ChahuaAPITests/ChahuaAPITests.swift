@@ -9,6 +9,56 @@ final class ChahuaAPITests: XCTestCase {
         super.tearDown()
     }
 
+    func testCreateRequestRoundTripsOmittedAttachmentIDsAndRejectsMalformedSelections() throws {
+        let original = CreateMessageBody(
+            messageType: .text, clientGeneratedId: "frozen", message: "text",
+            replyToId: MessageID(9))
+        let data = try JSONEncoder().encode(original)
+        XCTAssertEqual(try JSONDecoder().decode(CreateMessageBody.self, from: data), original)
+        for value in ["null", #""not-an-array""#, "42", "[1]", "{}"] {
+            let malformed = """
+                {"messageType":"text","clientGeneratedId":"frozen","message":"text","attachmentIds":\(value)}
+                """
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(CreateMessageBody.self, from: Data(malformed.utf8)))
+        }
+    }
+
+    func testMessageUpdateOmitsUnchangedAttachmentsAndPreservesEmptyOrOrderedSelection()
+        async throws
+    {
+        let requests = RequestRecorder()
+        let message = MessageResponse(
+            id: MessageID(7), chatId: "chat", clientGeneratedId: "client",
+            messageType: .text,
+            sender: User(uid: 1, gender: 0, name: nil, avatarUrl: nil, userGroup: nil),
+            createdAt: Date(timeIntervalSince1970: 1), message: "edited")
+        let response = String(decoding: try JSONCoding.encoder.encode(message), as: UTF8.self)
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (200, response)
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        for body in [
+            UpdateMessageBody(message: "text only"),
+            UpdateMessageBody(message: "remove media", attachmentIds: []),
+            UpdateMessageBody(message: "reorder", attachmentIds: ["second", "first"]),
+        ] {
+            _ = try await client.updateMessage(chatID: "chat", messageID: MessageID(7), body: body)
+        }
+        let bodies = try requests.values.map {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: requestBody($0)) as? [String: Any])
+        }
+        XCTAssertEqual(requests.values.map(\.httpMethod), ["PATCH", "PATCH", "PATCH"])
+        XCTAssertTrue(requests.values.allSatisfy { $0.url?.path == "/chats/chat/messages/7" })
+        XCTAssertNil(bodies[0]["attachmentIds"])
+        XCTAssertEqual(bodies[0]["message"] as? String, "text only")
+        XCTAssertEqual(bodies[1]["attachmentIds"] as? [String], [])
+        XCTAssertEqual(bodies[2]["attachmentIds"] as? [String], ["second", "first"])
+    }
+
     func testForwardingRoutesPreserveSourceIDsThreadAndPlaceholderConsent() async throws {
         let requests = RequestRecorder()
         let sourceID = MessageID(9_007_199_254_740_993)
@@ -982,6 +1032,85 @@ final class ChahuaAPITests: XCTestCase {
             XCTAssertEqual(status, 403)
             XCTAssertEqual(responseBody, Data(body.utf8))
         }
+    }
+
+    func testInvitePreviewDecodesEligibilityAndActualGroupCreationDate() async throws {
+        let requests = RequestRecorder()
+        let body = #"""
+            {"alreadyMember":false,"canJoin":false,
+             "chat":{"id":"group","name":"Members","createdAt":"2020-01-02T03:04:05Z",
+                     "speakingMode":"threadsOnly"},
+             "invite":{"id":"invite","chatId":"group","code":"code","createdAt":"2026-09-01T01:02:03Z",
+                       "inviteType":"targeted","targetUid":17}}
+            """#
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (200, body)
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        let denied = try await client.previewGroupInvite(code: "code")
+        XCTAssertFalse(denied.canJoin)
+        XCTAssertFalse(denied.alreadyMember)
+        XCTAssertEqual(denied.chat.speakingMode, .threadsOnly)
+        XCTAssertEqual(
+            denied.chat.createdAt, ISO8601DateFormatter().date(from: "2020-01-02T03:04:05Z"))
+        XCTAssertNotEqual(denied.chat.createdAt, denied.invite.createdAt)
+        let allowed = try JSONCoding.decoder.decode(
+            GroupInvitePreview.self,
+            from: Data(
+                body.replacingOccurrences(of: #""canJoin":false"#, with: #""canJoin":true"#).utf8))
+        XCTAssertTrue(allowed.canJoin)
+        let request = try XCTUnwrap(requests.values.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.path, "/invites/invite")
+        XCTAssertEqual(
+            URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?
+                .queryItems,
+            [URLQueryItem(name: "inviteCode", value: "code")])
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+    }
+
+    func testInvitePreviewRejectsMissingAndNonBooleanEligibility() async throws {
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        for eligibility in [
+            "", #""canJoin":null,"#, #""canJoin":"true","#, #""canJoin":1,"#,
+            #""canJoin":[],"#, #""canJoin":{},"#,
+        ] {
+            let body = #"""
+                {"alreadyMember":false,\#(eligibility)"chat":{"id":"group"},
+                 "invite":{"id":"invite","chatId":"group","code":"code",
+                           "createdAt":"2026-09-01T01:02:03Z","inviteType":"generic"}}
+                """#
+            StubURLProtocol.handler = { _ in (200, body) }
+            do {
+                _ = try await client.previewGroupInvite(code: "code")
+                XCTFail("Missing or invalid canJoin must fail closed: \(eligibility)")
+            } catch APIError.decoding(let status, _) {
+                XCTAssertEqual(status, 200)
+            }
+        }
+    }
+
+    func testGroupCreationDateRemainsOptionalForSparseSnapshotsAndRoundTrips() throws {
+        for body in [#"{"id":"group"}"#, #"{"id":"group","createdAt":null}"#] {
+            let group = try JSONCoding.decoder.decode(GroupInfoResponse.self, from: Data(body.utf8))
+            XCTAssertNil(group.createdAt)
+            XCTAssertEqual(group.kind, .group)
+        }
+        XCTAssertNil(GroupInfoResponse(id: "group", kind: .group).createdAt)
+        let date = Date(timeIntervalSince1970: 1_577_934_245)
+        let group = GroupInfoResponse(id: "group", createdAt: date, kind: .group)
+        XCTAssertEqual(
+            try JSONCoding.decoder.decode(
+                GroupInfoResponse.self, from: JSONCoding.encoder.encode(group)), group)
+        XCTAssertThrowsError(
+            try JSONCoding.decoder.decode(
+                GroupInfoResponse.self,
+                from: Data(#"{"id":"group","createdAt":"not-a-date"}"#.utf8)))
     }
 
     func testGroupMetadataAndMemberMutationsUseDocumentedWireContract() async throws {

@@ -41,6 +41,22 @@
             XCTAssertEqual(harness.persisted, "draft ")
         }
 
+        func testEditPreparationSettlesVisiblePreeditBeforeSwitchingBindings() {
+            let harness = NativeComposerHarness(text: "normal ")
+            defer { harness.input.detach() }
+            harness.mark("ni")
+            XCTAssertTrue(harness.input.prepareForEditing())
+            XCTAssertEqual(harness.persisted, "normal ni")
+            XCTAssertFalse(harness.input.isComposing)
+            var edit = "pending"
+            harness.input.configure(
+                draft: Binding(get: { edit }, set: { edit = $0 }),
+                onCompositionChanged: nil)
+            harness.input.receiveExternalText(edit)
+            XCTAssertEqual(harness.persisted, "normal ni")
+            XCTAssertEqual(edit, "pending")
+        }
+
         func testInlineFormattingPreservesEmojiEdgesWhitespaceAndParagraphs() {
             let source = NSAttributedString(string: "outside  😀 \n\n  你好😀  after")
             let selected = (source.string as NSString).range(of: "  😀 \n\n  你好😀  ")

@@ -58,6 +58,33 @@ enum TimelineTestFixtures {
         }
     #endif
 
+    static func pending(
+        id: String, at second: Int = 0, type: MessageType = .text,
+        text: String = "Queued message", claimed: Bool = false
+    ) -> PendingOutgoingMessage {
+        PendingOutgoingMessage(
+            chatID: "chat", clientGeneratedID: id,
+            body: .init(messageType: type, clientGeneratedId: id, message: text),
+            enqueuedAt: date(second: second), senderID: 1, state: claimed ? .sending : .queued,
+            dispatchClaimed: claimed)
+    }
+
+    static func capturedPreferenceSnapshot(firstID: UInt64, name: String) throws
+        -> ForwardedRecordSnapshot
+    {
+        let messages = try (0..<2).map { offset in
+            let message = try Self.message(
+                id: firstID + UInt64(offset), chatID: name, senderID: 2, senderName: name,
+                at: offset, text: "Hi")
+            return ForwardedMessageResponse(
+                originalMessageId: message.id, originalChatId: message.chatId,
+                message: message.message, messageType: .text, sender: message.sender,
+                originalCreatedAt: message.createdAt)
+        }
+        return ForwardedRecordSnapshot(
+            response: .init(total: messages.count, messages: messages), currentUserID: 1)
+    }
+
     /// `id` is the server message ID; ascending IDs are server (timeline) order.
     static func message(
         id: UInt64,

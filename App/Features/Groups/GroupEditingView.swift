@@ -5,8 +5,11 @@ import UniformTypeIdentifiers
 
 struct GroupEditingView: View {
     @ObservedObject var store: ChatStore
+    @ObservedObject var exitGuard: FormExitGuard
+    let exitOwner: UUID
     let info: GroupInfoResponse
     let onUpdated: (GroupInfoResponse) -> Void
+    let onBack: () -> Void
     @State private var name: String
     @State private var description: String
     @State private var savedName: String
@@ -21,17 +24,23 @@ struct GroupEditingView: View {
     @State private var directory: URL
     @State private var speakingMode: SpeakingMode?
     @State private var membershipVisibility: MembershipMessageVisibility?
-    private let sessionRevision: Int
-    private let accountUID: Int32?
+    @State private var sessionRevision: Int
+    @State private var accountUID: Int32?
+    @State private var accessRevoked = false
 
     init(
-        store: ChatStore, info: GroupInfoResponse, onUpdated: @escaping (GroupInfoResponse) -> Void
+        store: ChatStore, exitGuard: FormExitGuard, exitOwner: UUID,
+        info: GroupInfoResponse, onUpdated: @escaping (GroupInfoResponse) -> Void,
+        onBack: @escaping () -> Void
     ) {
         self.store = store
+        self.exitGuard = exitGuard
+        self.exitOwner = exitOwner
         self.info = info
         self.onUpdated = onUpdated
-        accountUID = store.currentUserProfile?.uid
-        sessionRevision = store.sessionRevision
+        self.onBack = onBack
+        _accountUID = State(initialValue: store.currentUserProfile?.uid)
+        _sessionRevision = State(initialValue: store.sessionRevision)
         _speakingMode = State(initialValue: info.speakingMode)
         _membershipVisibility = State(initialValue: info.membershipMessagePolicy?.visibility)
         _directory = State(
@@ -143,6 +152,7 @@ struct GroupEditingView: View {
         .formStyle(.grouped)
         .disabled(busy || !authorized)
         .navigationTitle("Edit Group")
+        .formBackProtection(exitGuard, onBack: onBack)
         .fileImporter(isPresented: $selectingAvatar, allowedContentTypes: [.image]) { result in
             switch result {
             case .success(let url):
@@ -157,6 +167,21 @@ struct GroupEditingView: View {
             if membershipVisibility == nil || membershipVisibility == oldValue {
                 membershipVisibility = newValue
             }
+        }
+        .onChange(of: isDirty, initial: true) { _, _ in refreshExitProtection() }
+        .onChange(of: busy) { _, _ in refreshExitProtection() }
+        .onChange(of: authorized) { _, allowed in
+            if !allowed {
+                accessRevoked = true
+                task?.cancel()
+            }
+            refreshExitProtection()
+        }
+        .onReceive(store.chatAccessInvalidations) { chatID in
+            guard chatID == info.id else { return }
+            accessRevoked = true
+            task?.cancel()
+            refreshExitProtection()
         }
         .onDisappear {
             task?.cancel()
@@ -173,18 +198,46 @@ struct GroupEditingView: View {
     }
 
     private var authorized: Bool {
-        let chatID = info.id
-        let groupInfoByChatID = store.groupInfoByChatID
-        return groupInfoByChatID[chatID]?.myRole == .admin
+        !accessRevoked && accountUID != nil
             && accountUID == store.currentUserProfile?.uid
             && sessionRevision == store.sessionRevision
+            && currentInfo.kind == .group && currentInfo.myRole == .admin
+    }
+
+    private var isDirty: Bool {
+        if name != savedName || description != savedDescription || avatar != nil { return true }
+        if let savedMode = currentInfo.speakingMode,
+            (speakingMode ?? savedMode) != savedMode
+        {
+            return true
+        }
+        if let savedVisibility = currentInfo.membershipMessagePolicy?.visibility,
+            (membershipVisibility ?? savedVisibility) != savedVisibility
+        {
+            return true
+        }
+        return false
+    }
+
+    private func refreshExitProtection() {
+        guard authorized else {
+            exitGuard.unregister(owner: exitOwner)
+            return
+        }
+        exitGuard.update(
+            owner: exitOwner, isDirty: isDirty, isSubmitting: busy,
+            accountID: accountUID, sessionRevision: sessionRevision)
     }
 
     private func saveSpeakingMode() async {
-        guard !busy, authorized, let speakingMode else { return }
+        guard !Task.isCancelled, !busy, authorized, let speakingMode else { return }
         busy = true
+        refreshExitProtection()
         error = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            if !Task.isCancelled { refreshExitProtection() }
+        }
         do {
             let updated = try await store.updateGroupSpeakingMode(
                 chatID: info.id, speakingMode: speakingMode)
@@ -200,10 +253,14 @@ struct GroupEditingView: View {
     }
 
     private func save(_ body: UpdateGroupBody) async {
-        guard !busy, authorized else { return }
+        guard !Task.isCancelled, !busy, authorized else { return }
         busy = true
+        refreshExitProtection()
         error = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            if !Task.isCancelled { refreshExitProtection() }
+        }
         do {
             let updated = try await store.updateGroup(chatID: info.id, body: body)
             guard authorized, !Task.isCancelled else { return }
@@ -226,10 +283,14 @@ struct GroupEditingView: View {
     }
 
     private func importAvatar(_ url: URL) async {
-        guard !busy, authorized else { return }
+        guard !Task.isCancelled, !busy, authorized else { return }
         busy = true
+        refreshExitProtection()
         error = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            if !Task.isCancelled { refreshExitProtection() }
+        }
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
@@ -238,7 +299,7 @@ struct GroupEditingView: View {
             guard imported.mimeType.hasPrefix("image/") else {
                 throw OutgoingImageError.unsupportedImage
             }
-            guard authorized else { return }
+            guard authorized, !Task.isCancelled else { return }
             avatar = imported
         } catch is CancellationError {} catch {
             guard authorized, !Task.isCancelled else { return }
@@ -247,14 +308,16 @@ struct GroupEditingView: View {
     }
 
     private func uploadAvatar(_ avatar: LocalOutgoingAttachment) async {
-        guard !busy, authorized else { return }
+        guard !Task.isCancelled, !busy, authorized else { return }
         busy = true
+        refreshExitProtection()
         uploadingAvatar = true
         error = nil
         progress = 0
         defer {
             busy = false
             uploadingAvatar = false
+            if !Task.isCancelled { refreshExitProtection() }
         }
         do {
             let allocation = try await store.groupAvatarUpload(

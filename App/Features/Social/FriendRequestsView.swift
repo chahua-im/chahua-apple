@@ -1,10 +1,26 @@
 import ChahuaAPI
 import SwiftUI
 
+struct FriendRequestProfileContext: Hashable, Identifiable {
+    let id: String
+    let peerUID: Int32
+    let question: String?
+    let message: String?
+
+    init(request: FriendRequest, currentUserID: Int32) {
+        let incoming =
+            request.direction.map { $0 == .incoming } ?? (request.to.uid == currentUserID)
+        id = request.id
+        peerUID = incoming ? request.from.uid : request.to.uid
+        question = request.question
+        message = request.message
+    }
+}
+
 struct FriendRequestsView: View {
     let currentUserID: Int32
     @ObservedObject var store: ChatStore
-    let onOpenProfile: (Int32) -> Void
+    let onOpenRequest: (FriendRequestProfileContext) -> Void
     @State private var requests: [FriendRequest] = []
     @State private var loading = false
     @State private var busyID: String?
@@ -52,7 +68,8 @@ struct FriendRequestsView: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 Button {
-                    onOpenProfile(peer.uid)
+                    onOpenRequest(
+                        FriendRequestProfileContext(request: request, currentUserID: currentUserID))
                 } label: {
                     HStack(spacing: 12) {
                         AvatarView(
@@ -78,9 +95,16 @@ struct FriendRequestsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            if actionable {
-                if let question = request.question { Text(question).font(.subheadline.bold()) }
-                if let message = request.message { Text(message).textSelection(.enabled) }
+            if let question = request.question {
+                Text(question)
+                    .font(.subheadline.bold())
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            if let message = request.message {
+                Text(message)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
             }
             if actionable {
                 HStack {

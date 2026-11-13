@@ -11,8 +11,8 @@
         var onDismiss: (() -> Void)?
         var onReaction: ((String) -> Void)?
         var onAction: ((MessageMenuAction) -> Void)?
-        var onBlock: (() -> Void)?
-        var onRevoke: (() -> Void)?
+        var onEditPending: (() -> Void)?
+        var onCancelPending: (() -> Void)?
 
         private let dismissButton = TimelineMenuButton()
         private let scrollView = NSScrollView()
@@ -86,14 +86,14 @@
             reactionSurface.addSubview(progress)
 
             blockButton.configureHorizontal(
-                symbol: "square.and.pencil", label: AppLanguage.localized("Move back to composer"),
+                symbol: "square.and.pencil", label: AppLanguage.localized("Edit message"),
                 destructive: false)
-            blockButton.onPress = { [weak self] in self?.onBlock?() }
+            blockButton.onPress = { [weak self] in self?.onEditPending?() }
             pendingSurface.addSubview(blockButton)
             revokeButton.configureHorizontal(
-                symbol: "trash", label: AppLanguage.localized("Revoke unsent message"),
+                symbol: "trash", label: AppLanguage.localized("Recall message"),
                 destructive: true)
-            revokeButton.onPress = { [weak self] in self?.onRevoke?() }
+            revokeButton.onPress = { [weak self] in self?.onCancelPending?() }
             pendingSurface.addSubview(revokeButton)
         }
 
@@ -244,18 +244,14 @@
                 divider.isHidden = index >= dividerCount
                 divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
             }
-            showsPending = false
-            if case .pending(let pending) = row.entry, !pending.dispatchClaimed,
-                actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID)
-            {
-                showsPending = true
+            blockButton.isEnabled = false
+            revokeButton.isEnabled = false
+            if case .pending(let pending) = row.entry {
+                blockButton.isEnabled = actions.canEditPendingMessage(pending)
+                revokeButton.isEnabled = actions.canCancelPendingMessage(pending)
             }
+            showsPending = blockButton.isEnabled || revokeButton.isEnabled
             pendingSurface.isHidden = !showsPending
-            blockButton.isEnabled =
-                actions.blockPendingMessage != nil
-                && [.text, .file].contains(row.entry.messageType)
-                && row.entry.presentationMessage?.forwardedFrom == nil
-            revokeButton.isEnabled = actions.revokePendingMessage != nil
             blockButton.alphaValue = blockButton.isEnabled ? 1 : 0.4
             revokeButton.alphaValue = revokeButton.isEnabled ? 1 : 0.4
             blockButton.setAccessibilityHelp(
@@ -452,8 +448,8 @@
             onDismiss = nil
             onReaction = nil
             onAction = nil
-            onBlock = nil
-            onRevoke = nil
+            onEditPending = nil
+            onCancelPending = nil
             for button in reactionButtons + actionButtons { button.onPress = nil }
             blockButton.onPress = nil
             revokeButton.onPress = nil

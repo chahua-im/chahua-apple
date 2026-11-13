@@ -68,11 +68,12 @@ final class LocalPersistenceTests: XCTestCase {
             request: LocalForwardRequest(sourceChatID: "source", sources: [source]))
         let pending = try XCTUnwrap(enqueued.outgoing.first)
         do {
-            _ = try await store.blockTail(
-                chatID: "destination", itemID: pending.clientGeneratedID, expectedRevision: 0)
+            _ = try await store.editOutgoing(
+                chatID: "destination", itemID: pending.clientGeneratedID, expectedRevision: 0,
+                text: "changed", attachments: [])
             XCTFail("Forwarded text is not an editable ordinary message")
         } catch LocalStorageError.unsupportedMessageType {}
-        let revoked = try await store.revokeTail(
+        let revoked = try await store.cancelOutgoing(
             chatID: "destination", itemID: pending.clientGeneratedID, expectedRevision: 0)
         XCTAssertTrue(revoked.outgoing.isEmpty)
     }
@@ -121,8 +122,8 @@ final class LocalPersistenceTests: XCTestCase {
                 messageType: .sticker, clientGeneratedId: "selected-sticker", replyToId: reply.id,
                 stickerId: sticker.id))
         XCTAssertEqual(claim.message?.replyToMessage, reply)
-        let acknowledged = try await store!.acknowledge(
-            chatID: "chat", threadID: "thread", clientGeneratedID: "selected-sticker")
+        let acknowledged = try await deliver(
+            store!, chatID: "chat", threadID: "thread", itemID: "selected-sticker")
         XCTAssertTrue(acknowledged.outgoing.isEmpty)
         XCTAssertEqual(acknowledged.draft, saved.draft)
 
@@ -160,14 +161,15 @@ final class LocalPersistenceTests: XCTestCase {
             chatID: "chat", senderID: 1, clientGeneratedID: "sticker-send",
             sticker: sticker, enqueuedAt: Date())
         do {
-            _ = try await store.blockTail(
-                chatID: "chat", itemID: "sticker-send", expectedRevision: 0)
+            _ = try await store.editOutgoing(
+                chatID: "chat", itemID: "sticker-send", expectedRevision: 0,
+                text: "changed", attachments: [])
             XCTFail("A sticker must not be converted into an empty text draft")
         } catch LocalStorageError.unsupportedMessageType {}
         let restored = try await store.restore()
         XCTAssertNil(restored.first?.composingItem)
         XCTAssertEqual(restored.first?.outgoing.first?.body.messageType, .sticker)
-        let revoked = try await store.revokeTail(
+        let revoked = try await store.cancelOutgoing(
             chatID: "chat", itemID: "sticker-send", expectedRevision: 0)
         XCTAssertTrue(revoked.outgoing.isEmpty)
         let claim = try await store.claimNext(chatID: "chat")
@@ -349,11 +351,15 @@ final class LocalPersistenceTests: XCTestCase {
         )
         let retry = try await store!.claimNext(chatID: "chat", threadID: "one")
         XCTAssertEqual(retry.message?.clientGeneratedID, "id-1")
-        _ = try await store!.acknowledge(chatID: "chat", clientGeneratedID: "id-1")
+        do {
+            _ = try await store!.acceptCreate(
+                confirmation(itemID: "id-1", text: "outgoing-1"), published: true)
+            XCTFail("An acknowledgement for another conversation must be rejected")
+        } catch LocalStorageError.staleDraft {}
         let wrongAcknowledgement = try await store!.claimNext(chatID: "chat", threadID: "one")
         XCTAssertEqual(wrongAcknowledgement.snapshot.outgoing.map(\.clientGeneratedID), ["id-1"])
-        let acknowledged = try await store!.acknowledge(
-            chatID: "chat", threadID: "one", clientGeneratedID: "id-1")
+        let acknowledged = try await deliver(
+            store!, chatID: "chat", threadID: "one", itemID: "id-1")
         XCTAssertTrue(acknowledged.outgoing.isEmpty)
         XCTAssertEqual(acknowledged.draft.text, "draft-1")
         let parent = try await store!.claimNext(chatID: "chat")
@@ -459,7 +465,7 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(restored.first?.outgoing.first?.dispatchClaimed, true)
         let next = try await store!.claimNext(chatID: "chat")
         XCTAssertEqual(next.message?.clientGeneratedID, "A")
-        _ = try await store!.acknowledge(chatID: "chat", clientGeneratedID: "A")
+        _ = try await deliver(store!, chatID: "chat", itemID: "A")
         let obsoleteFailure = try await store!.fail(chatID: "chat", clientGeneratedID: "A")
         XCTAssertEqual(obsoleteFailure.outgoing.map(\.state), [.queued, .queued, .queued])
         let second = try await store!.claimNext(chatID: "chat")
@@ -751,7 +757,7 @@ final class LocalPersistenceTests: XCTestCase {
             chatID: "chat", senderID: 1, clientGeneratedID: "ignored", text: "", enqueuedAt: Date(),
             clearedDraftRevision: attached.draft.editRevision + 1)
         let pending = try XCTUnwrap(released.outgoing.first)
-        _ = try await store.revokeTail(
+        _ = try await store.cancelOutgoing(
             chatID: "chat", itemID: pending.clientGeneratedID,
             expectedRevision: pending.editRevision)
         slot.attachmentID = "orphan"
@@ -767,44 +773,38 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertNil(claim.message)
     }
 
-    func testClaimBoundaryStaysFrozenThroughFailureAndRecovery() async throws {
+    func testClaimBoundaryStaysFrozenThroughEditsFailureAndRecovery() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
-        let queued = try await store!.enqueueText(
-            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "sealed", enqueuedAt: Date(),
-            clearedDraftRevision: 1)
-        let pending = try XCTUnwrap(queued.outgoing.first)
-        let blocked = try await store!.blockTail(
-            chatID: "chat", itemID: "A", expectedRevision: pending.editRevision)
-        XCTAssertEqual(blocked.draft.itemID, "A")
-        XCTAssertTrue(blocked.outgoing.isEmpty)
-        let noClaim = try await store!.claimNext(chatID: "chat")
-        XCTAssertNil(noClaim.message)
         _ = try await store!.enqueueText(
-            chatID: "chat", senderID: 1, clientGeneratedID: "unused", text: "sealed",
-            enqueuedAt: Date(), clearedDraftRevision: blocked.draft.editRevision + 1)
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "sealed", enqueuedAt: Date(),
+            clearedDraftRevision: 1, replyToMessage: preview(id: 103))
         let claimed = try await store!.claimNext(chatID: "chat")
-        let revision = try XCTUnwrap(claimed.message?.editRevision)
-        do {
-            _ = try await store!.revokeTail(chatID: "chat", itemID: "A", expectedRevision: revision)
-            XCTFail("A claimed request has no guaranteed local revocation")
-        } catch LocalStorageError.dispatchAlreadyClaimed {}
+        let original = try XCTUnwrap(claimed.message)
+        let edited = try await store!.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: original.editRevision,
+            text: "replacement", attachments: [])
+        XCTAssertEqual(edited.outgoing.first?.text, "replacement")
+        XCTAssertEqual(edited.outgoing.first?.body, original.body)
+        XCTAssertEqual(edited.outgoing.first?.replyToMessage, original.replyToMessage)
         store = nil
         store = try ChahuaLocalStore(directory: directory)
         _ = try await store!.restore()
         _ = try await store!.fail(chatID: "chat", clientGeneratedID: "A")
         _ = try await store!.retry(chatID: "chat", clientGeneratedID: "A", scope: .message)
-        do {
-            _ = try await store!.blockTail(chatID: "chat", itemID: "A", expectedRevision: revision)
-            XCTFail("Recovery or retry must not unfreeze an uncertain request")
-        } catch LocalStorageError.dispatchAlreadyClaimed {}
         let retry = try await store!.claimNext(chatID: "chat")
-        XCTAssertEqual(retry.message?.body, claimed.message?.body)
+        XCTAssertEqual(retry.message?.body, original.body)
+        let accepted = try await store!.acceptCreate(
+            confirmation(itemID: "A", text: "sealed"), published: true)
+        XCTAssertEqual(accepted.disposition, .retained)
+        let patch = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(patch.patch?.text, "replacement")
+        XCTAssertEqual(patch.patch?.revision, original.editRevision + 1)
     }
 
-    func testConcurrentReleaseCreatesOneItemAndTailCannotBeBypassed() async throws {
+    func testConcurrentReleaseCreatesOneItemAndReleasedEditPreservesComposition() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -834,19 +834,18 @@ final class LocalPersistenceTests: XCTestCase {
             snapshots.first?.outgoing.map(\.clientGeneratedID), [try XCTUnwrap(draft.draft.itemID)])
         let pending = try XCTUnwrap(snapshots.first?.outgoing.first)
         let next = try await store.beginComposition(chatID: "chat", senderID: 1)
-        do {
-            _ = try await store.blockTail(
-                chatID: "chat", itemID: pending.clientGeneratedID,
-                expectedRevision: pending.editRevision)
-            XCTFail("Blocking an older row must not move it behind the composing tail")
-        } catch LocalStorageError.notTail {}
+        let edited = try await store.editOutgoing(
+            chatID: "chat", itemID: pending.clientGeneratedID,
+            expectedRevision: pending.editRevision, text: "edited older row", attachments: [])
+        XCTAssertEqual(edited.composingItem, next.composingItem)
+        XCTAssertEqual(edited.outgoing.first?.enqueueSequence, pending.enqueueSequence)
         let claim = try await store.claimNext(chatID: "chat")
         XCTAssertEqual(claim.message?.clientGeneratedID, pending.clientGeneratedID)
         XCTAssertEqual(
             claim.snapshot.composingItem?.clientGeneratedID, next.composingItem?.clientGeneratedID)
     }
 
-    func testConcurrentClaimAndRevokeHaveOneDurableWinner() async throws {
+    func testConcurrentClaimAndCancellationNeverResendCancelledIdentity() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -856,25 +855,23 @@ final class LocalPersistenceTests: XCTestCase {
             clearedDraftRevision: 1)
         let pending = try XCTUnwrap(queued.outgoing.first)
         let claimTask = Task { try await store.claimNext(chatID: "chat") }
-        let revokeTask = Task {
-            try await store.revokeTail(
+        let cancelTask = Task {
+            try await store.cancelOutgoing(
                 chatID: "chat", itemID: "A", expectedRevision: pending.editRevision)
         }
         let claim = try await claimTask.value
+        let cancelled = try await cancelTask.value
         if let claimed = claim.message {
-            do {
-                _ = try await revokeTask.value
-                XCTFail("Claim and revocation cannot both win")
-            } catch LocalStorageError.dispatchAlreadyClaimed {}
             XCTAssertEqual(claimed.body.clientGeneratedId, "A")
-            let restored = try await store.restore()
-            XCTAssertEqual(restored.first?.outgoing.first?.body, claimed.body)
+            XCTAssertTrue(try XCTUnwrap(cancelled.outgoing.first).isCancelled)
+            XCTAssertEqual(cancelled.outgoing.first?.frozenCreate, claimed.frozenCreate)
         } else {
-            let revoked = try await revokeTask.value
-            XCTAssertTrue(revoked.outgoing.isEmpty)
-            let restored = try await store.restore()
-            XCTAssertTrue(try XCTUnwrap(restored.first).outgoing.isEmpty)
+            XCTAssertTrue(cancelled.outgoing.isEmpty)
         }
+        let reopened = try ChahuaLocalStore(directory: directory)
+        _ = try await reopened.restore()
+        let next = try await reopened.claimNext(chatID: "chat")
+        XCTAssertNil(next.message)
     }
 
     func testAccountRelocationResolvesDurableAttachmentPathsAtNewDirectory() async throws {
@@ -939,6 +936,713 @@ final class LocalPersistenceTests: XCTestCase {
         } catch LocalStorageError.invalidAttachments {}
         let restored = try await store.restore()
         XCTAssertEqual(restored.first?.composingItem, item)
+    }
+
+    func testMiddleIntentEditAndCancellationPreserveFIFOReplyAndOrdinaryDraft() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        for id in ["A", "B", "C"] {
+            _ = try await store.enqueueText(
+                chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: id, text: id,
+                enqueuedAt: Date(),
+                clearedDraftRevision: Int64(["A", "B", "C"].firstIndex(of: id)! + 1),
+                replyToMessage: preview(id: 103))
+        }
+        let draft = try await store.saveDraft(
+            chatID: "chat", threadID: "thread", text: "ordinary", editRevision: 4,
+            updatedAt: Date(), replyToMessage: preview(id: 104))
+        let original = try XCTUnwrap(draft.outgoing.first { $0.clientGeneratedID == "B" })
+        let edited = try await store.editOutgoing(
+            chatID: "chat", threadID: "thread", itemID: "B",
+            expectedRevision: original.editRevision, text: "  edited B\n", attachments: [])
+        XCTAssertEqual(edited.draft, draft.draft)
+        XCTAssertEqual(
+            edited.outgoing.map(\.enqueueSequence), draft.outgoing.map(\.enqueueSequence))
+        XCTAssertEqual(edited.outgoing[1].replyToMessage, original.replyToMessage)
+        XCTAssertEqual(edited.outgoing[1].text, "edited B")
+        XCTAssertEqual(edited.outgoing[1].editRevision, original.editRevision + 1)
+        do {
+            _ = try await store.cancelOutgoing(
+                chatID: "chat", threadID: "thread", itemID: "B",
+                expectedRevision: original.editRevision)
+            XCTFail("An older editor cannot cancel newer intent")
+        } catch LocalStorageError.staleDraft {}
+        let cancelled = try await store.cancelOutgoing(
+            chatID: "chat", threadID: "thread", itemID: "B",
+            expectedRevision: edited.outgoing[1].editRevision)
+        XCTAssertEqual(cancelled.outgoing.map(\.clientGeneratedID), ["A", "C"])
+        XCTAssertEqual(cancelled.draft, draft.draft)
+        XCTAssertGreaterThan(cancelled.revision, edited.revision)
+        do {
+            _ = try await store.editOutgoing(
+                chatID: "chat", threadID: "thread", itemID: "B",
+                expectedRevision: edited.outgoing[1].editRevision, text: "resurrect",
+                attachments: [])
+            XCTFail("A removed identity must remain unavailable")
+        } catch LocalStorageError.staleDraft {}
+    }
+
+    func testConcurrentEditAndCancelRequireTheSameCapturedRevision() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        _ = try await store.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        let edit = Task {
+            try await store.editOutgoing(
+                chatID: "chat", itemID: "A", expectedRevision: 0, text: "edited", attachments: [])
+        }
+        let cancel = Task {
+            try await store.cancelOutgoing(chatID: "chat", itemID: "A", expectedRevision: 0)
+        }
+        var successes = 0
+        for task in [edit, cancel] {
+            do {
+                _ = try await task.value
+                successes += 1
+            } catch LocalStorageError.staleDraft {}
+        }
+        XCTAssertEqual(successes, 1)
+        let restored = try await store.restore()
+        let item = restored.first?.outgoing.first
+        XCTAssertTrue(item == nil || (item?.text == "edited" && item?.editRevision == 1))
+    }
+
+    func testConfirmationKeepsLeaseRowAndFinalizationCannotEraseNewerIntent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        _ = try await store.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        _ = try await store.claimNext(chatID: "chat")
+        let created = try await store.acceptCreate(
+            confirmation(itemID: "A", text: "original"), published: true)
+        XCTAssertEqual(created.disposition, .completed)
+        XCTAssertEqual(created.snapshot.outgoing.count, 1)
+        let edited = try await store.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0, text: "new intent", attachments: [])
+        let staleFinalization = try await store.finalizeOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0)
+        XCTAssertEqual(staleFinalization, edited)
+        let patch = try await store.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(patch.patch?.attachmentIDs, [])
+        let updated = try await store.acceptPatch(
+            confirmation(itemID: "A", text: "new intent"), itemID: "A", revision: 1)
+        XCTAssertEqual(updated.disposition, .completed)
+        let duplicatePatch = try await store.acceptPatch(
+            confirmation(itemID: "A", text: "obsolete duplicate"), itemID: "A", revision: 1)
+        XCTAssertEqual(duplicatePatch.snapshot, updated.snapshot)
+        let heldCreate = try await store.acceptCreate(
+            confirmation(itemID: "A", text: "original"), published: true)
+        XCTAssertEqual(heldCreate.snapshot.outgoing.first?.confirmedMessage?.message, "new intent")
+        XCTAssertEqual(heldCreate.snapshot.outgoing.first?.acknowledgedRevision, 1)
+        let completed = try await store.finalizeOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 1)
+        XCTAssertTrue(completed.outgoing.isEmpty)
+        let lateCreate = try await store.acceptCreate(
+            confirmation(itemID: "A", text: "original"), published: true)
+        XCTAssertTrue(lateCreate.snapshot.outgoing.isEmpty)
+        XCTAssertEqual(lateCreate.disposition, .completed)
+        let latePatch = try await store.acceptPatch(
+            confirmation(itemID: "A", text: "obsolete duplicate"), itemID: "A", revision: 1)
+        XCTAssertTrue(latePatch.snapshot.outgoing.isEmpty)
+        XCTAssertEqual(latePatch.disposition, .completed)
+    }
+
+    func testClaimedPatchReplaysAcrossNewerIntentAndCancellationSuppressesItsPayload() async throws
+    {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        _ = try await store!.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        _ = try await store!.claimNext(chatID: "chat")
+        _ = try await store!.acceptCreate(
+            confirmation(itemID: "A", text: "original"), published: true)
+        _ = try await store!.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0, text: "first edit", attachments: [])
+        let first = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        _ = try await store!.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 1, text: "second edit", attachments: [])
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        XCTAssertEqual(restored.first?.outgoing.first?.claimedPatch, first.patch)
+        let replay = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(replay.patch, first.patch)
+        let older = try await store!.acceptPatch(
+            confirmation(itemID: "A", text: "first edit"), itemID: "A", revision: 1)
+        XCTAssertEqual(older.disposition, .retained)
+        XCTAssertEqual(older.snapshot.outgoing.first?.text, "second edit")
+        XCTAssertEqual(older.snapshot.outgoing.first?.acknowledgedRevision, 1)
+        _ = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        let cancelled = try await store!.cancelOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 2)
+        XCTAssertTrue(try XCTUnwrap(cancelled.outgoing.first).isCancelled)
+        let failed = try await store!.failMutation(
+            chatID: "chat", itemID: "A", patchRevision: nil, retryable: false)
+        XCTAssertEqual(failed.outgoing.first?.state, .failed)
+        let obsoletePatch = try await store!.acceptPatch(
+            confirmation(itemID: "A", text: "second edit"), itemID: "A", revision: 2)
+        XCTAssertEqual(obsoletePatch.disposition, .cancelled)
+        XCTAssertEqual(
+            obsoletePatch.snapshot.outgoing.first?.confirmedMessage?.message, "first edit")
+        XCTAssertEqual(obsoletePatch.snapshot.outgoing.first?.state, .failed)
+        XCTAssertFalse(try XCTUnwrap(obsoletePatch.snapshot.outgoing.first).mutationRetryable)
+        let forbidden = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertNil(forbidden.patch)
+        let deleted = try await store!.acceptDelete(chatID: "chat", itemID: "A")
+        XCTAssertEqual(deleted.disposition, .cancelled)
+        XCTAssertTrue(deleted.snapshot.outgoing.isEmpty)
+    }
+
+    func testMutationFailureRecoveryRetriesOnlyPersistedRetryableStages() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        for id in ["transient", "permanent", "create"] {
+            _ = try await store!.enqueueIndependentText(
+                chatID: id, senderID: 1, clientGeneratedID: id, text: "original", enqueuedAt: Date()
+            )
+            _ = try await store!.claimNext(chatID: id)
+            if id == "create" {
+                _ = try await store!.fail(chatID: id, clientGeneratedID: id)
+            } else {
+                _ = try await store!.acceptCreate(
+                    confirmation(itemID: id, text: "original", chatID: id), published: true)
+                _ = try await store!.editOutgoing(
+                    chatID: id, itemID: id, expectedRevision: 0, text: "edited", attachments: [])
+                _ = try await store!.claimPatch(chatID: id, itemID: id)
+                _ = try await store!.failMutation(
+                    chatID: id, itemID: id, patchRevision: 1, retryable: id == "transient")
+            }
+        }
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        let items = Dictionary(uniqueKeysWithValues: restored.map { ($0.chatID, $0.outgoing[0]) })
+        XCTAssertEqual(items["transient"]?.state, .queued)
+        XCTAssertTrue(try XCTUnwrap(items["transient"]).mutationRetryable)
+        XCTAssertEqual(items["permanent"]?.state, .failed)
+        XCTAssertEqual(items["create"]?.state, .failed)
+        let blocked = try await store!.claimPatch(chatID: "permanent", itemID: "permanent")
+        XCTAssertNil(blocked.patch)
+        _ = try await store!.retry(
+            chatID: "permanent", clientGeneratedID: "permanent", scope: .message)
+        let explicit = try await store!.claimPatch(chatID: "permanent", itemID: "permanent")
+        XCTAssertEqual(explicit.patch?.text, "edited")
+    }
+
+    func testQueuedVideoEditsSupportLocalImportAndServerReorderingAndRemoval() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        _ = try await store.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        let original = try await store.claimNext(chatID: "chat")
+        _ = try await store.acceptCreate(
+            confirmation(itemID: "A", text: "original"), published: true)
+        let videoFile = directory.appendingPathComponent("video.mov")
+        try Data([1, 2, 3]).write(to: videoFile)
+        let video = LocalOutgoingAttachment(
+            id: "video", generation: UUID().uuidString, position: 0,
+            sourcePath: videoFile.path, preparedPath: videoFile.path, previewPath: videoFile.path,
+            fileName: "video.mov", mimeType: "video/quicktime", width: 10, height: 10, byteCount: 3,
+            attachmentID: "uploaded-video")
+        var image = try attachment(directory: directory, id: "image", position: 1)
+        image.attachmentID = "uploaded-image"
+        let imported = try await store.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0, text: "media",
+            attachments: [.local(video), .local(image)])
+        XCTAssertEqual(imported.outgoing.first?.intentAttachments, [.local(video), .local(image)])
+        XCTAssertEqual(imported.outgoing.first?.body, original.message?.body)
+        let uploaded = try await store.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(uploaded.patch?.attachmentIDs, ["uploaded-video", "uploaded-image"])
+        let serverVideo = AttachmentResponse(
+            id: "uploaded-video", url: "https://example.test/video.mov", kind: "video/quicktime",
+            size: 3, fileName: "video.mov", width: 10, height: 10)
+        let serverImage = AttachmentResponse(
+            id: "uploaded-image", url: "https://example.test/image.png", kind: "image/png",
+            size: 3, fileName: "image.png", width: 10, height: 10)
+        _ = try await store.acceptPatch(
+            confirmation(itemID: "A", text: "media", attachments: [serverVideo, serverImage]),
+            itemID: "A", revision: 1)
+        _ = try await store.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 1, text: "media",
+            attachments: [.server(serverImage), .server(serverVideo)])
+        let reordered = try await store.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(reordered.patch?.attachmentIDs, ["uploaded-image", "uploaded-video"])
+        _ = try await store.acceptPatch(
+            confirmation(itemID: "A", text: "media", attachments: [serverImage, serverVideo]),
+            itemID: "A", revision: 2)
+        _ = try await store.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 2, text: "media",
+            attachments: [.server(serverImage)])
+        let removed = try await store.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(removed.patch?.attachmentIDs, ["uploaded-image"])
+        XCTAssertEqual(removed.snapshot.outgoing.first?.body, original.message?.body)
+    }
+
+    func testMixedIntentCheckpointsPreserveOrderFrozenCreateAndRelocatedOwnership() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = root.appendingPathComponent("original")
+        let relocated = root.appendingPathComponent("relocated")
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: original)
+        let begun = try await store!.beginComposition(
+            chatID: "chat", threadID: "thread", senderID: 1)
+        let item = try XCTUnwrap(begun.composingItem)
+        let borrowed = try attachment(directory: original, id: "borrowed", position: 0)
+        let attached = try await store!.setCompositionAttachments(
+            chatID: "chat", threadID: "thread", itemID: item.clientGeneratedID,
+            expectedRevision: item.editRevision, attachments: [borrowed], compressionEnabled: false)
+        // The compression selection creates a new content generation. Complete the
+        // durable slot's upload, not the pre-selection fixture's stale generation.
+        var uploaded = try XCTUnwrap(attached.draft.attachments.first)
+        uploaded.attachmentID = "uploaded-original"
+        _ = try await store!.checkpointAttachment(
+            chatID: "chat", threadID: "thread", itemID: item.clientGeneratedID, attachment: uploaded
+        )
+        let released = try await store!.enqueueText(
+            chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: "unused",
+            text: "original", enqueuedAt: Date(),
+            clearedDraftRevision: attached.draft.editRevision + 1)
+        let pending = try XCTUnwrap(released.outgoing.first)
+        let claim = try await store!.claimNext(chatID: "chat", threadID: "thread")
+        let claimed = try XCTUnwrap(claim.message)
+        let server = AttachmentResponse(
+            id: "uploaded-original", url: "https://example.test/image", kind: "image",
+            size: 3, fileName: "original.png", width: 10, height: 10)
+        _ = try await store!.acceptCreate(
+            confirmation(
+                itemID: item.clientGeneratedID, text: "original", threadID: "thread",
+                attachments: [server]), published: true)
+        var added = try attachment(directory: original, id: "added", position: 1)
+        let edited = try await store!.editOutgoing(
+            chatID: "chat", threadID: "thread", itemID: item.clientGeneratedID,
+            expectedRevision: pending.editRevision, text: "mixed",
+            attachments: [.server(server), .local(added)])
+        XCTAssertEqual(edited.outgoing.first?.body, claimed.body)
+        added.preparedPath = added.sourcePath
+        added.attachmentID = "uploaded-added"
+        let checkpoint = try await store!.checkpointAttachment(
+            chatID: "chat", threadID: "thread", itemID: item.clientGeneratedID, attachment: added)
+        XCTAssertEqual(
+            checkpoint.outgoing.first?.intentAttachments, [.server(server), .local(added)])
+        XCTAssertEqual(checkpoint.outgoing.first?.body.attachmentIds, ["uploaded-original"])
+        store = nil
+        try FileManager.default.moveItem(at: original, to: relocated)
+        store = try ChahuaLocalStore(directory: relocated)
+        let restored = try await store!.restore()
+        let selection = try XCTUnwrap(restored.first?.outgoing.first?.intentAttachments)
+        guard case .local(let relocatedSlot) = selection[1] else {
+            return XCTFail("The imported slot must retain its local ownership")
+        }
+        XCTAssertTrue(relocatedSlot.sourcePath.hasPrefix(relocated.path + "/"))
+        let patch = try await store!.claimPatch(
+            chatID: "chat", threadID: "thread", itemID: item.clientGeneratedID)
+        XCTAssertEqual(patch.patch?.attachmentIDs, ["uploaded-original", "uploaded-added"])
+        let removed = try await store!.editOutgoing(
+            chatID: "chat", threadID: "thread", itemID: item.clientGeneratedID,
+            expectedRevision: pending.editRevision + 1, text: "server only",
+            attachments: [.server(server)])
+        var late = relocatedSlot
+        late.error = "obsolete upload"
+        let ignored = try await store!.checkpointAttachment(
+            chatID: "chat", threadID: "thread", itemID: item.clientGeneratedID, attachment: late)
+        XCTAssertEqual(ignored, removed)
+        let wrongThread = try await store!.claimPatch(
+            chatID: "chat", itemID: item.clientGeneratedID)
+        XCTAssertNil(wrongThread.patch)
+        let other = try ChahuaLocalStore(directory: root.appendingPathComponent("other-account"))
+        let isolated = try await other.restore()
+        XCTAssertTrue(isolated.isEmpty)
+    }
+
+    func testVersionSevenMigrationFreezesClaimedRequestWithoutChangingItsIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let queued = try await store!.enqueueText(
+            chatID: "chat", threadID: "thread", senderID: 1, clientGeneratedID: "legacy",
+            text: "legacy text", enqueuedAt: Date(timeIntervalSince1970: 100),
+            clearedDraftRevision: 5,
+            replyToMessage: preview(id: 103))
+        let claimed = try await store!.claimNext(chatID: "chat", threadID: "thread")
+        store = nil
+        try await removeVersionEightColumns(directory: directory)
+        store = try ChahuaLocalStore(directory: directory)
+        let beforeRestore = try await store!.claimNext(chatID: "chat", threadID: "thread")
+        XCTAssertNil(beforeRestore.message)
+        XCTAssertEqual(
+            beforeRestore.snapshot.outgoing.first?.frozenCreate?.body, claimed.message?.body)
+        let restored = try await store!.restore()
+        let item = try XCTUnwrap(restored.first?.outgoing.first)
+        XCTAssertEqual(item.clientGeneratedID, "legacy")
+        XCTAssertEqual(item.body, claimed.message?.body)
+        XCTAssertEqual(item.frozenCreate?.revision, 5)
+        XCTAssertEqual(item.replyToMessage, queued.outgoing.first?.replyToMessage)
+        XCTAssertEqual(item.enqueueSequence, queued.outgoing.first?.enqueueSequence)
+        XCTAssertNil(item.intentAttachments)
+        XCTAssertNil(item.confirmedMessage)
+        XCTAssertEqual(item.acknowledgedRevision, -1)
+        XCTAssertFalse(item.isPublished)
+        XCTAssertFalse(item.isCancelled)
+        XCTAssertFalse(item.mutationRetryable)
+        let edited = try await store!.editOutgoing(
+            chatID: "chat", threadID: "thread", itemID: "legacy", expectedRevision: 5,
+            text: "new intent", attachments: [])
+        XCTAssertEqual(edited.outgoing.first?.body, claimed.message?.body)
+    }
+
+    func testLegacyClaimWithUnresolvedAttachmentFailsRatherThanInventingARequest() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let begun = try await store!.beginComposition(chatID: "chat", senderID: 1)
+        let item = try XCTUnwrap(begun.composingItem)
+        let slot = try attachment(directory: directory, id: "unresolved", position: 0)
+        let attached = try await store!.setCompositionAttachments(
+            chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision,
+            attachments: [slot], compressionEnabled: true)
+        _ = try await store!.enqueueText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "unused", text: "",
+            enqueuedAt: Date(), clearedDraftRevision: attached.draft.editRevision + 1)
+        store = nil
+        try await removeVersionEightColumns(directory: directory)
+        do {
+            let database = try DatabaseQueue(
+                path: directory.appendingPathComponent("chat.sqlite").path)
+            try await database.write { db in
+                try db.execute(
+                    sql: "UPDATE outgoing_message SET dispatch_claimed = 1, state = 'sending'")
+            }
+        }
+        store = try ChahuaLocalStore(directory: directory)
+        do {
+            _ = try await store!.restore()
+            XCTFail("A claimed request with missing upload IDs must surface storage corruption")
+        } catch LocalStorageError.corruptRecord {}
+    }
+
+    func testUnpublishedConfirmedAudioSurvivesFinalizationUntilActualPublication() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        let file = directory.appendingPathComponent("voice.m4a")
+        try Data([1, 2, 3]).write(to: file)
+        var voice = LocalOutgoingAttachment(
+            id: "voice", generation: "generation", position: 0, sourcePath: file.path,
+            preparedPath: file.path, previewPath: file.path, fileName: "voice.m4a",
+            mimeType: "audio/mp4", width: 0, height: 0, byteCount: 3)
+        _ = try await store.enqueueVoice(
+            chatID: "chat", senderID: 1, clientGeneratedID: "voice",
+            attachment: voice, enqueuedAt: Date())
+        voice.attachmentID = "uploaded-voice"
+        _ = try await store.checkpointAttachment(chatID: "chat", itemID: "voice", attachment: voice)
+        _ = try await store.claimNext(chatID: "chat")
+        let audio = MessageResponse(
+            id: MessageID(7), chatId: "chat", clientGeneratedId: "voice", messageType: .audio,
+            sender: User(uid: 1, gender: 0, name: nil, avatarUrl: nil, userGroup: nil),
+            createdAt: Date(timeIntervalSince1970: 1))
+        let initial = try await store.acceptCreate(audio, published: false)
+        XCTAssertEqual(initial.disposition, .retained)
+        let premature = try await store.finalizeOutgoing(
+            chatID: "chat", itemID: "voice", expectedRevision: 0)
+        XCTAssertEqual(premature.outgoing.count, 1)
+        let published = try await store.acceptCreate(audio, published: true)
+        XCTAssertEqual(published.disposition, .completed)
+        let finalized = try await store.finalizeOutgoing(
+            chatID: "chat", itemID: "voice", expectedRevision: 0)
+        XCTAssertTrue(finalized.outgoing.isEmpty)
+    }
+
+    func testCancellationTombstoneSkipsCreateFIFOAndRequiresKnownIdentityForDeletion() async throws
+    {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        for id in ["A", "B", "C"] {
+            _ = try await store.enqueueIndependentText(
+                chatID: "chat", senderID: 1, clientGeneratedID: id, text: id, enqueuedAt: Date())
+        }
+        _ = try await store.claimNext(chatID: "chat")
+        let cancelled = try await store.cancelOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0)
+        XCTAssertTrue(try XCTUnwrap(cancelled.outgoing.first).isCancelled)
+        do {
+            _ = try await store.acceptDelete(chatID: "chat", itemID: "A")
+            XCTFail("Unknown cancelled creates must remain durable tombstones")
+        } catch LocalStorageError.staleDraft {}
+        let next = try await store.claimNext(chatID: "chat")
+        XCTAssertEqual(next.message?.clientGeneratedID, "B")
+        let accepted = try await store.acceptCreate(
+            confirmation(itemID: "A", text: "A"), published: true)
+        XCTAssertEqual(accepted.disposition, .cancelled)
+        let noPatch = try await store.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertNil(noPatch.patch)
+        let deleted = try await store.acceptDelete(chatID: "chat", itemID: "A")
+        XCTAssertEqual(deleted.snapshot.outgoing.map(\.clientGeneratedID), ["B", "C"])
+    }
+
+    func testAuthoritativeDeletionRemovesUncancelledConfirmedEditorTarget() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        _ = try await store.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        _ = try await store.claimNext(chatID: "chat")
+        _ = try await store.acceptCreate(
+            confirmation(itemID: "A", text: "original"), published: true)
+        _ = try await store.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0, text: "unsent edit", attachments: [])
+        let deleted = try await store.acceptDelete(chatID: "chat", itemID: "A")
+        XCTAssertEqual(deleted.disposition, .cancelled)
+        XCTAssertTrue(deleted.snapshot.outgoing.isEmpty)
+    }
+
+    func testEditRejectsInvalidSelectionAndCrossAccountSourcesWithoutLosingPriorIntent()
+        async throws
+    {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("account")
+        let other = root.appendingPathComponent("other")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        let store = try ChahuaLocalStore(directory: directory)
+        let queued = try await store.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        let external = try attachment(directory: other, id: "external", position: 0)
+        let local = try attachment(directory: directory, id: "local", position: 0)
+        let unknown = AttachmentResponse(
+            id: "unowned", url: "https://example.test/image", kind: "image",
+            size: 3, fileName: "image.png", width: 10, height: 10)
+        let invalidSelections: [[LocalEditAttachment]] = [
+            [.local(external)], [.local(local), .local(local)], [.server(unknown)],
+        ]
+        for selection in invalidSelections {
+            do {
+                _ = try await store.editOutgoing(
+                    chatID: "chat", itemID: "A", expectedRevision: 0, text: "changed",
+                    attachments: selection)
+                XCTFail("Invalid attachment ownership or duplicate identity must be rejected")
+            } catch LocalStorageError.invalidAttachments {}
+        }
+        do {
+            _ = try await store.editOutgoing(
+                chatID: "chat", itemID: "A", expectedRevision: 0, text: " \n ", attachments: [])
+            XCTFail("An edit must retain text or media")
+        } catch LocalStorageError.blankMessage {}
+        let snapshots = try await store.restore()
+        XCTAssertEqual(snapshots.first, queued)
+        let mediaOnly = try await store.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0, text: " \n ",
+            attachments: [.local(local)])
+        XCTAssertEqual(mediaOnly.outgoing.first?.text, "")
+        XCTAssertEqual(mediaOnly.outgoing.first?.intentAttachments, [.local(local)])
+        let unresolved = try await store.claimNext(chatID: "chat")
+        XCTAssertNil(unresolved.message)
+    }
+
+    func testMismatchedConfirmationAndPatchRevisionNeverConsumeIntent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        _ = try await store.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        _ = try await store.claimNext(chatID: "chat")
+        for invalid in [
+            confirmation(itemID: "A", text: "original", senderID: 2),
+            confirmation(itemID: "A", text: "original", threadID: "other-thread"),
+            confirmation(itemID: "A", text: "original", chatID: "other-chat"),
+        ] {
+            do {
+                _ = try await store.acceptCreate(invalid, published: true)
+                XCTFail("A different sender or conversation cannot confirm this identity")
+            } catch LocalStorageError.staleDraft {}
+        }
+        _ = try await store.acceptCreate(
+            confirmation(itemID: "A", text: "original"), published: true)
+        _ = try await store.editOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 0, text: "edited", attachments: [])
+        let claimed = try await store.claimPatch(chatID: "chat", itemID: "A")
+        do {
+            _ = try await store.acceptPatch(
+                confirmation(itemID: "A", text: "wrong"), itemID: "A", revision: 2)
+            XCTFail("Only the exact claimed revision can advance acknowledgement")
+        } catch LocalStorageError.staleDraft {}
+        let staleFailure = try await store.failMutation(
+            chatID: "chat", itemID: "A", patchRevision: 2, retryable: false)
+        XCTAssertEqual(staleFailure, claimed.snapshot)
+        let staleFinalization = try await store.finalizeOutgoing(
+            chatID: "chat", itemID: "A", expectedRevision: 1)
+        XCTAssertEqual(staleFinalization, claimed.snapshot)
+    }
+
+    func testLegacyClaimIsFrozenBeforeDirectEditOrCancellation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for cancels in [false, true] {
+            let directory = root.appendingPathComponent(cancels ? "cancel" : "edit")
+            let store = try ChahuaLocalStore(directory: directory)
+            _ = try await store.enqueueIndependentText(
+                chatID: "chat", senderID: 1, clientGeneratedID: "legacy",
+                text: "original request", enqueuedAt: Date())
+            let claimed = try await store.claimNext(chatID: "chat")
+            do {
+                let database = try DatabaseQueue(
+                    path: directory.appendingPathComponent("chat.sqlite").path)
+                try await database.write { db in
+                    try db.execute(sql: "UPDATE outgoing_message SET frozen_create = NULL")
+                }
+            }
+            let changed: LocalConversationSnapshot
+            if cancels {
+                changed = try await store.cancelOutgoing(
+                    chatID: "chat", itemID: "legacy", expectedRevision: 0)
+                XCTAssertTrue(try XCTUnwrap(changed.outgoing.first).isCancelled)
+            } else {
+                changed = try await store.editOutgoing(
+                    chatID: "chat", itemID: "legacy", expectedRevision: 0, text: "new intent",
+                    attachments: [])
+                XCTAssertEqual(changed.outgoing.first?.text, "new intent")
+            }
+            XCTAssertEqual(changed.outgoing.first?.body, claimed.message?.body)
+            XCTAssertEqual(changed.outgoing.first?.frozenCreate?.revision, 0)
+        }
+    }
+
+    func testEditAndCancelStorageFailureRollBackContentAndConversationRevision() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        let original = try await store.enqueueIndependentText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
+            enqueuedAt: Date())
+        do {
+            let database = try DatabaseQueue(
+                path: directory.appendingPathComponent("chat.sqlite").path)
+            try await database.write { db in
+                try db.execute(
+                    sql: """
+                        CREATE TRIGGER reject_intent_edit BEFORE UPDATE OF text ON outgoing_message
+                        BEGIN SELECT RAISE(ABORT, 'held storage failure'); END;
+                        CREATE TRIGGER reject_intent_cancel BEFORE DELETE ON outgoing_message
+                        BEGIN SELECT RAISE(ABORT, 'held storage failure'); END;
+                        """)
+            }
+        }
+        do {
+            _ = try await store.editOutgoing(
+                chatID: "chat", itemID: "A", expectedRevision: 0, text: "new intent",
+                attachments: [])
+            XCTFail("A failed local commit cannot report a successful edit")
+        } catch is DatabaseError {}
+        do {
+            _ = try await store.cancelOutgoing(chatID: "chat", itemID: "A", expectedRevision: 0)
+            XCTFail("A failed local commit cannot hide the outgoing item")
+        } catch is DatabaseError {}
+        let restored = try await store.restore()
+        XCTAssertEqual(restored.first, original)
+    }
+
+    func testFailedDeletionRestoresOnlyRetryableCancellationWithoutDispatchingCreate() async throws
+    {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        for id in ["transient", "permanent"] {
+            _ = try await store!.enqueueIndependentText(
+                chatID: id, senderID: 1, clientGeneratedID: id, text: id, enqueuedAt: Date())
+            _ = try await store!.claimNext(chatID: id)
+            _ = try await store!.acceptCreate(
+                confirmation(itemID: id, text: id, chatID: id), published: true)
+            _ = try await store!.cancelOutgoing(chatID: id, itemID: id, expectedRevision: 0)
+            _ = try await store!.failMutation(
+                chatID: id, itemID: id, patchRevision: nil, retryable: id == "transient")
+        }
+        store = nil
+        store = try ChahuaLocalStore(directory: directory)
+        let restored = try await store!.restore()
+        let items = Dictionary(uniqueKeysWithValues: restored.map { ($0.chatID, $0.outgoing[0]) })
+        XCTAssertEqual(items["transient"]?.state, .queued)
+        XCTAssertEqual(items["permanent"]?.state, .failed)
+        XCTAssertTrue(items.values.allSatisfy(\.isCancelled))
+        _ = try await store!.retry(
+            chatID: "permanent", clientGeneratedID: "permanent", scope: .message)
+        for id in ["transient", "permanent"] {
+            let noCreate = try await store!.claimNext(chatID: id)
+            XCTAssertNil(noCreate.message)
+            let deleted = try await store!.acceptDelete(chatID: id, itemID: id)
+            XCTAssertTrue(deleted.snapshot.outgoing.isEmpty)
+        }
+    }
+
+    private func removeVersionEightColumns(directory: URL) async throws {
+        let database = try DatabaseQueue(path: directory.appendingPathComponent("chat.sqlite").path)
+        try await database.write { db in
+            for column in [
+                "frozen_create", "intent_attachments", "confirmed_message", "is_published",
+                "is_cancelled", "acknowledged_revision", "claimed_patch", "mutation_retryable",
+            ] {
+                try db.execute(sql: "ALTER TABLE outgoing_message DROP COLUMN \(column)")
+            }
+            try db.execute(
+                sql: "DELETE FROM grdb_migrations WHERE identifier = 'v8_outgoing_intents'")
+        }
+    }
+
+    private func confirmation(
+        itemID: String, text: String, chatID: String = "chat", threadID: String? = nil,
+        id: UInt64 = 7, senderID: Int32 = 1, messageType: MessageType = .text,
+        attachments: [AttachmentResponse] = []
+    ) -> MessageResponse {
+        MessageResponse(
+            id: MessageID(id), chatId: chatID, clientGeneratedId: itemID, messageType: messageType,
+            sender: User(uid: senderID, gender: 0, name: nil, avatarUrl: nil, userGroup: nil),
+            createdAt: Date(timeIntervalSince1970: 1),
+            hasAttachments: !attachments.isEmpty, attachments: attachments,
+            message: text, replyRootId: threadID)
+    }
+
+    private func deliver(
+        _ store: ChahuaLocalStore, chatID: String, threadID: String? = nil, itemID: String
+    ) async throws -> LocalConversationSnapshot {
+        let restored = try await store.restore()
+        let item = try XCTUnwrap(
+            restored.first {
+                $0.conversationKey == ConversationKey(chatID: chatID, threadID: threadID)
+            }?
+            .outgoing.first { $0.clientGeneratedID == itemID })
+        _ = try await store.acceptCreate(
+            confirmation(
+                itemID: itemID, text: item.text, chatID: chatID, threadID: threadID,
+                messageType: item.messageType),
+            published: true)
+        return try await store.finalizeOutgoing(
+            chatID: chatID, threadID: threadID, itemID: itemID, expectedRevision: item.editRevision)
     }
 
     private func attachment(directory: URL, id: String, position: Int) throws

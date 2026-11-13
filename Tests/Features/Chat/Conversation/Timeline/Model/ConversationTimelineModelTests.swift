@@ -8,6 +8,219 @@ import XCTest
 final class ConversationTimelineModelTests: XCTestCase {
     private var cancellables: Set<AnyCancellable> = []
 
+    func testLocalCancellationHidesConfirmedAndEditedContentUntilResetWithoutServerDelete()
+        async throws
+    {
+        let confirmed = try TimelineTestFixtures.message(
+            id: 1, at: 1, text: "Already delivered", clientGeneratedID: "cancelled")
+        let page = try TimelineTestFixtures.page([confirmed])
+        let source = ScriptedTimelineSource(pages: [
+            .success(page), .success(page), .success(page),
+        ])
+        let store = source.store
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store)
+        defer { model.close() }
+        await model.open()
+        XCTAssertEqual(remoteMessages(model).map(\.message), ["Already delivered"])
+
+        let edit = TimelineTestFixtures.pending(
+            id: "cancelled", at: 1, text: "Newer local edit", claimed: true)
+        store.replacePending(chatID: "chat", with: [edit])
+        XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [.clientGenerated("cancelled")])
+        XCTAssertEqual(
+            model.rows.compactMap { row -> String? in
+                guard case .message(let message) = row else { return nil }
+                return message.entry.text
+            }, ["Newer local edit"])
+
+        // A local snapshot arrives while DELETE is still outstanding; no server
+        // deletion event may be fabricated to hide either version.
+        store.replacePending(
+            chatID: "chat", with: [], cancelledClientGeneratedIDs: ["cancelled"])
+        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertTrue(store.isCancelledOutgoing(confirmed))
+        XCTAssertTrue(store.isCancelledOutgoing(confirmed.replyPreview, chatID: "chat"))
+        // A failed recall or compacted tombstone can publish no pending content.
+        // Omission of an earlier cancellation must not reveal the confirmed row.
+        store.replacePending(chatID: "chat", with: [])
+        let lateUpdate = try TimelineTestFixtures.message(
+            id: 1, at: 1, text: "Late PATCH response", clientGeneratedID: "cancelled")
+        store.apply(.messageUpdated(lateUpdate))
+        store.apply(.message(confirmed))
+        XCTAssertTrue(model.rows.isEmpty)
+        // Nor can a stale local projection restore a cancelled pending edit.
+        store.replacePending(chatID: "chat", with: [edit])
+        XCTAssertTrue(model.rows.isEmpty)
+        store.replacePending(chatID: "chat", with: [])
+
+        let reopened = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store)
+        defer { reopened.close() }
+        await reopened.open()
+        XCTAssertTrue(reopened.rows.isEmpty, "A stale history page remains locally suppressed.")
+        XCTAssertTrue(store.isCancelledOutgoing(confirmed))
+
+        store.reset()
+        XCTAssertFalse(store.isCancelledOutgoing(confirmed))
+        XCTAssertFalse(store.isCancelledOutgoing(confirmed.replyPreview, chatID: "chat"))
+        let nextSession = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store)
+        defer { nextSession.close() }
+        await nextSession.open()
+        XCTAssertEqual(remoteMessages(nextSession).map(\.message), ["Already delivered"])
+        XCTAssertEqual(remoteMessages(nextSession).first?.isDeleted, false)
+    }
+
+    func testNewCancellationWithUnchangedPendingBatchIsConversationAndThreadScoped() async throws {
+        let cancelled = try TimelineTestFixtures.message(
+            id: 1, at: 0, clientGeneratedID: "shared-client")
+        let root = try TimelineTestFixtures.message(id: 9, at: 1)
+        let reply = try TimelineTestFixtures.message(
+            id: 10, at: 2, clientGeneratedID: "shared-client", fields: ["replyRootId": "9"])
+        let other = try TimelineTestFixtures.message(
+            id: 11, chatID: "other", at: 3, clientGeneratedID: "shared-client")
+        let page = try TimelineTestFixtures.page([cancelled, root, reply, other])
+        let source = ScriptedTimelineSource(pages: [
+            .success(page), .success(page), .success(page),
+        ])
+        let store = source.store
+        let conversation = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store)
+        let thread = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store, threadID: "9")
+        let otherConversation = ConversationTimelineModel(
+            chatID: "other", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store)
+        defer {
+            conversation.close()
+            thread.close()
+            otherConversation.close()
+        }
+        await conversation.open()
+        await thread.open()
+        await otherConversation.open()
+        store.replacePending(chatID: "chat", with: [])
+        XCTAssertEqual(conversation.rows.compactMap(\.messageID), [cancelled.id, root.id])
+        store.replacePending(
+            chatID: "chat", with: [], cancelledClientGeneratedIDs: ["shared-client"])
+        XCTAssertEqual(conversation.rows.compactMap(\.messageID), [root.id])
+        XCTAssertEqual(thread.rows.compactMap(\.messageID), [root.id, reply.id])
+        XCTAssertEqual(otherConversation.rows.compactMap(\.messageID), [other.id])
+        XCTAssertTrue(store.isCancelledOutgoing(cancelled))
+        XCTAssertFalse(store.isCancelledOutgoing(reply))
+        XCTAssertFalse(store.isCancelledOutgoing(other))
+        XCTAssertTrue(store.isCancelledOutgoing(cancelled.replyPreview, chatID: "chat"))
+        XCTAssertFalse(store.isCancelledOutgoing(reply.replyPreview, chatID: "chat", threadID: "9"))
+        XCTAssertFalse(store.isCancelledOutgoing(other.replyPreview, chatID: "other"))
+
+        store.apply(.messageUpdated(cancelled))
+        store.replacePending(chatID: "chat", with: [])
+        XCTAssertEqual(conversation.rows.compactMap(\.messageID), [root.id])
+        XCTAssertEqual(thread.rows.compactMap(\.messageID), [root.id, reply.id])
+        XCTAssertEqual(otherConversation.rows.compactMap(\.messageID), [other.id])
+    }
+
+    func testThreadCancellationDoesNotHideMatchingClientInParentConversation() async throws {
+        let parent = try TimelineTestFixtures.message(
+            id: 1, at: 0, clientGeneratedID: "shared-client")
+        let root = try TimelineTestFixtures.message(id: 9, at: 1)
+        let reply = try TimelineTestFixtures.message(
+            id: 10, at: 2, clientGeneratedID: "shared-client", fields: ["replyRootId": "9"])
+        let page = try TimelineTestFixtures.page([parent, root, reply])
+        let source = ScriptedTimelineSource(pages: [.success(page), .success(page)])
+        let store = source.store
+        let conversation = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store)
+        let thread = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: store, threadID: "9")
+        defer {
+            conversation.close()
+            thread.close()
+        }
+        await conversation.open()
+        await thread.open()
+        store.replacePending(
+            chatID: "chat", threadID: "9", with: [],
+            cancelledClientGeneratedIDs: ["shared-client"])
+        XCTAssertEqual(conversation.rows.compactMap(\.messageID), [parent.id, root.id])
+        XCTAssertEqual(thread.rows.compactMap(\.messageID), [root.id])
+        XCTAssertFalse(store.isCancelledOutgoing(parent))
+        XCTAssertTrue(store.isCancelledOutgoing(reply))
+        XCTAssertFalse(store.isCancelledOutgoing(parent.replyPreview, chatID: "chat"))
+        XCTAssertTrue(store.isCancelledOutgoing(reply.replyPreview, chatID: "chat", threadID: "9"))
+    }
+
+    func testLatestPendingIntentOverlaysConfirmedIdentityUntilCleanHandoff() async throws {
+        let confirmed = try TimelineTestFixtures.message(
+            id: 2, at: 1, text: "Original create", clientGeneratedID: "middle")
+        let before = try TimelineTestFixtures.message(id: 1, at: 0)
+        let after = try TimelineTestFixtures.message(id: 3, at: 2)
+        let source = ScriptedTimelineSource(pages: [
+            .success(try TimelineTestFixtures.page([before, confirmed, after]))
+        ])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store)
+        defer { model.close() }
+        await model.open()
+        let pending = TimelineTestFixtures.pending(
+            id: "middle", at: 1, text: "Latest durable intent", claimed: true)
+        source.store.replacePending(chatID: "chat", with: [pending])
+        func entries() -> [ConversationTimelineEntry] {
+            model.rows.compactMap {
+                guard case .message(let row) = $0 else { return nil }
+                return row.entry
+            }
+        }
+        XCTAssertEqual(
+            entries().map(\.stableKey),
+            [
+                .clientGenerated("client-1"), .clientGenerated("middle"),
+                .clientGenerated("client-3"),
+            ])
+        XCTAssertEqual(entries()[1], .pending(pending))
+        source.store.apply(.messageUpdated(confirmed))
+        XCTAssertEqual(entries().count, 3)
+        XCTAssertEqual(entries()[1].text, "Latest durable intent")
+        let updated = try TimelineTestFixtures.message(
+            id: 2, at: 1, text: "Latest durable intent", clientGeneratedID: "middle")
+        source.store.apply(.messageUpdated(updated))
+        source.store.replacePending(chatID: "chat", with: [])
+        XCTAssertEqual(entries().count, 3)
+        XCTAssertEqual(entries()[1].remoteMessage?.id, updated.id)
+        XCTAssertEqual(entries()[1].text, "Latest durable intent")
+    }
+
+    func testPatchHandoffCanBeFirstVisibleServerPayloadAfterSuppressedCreate() async throws {
+        let source = ScriptedTimelineSource(pages: [
+            .success(ListMessagesResponse(messages: []))
+        ])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store)
+        defer { model.close() }
+        await model.open()
+        source.store.replacePending(
+            chatID: "chat",
+            with: [
+                TimelineTestFixtures.pending(id: "edited", text: "Latest intent", claimed: true)
+            ])
+        let patched = try TimelineTestFixtures.message(
+            id: 1, at: 1, text: "Latest intent", clientGeneratedID: "edited")
+        source.store.replacePending(chatID: "chat", with: [], acknowledging: patched)
+        source.store.apply(.messageUpdated(patched))
+        XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [.clientGenerated("edited")])
+        XCTAssertEqual(remoteMessages(model).map(\.message), ["Latest intent"])
+    }
+
     func testPendingPreviewExpiresLocallyAndFullUpdateRestoresReadyWithoutEditing() async throws {
         let deadline = Date(timeIntervalSince1970: ceil(Date().timeIntervalSince1970) + 1)
         let formatter = ISO8601DateFormatter()

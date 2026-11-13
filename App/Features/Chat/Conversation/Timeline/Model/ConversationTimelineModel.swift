@@ -1750,33 +1750,35 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    /// Confirmed messages in server (ID) order, then unacknowledged sends in outbox order.
-    /// Both runs are already ordered, so this is a concatenation, not a sort.
+    /// Confirmed server positions retain their identity while latest durable intent overlays them.
+    /// Items without confirmation follow in outbox order.
     private func timelineEntries() -> [ConversationTimelineEntry] {
         var confirmed = window.messages
-        var earlyClientIDs: Set<String> = []
         if isBeforeInitialHistory {
             // Acknowledgements that arrived before the first page are shown in place.
             for (key, message) in deferredCreates where preHistoryAcknowledgementKeys.contains(key)
             {
                 let index = confirmed.firstIndex { $0.id > message.id } ?? confirmed.count
                 confirmed.insert(message, at: index)
-                earlyClientIDs.insert(message.clientGeneratedId)
             }
         }
         let pending = messageStore.pending(chatID: chatID, threadID: threadID)
+        var pendingByClientID = Dictionary(
+            uniqueKeysWithValues: pending.map { ($0.clientGeneratedID, $0) })
         var entries: [ConversationTimelineEntry] = []
         entries.reserveCapacity(confirmed.count + pending.count)
         let now = Date()
-        entries.append(
-            contentsOf: confirmed.lazy.map {
-                .remote($0.projectingExpiredLinkPreviews(at: now))
-            })
-        for item in pending {
-            // A realtime echo can confirm a send before the outbox drops it from pending.
-            guard window.index(of: .clientGenerated(item.clientGeneratedID)) == nil,
-                !earlyClientIDs.contains(item.clientGeneratedID)
-            else { continue }
+        for message in confirmed where !messageStore.isCancelledOutgoing(message) {
+            if let item = pendingByClientID[message.clientGeneratedId],
+                item.senderID == message.sender.uid
+            {
+                entries.append(.pending(item))
+                pendingByClientID.removeValue(forKey: item.clientGeneratedID)
+            } else {
+                entries.append(.remote(message.projectingExpiredLinkPreviews(at: now)))
+            }
+        }
+        for item in pending where pendingByClientID[item.clientGeneratedID] != nil {
             entries.append(.pending(item))
         }
         return entries

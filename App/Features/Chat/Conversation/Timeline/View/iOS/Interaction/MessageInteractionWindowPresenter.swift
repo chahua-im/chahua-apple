@@ -12,8 +12,8 @@
         let mediaContext: AppMediaContext?
         let actions: TimelineBubbleActions
         let interfaceStyle: UIUserInterfaceStyle
-        let onBlock: (PendingOutgoingMessage) -> Void
-        let onRevoke: (PendingOutgoingMessage) -> Void
+        let onEditPending: (PendingOutgoingMessage) -> Void
+        let onCancelPending: (PendingOutgoingMessage) -> Void
         let isReacting: Bool
         let onReaction: (String) -> Void
         let onAction: (MessageMenuAction) -> Void
@@ -442,8 +442,9 @@
                 ).isActive = true
                 actionStack.addArrangedSubview(surface)
             }
-            if case .pending(let pending) = value.row.entry, !pending.dispatchClaimed,
-                value.actions.modifiablePendingMessageIDs.contains(pending.clientGeneratedID)
+            if case .pending(let pending) = value.row.entry,
+                value.actions.canEditPendingMessage(pending)
+                    || value.actions.canCancelPendingMessage(pending)
             {
                 let surface = MessageInteractionSurface(radius: 14)
                 let stack = UIStackView()
@@ -458,7 +459,7 @@
                 ])
                 for revoke in [false, true] {
                     let title: String.LocalizationValue =
-                        revoke ? "Revoke unsent message" : "Move back to composer"
+                        revoke ? "Recall message" : "Edit message"
                     var config = UIButton.Configuration.plain()
                     config.title = AppLanguage.localized(title)
                     config.image = UIImage(systemName: revoke ? "trash" : "square.and.pencil")
@@ -467,17 +468,16 @@
                     let button = UIButton(configuration: config)
                     button.isEnabled =
                         revoke
-                        ? value.actions.revokePendingMessage != nil
-                        : value.actions.blockPendingMessage != nil
-                            && [.text, .file].contains(pending.body.messageType)
+                        ? value.actions.canCancelPendingMessage(pending)
+                        : value.actions.canEditPendingMessage(pending)
                     button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
                     button.addAction(
                         UIAction { [weak self] _ in
                             guard let self else { return }
                             if revoke {
-                                self.presentation.onRevoke(pending)
+                                self.presentation.onCancelPending(pending)
                             } else {
-                                self.presentation.onBlock(pending)
+                                self.presentation.onEditPending(pending)
                             }
                         }, for: .touchUpInside)
                     stack.addArrangedSubview(button)

@@ -51,14 +51,8 @@
                 tile.setVisible(visible)
                 clearTiles(after: 1)
             } else if row.entry.messageType == .text || row.entry.messageType == .file {
-                let pending: [LocalOutgoingAttachment]
-                if case .pending(let message) = row.entry {
-                    pending = message.attachments
-                } else {
-                    pending = []
-                }
-                let attachments = row.entry.presentationMessage?.attachments ?? []
-                let count = pending.isEmpty ? attachments.count : pending.count
+                let attachments = row.entry.mediaAttachments
+                let count = attachments.count
                 itemFrames =
                     count == 1
                     ? [CGRect(origin: .zero, size: mediaFrame.size)]
@@ -69,9 +63,10 @@
                     let overflow =
                         row.entry.messageType != .file && index == 5 && count > 6
                         ? count - 5 : 0
-                    if !pending.isEmpty {
+                    switch attachments[index] {
+                    case .local(let attachment):
                         tile.configurePending(
-                            pending[index], gallery: count > 1, overflow: overflow,
+                            attachment, gallery: count > 1, overflow: overflow,
                             asFile: row.entry.messageType == .file,
                             captionSize: environment.captionSize,
                             canOpen: !binding.context.isInteractionPreview
@@ -79,16 +74,16 @@
                                     ? binding.actions.openAttachment != nil
                                     : binding.actions.openMedia != nil)
                         )
-                    } else {
+                    case .server(let attachment):
                         tile.configureRemote(
-                            attachments[index], gallery: count > 1, overflow: overflow,
+                            attachment, gallery: count > 1, overflow: overflow,
                             asFile: row.entry.messageType == .file,
                             displayScale: environment.displayScale,
                             captionSize: environment.captionSize,
                             mediaContext: binding.mediaContext,
                             canOpen: !binding.context.isInteractionPreview
                                 && (row.entry.messageType == .file
-                                    || attachments[index].isDocumentAttachment
+                                    || attachment.isDocumentAttachment
                                     ? binding.actions.openAttachment != nil
                                     : binding.actions.openMedia != nil)
                         )
@@ -150,20 +145,23 @@
             guard let binding, !binding.context.isInteractionPreview,
                 case .message(let row) = binding.presentation.row
             else { return }
-            if case .pending(let pending) = row.entry, pending.attachments.indices.contains(index),
-                pending.messageType == .file
-            {
-                let file = pending.attachments[index]
+            let attachments = row.entry.mediaAttachments
+            guard attachments.indices.contains(index) else { return }
+            switch attachments[index] {
+            case .local(let file) where row.entry.messageType == .file:
                 binding.actions.openAttachment?(
                     AttachmentResponse(
                         id: file.id, url: URL(fileURLWithPath: file.sourcePath).absoluteString,
                         kind: file.mimeType, size: file.byteCount, fileName: file.fileName))
-            } else if let attachments = row.entry.presentationMessage?.attachments,
-                attachments.indices.contains(index),
-                row.entry.messageType == .file || attachments[index].isDocumentAttachment
-            {
-                binding.actions.openAttachment?(attachments[index])
-            } else if let gallery = MessageImageGallery(entry: row.entry, attachmentIndex: index) {
+                return
+            case .server(let attachment)
+            where row.entry.messageType == .file || attachment.isDocumentAttachment:
+                binding.actions.openAttachment?(attachment)
+                return
+            default:
+                break
+            }
+            if let gallery = MessageImageGallery(entry: row.entry, attachmentIndex: index) {
                 binding.actions.openMedia?(gallery)
             }
         }

@@ -146,6 +146,19 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
     migrator.registerMigration("v7_speaking_restriction") { db in
         try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN speaking_restriction TEXT")
     }
+    migrator.registerMigration("v8_outgoing_intents") { db in
+        try db.execute(
+            sql: """
+                ALTER TABLE outgoing_message ADD COLUMN frozen_create BLOB;
+                ALTER TABLE outgoing_message ADD COLUMN intent_attachments BLOB;
+                ALTER TABLE outgoing_message ADD COLUMN confirmed_message BLOB;
+                ALTER TABLE outgoing_message ADD COLUMN is_published INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE outgoing_message ADD COLUMN is_cancelled INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE outgoing_message ADD COLUMN acknowledged_revision INTEGER NOT NULL DEFAULT -1;
+                ALTER TABLE outgoing_message ADD COLUMN claimed_patch BLOB;
+                ALTER TABLE outgoing_message ADD COLUMN mutation_retryable INTEGER NOT NULL DEFAULT 0;
+                """)
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }

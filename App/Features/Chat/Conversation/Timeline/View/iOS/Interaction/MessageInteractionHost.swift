@@ -86,16 +86,15 @@
                     source: target.source,
                     mediaContext: mediaContext, actions: actions,
                     interfaceStyle: colorScheme == .dark ? .dark : .light,
-                    onBlock: { pending in
-                        guard [.text, .file].contains(pending.body.messageType),
-                            pending.forwardRequest == nil
-                        else { return }
+                    onEditPending: { pending in
+                        guard actions.canEditPendingMessage(pending) else { return }
                         self.target = nil
-                        actions.blockPendingMessage?(pending)
+                        actions.editPendingMessage?(pending)
                     },
-                    onRevoke: { pending in
+                    onCancelPending: { pending in
+                        guard actions.canCancelPendingMessage(pending) else { return }
                         self.target = nil
-                        actions.revokePendingMessage?(pending)
+                        actions.cancelPendingMessage?(pending)
                     },
                     isReacting: actions.isReacting(to: row.entry),
                     onReaction: { emoji in

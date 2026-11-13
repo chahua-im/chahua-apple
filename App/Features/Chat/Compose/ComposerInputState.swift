@@ -184,6 +184,16 @@ final class ComposerInputState: ObservableObject {
         return true
     }
 
+    /// An explicit edit action commits visible preedit before replacing the binding.
+    func prepareForEditing() -> Bool {
+        let snapshot = nativeInput?.snapshot() ?? endingSnapshot ?? .unavailable
+        if case .marked = snapshot {
+            guard prepareExplicitSubmission(allowEmptyUnfocused: true) else { return false }
+        }
+        settleNativeInput()
+        return !isComposing
+    }
+
     private func beginComposition() {
         hasPendingComposition = false
         mentionQuery = nil

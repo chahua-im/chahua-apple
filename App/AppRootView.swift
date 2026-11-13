@@ -25,18 +25,20 @@ struct AppRootView: View {
             case .signedOut(let reason):
                 AuthLoginView(model: model, reason: reason)
             case .authenticated(let me):
-                AuthenticatedShell(
-                    chatStore: chatStore,
-                    notifications: notifications,
-                    notificationSceneID: sceneID,
-                    me: me,
-                    isSigningOut: model.isSubmitting,
-                    onSignOut: { Task { await model.logout() } },
-                    pendingURL: $pendingURL
-                )
-                .modifier(ImageDetailPresentation())
-                .id(me.uid)
-                .environment(\.mediaContext, mediaContext)
+                ConversationDisplayPreferenceScope(preferences: chatStore.displayPreferences) {
+                    AuthenticatedShell(
+                        chatStore: chatStore,
+                        notifications: notifications,
+                        notificationSceneID: sceneID,
+                        me: me,
+                        isSigningOut: model.isSubmitting,
+                        onSignOut: { Task { await model.logout() } },
+                        pendingURL: $pendingURL
+                    )
+                    .modifier(ImageDetailPresentation())
+                    .id(me.uid)
+                    .environment(\.mediaContext, mediaContext)
+                }
             case .restorationFailed(let failure):
                 ChahuaRecoverableErrorView(
                     title: failure.title,

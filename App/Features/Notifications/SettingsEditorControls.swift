@@ -40,8 +40,18 @@ private struct SettingsEditorControls: ViewModifier {
     let onFinish: () -> Void
     @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
     @Environment(\.colorScheme) private var colorScheme
-    @State private var showsDiscardConfirmation = false
-    @State private var discardAccountID: Int32?
+    @StateObject private var exitGuard = FormExitGuard()
+    @State private var exitOwner = UUID()
+
+    private struct ExitState: Equatable {
+        let isDirty: Bool
+        let isSaving: Bool
+        let accountID: Int32?
+    }
+
+    private var exitState: ExitState {
+        ExitState(isDirty: isDirty, isSaving: isSaving, accountID: accountID)
+    }
 
     private var canCommit: Bool { isDirty && canSave && !isSaving }
 
@@ -92,18 +102,9 @@ private struct SettingsEditorControls: ViewModifier {
         }
         .interactiveDismissDisabled(isDirty || isSaving)
         .preference(key: SettingsEditorExitProtectionKey.self, value: isDirty || isSaving)
-        .alert("Discard unsaved changes?", isPresented: $showsDiscardConfirmation) {
-            Button("Discard Changes", role: .destructive) {
-                guard !isSaving, discardAccountID == accountID else { return }
-                onFinish()
-            }
-            Button("Keep Editing", role: .cancel) {}
-        } message: {
-            Text("Your changes haven’t been saved.")
-        }
-        .onChange(of: accountID) { _, _ in
-            showsDiscardConfirmation = false
-            discardAccountID = nil
+        .formDiscardConfirmation(exitGuard)
+        .onChange(of: exitState, initial: true) { _, _ in
+            updateExitGuard()
         }
     }
 
@@ -185,13 +186,15 @@ private struct SettingsEditorControls: ViewModifier {
         }
     #endif
 
+    private func updateExitGuard() {
+        exitGuard.update(
+            owner: exitOwner, isDirty: isDirty, isSubmitting: isSaving,
+            accountID: accountID, sessionRevision: 0)
+    }
+
     private func requestDismiss() {
-        guard !isSaving else { return }
-        if isDirty {
-            discardAccountID = accountID
-            showsDiscardConfirmation = true
-        } else {
-            onFinish()
-        }
+        // Synchronize before deciding, even if SwiftUI has not delivered onChange yet.
+        updateExitGuard()
+        exitGuard.requestExit(onFinish)
     }
 }

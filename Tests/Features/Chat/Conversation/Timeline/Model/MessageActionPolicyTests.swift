@@ -8,6 +8,59 @@ import XCTest
 final class MessageActionPolicyTests: XCTestCase {
     private let writable = MessageInteractionContext(canWrite: true, speakingMode: .unrestricted)
 
+    func testPendingActionsAllowMiddleAndClaimedTextButOnlyCancellationForFiles() {
+        var actions = TimelineBubbleActions()
+        actions.editablePendingMessageIDs = ["middle", "file"]
+        actions.cancellablePendingMessageIDs = ["middle", "file", "audio"]
+        actions.editPendingMessage = { _ in }
+        actions.cancelPendingMessage = { _ in }
+        for claimed in [false, true] {
+            let middle = TimelineTestFixtures.pending(id: "middle", claimed: claimed)
+            XCTAssertTrue(actions.canEditPendingMessage(middle))
+            XCTAssertTrue(actions.canCancelPendingMessage(middle))
+            let file = TimelineTestFixtures.pending(id: "file", type: .file, claimed: claimed)
+            XCTAssertFalse(actions.canEditPendingMessage(file))
+            XCTAssertTrue(actions.canCancelPendingMessage(file))
+            let audio = TimelineTestFixtures.pending(id: "audio", type: .audio, claimed: claimed)
+            XCTAssertFalse(actions.canEditPendingMessage(audio))
+            XCTAssertTrue(actions.canCancelPendingMessage(audio))
+        }
+        XCTAssertFalse(actions.canEditPendingMessage(TimelineTestFixtures.pending(id: "other")))
+        XCTAssertFalse(actions.canCancelPendingMessage(TimelineTestFixtures.pending(id: "other")))
+        actions.editablePendingMessageIDs.remove("middle")
+        XCTAssertFalse(actions.canEditPendingMessage(TimelineTestFixtures.pending(id: "middle")))
+        XCTAssertTrue(actions.canCancelPendingMessage(TimelineTestFixtures.pending(id: "middle")))
+    }
+
+    func testPendingActionEqualityTracksBothEligibilitySetsAndCallbackPresence() {
+        let original = TimelineBubbleActions()
+        var changed = original
+        changed.editablePendingMessageIDs = ["middle"]
+        XCTAssertFalse(original.hasSameRendering(as: changed))
+        changed = original
+        changed.cancellablePendingMessageIDs = ["middle"]
+        XCTAssertFalse(original.hasSameRendering(as: changed))
+        changed = original
+        changed.editPendingMessage = { _ in }
+        XCTAssertFalse(original.hasSameRendering(as: changed))
+        changed = original
+        changed.cancelPendingMessage = { _ in }
+        XCTAssertFalse(original.hasSameRendering(as: changed))
+        var samePresence = changed
+        samePresence.cancelPendingMessage = { _ in }
+        XCTAssertTrue(changed.hasSameRendering(as: samePresence))
+    }
+
+    func testForwardedPendingTextCannotEnterEditorEvenWithEditableID() throws {
+        var pending = TimelineTestFixtures.pending(id: "forward")
+        pending.forwardRequest = LocalForwardRequest(
+            sourceChatID: "source", sources: [try TimelineTestFixtures.message(id: 1, at: 0)])
+        let actions = TimelineBubbleActions(
+            editablePendingMessageIDs: ["forward"], cancellablePendingMessageIDs: ["forward"],
+            editPendingMessage: { _ in }, cancelPendingMessage: { _ in })
+        XCTAssertFalse(actions.canEditPendingMessage(pending))
+        XCTAssertTrue(actions.canCancelPendingMessage(pending))
+    }
     func testSpeakingModesRestrictWritesWithoutRemovingReactionDeleteOrForward() {
         let cases: [(SpeakingMode, Bool, Bool, Bool)] = [
             (.unrestricted, true, true, true),

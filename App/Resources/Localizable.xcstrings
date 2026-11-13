@@ -1,6 +1,167 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "This queued message changed or is no longer available." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This queued message changed or is no longer available." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "这条排队消息已更改或不再可用。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "這則排隊訊息已變更或不再可用。" } }
+      }
+    },
+    "Attachment exceeds the server limit of %@." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Attachment exceeds the server limit of %@." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "附件超过服务器的 %@ 大小限制。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "附件超過伺服器的 %@ 大小限制。" } }
+      }
+    },
+    "Attachments" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Attachments" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "附件" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "附件" } }
+      }
+    },
+    "Couldn’t recall message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t recall message" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法撤回消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法撤回訊息" } }
+      }
+    },
+    "Recall message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Recall message" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "撤回消息" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "撤回訊息" } }
+      }
+    },
+    "Group created" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Group created" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "群聊创建时间" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "群組建立時間" } }
+      }
+    },
+    "Invitation status" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Invitation status" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "邀请状态" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "邀請狀態" } }
+      }
+    },
+    "This invitation never expires." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This invitation never expires." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此邀请永不过期。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此邀請永不過期。" } }
+      }
+    },
+    "Invitation already used" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Invitation already used" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "邀请已使用" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "邀請已使用" } }
+      }
+    },
+    "You are not eligible to join with this invitation." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "You are not eligible to join with this invitation." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你不符合通过此邀请加入的条件。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你不符合透過此邀請加入的條件。" } }
+      }
+    },
+    "This invitation code or URL is invalid." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This invitation code or URL is invalid." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此邀请码或链接无效。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此邀請碼或連結無效。" } }
+      }
+    },
+    "This invitation could not be found." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This invitation could not be found." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "找不到此邀请。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "找不到此邀請。" } }
+      }
+    },
+    "This invitation has expired or been revoked." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "This invitation has expired or been revoked." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此邀请已过期或被撤销。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "此邀請已過期或被撤銷。" } }
+      }
+    },
+    "Could not load invitation. Please try again." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not load invitation. Please try again." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加载邀请，请重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法載入邀請，請再試一次。" } }
+      }
+    },
+    "Could not join group. Please try again." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Could not join group. Please try again." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法加入群聊，请重试。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法加入群組，請再試一次。" } }
+      }
+    },
+    "Active" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Active" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "有效" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "有效" } }
+      }
+    },
+    "Expired" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Expired" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已过期" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已過期" } }
+      }
+    },
+    "Revoked" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Revoked" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已撤销" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已撤銷" } }
+      }
+    },
+    "Used" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Used" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已使用" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已使用" } }
+      }
+    },
+    "You are already a member." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "You are already a member." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "你已经是群成员。" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你已經是群組成員。" } }
+      }
+    },
+    "Request details" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Request details" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请求详情" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "請求詳情" } }
+      }
+    },
+    "Answer" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Answer" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "回答" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "回答" } }
+      }
+    },
+    "No message" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "No message" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无留言" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無留言" } }
+      }
+    },
     "" : {
       "localizations" : {
         "zh-Hans" : {
@@ -5689,7 +5850,12 @@
     },
     "Expires" : {
       "comment" : "A label for the expiry date of a group invitation.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Expires" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "到期时间" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "到期時間" } }
+      }
     },
     "Expires %@" : {
       "comment" : "A label displaying the expiry date of an invitation. The argument is the expiry date.",
@@ -6363,7 +6529,12 @@
     },
     "Group preview" : {
       "comment" : "A section that displays information about a group.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Group preview" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "群聊预览" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "群組預覽" } }
+      }
     },
     "Groups" : {
       "comment" : "A label for a group.",
@@ -6602,7 +6773,12 @@
     },
     "Invitation" : {
       "comment" : "A section for entering a group invitation code or URL.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Invitation" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "邀请" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "邀請" } }
+      }
     },
     "Invitations" : {
       "comment" : "A section header for the user's invitations.",
@@ -6610,11 +6786,21 @@
     },
     "Invite code or URL" : {
       "comment" : "A label for the invitation code or URL field in the Join Group view.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Invite code or URL" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "邀请码或链接" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "邀請碼或連結" } }
+      }
     },
     "Join Group" : {
       "comment" : "A button that lets the user join a group.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Join Group" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加入群聊" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "加入群組" } }
+      }
     },
     "Join with Link" : {
       "extractionState" : "manual",
@@ -8528,24 +8714,6 @@
         }
       }
     },
-    "Move back to composer" : {
-      "comment" : "A button that moves a pending message back to the composer.",
-      "isCommentAutoGenerated" : true,
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移回输入框"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "移回輸入框"
-          }
-        }
-      }
-    },
     "Move earlier" : {
       "comment" : "A button that moves an attachment earlier in the composer's list.",
       "isCommentAutoGenerated" : true,
@@ -9816,7 +9984,12 @@
     },
     "Open Group" : {
       "comment" : "A button that opens a group.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Open Group" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "打开群聊" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "開啟群組" } }
+      }
     },
     "Open image" : {
       "comment" : "A label for an action that opens an image.",
@@ -10981,7 +11154,12 @@
     },
     "Question" : {
       "comment" : "A label for the question field in the friend verification settings view.",
-      "isCommentAutoGenerated" : true
+      "isCommentAutoGenerated" : true,
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Question" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "问题" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "問題" } }
+      }
     },
     "Queued" : {
       "comment" : "A label for a message that is currently being sent.",
@@ -12392,24 +12570,6 @@
     "Revoke invitation?" : {
       "comment" : "A confirmation dialog that lets the user revoke a group invitation.",
       "isCommentAutoGenerated" : true
-    },
-    "Revoke unsent message" : {
-      "comment" : "A button that revokes an unsent message.",
-      "isCommentAutoGenerated" : true,
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "撤销未发送的消息"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "撤銷未傳送的訊息"
-          }
-        }
-      }
     },
     "Sandbox" : {
       "extractionState" : "manual",

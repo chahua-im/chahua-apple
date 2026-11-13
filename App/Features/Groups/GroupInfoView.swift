@@ -6,6 +6,7 @@ struct GroupInfoView: View {
     let chat: ChatListItem
     let currentUserID: Int32
     @ObservedObject private var store: ChatStore
+    @ObservedObject private var exitGuard: FormExitGuard
     let onLeave: () -> Void
     let onSearch: () -> Void
     let onOpenMessage: (MessageResponse) -> Void
@@ -25,19 +26,23 @@ struct GroupInfoView: View {
     @State private var infoRevision = 0
     @State private var selectedSection: GroupInfoSection = .members
     @State private var selectedMediaKind: ChatAttachmentKind = .image
+    @State private var showsEditing = false
+    @State private var editingExitOwner = UUID()
     @State private var showsInvitations = false
+    @State private var invitationsExitOwner = UUID()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openUserProfile) private var openUserProfile
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
     @AppStorage(AppLanguage.storageKey) private var languageRawValue = AppLanguage.system.rawValue
-    private let sessionRevision: Int
+    @State private var sessionRevision: Int
 
     init(
         chat: ChatListItem,
         currentUserID: Int32,
         store: ChatStore,
+        exitGuard: FormExitGuard,
         onLeave: @escaping () -> Void,
         onSearch: @escaping () -> Void,
         onOpenMessage: @escaping (MessageResponse) -> Void = { _ in },
@@ -48,13 +53,14 @@ struct GroupInfoView: View {
         self.chat = chat
         self.currentUserID = currentUserID
         self.store = store
+        self.exitGuard = exitGuard
         self.onLeave = onLeave
         self.onSearch = onSearch
         self.onOpenMessage = onOpenMessage
         self.onOpenThread = onOpenThread
         self.isInspector = isInspector
         self.onClose = onClose
-        sessionRevision = store.sessionRevision
+        _sessionRevision = State(initialValue: store.sessionRevision)
     }
 
     private var usesDesignedPresentation: Bool {
@@ -184,18 +190,55 @@ struct GroupInfoView: View {
         .toolbar {
             if !usesContentHeader {
                 ToolbarItem(placement: .primaryAction) {
-                    editLink
+                    editButton
                 }
             }
         }
-        .navigationDestination(isPresented: $showsInvitations) {
-            GroupInvitesView(store: store, chatID: chat.id)
+        .navigationDestination(isPresented: $showsEditing) {
+            if let info = groupInfo {
+                GroupEditingView(
+                    store: store, exitGuard: exitGuard, exitOwner: editingExitOwner, info: info,
+                    onUpdated: { updated in
+                        groupInfo = updated
+                        infoRevision += 1
+                    },
+                    onBack: { showsEditing = false }
+                )
                 .modifier(GroupInfoDestinationNavigation())
+            }
+        }
+        .navigationDestination(isPresented: $showsInvitations) {
+            GroupInvitesView(
+                store: store, exitGuard: exitGuard, exitOwner: invitationsExitOwner,
+                chatID: chat.id, onBack: { showsInvitations = false }
+            )
+            .modifier(GroupInfoDestinationNavigation())
+        }
+        .onChange(of: showsEditing) { _, presented in
+            if !presented { exitGuard.unregister(owner: editingExitOwner) }
+        }
+        .onChange(of: showsInvitations) { _, presented in
+            if !presented { exitGuard.unregister(owner: invitationsExitOwner) }
+        }
+        .onChange(of: groupInfo?.myRole) { _, role in
+            if groupInfo != nil, role != .admin { closeFormDestinations() }
+        }
+        .onChange(of: isCurrentSession, initial: true) { _, current in
+            if !current {
+                groupInfo = nil
+                closeFormDestinations()
+            }
+        }
+        .onReceive(store.chatAccessInvalidations) { chatID in
+            guard chatID == chat.id else { return }
+            groupInfo = nil
+            closeFormDestinations()
         }
         .task(id: chat.id) { await loadInfo() }
         .onReceive(store.$groupInfoByChatID) { infos in
             guard isCurrentSession else {
                 groupInfo = nil
+                closeFormDestinations()
                 return
             }
             if let updated = infos[chat.id] {
@@ -203,7 +246,6 @@ struct GroupInfoView: View {
                 infoRevision &+= 1
             }
         }
-        .onChange(of: store.sessionRevision) { _, _ in groupInfo = nil }
         .task(id: peerUID) { await loadRelationship() }
         .presenceScope(ChatPresenceDisplay.scope(for: chat), store: store)
         .confirmationDialog(
@@ -261,7 +303,7 @@ struct GroupInfoView: View {
                 .font(.subheadline.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
-            editLink
+            editButton
                 .font(.subheadline.weight(.semibold))
                 .frame(minHeight: 36)
         }
@@ -273,14 +315,12 @@ struct GroupInfoView: View {
     }
 
     @ViewBuilder
-    private var editLink: some View {
-        if isCurrentSession, !isDM, let info = groupInfo, info.myRole == .admin {
-            NavigationLink("Edit") {
-                GroupEditingView(store: store, info: info) { updated in
-                    groupInfo = updated
-                    infoRevision += 1
-                }
-                .modifier(GroupInfoDestinationNavigation())
+    private var editButton: some View {
+        if isCurrentSession, !isDM, groupInfo?.myRole == .admin {
+            Button("Edit") {
+                guard !showsEditing, !showsInvitations else { return }
+                editingExitOwner = UUID()
+                showsEditing = true
             }
             .foregroundStyle(Color.accentColor)
             .accessibilityIdentifier("group-edit-button")
@@ -488,6 +528,8 @@ struct GroupInfoView: View {
                 } else {
                     if groupInfo?.myRole == .admin {
                         Button("Manage Invitations", systemImage: "link.badge.plus") {
+                            guard isCurrentSession, !showsEditing, !showsInvitations else { return }
+                            invitationsExitOwner = UUID()
                             showsInvitations = true
                         }
                         Divider()
@@ -625,6 +667,13 @@ struct GroupInfoView: View {
 
     private var isCurrentSession: Bool {
         store.sessionRevision == sessionRevision && store.currentUserProfile?.uid == currentUserID
+    }
+
+    private func closeFormDestinations() {
+        showsEditing = false
+        showsInvitations = false
+        exitGuard.unregister(owner: editingExitOwner)
+        exitGuard.unregister(owner: invitationsExitOwner)
     }
 
     private func loadInfo() async {

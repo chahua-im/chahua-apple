@@ -10,6 +10,214 @@
     @MainActor
     final class TimelineCollectionViewControllerTests: XCTestCase {
 
+        func testAccountDisplayScopeUpdatesMountedDMGroupAndCapturedNativeTimelines() async throws {
+            let suite = "NativeTimelinePreferences.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let preferences = ConversationDisplayPreferences(
+                defaults: defaults, namespace: "native")
+            preferences.activate(uid: 1)
+            preferences.setShowAllAvatars(true, for: 1)
+            preferences.setShowDmDetails(false, for: 1)
+            preferences.activate(uid: 2)
+            preferences.setShowAllAvatars(false, for: 2)
+            preferences.setShowDmDetails(true, for: 2)
+            preferences.activate(uid: 1)
+            func live(_ firstID: UInt64, name: String, isGroup: Bool) throws
+                -> ConversationTimelineModel
+            {
+                let messages = try (0..<2).map {
+                    try TimelineTestFixtures.message(
+                        id: firstID + UInt64($0), chatID: name, senderID: 2, senderName: name,
+                        at: $0, text: "Hi")
+                }
+                return ConversationTimelineModel(
+                    chatID: name, currentUserID: 1, isGroupChat: isGroup,
+                    source: BubbleSource(page: ListMessagesResponse(messages: messages)),
+                    messageStore: ConversationMessageStore())
+            }
+            let dm = try live(1, name: "DM", isGroup: false)
+            let group = try live(11, name: "Group", isGroup: true)
+            let saved = try TimelineTestFixtures.capturedPreferenceSnapshot(
+                firstID: 21, name: "Saved")
+            let forwarded = try TimelineTestFixtures.capturedPreferenceSnapshot(
+                firstID: 31, name: "Forwarded")
+            let models = [dm, group, saved.timeline, forwarded.timeline]
+            for model in models { await model.open() }
+            var readOnly = TimelineBubbleActions()
+            readOnly.interactionContext.isReadOnly = true
+            let root = ConversationDisplayPreferenceScope(preferences: preferences) {
+                VStack(spacing: 0) {
+                    ConversationTimelineView(model: dm, loadsInitialAutomatically: false)
+                    ConversationTimelineView(model: group, loadsInitialAutomatically: false)
+                    ConversationTimelineView(
+                        model: saved.timeline, loadsInitialAutomatically: false, actions: readOnly)
+                    ConversationTimelineView(
+                        model: forwarded.timeline, loadsInitialAutomatically: false,
+                        actions: readOnly)
+                }
+            }
+            let host = UIHostingController(rootView: root)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previous = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                for model in models { model.close() }
+                saved.invalidate()
+                forwarded.invalidate()
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKey()
+            }
+            func nativeRows(in view: UIView) -> [TimelineRowView] {
+                (view as? TimelineRowView).map { [$0] }
+                    ?? view.subviews.flatMap { nativeRows(in: $0) }
+            }
+            func assertSurface(
+                firstID: UInt64, details: Bool, dense: Bool,
+                file: StaticString = #filePath, line: UInt = #line
+            ) throws {
+                let bindings = try (0..<2).map { offset in
+                    try XCTUnwrap(
+                        nativeRows(in: host.view).first {
+                            $0.binding?.presentation.row.messageID
+                                == MessageID(firstID + UInt64(offset))
+                        }?.binding, file: file, line: line)
+                }
+                for binding in bindings {
+                    XCTAssertEqual(
+                        binding.presentation.environment.showsMessageDetails, details,
+                        file: file, line: line)
+                    XCTAssertEqual(
+                        binding.presentation.environment.showAllAvatars, dense,
+                        file: file, line: line)
+                    XCTAssertEqual(
+                        binding.presentation.environment.identityLaneWidth == 0, !details,
+                        file: file, line: line)
+                }
+                XCTAssertEqual(
+                    bindings.map { $0.layout.frames[.avatar] != nil },
+                    details ? (dense ? [true, true] : [false, true]) : [false, false],
+                    file: file, line: line)
+                XCTAssertEqual(
+                    bindings.map { $0.layout.frames[.title] != nil },
+                    details ? [true, false] : [false, false], file: file, line: line)
+            }
+            for uid in [Int32(1), 2, 1] {
+                preferences.activate(uid: uid)
+                try await Task.sleep(for: .milliseconds(300))
+                window.layoutIfNeeded()
+                try assertSurface(firstID: 1, details: uid == 2, dense: uid == 1)
+                for firstID in [UInt64(11), 21, 31] {
+                    try assertSurface(firstID: firstID, details: true, dense: uid == 1)
+                }
+                let capture = XCTAttachment(
+                    image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                    })
+                capture.name =
+                    "Account \(uid): live DM, group, saved and forwarded native identities"
+                capture.lifetime = .keepAlways
+                add(capture)
+            }
+        }
+
+        func testMiddleClaimedPendingMenuAndIndependentEligibilityRefresh() async throws {
+            let pending = ["first", "middle", "last"].enumerated().map {
+                TimelineTestFixtures.pending(id: $0.element, at: $0.offset, claimed: true)
+            }
+            let store = ConversationMessageStore()
+            store.replacePending(chatID: "chat", with: pending)
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: BubbleSource(page: ListMessagesResponse(messages: [])), messageStore: store)
+            var edited: [String] = []
+            var cancelled: [String] = []
+            var actions = TimelineBubbleActions(
+                editablePendingMessageIDs: ["middle"], cancellablePendingMessageIDs: ["middle"],
+                editPendingMessage: { edited.append($0.clientGeneratedID) },
+                cancelPendingMessage: { cancelled.append($0.clientGeneratedID) })
+            let controller = TimelineCollectionViewController(model: model, actions: actions)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            let coordinator = MessageInteractionWindowPresenter.Coordinator()
+            coordinator.reduceMotion = true
+            defer {
+                coordinator.remove()
+                window.isHidden = true
+                model.close()
+            }
+            await model.loadInitial()
+            try await Task.sleep(for: .milliseconds(200))
+            window.layoutIfNeeded()
+            func descendants<T: UIView>(_ type: T.Type, in view: UIView) -> [T] {
+                (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+            }
+            func middleBinding() throws -> TimelineRowBinding {
+                try XCTUnwrap(
+                    descendants(TimelineRowView.self, in: controller.view).first {
+                        $0.binding?.presentation.row.stableMessageKey == .clientGenerated("middle")
+                    }?.binding)
+            }
+            func present(_ binding: TimelineRowBinding) throws {
+                guard case .message(let row) = binding.presentation.row else {
+                    XCTFail("Missing pending row")
+                    return
+                }
+                XCTAssertEqual(row.groupPosition, .middle)
+                coordinator.presentation = .init(
+                    row: row, context: .init(canWrite: true), currentUserID: 1,
+                    source: .init(
+                        rect: CGRect(x: 40, y: 180, width: 220, height: 60),
+                        presentation: binding.presentation, layout: binding.layout),
+                    mediaContext: nil, actions: binding.actions, interfaceStyle: .light,
+                    onEditPending: { binding.actions.editPendingMessage?($0) },
+                    onCancelPending: { binding.actions.cancelPendingMessage?($0) },
+                    isReacting: false, onReaction: { _ in }, onAction: { _ in }, onClose: {})
+                coordinator.attach(to: window)
+                window.layoutIfNeeded()
+            }
+            func menuButton(_ key: String.LocalizationValue) throws -> UIButton {
+                try XCTUnwrap(
+                    descendants(UIButton.self, in: window).first {
+                        $0.configuration?.title == AppLanguage.localized(key)
+                    })
+            }
+            let initial = try middleBinding()
+            XCTAssertEqual(initial.actions.editablePendingMessageIDs, ["middle"])
+            XCTAssertEqual(initial.actions.cancellablePendingMessageIDs, ["middle"])
+            try present(initial)
+            XCTAssertTrue(try menuButton("Edit message").isEnabled)
+            XCTAssertTrue(try menuButton("Recall message").isEnabled)
+            try await Task.sleep(for: .milliseconds(350))
+            let capture = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                })
+            capture.name = "Claimed middle queued message with independent edit and recall"
+            capture.lifetime = .keepAlways
+            add(capture)
+            try menuButton("Edit message").sendActions(for: .touchUpInside)
+            XCTAssertEqual(edited, ["middle"])
+            actions.editablePendingMessageIDs = []
+            controller.actions = actions
+            try present(middleBinding())
+            XCTAssertFalse(try menuButton("Edit message").isEnabled)
+            XCTAssertTrue(try menuButton("Recall message").isEnabled)
+            try menuButton("Recall message").sendActions(for: .touchUpInside)
+            XCTAssertEqual(cancelled, ["middle"])
+            actions.editablePendingMessageIDs = ["middle"]
+            actions.cancellablePendingMessageIDs = []
+            controller.actions = actions
+            try present(middleBinding())
+            XCTAssertTrue(try menuButton("Edit message").isEnabled)
+            XCTAssertFalse(try menuButton("Recall message").isEnabled)
+        }
+
         func testForwardedContentUsesNativeTimelineCardsAndPlaceholderBoundaries() async throws {
             let source = try TimelineTestFixtures.message(
                 id: 10, senderID: 2, senderName: "Original author", at: 0,

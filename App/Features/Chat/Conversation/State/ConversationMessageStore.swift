@@ -15,6 +15,9 @@ final class ConversationMessageStore: ObservableObject {
     let changes = PassthroughSubject<ConversationChange, Never>()
 
     private var pendingOutgoing: [ConversationKey: [PendingOutgoingMessage]] = [:]
+    // Local cancellation hides content immediately, without inventing a server deletion.
+    // Retain identities for the session even after their durable tombstones are compacted.
+    private var cancelledOutgoingClientIDs: [ConversationKey: Set<String>] = [:]
     private var deletedReplyIDs: [String: Set<MessageID>] = [:]
     private var receiveRevision: UInt64 = 0
     private struct Snapshot {
@@ -69,16 +72,24 @@ final class ConversationMessageStore: ObservableObject {
 
     func replacePending(
         chatID: String, threadID: String? = nil, with pending: [PendingOutgoingMessage],
-        acknowledging message: MessageResponse? = nil
+        acknowledging message: MessageResponse? = nil,
+        cancelledClientGeneratedIDs: Set<String> = []
     ) {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         pendingOutgoing[key] =
             deletedReplyIDs[chatID]?.isEmpty == false ? pending.map(normalizingReply) : pending
+        var cancellationsChanged = false
+        if !cancelledClientGeneratedIDs.isEmpty {
+            let previousCount = cancelledOutgoingClientIDs[key]?.count ?? 0
+            cancelledOutgoingClientIDs[key, default: []].formUnion(cancelledClientGeneratedIDs)
+            cancellationsChanged = cancelledOutgoingClientIDs[key]?.count != previousCount
+        }
         if let message {
             precondition(
                 message.chatId == chatID && message.replyRootId == threadID,
                 "Acknowledgement and pending batch must belong to the same conversation.")
             apply(.message(message))
+            if cancellationsChanged { changes.send(.pendingChanged(chatID: chatID)) }
         } else {
             changes.send(.pendingChanged(chatID: chatID))
         }
@@ -176,6 +187,7 @@ final class ConversationMessageStore: ObservableObject {
 
     func reset() {
         pendingOutgoing.removeAll()
+        cancelledOutgoingClientIDs.removeAll()
         deletedReplyIDs.removeAll()
         snapshots.removeAll()
         journals.removeAll()
@@ -187,10 +199,27 @@ final class ConversationMessageStore: ObservableObject {
         changes.send(.reset)
     }
 
-    /// Unacknowledged sends for one conversation in outbox (enqueue) order. They have no
-    /// server position yet, so a timeline shows them after every confirmed message.
+    func isCancelledOutgoing(_ message: MessageResponse) -> Bool {
+        let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
+        return cancelledOutgoingClientIDs[key]?.contains(message.clientGeneratedId) == true
+    }
+
+    func isCancelledOutgoing(
+        _ preview: MessagePreview, chatID: String, threadID: String? = nil
+    ) -> Bool {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        return cancelledOutgoingClientIDs[key]?.contains(preview.clientGeneratedId) == true
+    }
+
+    /// Latest visible intent for one conversation in outbox order. Confirmed identities
+    /// overlay their server positions; not-yet-confirmed identities follow the window.
     func pending(chatID: String, threadID: String? = nil) -> [PendingOutgoingMessage] {
-        pendingOutgoing[ConversationKey(chatID: chatID, threadID: threadID), default: []]
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let pending = pendingOutgoing[key, default: []]
+        guard let cancelled = cancelledOutgoingClientIDs[key], !cancelled.isEmpty else {
+            return pending
+        }
+        return pending.filter { !cancelled.contains($0.clientGeneratedID) }
     }
 
     private func normalizingReply(_ pending: PendingOutgoingMessage) -> PendingOutgoingMessage {

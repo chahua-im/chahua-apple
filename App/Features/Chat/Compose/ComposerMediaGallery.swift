@@ -1,15 +1,63 @@
 import ChahuaAPI
 import Combine
 import ImageIO
+import Kingfisher
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum ComposerMediaItem: Hashable, Identifiable {
+    case local(LocalOutgoingAttachment)
+    case server(AttachmentResponse)
+
+    init(_ attachment: LocalEditAttachment) {
+        switch attachment {
+        case .local(let local): self = .local(local)
+        case .server(let server): self = .server(server)
+        }
+    }
+
+    var localAttachment: LocalOutgoingAttachment? {
+        guard case .local(let attachment) = self else { return nil }
+        return attachment
+    }
+    var id: String {
+        switch self {
+        case .local(let attachment): attachment.id
+        case .server(let attachment): attachment.id
+        }
+    }
+    var fileName: String {
+        switch self {
+        case .local(let attachment): attachment.fileName
+        case .server(let attachment): attachment.fileName
+        }
+    }
+    var mimeType: String {
+        switch self {
+        case .local(let attachment): attachment.mimeType
+        case .server(let attachment): attachment.kind
+        }
+    }
+    var width: Int {
+        switch self {
+        case .local(let attachment): attachment.width
+        case .server(let attachment): Int(attachment.width ?? 1)
+        }
+    }
+    var height: Int {
+        switch self {
+        case .local(let attachment): attachment.height
+        case .server(let attachment): Int(attachment.height ?? 1)
+        }
+    }
+    var isFile: Bool { localAttachment?.isFile == true }
+}
 /// Local media is intentionally separate from server attachments: an allocated ID is
 /// not evidence of a successful upload, and its server thumbnail may not exist yet.
 struct LocalOutgoingImagePreview: View {
     let path: String
     var isMeasuring = false
-    var contentMode: ContentMode = .fill
+    var contentMode: SwiftUI.ContentMode = .fill
     var showsBlurredBackdrop = false
     @State private var image: CGImage?
 
@@ -97,7 +145,7 @@ struct OutgoingImageStatus: View {
 struct ComposerMediaGallery: View {
     static let slotDragType = UTType(exportedAs: "app.chahua.chat.composer-media-slot")
 
-    let attachments: [LocalOutgoingAttachment]
+    let attachments: [ComposerMediaItem]
     let progress: [String: Double]
     let isEnabled: Bool
     let onRemove: (String) -> Void
@@ -182,7 +230,7 @@ struct ComposerMediaGallery: View {
         .onDisappear { drag.update(ids: [], isEnabled: false) }
     }
 
-    private func tile(_ attachment: LocalOutgoingAttachment, index: Int, viewport: CGRect)
+    private func tile(_ attachment: ComposerMediaItem, index: Int, viewport: CGRect)
         -> some View
     {
         GeometryReader { geometry in
@@ -219,7 +267,7 @@ struct ComposerMediaGallery: View {
         }
     }
 
-    @ViewBuilder private func draggableTile(_ attachment: LocalOutgoingAttachment, index: Int)
+    @ViewBuilder private func draggableTile(_ attachment: ComposerMediaItem, index: Int)
         -> some View
     {
         if isEnabled && attachments.count > 1 {
@@ -230,25 +278,27 @@ struct ComposerMediaGallery: View {
         }
     }
 
-    private func tileContent(_ attachment: LocalOutgoingAttachment, index: Int) -> some View {
+    private func tileContent(_ attachment: ComposerMediaItem, index: Int) -> some View {
         Group {
-            if attachment.isFile {
+            if let local = attachment.localAttachment, local.isFile {
                 VStack(spacing: 10) {
                     Image(systemName: "doc.fill").font(.largeTitle).foregroundStyle(.secondary)
                     Text(attachment.fileName).font(.headline).lineLimit(3)
                     Text(attachment.mimeType).font(.caption).foregroundStyle(.secondary)
                     Text(
                         ByteCountFormatter.string(
-                            fromByteCount: attachment.byteCount, countStyle: .file)
+                            fromByteCount: local.byteCount, countStyle: .file)
                     )
                     .font(.caption).foregroundStyle(.secondary)
-                    OutgoingImageStatus(attachment: attachment, progress: progress[attachment.id])
+                    OutgoingImageStatus(attachment: local, progress: progress[attachment.id])
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(.quaternary)
-            } else {
-                LocalOutgoingImagePreview(path: attachment.previewPath, contentMode: .fit)
+            } else if let local = attachment.localAttachment {
+                LocalOutgoingImagePreview(path: local.previewPath, contentMode: .fit)
+            } else if case .server(let server) = attachment {
+                ComposerServerMediaPreview(attachment: server)
             }
         }
         .overlay {
@@ -262,8 +312,10 @@ struct ComposerMediaGallery: View {
             }
         }
         .overlay(alignment: .bottomLeading) {
-            if attachment.error != nil || progress[attachment.id] != nil {
-                OutgoingImageStatus(attachment: attachment, progress: progress[attachment.id])
+            if let local = attachment.localAttachment,
+                local.error != nil || progress[attachment.id] != nil
+            {
+                OutgoingImageStatus(attachment: local, progress: progress[attachment.id])
                     .padding(8)
                     .background(.regularMaterial, in: Capsule())
                     .padding(8)
@@ -271,7 +323,7 @@ struct ComposerMediaGallery: View {
         }
         .overlay(alignment: .bottomTrailing) {
             Menu {
-                if let error = attachment.error {
+                if let error = attachment.localAttachment?.error {
                     Text(error)
                     Button("Retry") { onRetry(attachment.id) }
                 }
@@ -316,6 +368,46 @@ struct ComposerMediaGallery: View {
         var ids = attachments.map(\.id)
         ids.swapAt(index, index + offset)
         onReorder(ids)
+    }
+}
+
+private struct ComposerServerMediaPreview: View {
+    let attachment: AttachmentResponse
+    @Environment(\.mediaContext) private var mediaContext
+    @State private var poster: VideoPoster?
+
+    var body: some View {
+        Group {
+            if attachment.kind.lowercased().hasPrefix("video/") {
+                if let poster {
+                    KFImage.dataProvider(poster)
+                        .setProcessor(DownsamplingImageProcessor(size: VideoPoster.pixelSize))
+                        .scaleFactor(1)
+                        .targetCache(mediaContext?.cache ?? .default)
+                        .cacheOriginalImage()
+                        .cancelOnDisappear(true)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    ProgressView()
+                }
+            } else {
+                RemoteImageView(
+                    url: URL(string: attachment.url), contentMode: .fit,
+                    thumbnailPixelSize: CGSize(width: 640, height: 640))
+            }
+        }
+        .task(id: attachment.url) {
+            if attachment.kind.lowercased().hasPrefix("video/"),
+                let url = URL(string: attachment.url)
+            {
+                poster = VideoPoster(url: url)
+            }
+        }
+        .onDisappear {
+            poster?.cancel()
+            poster = nil
+        }
     }
 }
 

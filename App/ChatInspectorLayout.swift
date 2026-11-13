@@ -4,9 +4,10 @@ import SwiftUI
 /// A sheet preserves access when the current detail cannot fit both readable columns.
 struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
     @Binding var isPresented: Bool
+    var freezesPresentation = false
     @ViewBuilder var detail: () -> Detail
     @ViewBuilder var inspector: () -> Inspector
-    @State private var inlineEligible = false
+    @State private var presentedInline: Bool?
 
     static var inspectorWidth: CGFloat { 340 }
     static var gap: CGFloat {
@@ -22,10 +23,11 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
             let fitsInline =
                 geometry.size.width >= ChatSplitMetrics.minimumDetailWidth
                 + Self.inspectorWidth + Self.gap + ChatSplitMetrics.outerInset
+            let presentsInline = presentedInline ?? fitsInline
             HStack(spacing: Self.gap) {
                 detail()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if isPresented && fitsInline {
+                if isPresented && presentsInline {
                     inspector()
                         .environment(\.chatInfoIsModal, false)
                         .frame(width: Self.inspectorWidth)
@@ -41,17 +43,21 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
                 }
             }
             .onChange(of: fitsInline, initial: true) { _, value in
-                inlineEligible = value
+                if presentedInline == nil || !freezesPresentation { presentedInline = value }
+            }
+            .onChange(of: freezesPresentation) { _, frozen in
+                if !frozen { presentedInline = fitsInline }
             }
             .sheet(
                 isPresented: Binding(
-                    get: { isPresented && !fitsInline },
-                    set: { if !$0 && !inlineEligible { isPresented = false } }
+                    get: { isPresented && !presentsInline },
+                    set: { if !$0 && !presentsInline { isPresented = false } }
                 )
             ) {
                 inspector()
                     .environment(\.chatInfoIsModal, true)
                     .modifier(ChatInfoModalSizing())
+                    .interactiveDismissDisabled(freezesPresentation)
             }
         }
     }

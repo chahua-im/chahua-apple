@@ -19,8 +19,8 @@ struct AuthenticatedShell: View {
 
     @State private var selectedScope: ConversationListScope = .messages
     @State private var archivedScope: ConversationListScope = .messages
-    @AppStorage(ConversationListPreferences.showThreadsInMessagesStorageKey)
-    private var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
+    @Environment(\.conversationDisplayValues) private var displayValues
+    private var showThreadsInMessages: Bool { displayValues.showThreadsInMessages }
     @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
     private var unreadBadgeColorRawValue = ConversationListPreferences.defaultUnreadBadgeColor
         .rawValue
@@ -43,16 +43,21 @@ struct AuthenticatedShell: View {
     @State private var isListRefreshing = false
     @StateObject private var listPresentation = ConversationListPresentation()
     @State private var navigationActions = ShellNavigationActions()
+    @StateObject private var featureExitGuard = FormExitGuard()
+    @StateObject private var groupExitGuard = FormExitGuard()
+    @State private var declinedNotificationIDs = Set<UUID>()
+    @State private var retainedSplitPresentation: Bool?
 
     private enum FeatureDestination: Hashable, Identifiable {
         case addFriend, createGroup
         case joinGroup(String)
         case profile(Int32)
+        case requestProfile(FriendRequestProfileContext)
         var id: Self { self }
 
         var showsDoneButton: Bool {
             switch self {
-            case .profile: false
+            case .profile, .requestProfile: false
             default: true
             }
         }
@@ -69,7 +74,7 @@ struct AuthenticatedShell: View {
 
     private enum FriendRequestRoute: Hashable {
         case list
-        case profile(Int32)
+        case profile(FriendRequestProfileContext)
     }
 
     private enum GroupRoute: Hashable {
@@ -180,15 +185,19 @@ struct AuthenticatedShell: View {
     var body: some View {
         bindNavigationActions()
         return GeometryReader { geometry in
+            let wantsSplit = geometry.size.width >= ChatSplitMetrics.splitThreshold
             #if os(macOS)
                 adaptiveLayout
             #else
                 Group {
-                    if geometry.size.width >= ChatSplitMetrics.splitThreshold {
+                    if retainedSplitPresentation ?? wantsSplit {
                         adaptiveLayout
                     } else {
                         if UserProfilePresentation.usesModal {
-                            ChatInspectorLayout(isPresented: $showsInspector) {
+                            ChatInspectorLayout(
+                                isPresented: inspectorPresentation,
+                                freezesPresentation: groupExitGuard.isProtected
+                            ) {
                                 listNavigation(includesDetail: true)
                             } inspector: {
                                 inspectorContent
@@ -203,6 +212,12 @@ struct AuthenticatedShell: View {
                     }
                 }
                 .environment(\.conversationListBottomSafeArea, geometry.safeAreaInsets.bottom)
+                .onChange(of: wantsSplit, initial: true) { _, value in
+                    if !groupExitGuard.isProtected { retainedSplitPresentation = value }
+                }
+                .onChange(of: groupExitGuard.isProtected) { _, protected in
+                    if !protected { retainedSplitPresentation = wantsSplit }
+                }
             #endif
         }
         .onPreferenceChange(ForwardThreadActionKey.self) { forwardThreadAction = $0 }
@@ -212,8 +227,11 @@ struct AuthenticatedShell: View {
         .sheet(
             item: $feature,
             onDismiss: {
-                profilePath.removeAll()
-                nestedProfileUID = nil
+                if feature == nil {
+                    featureExitGuard.invalidate()
+                    profilePath.removeAll()
+                    nestedProfileUID = nil
+                }
             }
         ) { destination in
             NavigationStack(path: $profilePath) {
@@ -226,7 +244,7 @@ struct AuthenticatedShell: View {
                     .toolbar {
                         if destination.showsDoneButton {
                             ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") { feature = nil }
+                                Button("Done") { setFeature(nil) }
                             }
                         }
                     }
@@ -241,14 +259,24 @@ struct AuthenticatedShell: View {
             .modifier(
                 FeatureModalSizing(
                     isProfile: {
-                        if case .profile = destination { return true }
-                        return false
-                    }()))
+                        switch destination {
+                        case .profile, .requestProfile: true
+                        default: false
+                        }
+                    }())
+            )
+            .interactiveDismissDisabled(featureExitGuard.isProtected)
+            .formDiscardConfirmation(featureExitGuard)
+            #if os(macOS)
+                .onExitCommand { setFeature(nil) }
+            #endif
+            #if os(macOS)
+                .modifier(TimelineInteractionOverlayRoot())
+            #endif
         }
         .task(id: pendingURL.wrappedValue) {
             guard let url = pendingURL.wrappedValue else { return }
-            await openIncomingURL(url)
-            if pendingURL.wrappedValue == url { pendingURL.wrappedValue = nil }
+            requestIncomingURL(url)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VoicePlaybackBar { message in
@@ -273,7 +301,10 @@ struct AuthenticatedShell: View {
                     == .loaded
                 : (isBrowsingArchived
                     ? state.archivedThreadListLoadPhase : state.threadListLoadPhase) == .loaded
-            if loaded && selectedConversation == nil { selectConversation(nil) }
+            if loaded && selectedConversation == nil {
+                invalidateFormGuards()
+                performSelectConversation(nil)
+            }
         }
         .task(id: notifications.pendingNavigation?.id) { claimNotification() }
         .onChange(of: scenePhase) { _, phase in
@@ -281,7 +312,9 @@ struct AuthenticatedShell: View {
         }
         .task(id: messageNavigation?.requestID) { await resolveNotification() }
         .onChange(of: me.uid) { _, _ in
-            selectConversation(nil)
+            invalidateFormGuards()
+            performSelectConversation(nil)
+            declinedNotificationIDs.removeAll()
             showsSettings = false
             listPath.removeAll()
             feature = nil
@@ -294,16 +327,13 @@ struct AuthenticatedShell: View {
             VoicePlaybackController.stopAll()
             archivedScope = .messages
         }
-        .onChange(of: isSigningOut) { _, signingOut in
-            if signingOut {
-                selectConversation(nil)
-                listPath.removeAll()
-                feature = nil
-                listPresentation.reset()
-                isListRefreshing = false
-                VoicePlaybackSession.shared.stop()
-                VoicePlaybackController.stopAll()
-            }
+        .onChange(of: chatStore.sessionRevision) { _, _ in
+            invalidateFormGuards()
+            performSelectConversation(nil)
+            feature = nil
+            listPath.removeAll()
+            showsInspector = false
+            declinedNotificationIDs.removeAll()
         }
         .onAppear {
             bindNavigationActions()
@@ -323,6 +353,7 @@ struct AuthenticatedShell: View {
             }
         }
         .onDisappear {
+            invalidateFormGuards()
             navigationActions.clear()
             isVisible = false
             notifications.setVisibleConversation(sceneID: notificationSceneID, conversation: nil)
@@ -368,32 +399,37 @@ struct AuthenticatedShell: View {
             if let chat = selectedInfoChat {
                 GroupInfoView(
                     chat: chat, currentUserID: me.uid, store: chatStore,
+                    exitGuard: groupExitGuard,
                     onLeave: {
                         if selectedConversationID?.chatID == chat.id {
-                            selectConversation(nil)
+                            invalidateFormGuards()
+                            performSelectConversation(nil)
                         }
                     },
                     onSearch: { openMessageSearch(in: chat) },
                     onOpenMessage: { openMessageTarget($0, in: chat) },
                     onOpenThread: {
-                        showsInspector = false
                         openThread($0, in: chat)
                     },
                     isInspector: true,
                     onClose: {
-                        withAnimation(.easeInOut(duration: 0.2)) { showsInspector = false }
+                        setInspectorPresented(false)
                     }
                 )
                 .id(chat.id)
             }
         }
         .environment(\.chatHeaderInset, 0)
+        .interactiveDismissDisabled(groupExitGuard.isProtected)
+        .formDiscardConfirmation(groupExitGuard)
+        #if os(macOS)
+            .onExitCommand { setInspectorPresented(false) }
+        #endif
         .environment(\.openUserProfile, { inspectorProfileUID = $0 })
         .modifier(
             UserProfilePresentation(
                 uid: $inspectorProfileUID, currentUserID: me.uid, store: chatStore,
                 onOpenChat: { chat in
-                    showsInspector = false
                     openChat(chat)
                 }))
     }
@@ -404,7 +440,7 @@ struct AuthenticatedShell: View {
             return
         }
         navigationActions.profileHandler = openProfile
-        navigationActions.inviteHandler = { feature = .joinGroup($0) }
+        navigationActions.inviteHandler = { setFeature(.joinGroup($0)) }
     }
 
     private var adaptiveLayout: some View {
@@ -421,7 +457,10 @@ struct AuthenticatedShell: View {
                 }
             #endif
         } detail: { isSplit in
-            ChatInspectorLayout(isPresented: $showsInspector) {
+            ChatInspectorLayout(
+                isPresented: inspectorPresentation,
+                freezesPresentation: groupExitGuard.isProtected
+            ) {
                 NavigationStack(path: $groupPath) {
                     Group {
                         if let key = threadPath.last {
@@ -442,9 +481,7 @@ struct AuthenticatedShell: View {
                                 onClose: nil,
                                 onOpenInfo: isSplit && selectedInfoChat != nil
                                     ? {
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            showsInspector.toggle()
-                                        }
+                                        setInspectorPresented(!showsInspector)
                                     }
                                     : infoAction,
                                 onSearch: searchAction,
@@ -578,29 +615,33 @@ struct AuthenticatedShell: View {
                     return path
                 },
                 set: { path in
-                    listPath = Array(
-                        path.prefix {
-                            switch $0 {
-                            case .archive, .friendRequests: true
-                            case .conversation, .group: false
-                            }
-                        })
-                    if isBrowsingFriendRequests { return }
-                    let conversations = path.dropFirst(listPath.count).compactMap {
-                        route -> ConversationKey? in
-                        guard case .conversation(let key) = route else { return nil }
-                        return key
-                    }
-                    if conversations.first != selectedConversationID {
-                        selectConversation(conversations.first)
-                    }
-                    threadPath = Array(conversations.dropFirst())
-                    groupPath = path.compactMap { route in
-                        guard case .group(let group) = route else { return nil }
-                        return group
-                    }
+                    requestNavigation { performSetPhonePath(path) }
                 }
             )
+        }
+
+        private func performSetPhonePath(_ path: [NavigationRoute]) {
+            listPath = Array(
+                path.prefix {
+                    switch $0 {
+                    case .archive, .friendRequests: true
+                    case .conversation, .group: false
+                    }
+                })
+            if isBrowsingFriendRequests { return }
+            let conversations = path.dropFirst(listPath.count).compactMap {
+                route -> ConversationKey? in
+                guard case .conversation(let key) = route else { return nil }
+                return key
+            }
+            if conversations.first != selectedConversationID {
+                performSelectConversation(conversations.first)
+            }
+            threadPath = Array(conversations.dropFirst())
+            groupPath = path.compactMap { route in
+                guard case .group(let group) = route else { return nil }
+                return group
+            }
         }
     #endif
 
@@ -672,25 +713,19 @@ struct AuthenticatedShell: View {
                             .padding(.bottom, 8)
                         FriendRequestsView(
                             currentUserID: me.uid, store: chatStore,
-                            onOpenProfile: openProfile)
+                            onOpenRequest: openFriendRequest)
                     }
                     .navigationTitle("")
                     .navigationBarBackButtonHidden(true)
                 #else
                     FriendRequestsView(
                         currentUserID: me.uid, store: chatStore,
-                        onOpenProfile: { uid in
-                            if UserProfilePresentation.usesModal {
-                                openProfile(uid)
-                            } else {
-                                listPath.append(.friendRequests(.profile(uid)))
-                            }
-                        })
+                        onOpenRequest: openFriendRequest)
                 #endif
-            case .profile(let uid):
+            case .profile(let context):
                 UserProfileView(
-                    uid: uid, currentUserID: me.uid, store: chatStore,
-                    onOpenChat: openChat)
+                    uid: context.peerUID, currentUserID: me.uid, store: chatStore,
+                    requestContext: context, onOpenChat: openChat)
             }
         }
         .environment(\.chatHeaderInset, 0)
@@ -778,7 +813,90 @@ struct AuthenticatedShell: View {
             ?? chatStore.state.archivedChats.first { $0.id == chat.id } ?? chat
     }
 
+    private func requestNavigation(
+        leavesFeature: Bool = true, leavesGroup: Bool = true,
+        isCurrent: @escaping () -> Bool = { true },
+        onCancel: (() -> Void)? = nil, _ action: @escaping () -> Void
+    ) {
+        let uid = me.uid
+        let revision = chatStore.sessionRevision
+        let execute = {
+            guard chatStore.currentUserProfile?.uid == uid,
+                chatStore.sessionRevision == revision, isCurrent()
+            else { return }
+            if leavesFeature {
+                featureExitGuard.invalidate()
+                feature = nil
+            }
+            if leavesGroup {
+                groupExitGuard.invalidate()
+                showsInspector = false
+            }
+            action()
+        }
+        let leaveGroup = {
+            if leavesGroup {
+                groupExitGuard.requestExit(execute, onCancel: onCancel)
+            } else {
+                execute()
+            }
+        }
+        if leavesFeature {
+            featureExitGuard.requestExit(leaveGroup, onCancel: onCancel)
+        } else {
+            leaveGroup()
+        }
+    }
+
+    private func invalidateFormGuards() {
+        featureExitGuard.invalidate()
+        groupExitGuard.invalidate()
+    }
+
+    private var inspectorPresentation: Binding<Bool> {
+        Binding(get: { showsInspector }, set: setInspectorPresented)
+    }
+
+    private func setInspectorPresented(_ presented: Bool) {
+        let apply = {
+            withAnimation(.easeInOut(duration: 0.2)) { showsInspector = presented }
+        }
+        if presented {
+            apply()
+        } else {
+            requestNavigation(leavesFeature: false, apply)
+        }
+    }
+
+    private func setFeature(_ destination: FeatureDestination?) {
+        let removesGroupForm: Bool
+        switch destination {
+        case .createGroup?, .joinGroup?: removesGroupForm = true
+        default: removesGroupForm = false
+        }
+        requestNavigation(leavesGroup: removesGroupForm) {
+            if removesGroupForm {
+                showsInspector = false
+                groupPath.removeAll()
+            }
+            profilePath.removeAll()
+            nestedProfileUID = nil
+            feature = destination
+        }
+    }
+
+    private func completeGroupForm(_ chat: ChatListItem) {
+        // The form has already committed and cleared its own protection.
+        featureExitGuard.invalidate()
+        performOpenChat(chat)
+    }
+
     private func pushThread(_ thread: ThreadNavigation) {
+        requestNavigation { performPushThread(thread) }
+    }
+
+    private func performPushThread(_ thread: ThreadNavigation) {
+        groupPath.removeAll()
         openedThread = thread
         #if os(macOS)
             withAnimation(nil) { threadPath = [thread.key] }
@@ -788,6 +906,11 @@ struct AuthenticatedShell: View {
     }
 
     private func popThread() {
+        requestNavigation { performPopThread() }
+    }
+
+    private func performPopThread() {
+        groupPath.removeAll()
         #if os(macOS)
             withAnimation(nil) { threadPath.removeAll() }
         #else
@@ -804,7 +927,7 @@ struct AuthenticatedShell: View {
             guard groupPath.isEmpty, !isSigningOut else { return }
             withAnimation {
                 if UserProfilePresentation.usesModal {
-                    showsInspector.toggle()
+                    setInspectorPresented(!showsInspector)
                 } else {
                     groupPath.append(.info(chat))
                 }
@@ -874,6 +997,10 @@ struct AuthenticatedShell: View {
     }
 
     private func openMessageSearch(in chat: ChatListItem) {
+        requestNavigation { performOpenMessageSearch(in: chat) }
+    }
+
+    private func performOpenMessageSearch(in chat: ChatListItem) {
         guard !isSigningOut else { return }
         showsInspector = false
         if messageSearch?.chat.id != chat.id {
@@ -896,6 +1023,10 @@ struct AuthenticatedShell: View {
     }
 
     private func openMessageTarget(_ message: MessageResponse, in chat: ChatListItem) {
+        requestNavigation { performOpenMessageTarget(message, in: chat) }
+    }
+
+    private func performOpenMessageTarget(_ message: MessageResponse, in chat: ChatListItem) {
         guard !isSigningOut, message.chatId == chat.id else { return }
         showsInspector = false
         groupPath.removeAll()
@@ -916,7 +1047,7 @@ struct AuthenticatedShell: View {
             $0.chatId == chat.id && $0.threadRootMessage.id.description == rootID
         }
         let preview = subscribedRoot.map { messagePreview($0.threadRootMessage) }
-        pushThread(
+        performPushThread(
             ThreadNavigation(
                 chat: chat, rootID: rootID,
                 title: preview.flatMap { $0.isEmpty ? nil : $0 } ?? AppLanguage.localized("Thread"),
@@ -930,14 +1061,19 @@ struct AuthenticatedShell: View {
             case .info(let chat):
                 GroupInfoView(
                     chat: chat, currentUserID: me.uid, store: chatStore,
+                    exitGuard: groupExitGuard,
                     onLeave: {
-                        if selectedConversationID?.chatID == chat.id { selectConversation(nil) }
+                        if selectedConversationID?.chatID == chat.id {
+                            invalidateFormGuards()
+                            performSelectConversation(nil)
+                        }
                     },
                     onSearch: { openMessageSearch(in: chat) },
                     onOpenMessage: { groupPath.append(.source(chat, $0)) },
                     onOpenThread: { groupPath.append(.thread(chat, $0)) }
                 )
                 .id(chat.id)
+                .formDiscardConfirmation(groupExitGuard)
             case .search(let chat):
                 if let session = messageSearch, session.chat.id == chat.id {
                     MessageSearchView(model: session.model, onSelect: openSearchResult)
@@ -997,11 +1133,11 @@ struct AuthenticatedShell: View {
             if canCreateGroup {
                 Button("Create Group", systemImage: "person.3") {
                     guard canCreateGroup else { return }
-                    feature = .createGroup
+                    setFeature(.createGroup)
                 }
             }
-            Button("Add Friend", systemImage: "person.badge.plus") { feature = .addFriend }
-            Button("Join with Link", systemImage: "link") { feature = .joinGroup("") }
+            Button("Add Friend", systemImage: "person.badge.plus") { setFeature(.addFriend) }
+            Button("Join with Link", systemImage: "link") { setFeature(.joinGroup("")) }
         } label: {
             Image(systemName: "plus")
                 #if os(macOS)
@@ -1035,13 +1171,28 @@ struct AuthenticatedShell: View {
                 currentUserID: me.uid, store: chatStore, usersOnly: true,
                 onOpenChat: openChat, onOpenProfile: openProfile)
         case .createGroup:
-            CreateGroupView(store: chatStore, onOpenChat: openChat)
+            CreateGroupView(
+                store: chatStore, exitGuard: featureExitGuard, onOpenChat: completeGroupForm)
         case .joinGroup(let code):
-            JoinGroupView(store: chatStore, initialCode: code, onOpenChat: openChat)
+            JoinGroupView(
+                store: chatStore, exitGuard: featureExitGuard, initialCode: code,
+                onOpenChat: completeGroupForm)
         case .profile(let uid):
             UserProfileView(
                 uid: uid, currentUserID: me.uid, store: chatStore,
-                onClose: { feature = nil }, onOpenChat: openChat)
+                onClose: { setFeature(nil) }, onOpenChat: openChat)
+        case .requestProfile(let context):
+            UserProfileView(
+                uid: context.peerUID, currentUserID: me.uid, store: chatStore,
+                onClose: { setFeature(nil) }, requestContext: context, onOpenChat: openChat)
+        }
+    }
+
+    private func openFriendRequest(_ context: FriendRequestProfileContext) {
+        if UserProfilePresentation.usesModal {
+            setFeature(.requestProfile(context))
+        } else {
+            listPath.append(.friendRequests(.profile(context)))
         }
     }
 
@@ -1059,7 +1210,6 @@ struct AuthenticatedShell: View {
         } else if let index = profilePath.firstIndex(of: uid) {
             profilePath = Array(profilePath.prefix(through: index))
         } else if feature == nil {
-            guard listPath.last != .friendRequests(.profile(uid)) else { return }
             feature = .profile(uid)
         } else {
             profilePath.append(uid)
@@ -1067,6 +1217,11 @@ struct AuthenticatedShell: View {
     }
 
     private func openChat(_ chat: ChatListItem) {
+        requestNavigation { performOpenChat(chat) }
+    }
+
+    private func performOpenChat(_ chat: ChatListItem) {
+        showsInspector = false
         chatStore.retainChatForNavigation(chat)
         feature = nil
         profilePath.removeAll()
@@ -1095,15 +1250,36 @@ struct AuthenticatedShell: View {
         } else {
             listPath.removeAll()
         }
-        selectConversation(conversation)
+        performSelectConversation(conversation)
     }
 
     private func openSourceMessage(_ message: MessageResponse, in chat: ChatListItem) {
-        feature = nil
-        openMessageTarget(message, in: chat)
+        requestNavigation {
+            feature = nil
+            performOpenMessageTarget(message, in: chat)
+        }
+    }
+
+    private func requestIncomingURL(_ url: URL) {
+        requestNavigation(
+            isCurrent: { pendingURL.wrappedValue == url },
+            onCancel: {
+                if pendingURL.wrappedValue == url { pendingURL.wrappedValue = nil }
+            },
+            {
+                feature = nil
+                showsInspector = false
+                groupPath.removeAll()
+                Task {
+                    await openIncomingURL(url)
+                    if pendingURL.wrappedValue == url { pendingURL.wrappedValue = nil }
+                }
+            }
+        )
     }
 
     private func openIncomingURL(_ url: URL) async {
+        let revision = chatStore.sessionRevision
         let origin = AppConfiguration.applicationURL
         guard url.scheme == origin.scheme, url.host == origin.host, url.port == origin.port else {
             navigationError = String(localized: "This link belongs to a different server.")
@@ -1114,7 +1290,11 @@ struct AuthenticatedShell: View {
                 let (message, chat) = try await chatStore.resolveMessageLink(
                     chatID: link.chatID, messageID: link.messageID)
                 try Task.checkCancellation()
-                openSourceMessage(message, in: chat)
+                guard pendingURL.wrappedValue == url, chatStore.sessionRevision == revision else {
+                    return
+                }
+                feature = nil
+                performOpenMessageTarget(message, in: chat)
             } catch is CancellationError {
             } catch {
                 navigationError = String(
@@ -1152,7 +1332,11 @@ struct AuthenticatedShell: View {
                 openSourceMessage(message, in: chat)
             },
             usesHeroLayout: usesAccountHero,
-            onClose: usesAccountHero ? { setSettingsPresented(false) } : nil)
+            onClose: usesAccountHero ? { setSettingsPresented(false) } : nil
+        )
+        #if os(macOS)
+            .modifier(TimelineInteractionOverlayRoot())
+        #endif
     }
 
     private func setSettingsPresented(_ presented: Bool) {
@@ -1267,8 +1451,24 @@ struct AuthenticatedShell: View {
 
     private func claimNotification() {
         guard scenePhase == .active, !isSigningOut,
-            let route = notifications.takeNavigation()
+            let route = notifications.pendingNavigation,
+            !declinedNotificationIDs.contains(route.id)
         else { return }
+        requestNavigation(
+            isCurrent: { notifications.pendingNavigation?.id == route.id },
+            onCancel: { declinedNotificationIDs.insert(route.id) },
+            {
+                guard notifications.pendingNavigation?.id == route.id,
+                    notifications.takeNavigation()?.id == route.id
+                else { return }
+                performClaimNotification(route)
+            }
+        )
+    }
+
+    private func performClaimNotification(_ route: PushNotificationRoute) {
+        feature = nil
+        showsInspector = false
         // Taking is synchronous across windows; keep the route while the
         // separate metadata task runs, including across cancellation/retry.
         groupPath.removeAll()
@@ -1282,6 +1482,11 @@ struct AuthenticatedShell: View {
     }
 
     private func selectConversation(_ conversation: ConversationKey?) {
+        requestNavigation { performSelectConversation(conversation) }
+    }
+
+    private func performSelectConversation(_ conversation: ConversationKey?) {
+        feature = nil
         groupPath.removeAll()
         threadPath.removeAll()
         openedThread = nil

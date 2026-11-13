@@ -101,12 +101,7 @@ struct NotificationSettingsView: View {
     var onClose: (() -> Void)? = nil
     @State private var profileUserID: Int32?
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system.rawValue
-    @AppStorage(ConversationTimelinePreferences.showAllAvatarsStorageKey)
-    private var showAllAvatars = ConversationTimelinePreferences.defaultShowAllAvatars
-    @AppStorage(ConversationTimelinePreferences.showDmDetailsStorageKey)
-    private var showDmDetails = ConversationTimelinePreferences.defaultShowDmDetails
-    @AppStorage(ConversationListPreferences.showThreadsInMessagesStorageKey)
-    private var showThreadsInMessages = ConversationListPreferences.defaultShowThreadsInMessages
+    @Environment(\.conversationDisplayValues) private var displayValues
     @AppStorage(MessageTextSizePreference.storageKey)
     private var messageTextSize = MessageTextSizePreference.defaultValue
     @AppStorage(ConversationListPreferences.unreadBadgeColorStorageKey)
@@ -413,12 +408,27 @@ struct NotificationSettingsView: View {
                 .disabled(unreadBadgeColor == ConversationUnreadBadgeColor.default.rawValue)
             }
         case .conversations:
-            Toggle("Show 'Threads' in Messages", isOn: $showThreadsInMessages)
-                .toggleStyle(.switch)
-            Toggle("Show all message avatars", isOn: $showAllAvatars)
-                .toggleStyle(.switch)
-            Toggle("Show avatars and names in DMs", isOn: $showDmDetails)
-                .toggleStyle(.switch)
+            Toggle(
+                "Show 'Threads' in Messages",
+                isOn: Binding(
+                    get: { displayValues.showThreadsInMessages },
+                    set: { chatStore.displayPreferences.setShowThreadsInMessages($0, for: me.uid) })
+            )
+            .toggleStyle(.switch)
+            Toggle(
+                "Show all message avatars",
+                isOn: Binding(
+                    get: { displayValues.showAllAvatars },
+                    set: { chatStore.displayPreferences.setShowAllAvatars($0, for: me.uid) })
+            )
+            .toggleStyle(.switch)
+            Toggle(
+                "Show avatars and names in DMs",
+                isOn: Binding(
+                    get: { displayValues.showDmDetails },
+                    set: { chatStore.displayPreferences.setShowDmDetails($0, for: me.uid) })
+            )
+            .toggleStyle(.switch)
             MembershipMessagePreferenceRow(store: chatStore, accountUID: me.uid)
                 .id("\(me.uid)-\(chatStore.sessionRevision)")
             if showsDividers {

@@ -467,6 +467,18 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
         case stickerId
     }
 
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messageType = try container.decode(MessageType.self, forKey: .messageType)
+        clientGeneratedId = try container.decode(String.self, forKey: .clientGeneratedId)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+        attachmentIds =
+            container.contains(.attachmentIds)
+            ? try container.decode([String].self, forKey: .attachmentIds) : []
+        replyToId = try container.decodeIfPresent(MessageID.self, forKey: .replyToId)
+        stickerId = try container.decodeIfPresent(String.self, forKey: .stickerId)
+    }
+
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(messageType, forKey: .messageType)

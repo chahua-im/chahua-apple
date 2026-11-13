@@ -28,6 +28,7 @@ public struct GroupInvite: Codable, Hashable, Identifiable, Sendable {
 
 public struct GroupInvitePreview: Codable, Sendable {
     public let alreadyMember: Bool
+    public let canJoin: Bool
     public let chat: GroupInfoResponse
     public let invite: GroupInvite
 }

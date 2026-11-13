@@ -18,12 +18,275 @@ import XCTest
 final class ComposerFocusTests: XCTestCase {
     func testCaptionWaitsForUserFocus() async throws {
         let h = try FocusComposerHarness(text: "caption", enabled: true, caption: true)
-        addTeardownBlock { @MainActor in h.close() }
+        addTeardownBlock { @MainActor in await h.close() }
         try await Task.sleep(for: .milliseconds(600))
         XCTAssertFalse(h.hasFocusedEditor)
         try h.focus()
         try await pause()
         XCTAssertTrue(h.hasFocusedEditor)
+    }
+
+    func testEditPreparationCommitsMarkedTextBeforeChangingDraftOwnership() async throws {
+        let h = try await mount(text: "draft ")
+        try h.selectEnd()
+        try h.mark("ni")
+        try await pause()
+        XCTAssertEqual(h.state.text, "draft ")
+        let prepare = try XCTUnwrap(h.state.attachments.prepareForEditing)
+        try await prepare()
+        XCTAssertEqual(h.state.text, "draft ni")
+        XCTAssertFalse(h.state.composing)
+        h.state.isEditing = true
+        h.state.editText = "queued edit"
+        try await pause()
+        XCTAssertEqual(h.state.editText, "queued edit")
+        XCTAssertEqual(h.state.text, "draft ni")
+        h.state.isEditing = false
+        try await pause()
+        try h.selectEnd()
+        try h.insertIntoFocusedEditor("!")
+        try await pause()
+        XCTAssertEqual(h.state.text, "draft ni!")
+    }
+
+    func testMediaOnlyPendingEditSubmitsWithoutOpeningOrdinaryCaptionDialog() async throws {
+        let h = try await mount(text: "")
+        h.state.isEditing = true
+        h.state.serverMedia = [
+            AttachmentResponse(
+                id: "uploaded", url: "", kind: "image/png", size: 20, fileName: "photo.png",
+                width: 4, height: 3)
+        ]
+        try await pause()
+        h.pressSendButton()
+        try await pause()
+        XCTAssertEqual(h.state.submits, 1)
+        XCTAssertEqual(h.state.text, "")
+    }
+
+    func testServerComposerSlotKeepsUploadedIdentityWithoutLocalWork() {
+        let server = AttachmentResponse(
+            id: "uploaded", url: "", kind: "video/mp4", size: 20, fileName: "clip.mp4",
+            width: 4, height: 3)
+        let slot = ComposerMediaItem(.server(server))
+        XCTAssertEqual(slot.id, "uploaded")
+        XCTAssertEqual(slot.width, 4)
+        XCTAssertEqual(slot.height, 3)
+        XCTAssertEqual(slot.mimeType, "video/mp4")
+        XCTAssertNil(slot.localAttachment)
+        XCTAssertFalse(slot.isFile)
+    }
+
+    func testEditPreparationCancelsAnImportWithoutReplacingTheOrdinaryDraft() async throws {
+        let h = try await mount(text: "Keep this draft")
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+        try makeMediaPNG(red: 40, green: 120, blue: 200, width: 16, height: 12).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let started = expectation(description: "Image import is in progress")
+        h.state.onImportImages = { _ in
+            started.fulfill()
+            try await Task.sleep(for: .seconds(30))
+            XCTFail("An import from the old composer must not complete after edit preparation.")
+        }
+        try await pause()
+        #if os(macOS)
+            let provider = try XCTUnwrap(NSItemProvider(contentsOf: url))
+            XCTAssertTrue(h.state.attachments.acceptDrop([provider]))
+        #else
+            let editor = try XCTUnwrap(h.focusedEditor() as? UITextView)
+            let previousItems = UIPasteboard.general.items
+            defer { UIPasteboard.general.items = previousItems }
+            UIPasteboard.general.items = [
+                [UTType.png.identifier: try Data(contentsOf: url)]
+            ]
+            editor.paste(nil)
+        #endif
+        await fulfillment(of: [started], timeout: 3)
+        XCTAssertTrue(h.state.attachments.isAcquiring)
+
+        let prepare = try XCTUnwrap(h.state.attachments.prepareForEditing)
+        try await prepare()
+
+        XCTAssertFalse(h.state.attachments.isAcquiring)
+        XCTAssertNil(h.state.attachments.error)
+        XCTAssertEqual(h.state.text, "Keep this draft")
+        XCTAssertEqual(h.state.submits, 0)
+    }
+
+    func testServerEditToPendingEditDiscardsOrdinaryMediaAndRestoresTextAndReply() async throws {
+        let remote = try TimelineTestFixtures.message(id: 1, at: 1, text: "Server original")
+        let api = FakeChatAPI(messageResults: [
+            "chat": [.success(.init(messages: [remote]))]
+        ])
+        await api.setConversationPageMetadata(
+            group: .init(
+                id: "chat", myRole: .admin, kind: .group, speakingMode: .unrestricted,
+                mySpeakingMode: .unrestricted, effectiveSpeakingMode: .unrestricted))
+        let queue = testOutgoingQueue(apiClient: api)
+        let store = ChatStore(apiClient: api, outgoingQueue: queue, onInvalidToken: {})
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        await queue.activate(uid: 1)
+        addTeardownBlock { @MainActor in await queue.deactivate() }
+        store.drafts.setDraftText("Queued original", chatID: "chat")
+        let didEnqueue = await store.drafts.submitDraft(chatID: "chat")
+        XCTAssertTrue(didEnqueue, "The ordinary send path must durably create the queued target.")
+        let pending = try XCTUnwrap(store.conversationMessages.pending(chatID: "chat").first)
+        store.drafts.setDraftText("Ordinary draft", chatID: "chat")
+        store.drafts.setDraftReply(remote.replyPreview, chatID: "chat")
+        await store.drafts.flushDraft(chatID: "chat")
+        let imageURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+        try makeMediaPNG(red: 40, green: 120, blue: 200, width: 16, height: 12)
+            .write(to: imageURL)
+        defer { try? FileManager.default.removeItem(at: imageURL) }
+        try await queue.importImages(urls: [imageURL], chatID: "chat")
+        let ordinaryMediaIDs = queue.draftAttachments(chatID: "chat").map(\.id)
+        XCTAssertEqual(ordinaryMediaIDs.count, 1)
+
+        let root = NavigationStack {
+            ChatDetailView(
+                chat: .init(
+                    id: "chat", name: "Queued editor regression", unreadCount: 0,
+                    archived: false, kind: .group),
+                currentUserID: 1, store: store)
+        }
+        .environment(\.scenePhase, .active)
+        #if os(macOS)
+            let host = NSHostingController(rootView: root.frame(width: 800, height: 720))
+            host.sizingOptions = []
+            host.view.frame = NSRect(x: 0, y: 0, width: 800, height: 720)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 800, height: 720),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.setContentSize(NSSize(width: 800, height: 720))
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                window.close()
+                store.reset()
+            }
+            func views(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap(views)
+            }
+            func actions() -> TimelineBubbleActions? {
+                views(host.view).compactMap { $0 as? TimelineRowView }
+                    .compactMap(\.binding).first {
+                        $0.presentation.row.messageID == remote.id
+                    }?.actions
+            }
+            func editor() -> NSTextView? {
+                views(host.view).compactMap { $0 as? NSTextView }.first { $0.isEditable }
+            }
+            func text() -> String? { editor()?.string }
+            func capture(_ name: String) throws {
+                host.view.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(
+                    host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                    uniformTypeIdentifier: "public.png")
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        #else
+            let scene = try XCTUnwrap(
+                UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+            let host = UIHostingController(rootView: root)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                window.rootViewController = nil
+                previousKeyWindow?.makeKey()
+                store.reset()
+            }
+            func views(_ view: UIView) -> [UIView] {
+                [view] + view.subviews.flatMap(views)
+            }
+            func actions() -> TimelineBubbleActions? {
+                views(host.view).compactMap { $0 as? TimelineRowView }
+                    .compactMap(\.binding).first {
+                        $0.presentation.row.messageID == remote.id
+                    }?.actions
+            }
+            func editor() -> UITextView? {
+                views(host.view).compactMap { $0 as? UITextView }.first { $0.isEditable }
+            }
+            func text() -> String? { editor()?.text }
+            func capture(_ name: String) throws {
+                window.layoutIfNeeded()
+                let attachment = XCTAttachment(
+                    image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                        window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                    })
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        #endif
+
+        try await waitUntil {
+            actions()?.editMessage != nil && actions()?.editPendingMessage != nil && editor() != nil
+        }
+        let editRemote = try XCTUnwrap(actions()?.editMessage)
+        editRemote(remote)
+        try await waitUntil { text() == "Server original" }
+        XCTAssertEqual(text(), "Server original")
+        XCTAssertEqual(queue.draftAttachments(chatID: "chat").map(\.id), ordinaryMediaIDs)
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
+        XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), remote.replyPreview)
+        try capture("Server edit retains ordinary draft media before queued edit entry")
+
+        let editPending = try XCTUnwrap(actions()?.editPendingMessage)
+        editPending(pending)
+        try await waitUntil {
+            text() == "Queued original" && queue.draftAttachments(chatID: "chat").isEmpty
+        }
+        XCTAssertEqual(text(), "Queued original")
+        XCTAssertTrue(queue.draftAttachments(chatID: "chat").isEmpty)
+        XCTAssertTrue(
+            queue.pendingMessages(chatID: "chat").contains {
+                $0.clientGeneratedID == pending.id
+            })
+        try capture("Queued edit header after ordinary draft media disposal")
+
+        #if os(macOS)
+            let input = try XCTUnwrap(editor())
+            XCTAssertTrue(window.makeFirstResponder(input))
+            try await pause()
+            let escape = try XCTUnwrap(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber,
+                    context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                    isARepeat: false, keyCode: 53))
+            NSApp.sendEvent(escape)
+            try await waitUntil { text() == "Ordinary draft" }
+            XCTAssertEqual(text(), "Ordinary draft")
+            try capture("Native Escape restores ordinary text and reply without discarded media")
+        #else
+            // Native iOS Close and hardware Escape are device-verification steps;
+            // hosted XCTest covers actual edit entry, media disposal and draft ownership.
+        #endif
+        XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
+        XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), remote.replyPreview)
+        XCTAssertTrue(queue.draftAttachments(chatID: "chat").isEmpty)
+        XCTAssertEqual(
+            queue.pendingMessages(chatID: "chat").first {
+                $0.clientGeneratedID == pending.id
+            }?.text,
+            "Queued original")
     }
 
     func testVoicePreviewStopInvalidatesPendingLoadWithoutPublishingIdleResets() async throws {
@@ -711,7 +974,7 @@ final class ComposerFocusTests: XCTestCase {
         -> FocusComposerHarness
     {
         let harness = try FocusComposerHarness(text: text, enabled: enabled, caption: caption)
-        addTeardownBlock { @MainActor in harness.close() }
+        addTeardownBlock { @MainActor in await harness.close() }
         try await pause()
         #if os(macOS)
             if caption {
@@ -734,6 +997,16 @@ private final class FocusComposerState: ObservableObject {
     @Published var enabled = true
     @Published var canSend = true
     @Published var media: [LocalOutgoingAttachment] = []
+    @Published var serverMedia: [AttachmentResponse] = []
+    @Published var isEditing = false
+    @Published var editText = ""
+    var composerText: Binding<String> {
+        Binding(
+            get: { self.isEditing ? self.editText : self.text },
+            set: {
+                if self.isEditing { self.editText = $0 } else { self.text = $0 }
+            })
+    }
     let caption: Bool
     @Published var showsComposer = true
     @Published var onImportImages: (([URL]) async throws -> Void)?
@@ -763,7 +1036,7 @@ private struct FocusComposerRoot: View {
                 #endif
             } else if state.showsComposer {
                 MessageComposerView(
-                    text: $state.text, attachmentState: state.attachments,
+                    text: state.composerText, attachmentState: state.attachments,
                     maxHeight: 160, isEnabled: state.enabled, canSend: state.canSend,
                     onSubmit: { text in
                         if let submit = state.onSubmit { return await submit(text) }
@@ -771,7 +1044,11 @@ private struct FocusComposerRoot: View {
                         state.canSend = false
                         return true
                     }, onCompositionChanged: { state.composing = $0 },
-                    attachments: state.media,
+                    isEditing: state.isEditing, initialEditText: "original",
+                    editIdentity: state.isEditing ? "pending-edit" : nil,
+                    allowsEditingMedia: state.isEditing,
+                    attachments: state.media.map(ComposerMediaItem.local)
+                        + state.serverMedia.map(ComposerMediaItem.server),
                     onImportImages: state.onImportImages,
                     onDiscardAttachments: { state.media = [] },
                     stickerLibrary: state.stickerLibrary, onSendSticker: { _ in true },
@@ -782,7 +1059,7 @@ private struct FocusComposerRoot: View {
 
     private var captionDialog: some View {
         ComposerAttachmentDialog(
-            text: $state.text, attachments: state.media, progress: [:],
+            text: $state.text, attachments: state.media.map(ComposerMediaItem.local), progress: [:],
             compressionEnabled: true, isEnabled: state.enabled, canSend: state.canSend,
             isAcquiring: false, attachmentError: nil,
             onCompositionChanged: { state.composing = $0 },
@@ -846,12 +1123,17 @@ private final class FocusComposerHarness {
         #endif
     }
 
-    func close() {
+    func close() async {
         #if os(macOS)
             window.close()
         #else
+            if host.presentedViewController != nil {
+                await withCheckedContinuation { continuation in
+                    host.dismiss(animated: false) { continuation.resume() }
+                }
+            }
             state.showsComposer = false
-            host.dismiss(animated: false)
+            await Task.yield()
             window.isHidden = true
             window.rootViewController = nil
             priorKeyWindow?.makeKey()

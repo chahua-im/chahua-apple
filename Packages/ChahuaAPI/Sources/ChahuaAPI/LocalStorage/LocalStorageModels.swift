@@ -99,6 +99,35 @@ public struct LocalForwardRequest: Codable, Hashable, Sendable {
     public var messageIDs: [MessageID] { sources.map(\.id).sorted() }
 }
 
+public enum LocalEditAttachment: Codable, Hashable, Sendable {
+    case local(LocalOutgoingAttachment)
+    case server(AttachmentResponse)
+}
+
+public struct LocalFrozenCreate: Codable, Hashable, Sendable {
+    public let body: CreateMessageBody?
+    public let forwardRequest: LocalForwardRequest?
+    public let revision: Int64
+
+    public init(body: CreateMessageBody?, forwardRequest: LocalForwardRequest?, revision: Int64) {
+        self.body = body
+        self.forwardRequest = forwardRequest
+        self.revision = revision
+    }
+}
+
+public struct LocalClaimedPatch: Codable, Hashable, Sendable {
+    public let text: String
+    public let attachmentIDs: [String]
+    public let revision: Int64
+
+    public init(text: String, attachmentIDs: [String], revision: Int64) {
+        self.text = text
+        self.attachmentIDs = attachmentIDs
+        self.revision = revision
+    }
+}
+
 public struct LocalOutgoingMessage: Sendable, Equatable {
     public enum State: String, Sendable { case queued, sending, failed }
     public let clientGeneratedID: String
@@ -123,6 +152,14 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public var sticker: MessageStickerResponse? = nil
     public var forwardRequest: LocalForwardRequest? = nil
     public var speakingRestriction: SpeakingMode? = nil
+    public var frozenCreate: LocalFrozenCreate? = nil
+    public var intentAttachments: [LocalEditAttachment]? = nil
+    public var confirmedMessage: MessageResponse? = nil
+    public var isPublished: Bool = false
+    public var isCancelled: Bool = false
+    public var acknowledgedRevision: Int64 = -1
+    public var claimedPatch: LocalClaimedPatch? = nil
+    public var mutationRetryable: Bool = false
 
     public var messageType: MessageType {
         if let forwardRequest {
@@ -136,18 +173,31 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     }
 
     public var isReadyForDispatch: Bool {
-        attachments.allSatisfy { $0.attachmentID != nil && $0.error == nil }
+        if frozenCreate != nil { return true }
+        return (intentAttachments ?? attachments.map(LocalEditAttachment.local)).allSatisfy {
+            switch $0 {
+            case .local(let slot): return slot.attachmentID != nil && slot.error == nil
+            case .server: return true
+            }
+        }
     }
 
     public var body: CreateMessageBody {
+        if let frozenCreate {
+            precondition(frozenCreate.body != nil, "Forwarding must use the forwarding endpoints")
+            return frozenCreate.body!
+        }
         precondition(forwardRequest == nil, "Forwarding must use the forwarding endpoints")
         precondition(
             isReadyForDispatch, "An unresolved attachment must never be omitted from a message")
         return CreateMessageBody(
             messageType: messageType, clientGeneratedId: clientGeneratedID,
             message: messageType == .text ? text : nil,
-            attachmentIds: attachments.sorted { $0.position < $1.position }.map {
-                $0.attachmentID!
+            attachmentIds: (intentAttachments ?? attachments.map(LocalEditAttachment.local)).map {
+                switch $0 {
+                case .local(let slot): return slot.attachmentID!
+                case .server(let attachment): return attachment.id
+                }
             },
             replyToId: replyToMessage?.id, stickerId: sticker?.id
         )
@@ -169,6 +219,21 @@ public struct LocalConversationSnapshot: Sendable, Equatable {
 public struct LocalOutgoingClaim: Sendable {
     public let snapshot: LocalConversationSnapshot
     public let message: LocalOutgoingMessage?
+}
+
+public enum LocalOutgoingDisposition: Equatable, Sendable {
+    case retained, completed, cancelled
+}
+
+public struct LocalOutgoingTransition: Sendable {
+    public let snapshot: LocalConversationSnapshot
+    public let clientGeneratedID: String
+    public let disposition: LocalOutgoingDisposition
+}
+
+public struct LocalOutgoingPatchClaim: Sendable {
+    public let snapshot: LocalConversationSnapshot
+    public let patch: LocalClaimedPatch?
 }
 
 public enum OutgoingRetryScope: Sendable { case message, messageAndSubsequent }

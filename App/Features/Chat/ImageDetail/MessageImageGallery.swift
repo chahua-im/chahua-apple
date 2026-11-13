@@ -54,27 +54,31 @@ struct MessageImageGallery: Identifiable {
         let items: [MessageImageItem]
         let messageID: String
         let sentAt: Date
-        if let message = entry.presentationMessage {
-            guard !message.isDeleted, message.messageType == .text || message.messageType == .file
-            else { return nil }
-            messageID = message.id.description
-            sentAt = message.createdAt
-            items = message.attachments.map {
-                MessageImageItem(
-                    id: $0.id, url: URL(string: $0.url), contentType: $0.kind,
-                    fileName: $0.fileName, width: $0.width.map(Int.init),
-                    height: $0.height.map(Int.init))
-            }
-        } else if case .pending(let message) = entry {
+        guard entry.messageType == .text || entry.messageType == .file,
+            entry.presentationMessage?.isDeleted != true
+        else { return nil }
+        if case .pending(let message) = entry {
             messageID = message.clientGeneratedID
             sentAt = message.enqueuedAt
-            items = message.attachments.map {
-                MessageImageItem(
-                    id: $0.id, url: URL(fileURLWithPath: $0.uploadPath), contentType: $0.mimeType,
-                    fileName: $0.fileName, width: $0.width, height: $0.height)
-            }
+        } else if let message = entry.presentationMessage {
+            messageID = message.id.description
+            sentAt = message.createdAt
         } else {
             return nil
+        }
+        items = entry.mediaAttachments.map {
+            switch $0 {
+            case .local(let attachment):
+                MessageImageItem(
+                    id: attachment.id, url: URL(fileURLWithPath: attachment.uploadPath),
+                    contentType: attachment.mimeType, fileName: attachment.fileName,
+                    width: attachment.width, height: attachment.height)
+            case .server(let attachment):
+                MessageImageItem(
+                    id: attachment.id, url: URL(string: attachment.url),
+                    contentType: attachment.kind, fileName: attachment.fileName,
+                    width: attachment.width.map(Int.init), height: attachment.height.map(Int.init))
+            }
         }
         guard items.indices.contains(attachmentIndex) else { return nil }
         self.init(

@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 /// The caller supplies a modal-local caption draft and transfers it on dismissal.
 struct ComposerAttachmentDialog: View {
     @Binding var text: String
-    let attachments: [LocalOutgoingAttachment]
+    let attachments: [ComposerMediaItem]
     let progress: [String: Double]
     let compressionEnabled: Bool
     let isEnabled: Bool
@@ -26,6 +26,10 @@ struct ComposerAttachmentDialog: View {
     let onSubmit: () async -> Bool
     let onCancel: () async throws -> Void
     nonisolated var onSearchMembers: ComposerMemberSearch? = nil
+    var isEditing = false
+    var allowsCompressionChanges = true
+    var onEscapeEdit: (() -> Void)? = nil
+    var editExitGuard: FormExitGuard? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var input = ComposerInputState()
@@ -44,13 +48,17 @@ struct ComposerAttachmentDialog: View {
 
     private var canInteract: Bool { isEnabled && !isAcquiring && !isSubmitting && !isCancelling }
     private var canEditCaption: Bool { isEnabled && !isSubmitting && !isCancelling }
-    private var canSubmit: Bool { canInteract && canSend && !attachments.isEmpty }
+    private var canSubmit: Bool {
+        canInteract && canSend
+            && (!attachments.isEmpty
+                || (isEditing && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+    }
 
     private var hasMediaOptions: Bool {
         #if os(iOS)
             true
         #else
-            !attachments.isEmpty
+            allowsCompressionChanges && attachments.contains { $0.localAttachment != nil }
         #endif
     }
     private var editorText: Binding<String> {
@@ -159,6 +167,13 @@ struct ComposerAttachmentDialog: View {
             input.receiveExternalText(text)
         }
         .onChange(of: text) { _, value in input.receiveExternalText(value) }
+        .onKeyPress(.escape) {
+            guard isEditing, !input.isComposing, !isSubmitting else { return .ignored }
+            input.settleNativeInput()
+            onEscapeEdit?()
+            return .handled
+        }
+        .modifier(ComposerEditDiscardConfirmation(exitGuard: editExitGuard))
         .onDisappear { input.settleNativeInput() }
     }
 
@@ -202,7 +217,11 @@ struct ComposerAttachmentDialog: View {
                         onTakePhoto()
                     }
                 #endif
-                if attachments.contains(where: { !$0.isFile && $0.mimeType.hasPrefix("image/") }) {
+                if allowsCompressionChanges,
+                    attachments.contains(where: {
+                        $0.localAttachment != nil && !$0.isFile && $0.mimeType.hasPrefix("image/")
+                    })
+                {
                     Toggle(
                         "Compress images",
                         isOn: Binding(
@@ -210,7 +229,9 @@ struct ComposerAttachmentDialog: View {
                             set: { enabled in changeAttachments { onCompressionChanged(enabled) } }
                         ))
                 }
-                if attachments.contains(where: { $0.isFile || $0.mimeType.hasPrefix("video/") }) {
+                if allowsCompressionChanges,
+                    attachments.contains(where: { $0.isFile || $0.mimeType.hasPrefix("video/") })
+                {
                     Text("Files and videos are sent in original quality.")
                 }
             } label: {
@@ -381,6 +402,18 @@ struct ComposerAttachmentDialog: View {
                 sendFailed = true
                 isCaptionFocused = true
             }
+        }
+    }
+}
+
+struct ComposerEditDiscardConfirmation: ViewModifier {
+    let exitGuard: FormExitGuard?
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if let exitGuard {
+            content.formDiscardConfirmation(exitGuard)
+        } else {
+            content
         }
     }
 }

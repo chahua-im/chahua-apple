@@ -9,9 +9,15 @@ import SwiftUI
 #endif
 
 struct GroupInvitesView: View {
-    let store: ChatStore
+    @ObservedObject var store: ChatStore
+    @ObservedObject var exitGuard: FormExitGuard
+    let exitOwner: UUID
     let chatID: String
-    @State private var authorized = false
+    let onBack: () -> Void
+    @State private var groupInfo: GroupInfoResponse?
+    @State private var accountUID: Int32?
+    @State private var sessionRevision: Int
+    @State private var accessRevoked = false
     @State private var loading = false
     @State private var busy = false
     @State private var invites: [GroupInvite] = []
@@ -20,11 +26,30 @@ struct GroupInvitesView: View {
     @State private var requiredGroup: SocialGroupSummary?
     @State private var destination: SocialGroupSummary?
     @State private var expires = false
-    @State private var expiry = Date().addingTimeInterval(86_400)
+    @State private var expiry: Date
+    @State private var initialExpiry: Date
     @State private var revoking: GroupInvite?
     @State private var error: String?
     @State private var notice: String?
     @State private var sendKeys: [String: String] = [:]
+    @State private var operationTask: Task<Void, Never>?
+
+    init(
+        store: ChatStore, exitGuard: FormExitGuard, exitOwner: UUID,
+        chatID: String, onBack: @escaping () -> Void
+    ) {
+        self.store = store
+        self.exitGuard = exitGuard
+        self.exitOwner = exitOwner
+        self.chatID = chatID
+        self.onBack = onBack
+        _groupInfo = State(initialValue: store.groupInfoByChatID[chatID])
+        _accountUID = State(initialValue: store.currentUserProfile?.uid)
+        _sessionRevision = State(initialValue: store.sessionRevision)
+        let initialExpiry = Date().addingTimeInterval(86_400)
+        _initialExpiry = State(initialValue: initialExpiry)
+        _expiry = State(initialValue: initialExpiry)
+    }
 
     var body: some View {
         Form {
@@ -46,27 +71,34 @@ struct GroupInvitesView: View {
                         NavigationLink(
                             target.map { $0.username ?? String($0.uid) } ?? "Choose recipient"
                         ) {
-                            GroupInviteUserPicker(store: store) { target = $0 }
+                            GroupInviteUserPicker(store: store) {
+                                guard authorized, !busy else { return }
+                                target = $0
+                            }
                         }
                     }
                     if type == .membership {
                         NavigationLink(requiredGroup?.name ?? "Choose prerequisite group") {
                             GroupInviteGroupPicker(store: store, title: "Prerequisite Group") {
+                                guard authorized, !busy else { return }
                                 requiredGroup = $0
                             }
                         }
                     }
                     Toggle("Set expiry", isOn: $expires)
                     if expires { DatePicker("Expires", selection: $expiry, in: Date()...) }
-                    Button("Create invitation") { Task { await create() } }
-                        .disabled(
-                            busy || (type == .targeted && target == nil)
-                                || (type == .membership && requiredGroup == nil)
-                                || (expires && expiry <= Date()))
+                    Button("Create invitation") {
+                        operationTask = Task { await create() }
+                    }
+                    .disabled(
+                        busy || (type == .targeted && target == nil)
+                            || (type == .membership && requiredGroup == nil)
+                            || (expires && expiry <= Date()))
                 }
                 Section("Send invite card") {
                     NavigationLink(destination?.name ?? "Choose destination group") {
                         GroupInviteGroupPicker(store: store, title: "Destination Group") {
+                            guard authorized, !busy else { return }
                             destination = $0
                         }
                     }
@@ -91,8 +123,10 @@ struct GroupInvitesView: View {
                             }
                             HStack {
                                 Button("Copy URL") { copy(invite) }
-                                Button("Send card") { Task { await share(invite) } }.disabled(
-                                    destination == nil)
+                                Button("Send card") {
+                                    operationTask = Task { await share(invite) }
+                                }
+                                .disabled(destination == nil)
                                 Button("Revoke", role: .destructive) { revoking = invite }
                             }
                             .disabled(busy || !invite.isActive)
@@ -106,15 +140,43 @@ struct GroupInvitesView: View {
             if busy { ProgressView() }
             if let notice { Text(notice).foregroundStyle(.secondary) }
         }
+        .disabled(busy || !isCurrentSession)
         .navigationTitle("Group Invitations")
+        .formBackProtection(exitGuard, onBack: onBack)
+        .onChange(of: isDirty, initial: true) { _, _ in refreshExitProtection() }
+        .onChange(of: busy) { _, _ in refreshExitProtection() }
+        .onChange(of: authorized) { _, allowed in
+            if !allowed {
+                accessRevoked = true
+                operationTask?.cancel()
+                revoking = nil
+                invites = []
+            }
+            refreshExitProtection()
+        }
+        .onReceive(store.$groupInfoByChatID) { infos in
+            guard isCurrentSession, let info = infos[chatID] else { return }
+            groupInfo = info
+        }
+        .onReceive(store.chatAccessInvalidations) { invalidatedChatID in
+            guard invalidatedChatID == chatID else { return }
+            accessRevoked = true
+            operationTask?.cancel()
+            revoking = nil
+            invites = []
+            refreshExitProtection()
+        }
         .task(id: chatID) { await load() }
+        .onDisappear { operationTask?.cancel() }
         .confirmationDialog(
             "Revoke invitation?",
             isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
             titleVisibility: .visible
         ) {
             if let invite = revoking {
-                Button("Revoke", role: .destructive) { Task { await revoke(invite) } }
+                Button("Revoke", role: .destructive) {
+                    operationTask = Task { await revoke(invite) }
+                }
             }
             Button("Cancel", role: .cancel) { revoking = nil }
         } message: {
@@ -122,30 +184,65 @@ struct GroupInvitesView: View {
         }
     }
 
+    private var isCurrentSession: Bool {
+        accountUID != nil && accountUID == store.currentUserProfile?.uid
+            && sessionRevision == store.sessionRevision
+    }
+
+    private var authorized: Bool {
+        let info = store.groupInfoByChatID[chatID] ?? groupInfo
+        return isCurrentSession && !accessRevoked && info?.kind == .group
+            && info?.myRole == .admin
+    }
+
+    private var isDirty: Bool {
+        type != .generic || target != nil || requiredGroup != nil || expires
+    }
+
+    private func refreshExitProtection() {
+        guard authorized else {
+            exitGuard.unregister(owner: exitOwner)
+            return
+        }
+        exitGuard.update(
+            owner: exitOwner, isDirty: isDirty, isSubmitting: busy,
+            accountID: accountUID, sessionRevision: sessionRevision)
+    }
+
     private func load() async {
-        guard !loading, !busy else { return }
+        guard isCurrentSession, !accessRevoked, !loading, !busy else { return }
         loading = true
         error = nil
         defer { loading = false }
         do {
             let info = try await store.groupInfo(chatID: chatID)
-            authorized = info.kind == .group && info.myRole == .admin
+            guard isCurrentSession, !accessRevoked, !Task.isCancelled else { return }
+            groupInfo = info
             guard authorized else {
                 invites = []
                 return
             }
-            invites = try await store.listGroupInvites(chatID: chatID).invites
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
+            let page = try await store.listGroupInvites(chatID: chatID)
+            guard authorized, !Task.isCancelled else { return }
+            invites = page.invites
+        } catch is CancellationError {} catch {
+            guard isCurrentSession, !accessRevoked, !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     private func create() async {
-        guard authorized, !busy, type != .targeted || target != nil,
+        guard !Task.isCancelled, authorized, !busy, type != .targeted || target != nil,
             type != .membership || requiredGroup != nil, !expires || expiry > Date()
         else { return }
         busy = true
+        refreshExitProtection()
         error = nil
         notice = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            if !Task.isCancelled { refreshExitProtection() }
+        }
         do {
             let invite = try await store.createGroupInvite(
                 body: .init(
@@ -153,27 +250,48 @@ struct GroupInvitesView: View {
                     targetUid: type == .targeted ? target?.uid : nil,
                     requiredChatId: type == .membership ? requiredGroup?.id : nil,
                     expiresAt: expires ? expiry : nil))
+            guard authorized, !Task.isCancelled else { return }
             invites.insert(invite, at: 0)
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
+            type = .generic
+            target = nil
+            requiredGroup = nil
+            expires = false
+            expiry = initialExpiry
+        } catch is CancellationError {} catch {
+            guard authorized, !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     private func revoke(_ invite: GroupInvite) async {
-        guard authorized, !busy else { return }
+        guard !Task.isCancelled, authorized, !busy else { return }
         busy = true
+        refreshExitProtection()
         error = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            if !Task.isCancelled { refreshExitProtection() }
+        }
         do {
             try await store.revokeGroupInvite(id: invite.id)
+            guard authorized, !Task.isCancelled else { return }
             invites.removeAll { $0.id == invite.id }
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
+        } catch is CancellationError {} catch {
+            guard authorized, !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     private func share(_ invite: GroupInvite) async {
-        guard authorized, !busy, let destination, invite.isActive else { return }
+        guard !Task.isCancelled, authorized, !busy, let destination, invite.isActive else { return }
         busy = true
+        refreshExitProtection()
         error = nil
         notice = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            if !Task.isCancelled { refreshExitProtection() }
+        }
         let operation = invite.id + ":" + destination.id
         let key = sendKeys[operation] ?? UUID().uuidString
         sendKeys[operation] = key
@@ -182,13 +300,17 @@ struct GroupInvitesView: View {
                 body: .init(
                     sourceChatId: chatID, inviteId: invite.id,
                     destinationChatId: destination.id, clientGeneratedId: key))
+            guard authorized, !Task.isCancelled else { return }
             sendKeys.removeValue(forKey: operation)
             notice = "Invitation card sent."
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
+        } catch is CancellationError {} catch {
+            guard authorized, !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     private func copy(_ invite: GroupInvite) {
-        guard let url = GroupInviteLink.url(code: invite.code) else { return }
+        guard authorized, !busy, let url = GroupInviteLink.url(code: invite.code) else { return }
         // SwiftUI has no clipboard-write API; the system pasteboard is required for explicit Copy on each platform.
         #if os(iOS)
             UIPasteboard.general.url = url

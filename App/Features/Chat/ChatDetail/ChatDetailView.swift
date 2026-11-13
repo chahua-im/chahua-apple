@@ -1,4 +1,5 @@
 import ChahuaAPI
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -31,6 +32,15 @@ struct ChatDetailView: View {
     @Environment(\.imageDetailPresenter) private var imageDetailPresenter
     @State private var replyFocusRequest = 0
     @State private var editingMessage: MessageResponse?
+    @State private var serverEditIdentity = UUID()
+    @StateObject private var pendingEditor = PendingEditPresentation()
+    @StateObject private var pendingEditExitGuard = FormExitGuard()
+    @State private var isEnteringEdit = false
+    @State private var editEntryTask: Task<Void, Never>?
+    private var pendingEditSession: PendingEditSession? {
+        get { pendingEditor.session }
+        nonmutating set { pendingEditor.session = newValue }
+    }
     @State private var editText = ""
     @State private var isUpdatingMessage = false
     @State private var isComposerComposing = false
@@ -305,7 +315,12 @@ struct ChatDetailView: View {
             .modifier(
                 ChatDetailMutationErrors(
                     systemTargetError: $systemTargetError, editError: $editError,
-                    outboxError: $outboxError))
+                    outboxError: $outboxError)
+            )
+            .formDiscardConfirmation(pendingEditExitGuard)
+            .task(id: pendingEditSession?.isValid) {
+                if pendingEditSession?.isValid == false, !isUpdatingMessage { cancelEditing() }
+            }
     }
 
     var body: some View {
@@ -325,6 +340,8 @@ struct ChatDetailView: View {
             }
             .onReceive(store.conversationMessages.changes, perform: receiveThreadMetadata)
             .onDisappear {
+                editEntryTask?.cancel()
+                cancelEditing()
                 selectionDeleteTask?.cancel()
                 systemTargetTask?.cancel()
                 systemTargetTask = nil
@@ -589,14 +606,14 @@ struct ChatDetailView: View {
         }
         .contentShape(Rectangle())
         .onDrop(of: [.item, .fileURL], isTargeted: $isMediaDropTargeted) { providers in
-            guard currentInteractionContext.canSend, editingMessage == nil,
+            guard canUseComposer, editingMessage == nil, !isEnteringEdit,
                 outgoingQueue.storageState == .ready,
                 !drafts.committingDrafts.contains(conversationKey)
             else { return false }
             return composerAttachments.acceptDrop(providers)
         }
         .overlay {
-            if isMediaDropTargeted, interactionContext.canSend, editingMessage == nil,
+            if isMediaDropTargeted, canUseComposer, editingMessage == nil,
                 !composerAttachments.isAcquiring
             {
                 RoundedRectangle(cornerRadius: 12)
@@ -626,6 +643,7 @@ struct ChatDetailView: View {
                                 selectionToolbar(actions: interactiveActions)
                             } else {
                                 savedStatusFeedback
+                                failedCancellationFeedback
                                 if store.outgoingQueue.storageState == .failed
                                     || drafts.draftSaveFailed
                                 {
@@ -649,7 +667,7 @@ struct ChatDetailView: View {
                                         )
                                 }
                                 if interactionContext.canWrite,
-                                    !(editingMessage.map(isEditable) ?? interactionContext.canSend),
+                                    !canUseComposer,
                                     let mode = interactionContext.speakingMode
                                 {
                                     Text(mode.restrictionExplanation)
@@ -663,90 +681,102 @@ struct ChatDetailView: View {
                                         )
                                         .padding(.horizontal, 12)
                                 } else {
-                                    MessageComposerView(
-                                        text: composerText,
-                                        attachmentState: composerAttachments,
-                                        maxHeight: max(36, geometry.size.height / 3),
-                                        isEnabled: editingMessage.map(isEditable)
-                                            ?? interactionContext.canSend,
-                                        canSend: canSubmitComposer,
-                                        onSubmit: submitComposer,
-                                        onCompositionChanged: { composing in
-                                            isComposerComposing = composing
-                                            guard editingMessage == nil else { return }
-                                            drafts.setDraftComposing(
-                                                composing, chatID: chat.id, threadID: threadID)
-                                        },
-                                        replyToMessage: drafts.draftReply(
-                                            chatID: chat.id, threadID: threadID),
-                                        replyFocusRequest: replyFocusRequest,
-                                        onCancelReply: {
-                                            drafts.setDraftReply(
-                                                nil, chatID: chat.id, threadID: threadID)
-                                        },
-                                        onOpenReply: { id in Task { await model.jumpToMessage(id) }
-                                        },
-                                        editingMessage: editingMessage,
-                                        onCancelEdit: cancelEditing,
-                                        onRequestEditLastMessage: requestEditLastOwnMessage,
-                                        attachments: outgoingQueue.draftAttachments(
-                                            chatID: chat.id, threadID: threadID),
-                                        attachmentProgress: outgoingQueue.attachmentProgress,
-                                        compressionEnabled: outgoingQueue.compressionEnabled(
-                                            chatID: chat.id, threadID: threadID),
-                                        onImportImages: { urls in
-                                            try await drafts.flushForAttachmentChange(
-                                                chatID: chat.id, threadID: threadID)
-                                            try await outgoingQueue.importImages(
-                                                urls: urls, chatID: chat.id, threadID: threadID)
-                                        },
-                                        onImportFiles: { urls in
-                                            try await drafts.flushForAttachmentChange(
-                                                chatID: chat.id, threadID: threadID)
-                                            try await outgoingQueue.importFiles(
-                                                urls: urls, chatID: chat.id, threadID: threadID)
-                                        },
-                                        onRemoveAttachment: { id in
-                                            try await drafts.flushForAttachmentChange(
-                                                chatID: chat.id, threadID: threadID)
-                                            try await outgoingQueue.removeAttachment(
-                                                id: id, chatID: chat.id, threadID: threadID)
-                                        },
-                                        onRetryAttachment: { id in
-                                            try await drafts.flushForAttachmentChange(
-                                                chatID: chat.id, threadID: threadID)
-                                            try await outgoingQueue.retryAttachment(
-                                                id: id, chatID: chat.id, threadID: threadID)
-                                        },
-                                        onCompressionChanged: { enabled in
-                                            try await drafts.flushForAttachmentChange(
-                                                chatID: chat.id, threadID: threadID)
-                                            try await outgoingQueue.setCompressionEnabled(
-                                                enabled, chatID: chat.id, threadID: threadID)
-                                        },
-                                        onReorderAttachments: { ids in
-                                            try await drafts.flushForAttachmentChange(
-                                                chatID: chat.id, threadID: threadID)
-                                            try await outgoingQueue.reorderAttachments(
-                                                ids: ids, chatID: chat.id, threadID: threadID)
-                                        },
-                                        onDiscardAttachments: {
-                                            try await drafts.discardAttachments(
-                                                chatID: chat.id, threadID: threadID)
-                                        },
-                                        stickerLibrary: store.stickers,
-                                        onSendSticker: sendSticker,
-                                        onSendVoice: sendVoice,
-                                        onSearchMembers: { query in
-                                            try await store.searchMembers(
-                                                chatID: chat.id, query: query)
-                                        }
-                                    )
+                                    messageComposer(maxHeight: max(36, geometry.size.height / 3))
                                 }
                             }
                         }
                     })
         }
+    }
+
+    private func messageComposer(maxHeight: CGFloat) -> MessageComposerView {
+        let hasChanges: ((String) -> Bool)?
+        let importFiles: (([URL]) async throws -> Void)?
+        if let session = pendingEditSession {
+            hasChanges = { session.hasChanges(text: $0) }
+            importFiles = nil
+        } else {
+            hasChanges = nil
+            importFiles = importComposerFiles
+        }
+        return MessageComposerView(
+            text: composerText,
+            attachmentState: composerAttachments,
+            maxHeight: maxHeight,
+            isEnabled: canUseComposer,
+            canSend: canSubmitComposer,
+            onSubmit: {
+                [
+                    sessionID = pendingEditSession?.id,
+                    messageID = editingMessage?.id,
+                    serverID = serverEditIdentity
+                ] text in
+                guard pendingEditSession?.id == sessionID,
+                    editingMessage?.id == messageID,
+                    editingMessage == nil || serverEditIdentity == serverID
+                else { return false }
+                return await submitComposer(text)
+            },
+            onCompositionChanged: { composing in
+                isComposerComposing = composing
+                guard !isEditing else { return }
+                drafts.setDraftComposing(composing, chatID: chat.id, threadID: threadID)
+            },
+            replyToMessage: isEditing
+                ? nil : drafts.draftReply(chatID: chat.id, threadID: threadID),
+            replyFocusRequest: replyFocusRequest,
+            onCancelReply: {
+                drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID)
+            },
+            onOpenReply: { id in Task { await model.jumpToMessage(id) } },
+            isEditing: isEditing,
+            initialEditText: pendingEditSession?.initialText ?? editingMessage?.message ?? "",
+            hasEditChanges: hasChanges,
+            editIdentity: pendingEditSession?.id.uuidString
+                ?? editingMessage.map { _ in serverEditIdentity.uuidString },
+            editMentionNames: MessageMentions.names(in: editingMessage?.mentions ?? []),
+            allowsEditingMedia: pendingEditSession != nil,
+            editExitGuard: pendingEditSession == nil ? nil : pendingEditExitGuard,
+            onCancelEdit: cancelEditing,
+            onEscapeEdit: requestEditingExit,
+            onRequestEditLastMessage: requestEditLastOwnMessage,
+            attachments: composerMedia,
+            attachmentProgress: outgoingQueue.attachmentProgress,
+            compressionEnabled: outgoingQueue.compressionEnabled(
+                chatID: chat.id, threadID: threadID),
+            onImportImages: { [session = pendingEditSession] urls in
+                try await importComposerImages(urls, session: session)
+            },
+            onImportFiles: importFiles,
+            onRemoveAttachment: { [session = pendingEditSession] id in
+                try await removeComposerAttachment(id, session: session)
+            },
+            onRetryAttachment: { [session = pendingEditSession] id in
+                try await retryComposerAttachment(id, session: session)
+            },
+            onCompressionChanged: { enabled in
+                guard canUseComposer, !isEditing else { throw APIError.unavailable }
+                try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+                guard canUseComposer, !isEditing else { throw CancellationError() }
+                try await outgoingQueue.setCompressionEnabled(
+                    enabled, chatID: chat.id, threadID: threadID)
+            },
+            onReorderAttachments: { [session = pendingEditSession] ids in
+                try await reorderComposerAttachments(ids, session: session)
+            },
+            onDiscardAttachments: { [session = pendingEditSession] in
+                if session == nil {
+                    guard canUseComposer, !isEditing else { throw APIError.unavailable }
+                    try await drafts.discardAttachments(chatID: chat.id, threadID: threadID)
+                }
+            },
+            stickerLibrary: store.stickers,
+            onSendSticker: sendSticker,
+            onSendVoice: sendVoice,
+            onSearchMembers: { query in
+                try await store.searchMembers(chatID: chat.id, query: query)
+            }
+        )
     }
 
     @ViewBuilder
@@ -853,6 +883,7 @@ struct ChatDetailView: View {
     }
 
     private func invalidateForSessionChange() {
+        editEntryTask?.cancel()
         permissionRequestRevision &+= 1
         interactionContext.canWrite = false
         hasLoadedInteractionPermissions = false
@@ -926,16 +957,18 @@ struct ChatDetailView: View {
         {
             actions.togglePin = requestPinChange
         }
-        let queueKey = conversationKey
-        let queueSnapshots = outgoingQueue.snapshots
-        let queueSnapshot = queueSnapshots[queueKey]
-        if let tail = queueSnapshot?.outgoing.last,
-            queueSnapshot?.composingItem == nil, !tail.dispatchClaimed
-        {
-            actions.modifiablePendingMessageIDs = [tail.clientGeneratedID]
+        // Eligibility follows identity and write access, never FIFO position or claim state.
+        if currentInteractionContext.canWrite {
+            let pending = outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID)
+            actions.cancellablePendingMessageIDs = Set(pending.map(\.clientGeneratedID))
+            if currentInteractionContext.canSend {
+                actions.editablePendingMessageIDs = Set(
+                    pending.filter { $0.messageType == .text && $0.forwardRequest == nil }
+                        .map(\.clientGeneratedID))
+            }
         }
-        actions.blockPendingMessage = { pending in changePending(pending, revoke: false) }
-        actions.revokePendingMessage = { pending in changePending(pending, revoke: true) }
+        actions.editPendingMessage = startPendingEditing
+        actions.cancelPendingMessage = cancelPendingMessage
         actions.openLink = { url in
             if let code = GroupInviteLink.code(from: url.absoluteString) {
                 openGroupInvite(code)
@@ -1031,14 +1064,186 @@ struct ChatDetailView: View {
         }
     }
 
+    private var isEditing: Bool { editingMessage != nil || pendingEditSession != nil }
+
+    private var canUseComposer: Bool {
+        guard isCurrentSession else { return false }
+        if let session = pendingEditSession {
+            return session.isValid && currentInteractionContext.canSend
+        }
+        return editingMessage.map(isEditable) ?? currentInteractionContext.canSend
+    }
+
+    private var composerMedia: [ComposerMediaItem] {
+        if let session = pendingEditSession {
+            return session.attachments.map(ComposerMediaItem.init)
+        }
+        guard editingMessage == nil else { return [] }
+        return outgoingQueue.draftAttachments(chatID: chat.id, threadID: threadID)
+            .map(ComposerMediaItem.local)
+    }
+
+    @ViewBuilder private var failedCancellationFeedback: some View {
+        let ids = outgoingQueue.failedCancellationIDs(chatID: chat.id, threadID: threadID)
+        ForEach(ids, id: \.self) { id in
+            HStack {
+                Text("Couldn’t recall message").font(.caption)
+                Spacer(minLength: 8)
+                Button("Retry") {
+                    guard isCurrentSession, currentInteractionContext.canWrite else { return }
+                    Task {
+                        do {
+                            guard isCurrentSession, currentInteractionContext.canWrite else {
+                                return
+                            }
+                            try await outgoingQueue.retry(
+                                chatID: chat.id, threadID: threadID, clientGeneratedID: id,
+                                scope: .message)
+                        } catch {
+                            if isCurrentSession { outboxError = error.localizedDescription }
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 12)
+        }
+        if let session = pendingEditSession {
+            if let error = session.error {
+                Text(error).font(.caption).foregroundStyle(.red)
+                    .padding(.horizontal, 16)
+            }
+            if session.isUploading {
+                ProgressView("Updating attachments…").controlSize(.small).padding(8)
+            }
+        }
+    }
+
+    private func prepareComposerForEditing(discardAttachments: Bool) async throws {
+        guard isCurrentSession, let prepare = composerAttachments.prepareForEditing else {
+            throw APIError.unavailable
+        }
+        try await prepare()
+        try Task.checkCancellation()
+        guard isCurrentSession else { throw CancellationError() }
+        composerAttachments.isAcquiring = true
+        defer { composerAttachments.isAcquiring = false }
+        if !isEditing {
+            try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+            try Task.checkCancellation()
+            guard isCurrentSession else { throw CancellationError() }
+        }
+        if discardAttachments {
+            try await outgoingQueue.discardDraftAttachments(chatID: chat.id, threadID: threadID)
+        }
+    }
+
+    private func requestEditingExit(_ text: String) {
+        let sessionID = pendingEditSession?.id
+        let serverID = serverEditIdentity
+        // Key handling can run inside SwiftUI's view update. Publish editor/lease
+        // changes on the next main-actor turn, fenced to the original editor.
+        Task { @MainActor in
+            guard isCurrentSession, pendingEditSession?.id == sessionID,
+                serverEditIdentity == serverID
+            else { return }
+            performEditingExit(text)
+        }
+    }
+
+    private func performEditingExit(_ text: String) {
+        guard !isUpdatingMessage else { return }
+        guard let session = pendingEditSession else {
+            if text == editingMessage?.message { cancelEditing() }
+            return
+        }
+        pendingEditExitGuard.update(
+            owner: session.id, isDirty: session.hasChanges(text: text),
+            isSubmitting: isUpdatingMessage || composerAttachments.isAcquiring,
+            accountID: observation.session.accountID, sessionRevision: observation.session.revision)
+        pendingEditExitGuard.requestExit {
+            guard isCurrentSession, pendingEditSession?.id == session.id,
+                !isUpdatingMessage, !composerAttachments.isAcquiring
+            else { return }
+            cancelEditing()
+        }
+    }
+
+    private func importComposerImages(_ urls: [URL], session: PendingEditSession?) async throws {
+        guard canUseComposer, pendingEditSession?.id == session?.id else {
+            throw APIError.unavailable
+        }
+        if let session {
+            try await outgoingQueue.importEditImages(urls: urls, session: session)
+        } else {
+            guard !isEditing else { throw APIError.unavailable }
+            try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+            guard canUseComposer, !isEditing else { throw CancellationError() }
+            try await outgoingQueue.importImages(urls: urls, chatID: chat.id, threadID: threadID)
+        }
+    }
+
+    private func importComposerFiles(_ urls: [URL]) async throws {
+        guard canUseComposer, !isEditing else { throw APIError.unavailable }
+        try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+        guard canUseComposer, !isEditing else { throw CancellationError() }
+        try await outgoingQueue.importFiles(urls: urls, chatID: chat.id, threadID: threadID)
+    }
+
+    private func removeComposerAttachment(_ id: String, session: PendingEditSession?) async throws {
+        guard canUseComposer, pendingEditSession?.id == session?.id else {
+            throw APIError.unavailable
+        }
+        if let session {
+            outgoingQueue.removeEditAttachment(id: id, session: session)
+        } else {
+            guard !isEditing else { throw APIError.unavailable }
+            try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+            guard canUseComposer, !isEditing else { throw CancellationError() }
+            try await outgoingQueue.removeAttachment(id: id, chatID: chat.id, threadID: threadID)
+        }
+    }
+
+    private func retryComposerAttachment(_ id: String, session: PendingEditSession?) async throws {
+        guard canUseComposer, pendingEditSession?.id == session?.id else {
+            throw APIError.unavailable
+        }
+        if let session {
+            outgoingQueue.retryEditAttachment(id: id, session: session)
+        } else {
+            guard !isEditing else { throw APIError.unavailable }
+            try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+            guard canUseComposer, !isEditing else { throw CancellationError() }
+            try await outgoingQueue.retryAttachment(id: id, chatID: chat.id, threadID: threadID)
+        }
+    }
+
+    private func reorderComposerAttachments(_ ids: [String], session: PendingEditSession?)
+        async throws
+    {
+        guard canUseComposer, pendingEditSession?.id == session?.id else {
+            throw APIError.unavailable
+        }
+        if let session {
+            try outgoingQueue.reorderEditAttachments(ids: ids, session: session)
+        } else {
+            guard !isEditing else { throw APIError.unavailable }
+            try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
+            guard canUseComposer, !isEditing else { throw CancellationError() }
+            try await outgoingQueue.reorderAttachments(
+                ids: ids, chatID: chat.id, threadID: threadID)
+        }
+    }
+
     private var composerText: Binding<String> {
         Binding(
             get: {
-                editingMessage == nil
+                !isEditing
                     ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText
             },
             set: {
-                if editingMessage == nil {
+                if !isEditing {
                     drafts.setDraftText($0, chatID: chat.id, threadID: threadID)
                 } else {
                     editText = $0
@@ -1049,10 +1254,13 @@ struct ChatDetailView: View {
 
     private var canSubmitComposer: Bool {
         let text =
-            (editingMessage == nil
+            (!isEditing
             ? drafts.draftText(chatID: chat.id, threadID: threadID) : editText)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard editingMessage.map(isEditable) ?? interactionContext.canSend else { return false }
+        guard canUseComposer, !isEnteringEdit else { return false }
+        if let session = pendingEditSession {
+            return !isUpdatingMessage && session.isValid
+        }
         if let editingMessage {
             return !isUpdatingMessage
                 && (isComposerComposing
@@ -1066,7 +1274,7 @@ struct ChatDetailView: View {
     }
 
     private func sendSticker(_ sticker: MessageStickerResponse) async -> Bool {
-        guard currentInteractionContext.canSend, editingMessage == nil,
+        guard currentInteractionContext.canSend, !isEditing, !isEnteringEdit,
             outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
         else { return false }
         do {
@@ -1080,7 +1288,7 @@ struct ChatDetailView: View {
     }
 
     private func sendVoice(_ fileURL: URL) async -> Bool {
-        guard currentInteractionContext.canSend, editingMessage == nil,
+        guard currentInteractionContext.canSend, !isEditing, !isEnteringEdit,
             outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
         else { return false }
         do {
@@ -1095,8 +1303,29 @@ struct ChatDetailView: View {
     }
 
     private func submitComposer(_ text: String) async -> Bool {
-        guard editingMessage.map(isEditable) ?? currentInteractionContext.canSend else {
-            return false
+        guard canUseComposer, !isEnteringEdit else { return false }
+        if let session = pendingEditSession {
+            guard session.isValid, !isUpdatingMessage,
+                session.hasChanges(text: text),
+                !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !session.attachments.isEmpty
+            else { return false }
+            isUpdatingMessage = true
+            defer { isUpdatingMessage = false }
+            do {
+                try await outgoingQueue.submitPendingEdit(session, text: text)
+                guard isCurrentSession, pendingEditSession?.id == session.id else { return false }
+                cancelEditing()
+                return true
+            } catch {
+                guard isCurrentSession, pendingEditSession?.id == session.id else { return false }
+                if !session.isValid {
+                    cancelEditing()
+                } else {
+                    editError = error.localizedDescription
+                }
+                return false
+            }
         }
         guard let message = editingMessage else {
             let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID, text: text)
@@ -1107,8 +1336,12 @@ struct ChatDetailView: View {
         guard !isUpdatingMessage else { return false }
         isUpdatingMessage = true
         let submittedText = text
+        let submittedEditIdentity = serverEditIdentity
         let didUpdate = await store.updateMessage(message, text: submittedText)
         guard isCurrentSession, !Task.isCancelled else { return false }
+        guard editingMessage?.id == message.id, pendingEditSession == nil,
+            submittedEditIdentity == serverEditIdentity
+        else { return didUpdate }
         isUpdatingMessage = false
         if didUpdate {
             if editText == submittedText {
@@ -1135,14 +1368,28 @@ struct ChatDetailView: View {
     }
 
     private func startEditing(_ message: MessageResponse) {
-        guard !isUpdatingMessage, isEditable(message) else { return }
-        drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID)
-        editingMessage = message
-        editText = message.message ?? ""
-        replyFocusRequest &+= 1
+        guard !isUpdatingMessage, !isEnteringEdit, isEditable(message) else { return }
+        isEnteringEdit = true
+        editEntryTask = Task {
+            defer { isEnteringEdit = false }
+            do {
+                try await prepareComposerForEditing(discardAttachments: false)
+                guard isCurrentSession, isTimelineVisible, isEditable(message), !Task.isCancelled
+                else { return }
+                cancelEditing()
+                editingMessage = message
+                editText = message.message ?? ""
+                replyFocusRequest &+= 1
+            } catch { editError = error.localizedDescription }
+        }
     }
 
     private func cancelEditing() {
+        serverEditIdentity = UUID()
+        composerAttachments.cancelEditingWork?()
+        if let session = pendingEditSession { outgoingQueue.endPendingEdit(session) }
+        pendingEditSession = nil
+        pendingEditExitGuard.invalidate()
         editingMessage = nil
         editText = ""
         isUpdatingMessage = false
@@ -1160,27 +1407,59 @@ struct ChatDetailView: View {
         return false
     }
 
-    private func changePending(_ pending: PendingOutgoingMessage, revoke: Bool) {
-        guard isCurrentSession, !pending.dispatchClaimed,
-            revoke
-                || ([.text, .file].contains(pending.messageType) && pending.forwardRequest == nil),
-            !drafts.committingDrafts.contains(conversationKey), editingMessage == nil
+    private func startPendingEditing(_ pending: PendingOutgoingMessage) {
+        guard isCurrentSession, currentInteractionContext.canSend,
+            pending.chatID == chat.id, pending.threadID == threadID,
+            pending.messageType == .text, pending.forwardRequest == nil,
+            pending.senderID == model.currentUserID,
+            !isUpdatingMessage, !isEnteringEdit
+        else { return }
+        isEnteringEdit = true
+        editEntryTask = Task {
+            var acquiredSession: PendingEditSession?
+            defer {
+                isEnteringEdit = false
+                if let acquiredSession, pendingEditSession?.id != acquiredSession.id {
+                    outgoingQueue.endPendingEdit(acquiredSession)
+                }
+            }
+            do {
+                let session = try await outgoingQueue.beginPendingEdit(pending)
+                acquiredSession = session
+                guard isCurrentSession, session.isValid, currentInteractionContext.canSend,
+                    !Task.isCancelled
+                else { return }
+                try await prepareComposerForEditing(discardAttachments: true)
+                guard isCurrentSession, isTimelineVisible, currentInteractionContext.canSend,
+                    session.isValid, !Task.isCancelled
+                else { return }
+                cancelEditing()
+                pendingEditSession = session
+                editText = session.initialText
+                replyFocusRequest &+= 1
+            } catch {
+                if isCurrentSession { editError = error.localizedDescription }
+            }
+        }
+    }
+
+    private func cancelPendingMessage(_ pending: PendingOutgoingMessage) {
+        guard isCurrentSession, currentInteractionContext.canWrite,
+            pending.chatID == chat.id, pending.threadID == threadID,
+            pending.senderID == model.currentUserID
         else { return }
         Task {
             do {
-                try await drafts.flushForAttachmentChange(chatID: chat.id, threadID: threadID)
-                guard isCurrentSession, !Task.isCancelled else { return }
-                if revoke {
-                    try await outgoingQueue.revokeTail(
-                        chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID,
-                        expectedRevision: pending.editRevision)
-                } else {
-                    try await outgoingQueue.blockTail(
-                        chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID,
-                        expectedRevision: pending.editRevision)
-                    replyFocusRequest &+= 1
+                guard isCurrentSession, currentInteractionContext.canWrite else { return }
+                try await outgoingQueue.cancelOutgoing(
+                    chatID: chat.id, threadID: threadID, itemID: pending.clientGeneratedID,
+                    expectedRevision: pending.editRevision)
+                if pendingEditSession?.clientGeneratedID == pending.clientGeneratedID {
+                    cancelEditing()
                 }
-            } catch { outboxError = error.localizedDescription }
+            } catch {
+                if isCurrentSession { outboxError = error.localizedDescription }
+            }
         }
     }
 
@@ -1221,4 +1500,17 @@ struct ChatDetailView: View {
         }
     }
 
+}
+
+/// SwiftUI must observe in-memory media checkpoints as well as durable queue snapshots.
+@MainActor
+private final class PendingEditPresentation: ObservableObject {
+    @Published var session: PendingEditSession? {
+        didSet {
+            changes = session?.objectWillChange.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+        }
+    }
+    private var changes: AnyCancellable?
 }

@@ -36,18 +36,45 @@ nonisolated enum GroupInviteLink {
 }
 
 struct CreateGroupView: View {
-    let store: ChatStore
+    @ObservedObject var store: ChatStore
+    @ObservedObject var exitGuard: FormExitGuard
     let onOpenChat: (ChatListItem) -> Void
     @State private var name = ""
     @State private var busy = false
     @State private var completed = false
     @State private var error: String?
+    @State private var exitOwner = UUID()
+    private let accountUID: Int32?
+    private let sessionRevision: Int
+
+    init(store: ChatStore, exitGuard: FormExitGuard, onOpenChat: @escaping (ChatListItem) -> Void) {
+        self.store = store
+        self.exitGuard = exitGuard
+        self.onOpenChat = onOpenChat
+        accountUID = store.currentUserProfile?.uid
+        sessionRevision = store.sessionRevision
+    }
+
+    private var isCurrentSession: Bool {
+        accountUID != nil && store.currentUserProfile?.uid == accountUID
+            && store.sessionRevision == sessionRevision
+    }
+
+    private func updateProtection() {
+        guard isCurrentSession else {
+            exitGuard.unregister(owner: exitOwner)
+            return
+        }
+        exitGuard.update(
+            owner: exitOwner, isDirty: !completed && !name.isEmpty,
+            isSubmitting: busy, accountID: accountUID, sessionRevision: sessionRevision)
+    }
 
     var body: some View {
         Form {
             Section("Group name") {
                 TextField("Name", text: $name)
-                    .disabled(busy || completed)
+                    .disabled(busy || completed || !isCurrentSession)
             }
             if let error { Text(error).foregroundStyle(.red) }
             Button {
@@ -56,112 +83,145 @@ struct CreateGroupView: View {
                 if busy { ProgressView() } else { Text("Create Group") }
             }
             .disabled(
-                name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || completed)
+                name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || completed
+                    || !isCurrentSession)
         }
         .navigationTitle("Create Group")
+        .onChange(of: name.isEmpty, initial: true) { _, _ in updateProtection() }
+        .onChange(of: busy) { _, _ in updateProtection() }
+        .onChange(of: completed) { _, _ in updateProtection() }
+        .onChange(of: store.sessionRevision) { _, _ in updateProtection() }
     }
 
     private func create() async {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !busy, !completed else { return }
+        guard !trimmed.isEmpty, !busy, !completed, isCurrentSession else { return }
         busy = true
+        updateProtection()
         error = nil
-        defer { busy = false }
+        defer {
+            busy = false
+            updateProtection()
+        }
         do {
             let chat = try await store.createGroup(name: trimmed)
+            guard isCurrentSession else { return }
             completed = true
+            busy = false
+            updateProtection()
             onOpenChat(chat)
         } catch is CancellationError {} catch { self.error = error.localizedDescription }
     }
 }
 
 struct JoinGroupView: View {
-    let store: ChatStore
+    @ObservedObject var store: ChatStore
+    @ObservedObject var exitGuard: FormExitGuard
     let onOpenChat: (ChatListItem) -> Void
-    @State private var input: String
-    @State private var preview: GroupInvitePreview?
-    @State private var busy = false
-    @State private var completed = false
-    @State private var error: String?
-    private let initialCode: String
+    @StateObject private var model: JoinGroupModel
+    @State private var exitOwner = UUID()
 
-    init(store: ChatStore, initialCode: String = "", onOpenChat: @escaping (ChatListItem) -> Void) {
+    private struct PreviewLookupIdentity: Hashable {
+        let code: String?
+        let accountUID: Int32?
+        let sessionRevision: Int
+    }
+
+    init(
+        store: ChatStore, exitGuard: FormExitGuard, initialCode: String = "",
+        onOpenChat: @escaping (ChatListItem) -> Void
+    ) {
         self.store = store
-        self.initialCode = initialCode
+        self.exitGuard = exitGuard
         self.onOpenChat = onOpenChat
-        _input = State(initialValue: initialCode)
+        _model = StateObject(wrappedValue: JoinGroupModel(store: store, initialCode: initialCode))
     }
 
     var body: some View {
         Form {
             Section("Invitation") {
-                TextField("Invite code or URL", text: $input)
+                TextField("Invite code or URL", text: $model.input)
                     .autocorrectionDisabled()
-                    .disabled(busy || completed)
-                Button("Preview invitation") { Task { await lookup() } }
-                    .disabled(GroupInviteLink.code(from: input) == nil || busy || completed)
+                    .disabled(model.isSubmitting || model.completed || !model.isCurrentSession)
             }
-            if busy { ProgressView() }
-            if let error { Text(error).foregroundStyle(.red) }
-            if let preview, preview.invite.code == GroupInviteLink.code(from: input) {
+            if model.isLoadingPreview { ProgressView() }
+            if let error = model.error {
+                Section {
+                    Text(error).foregroundStyle(.red)
+                    if model.canRetryPreview {
+                        Button("Retry") { Task { await model.retryPreview() } }
+                            .disabled(model.isLoadingPreview || model.isSubmitting)
+                    }
+                }
+            }
+            if let preview = model.preview, preview.invite.code == model.parsedCode {
                 Section("Group preview") {
                     HStack {
                         AvatarView(
                             url: preview.chat.avatar.flatMap(URL.init(string:)),
-                            displayName: preview.chat.name ?? "Group", diameter: 48)
-                        Text(preview.chat.name ?? "Group")
+                            displayName: preview.chat.name ?? AppLanguage.localized("Group"),
+                            diameter: 48)
+                        Text(preview.chat.name ?? AppLanguage.localized("Group"))
+                    }
+                    if let createdAt = preview.chat.createdAt {
+                        LabeledContent("Group created") {
+                            Text(createdAt, format: .dateTime.year().month(.wide).day())
+                        }
                     }
                     if let description = preview.chat.description, !description.isEmpty {
                         Text(description)
+                            .textSelection(.enabled)
                     }
-                    Text(
-                        preview.alreadyMember ? "You are already a member." : preview.invite.status)
+                    if let mode = preview.chat.speakingMode, mode != .unrestricted {
+                        LabeledContent("Speaking permissions", value: mode.localizedTitle)
+                    }
+                    if preview.alreadyMember { Text("You are already a member.") }
+                    if let status = model.statusTitle {
+                        LabeledContent("Invitation status", value: status)
+                    }
                     if let expiry = preview.invite.expiresAt {
-                        Text("Expires \(expiry.formatted())")
+                        LabeledContent("Expires") {
+                            Text(expiry, format: .dateTime.year().month().day().hour().minute())
+                        }
+                    } else {
+                        Text("This invitation never expires.")
                     }
-                    Button(preview.alreadyMember ? "Open Group" : "Join Group") {
-                        Task { await join(preview) }
-                    }
-                    .disabled(
-                        busy || completed || (!preview.alreadyMember && !preview.invite.isActive))
                 }
             }
+            Button {
+                Task {
+                    if let chat = await model.submit() {
+                        updateProtection()
+                        onOpenChat(chat)
+                    }
+                }
+            } label: {
+                if model.isSubmitting { ProgressView() } else { Text(model.actionTitle) }
+            }
+            .disabled(!model.canSubmit)
         }
         .navigationTitle("Join Group")
-        .onChange(of: input) { _, _ in
-            preview = nil
-            error = nil
+        .onChange(of: model.isDirty, initial: true) { _, _ in updateProtection() }
+        .onChange(of: model.isSubmitting) { _, _ in updateProtection() }
+        .onChange(of: model.completed) { _, _ in updateProtection() }
+        .onChange(of: store.sessionRevision) { _, _ in updateProtection() }
+        .task(
+            id: PreviewLookupIdentity(
+                code: model.parsedCode, accountUID: store.currentUserProfile?.uid,
+                sessionRevision: store.sessionRevision)
+        ) {
+            await model.loadPreview()
         }
-        .task { if !initialCode.isEmpty { await lookup() } }
+        .onDisappear { model.cancel() }
     }
 
-    private func lookup() async {
-        guard !busy, !completed, let code = GroupInviteLink.code(from: input) else { return }
-        busy = true
-        error = nil
-        preview = nil
-        defer { busy = false }
-        do {
-            let response = try await store.previewGroupInvite(code: code)
-            guard GroupInviteLink.code(from: input) == code else { return }
-            preview = response
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
-    }
-
-    private func join(_ preview: GroupInvitePreview) async {
-        guard !busy, !completed, preview.invite.code == GroupInviteLink.code(from: input),
-            preview.alreadyMember || preview.invite.isActive
-        else { return }
-        busy = true
-        error = nil
-        defer { busy = false }
-        do {
-            let chat =
-                preview.alreadyMember
-                ? store.groupChatSnapshot(preview.chat)
-                : try await store.redeemGroupInvite(code: preview.invite.code)
-            completed = true
-            onOpenChat(chat)
-        } catch is CancellationError {} catch { self.error = error.localizedDescription }
+    private func updateProtection() {
+        guard model.isCurrentSession else {
+            exitGuard.unregister(owner: exitOwner)
+            return
+        }
+        exitGuard.update(
+            owner: exitOwner, isDirty: model.isDirty, isSubmitting: model.isSubmitting,
+            accountID: store.currentUserProfile?.uid, sessionRevision: store.sessionRevision)
     }
 }

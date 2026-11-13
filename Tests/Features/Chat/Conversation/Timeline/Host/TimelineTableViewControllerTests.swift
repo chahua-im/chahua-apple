@@ -17,6 +17,218 @@
             TimelineDisplayScheduler.tickSource = .display
         }
 
+        func testAccountDisplayScopeUpdatesMountedDMGroupAndCapturedNativeTimelines() async throws {
+            let suite = "NativeTimelinePreferences.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let preferences = ConversationDisplayPreferences(
+                defaults: defaults, namespace: "native")
+            preferences.activate(uid: 1)
+            preferences.setShowAllAvatars(true, for: 1)
+            preferences.setShowDmDetails(false, for: 1)
+            preferences.activate(uid: 2)
+            preferences.setShowAllAvatars(false, for: 2)
+            preferences.setShowDmDetails(true, for: 2)
+            preferences.activate(uid: 1)
+            func live(_ firstID: UInt64, name: String, isGroup: Bool) throws
+                -> ConversationTimelineModel
+            {
+                let messages = try (0..<2).map {
+                    try TimelineTestFixtures.message(
+                        id: firstID + UInt64($0), chatID: name, senderID: 2, senderName: name,
+                        at: $0, text: "Hi")
+                }
+                let page = ListMessagesResponse(messages: messages)
+                return ConversationTimelineModel(
+                    chatID: name, currentUserID: 1, isGroupChat: isGroup,
+                    source: HistorySource(initial: page, older: page),
+                    messageStore: ConversationMessageStore())
+            }
+            let dm = try live(1, name: "DM", isGroup: false)
+            let group = try live(11, name: "Group", isGroup: true)
+            let saved = try TimelineTestFixtures.capturedPreferenceSnapshot(
+                firstID: 21, name: "Saved")
+            let forwarded = try TimelineTestFixtures.capturedPreferenceSnapshot(
+                firstID: 31, name: "Forwarded")
+            let models = [dm, group, saved.timeline, forwarded.timeline]
+            for model in models { await model.open() }
+            let readOnly = MessageInteractionContext(isReadOnly: true)
+            let root = ConversationDisplayPreferenceScope(preferences: preferences) {
+                VStack(spacing: 0) {
+                    ConversationTimelineView(model: dm, loadsInitialAutomatically: false)
+                    ConversationTimelineView(model: group, loadsInitialAutomatically: false)
+                    ConversationTimelineView(
+                        model: saved.timeline, loadsInitialAutomatically: false,
+                        interactionContext: readOnly)
+                    ConversationTimelineView(
+                        model: forwarded.timeline, loadsInitialAutomatically: false,
+                        interactionContext: readOnly)
+                }
+            }
+            let host = NSHostingController(rootView: root)
+            host.sizingOptions = []
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 1000),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.setContentSize(NSSize(width: 600, height: 1000))
+            window.orderFront(nil)
+            defer {
+                for model in models { model.close() }
+                saved.invalidate()
+                forwarded.invalidate()
+                window.close()
+            }
+            func nativeRows(in view: NSView) -> [TimelineRowView] {
+                (view as? TimelineRowView).map { [$0] }
+                    ?? view.subviews.flatMap { nativeRows(in: $0) }
+            }
+            func assertSurface(
+                firstID: UInt64, details: Bool, dense: Bool,
+                file: StaticString = #filePath, line: UInt = #line
+            ) throws {
+                let bindings = try (0..<2).map { offset in
+                    try XCTUnwrap(
+                        nativeRows(in: host.view).first {
+                            $0.binding?.presentation.row.messageID
+                                == MessageID(firstID + UInt64(offset))
+                        }?.binding, file: file, line: line)
+                }
+                for binding in bindings {
+                    XCTAssertEqual(
+                        binding.presentation.environment.showsMessageDetails, details,
+                        file: file, line: line)
+                    XCTAssertEqual(
+                        binding.presentation.environment.showAllAvatars, dense,
+                        file: file, line: line)
+                    XCTAssertEqual(
+                        binding.presentation.environment.identityLaneWidth == 0, !details,
+                        file: file, line: line)
+                }
+                XCTAssertEqual(
+                    bindings.map { $0.layout.frames[.avatar] != nil },
+                    details ? (dense ? [true, true] : [false, true]) : [false, false],
+                    file: file, line: line)
+                XCTAssertEqual(
+                    bindings.map { $0.layout.frames[.title] != nil },
+                    details ? [true, false] : [false, false], file: file, line: line)
+            }
+            for uid in [Int32(1), 2, 1] {
+                preferences.activate(uid: uid)
+                try await Task.sleep(for: .milliseconds(300))
+                host.view.layoutSubtreeIfNeeded()
+                try assertSurface(firstID: 1, details: uid == 2, dense: uid == 1)
+                for firstID in [UInt64(11), 21, 31] {
+                    try assertSurface(firstID: firstID, details: true, dense: uid == 1)
+                }
+                let bitmap = try XCTUnwrap(
+                    host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+                let capture = XCTAttachment(
+                    data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                    uniformTypeIdentifier: "public.png")
+                capture.name =
+                    "Account \(uid): live DM, group, saved and forwarded native identities"
+                capture.lifetime = .keepAlways
+                add(capture)
+            }
+        }
+
+        func testMiddleClaimedPendingMenuAndIndependentEligibilityRefresh() async throws {
+            let pending = ["first", "middle", "last"].enumerated().map {
+                TimelineTestFixtures.pending(id: $0.element, at: $0.offset, claimed: true)
+            }
+            let store = ConversationMessageStore()
+            store.replacePending(chatID: "chat", with: pending)
+            let page = ListMessagesResponse(messages: [])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: HistorySource(initial: page, older: page), messageStore: store)
+            var actions = TimelineBubbleActions(
+                editablePendingMessageIDs: ["middle"], cancellablePendingMessageIDs: ["middle"],
+                editPendingMessage: { _ in }, cancelPendingMessage: { _ in })
+            let controller = TimelineTableViewController(model: model, actions: actions)
+            controller.view.frame = NSRect(x: 0, y: 0, width: 600, height: 800)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 800),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = controller
+            window.setContentSize(NSSize(width: 600, height: 800))
+            window.orderFront(nil)
+            defer {
+                window.close()
+                model.close()
+            }
+            await model.loadInitial()
+            try await waitForDisplay(controller, model: model)
+            controller.view.layoutSubtreeIfNeeded()
+            func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+                (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+            }
+            func middleBinding() throws -> TimelineRowBinding {
+                try XCTUnwrap(
+                    descendants(TimelineRowView.self, in: controller.view).first {
+                        $0.binding?.presentation.row.stableMessageKey == .clientGenerated("middle")
+                    }?.binding)
+            }
+            let overlay = TimelineActionOverlayView(frame: controller.view.bounds)
+            controller.view.addSubview(overlay)
+            var edits = 0
+            var cancellations = 0
+            overlay.onEditPending = { edits += 1 }
+            overlay.onCancelPending = { cancellations += 1 }
+            func present(_ binding: TimelineRowBinding) throws {
+                guard case .message(let row) = binding.presentation.row else {
+                    XCTFail("Missing pending row")
+                    return
+                }
+                XCTAssertEqual(row.groupPosition, .middle)
+                overlay.configure(
+                    row: row, context: .init(canWrite: true), actions: binding.actions,
+                    sourceRect: CGRect(x: 300, y: 80, width: 220, height: 60))
+                overlay.layoutSubtreeIfNeeded()
+            }
+            func menuButton(_ key: String.LocalizationValue) throws -> NSButton {
+                try XCTUnwrap(
+                    descendants(NSButton.self, in: overlay).first {
+                        $0.accessibilityLabel() == AppLanguage.localized(key)
+                    })
+            }
+            let initial = try middleBinding()
+            XCTAssertEqual(initial.actions.editablePendingMessageIDs, ["middle"])
+            XCTAssertEqual(initial.actions.cancellablePendingMessageIDs, ["middle"])
+            try present(initial)
+            XCTAssertTrue(try menuButton("Edit message").isEnabled)
+            XCTAssertTrue(try menuButton("Recall message").isEnabled)
+            try menuButton("Edit message").performClick(nil)
+            XCTAssertEqual(edits, 1)
+            actions.editablePendingMessageIDs = []
+            controller.actions = actions
+            controller.view.layoutSubtreeIfNeeded()
+            try present(middleBinding())
+            XCTAssertFalse(try menuButton("Edit message").isEnabled)
+            XCTAssertTrue(try menuButton("Recall message").isEnabled)
+            try menuButton("Recall message").performClick(nil)
+            XCTAssertEqual(cancellations, 1)
+            let bitmap = try XCTUnwrap(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+            overlay.cacheDisplay(in: overlay.bounds, to: bitmap)
+            let capture = XCTAttachment(
+                data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+            capture.name = "Claimed middle queued message with independent edit and recall"
+            capture.lifetime = .keepAlways
+            add(capture)
+            actions.editablePendingMessageIDs = ["middle"]
+            actions.cancellablePendingMessageIDs = []
+            controller.actions = actions
+            controller.view.layoutSubtreeIfNeeded()
+            try present(middleBinding())
+            XCTAssertTrue(try menuButton("Edit message").isEnabled)
+            XCTAssertFalse(try menuButton("Recall message").isEnabled)
+        }
+
         func testInspectorContractsTimelineWithoutResizingWindowAndRestoresItsWidth() async throws {
             let state = InspectorState()
             let host = NSHostingController(rootView: InspectorHarness(state: state))

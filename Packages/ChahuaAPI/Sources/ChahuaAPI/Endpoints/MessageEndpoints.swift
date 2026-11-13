@@ -182,7 +182,7 @@ extension ChahuaClient {
         )
     }
 
-    /// Replaces the text of an existing message.
+    /// Replaces text and, when supplied, the complete ordered attachment selection.
     public func updateMessage(
         chatID: String,
         messageID: MessageID,
@@ -230,9 +230,11 @@ extension ChahuaClient {
 }
 public struct UpdateMessageBody: Codable, Hashable, Sendable {
     public let message: String
+    public let attachmentIds: [String]?
 
-    public init(message: String) {
+    public init(message: String, attachmentIds: [String]? = nil) {
         self.message = message
+        self.attachmentIds = attachmentIds
     }
 }
 
