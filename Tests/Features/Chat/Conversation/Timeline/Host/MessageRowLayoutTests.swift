@@ -1,9 +1,16 @@
+import ChahuaAPI
+import SwiftUI
+import XCTest
+
+@testable import chahua_apple
+
 #if os(macOS)
     import AppKit
-    import ChahuaAPI
-    import SwiftUI
-    import XCTest
-    @testable import chahua_apple
+#else
+    import UIKit
+#endif
+
+#if os(macOS)
 
     @MainActor
     final class MessageRowLayoutTests: XCTestCase {
@@ -81,28 +88,30 @@
                 buttons(in: native).first {
                     $0.accessibilityURL()?.absoluteString == destination
                 })
-            func labels(in view: NSView) -> [NSTextField] {
-                (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { labels(in: $0) }
-            }
-            let summary = try XCTUnwrap(
-                labels(in: card).first { $0.stringValue == description })
-            let headline = try XCTUnwrap(
-                labels(in: card).first { $0.stringValue == "Cutting cold start by 40%" })
-            let domain = try XCTUnwrap(
-                labels(in: card).first { $0.stringValue == "example.com" })
-            XCTAssertFalse(summary.isHidden)
-            XCTAssertGreaterThanOrEqual(summary.frame.minY, headline.frame.maxY)
-            XCTAssertGreaterThanOrEqual(domain.frame.minY, summary.frame.maxY)
-            XCTAssertTrue(card.bounds.contains(summary.frame))
-            let font = try XCTUnwrap(summary.font)
-            XCTAssertLessThanOrEqual(
-                summary.frame.height, ceil(font.ascender - font.descender + font.leading) * 3)
+            let painted = try XCTUnwrap(
+                card.subviews.compactMap { $0 as? LinkPreviewFlowTextView }.first)
+            let flow = try XCTUnwrap(painted.flowLayout)
+            XCTAssertTrue(flow === layout.linkPreviewLayouts[0])
+            XCTAssertEqual(painted.bounds.width, flow.width)
+            XCTAssertEqual(card.bounds.height, flow.height + 12)
+            let summary = flow.lineFragments(for: .description)
+            let headline = flow.lineFragments(for: .title)
+            let domain = flow.lineFragments(for: .domain)
+            XCTAssertFalse(summary.isEmpty)
+            XCTAssertGreaterThanOrEqual(
+                try XCTUnwrap(summary.first).minY, try XCTUnwrap(headline.last).maxY)
+            XCTAssertGreaterThanOrEqual(
+                try XCTUnwrap(domain.first).minY, try XCTUnwrap(summary.last).maxY)
+            XCTAssertLessThanOrEqual(summary.count, 3)
+            XCTAssertTrue(summary.contains { $0.width == flow.width })
+            XCTAssertTrue(card.bounds.contains(painted.frame))
             XCTAssertTrue(card.accessibilityLabel()?.contains(description) == true)
-            XCTAssertEqual(layout.linkPreviewFrames[1].height, layout.linkPreviewFrames[2].height)
+            XCTAssertGreaterThanOrEqual(
+                layout.linkPreviewFrames[1].height, layout.linkPreviewFrames[2].height)
             // Inspect painted glyphs, not just the allocated multiline rectangle.
             let scale: CGFloat = 2
-            let width = Int(ceil(summary.bounds.width * scale))
-            let height = Int(ceil(summary.bounds.height * scale))
+            let width = Int(ceil(painted.bounds.width * scale))
+            let height = Int(ceil(painted.bounds.height * scale))
             let context = try XCTUnwrap(
                 CGContext(
                     data: nil, width: width, height: height, bitsPerComponent: 8,
@@ -110,12 +119,12 @@
                     bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
                         | CGImageAlphaInfo.premultipliedLast.rawValue))
             context.clear(CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-            let cell = try XCTUnwrap(summary.cell)
             context.translateBy(x: 0, y: CGFloat(height))
             context.scaleBy(x: scale, y: -scale)
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
-            cell.drawInterior(withFrame: summary.bounds, in: summary)
+            context.clip(to: summary.reduce(CGRect.null) { $0.union($1) })
+            flow.draw(foregroundColor: .black, secondaryColor: .black)
             NSGraphicsContext.restoreGraphicsState()
             let pixels = try XCTUnwrap(context.data).assumingMemoryBound(to: UInt8.self)
             var paintedLines = 0
@@ -143,7 +152,7 @@
             add(attachment)
             _ = bind(message, outgoing: true)
             native.layoutSubtreeIfNeeded()
-            XCTAssertFalse(summary.isHidden)
+            XCTAssertFalse(painted.isHidden)
             let text = try XCTUnwrap(messageText(in: native))
             XCTAssertGreaterThanOrEqual(
                 native.convert(card.bounds, from: card).minY,
@@ -167,7 +176,8 @@
                 ])
             _ = bind(compact, outgoing: false)
             native.layoutSubtreeIfNeeded()
-            XCTAssertTrue(summary.isHidden)
+            XCTAssertTrue(
+                try XCTUnwrap(painted.flowLayout).lineFragments(for: .description).isEmpty)
             XCTAssertLessThan(card.frame.height, describedHeight)
             let plain = try TimelineTestFixtures.message(id: 2, at: 2, text: "No preview")
             let plainLayout = bind(plain, outgoing: false)
@@ -664,3 +674,163 @@
     }
 
 #endif
+
+@MainActor
+final class NativeLinkPreviewFlowTests: XCTestCase {
+    func testTextKitReclaimsThumbnailColumnAndKeepsCompleteDomain() throws {
+        for rtl in [false, true] {
+            for scale: CGFloat in [1, 2] {
+                let flow = LinkPreviewFlowLayout(
+                    title: "Article",
+                    description: String(
+                        repeating:
+                            "A description wraps beside the tile and then uses the full card. ",
+                        count: 8),
+                    domain: String(repeating: "long-subdomain.", count: 8) + "example.com",
+                    width: 220 * scale,
+                    titleFont: .systemFont(ofSize: 14 * scale, weight: .semibold),
+                    descriptionFont: .systemFont(ofSize: 13 * scale),
+                    domainFont: .systemFont(ofSize: 12 * scale),
+                    thumbnailSize: 36 * scale, gap: 8 * scale, rightToLeft: rtl,
+                    sectionSpacing: 2 * scale)
+                let summary = flow.lineFragments(for: .description)
+                XCTAssertEqual(summary.count, 3)
+                let beside = summary.filter { $0.minY < flow.thumbnailFrame.maxY }
+                let below = summary.filter { $0.minY >= flow.thumbnailFrame.maxY }
+                XCTAssertFalse(beside.isEmpty)
+                XCTAssertFalse(below.isEmpty)
+                for fragment in beside {
+                    if rtl {
+                        XCTAssertLessThanOrEqual(
+                            fragment.maxX, flow.thumbnailFrame.minX - 8 * scale)
+                    } else {
+                        XCTAssertGreaterThanOrEqual(
+                            fragment.minX, flow.thumbnailFrame.maxX + 8 * scale)
+                    }
+                    XCTAssertLessThan(fragment.width, flow.width)
+                }
+                for fragment in below {
+                    XCTAssertEqual(fragment.minX, 0, accuracy: 0.01)
+                    XCTAssertEqual(fragment.width, flow.width, accuracy: 0.01)
+                }
+                let domain = flow.lineFragments(for: .domain)
+                XCTAssertGreaterThan(
+                    domain.count, 1, "The domain must wrap, not silently truncate.")
+                XCTAssertGreaterThanOrEqual(
+                    try XCTUnwrap(domain.first).minY, try XCTUnwrap(summary.last).maxY)
+                XCTAssertGreaterThanOrEqual(flow.height, try XCTUnwrap(domain.last).maxY)
+                XCTAssertLessThan(flow.height - (try XCTUnwrap(domain.last).maxY), 1)
+            }
+        }
+    }
+
+    func testCachedNativeFlowMatchesRowGeometryAndInvalidatesWithDescription() throws {
+        let cache = TimelineLayoutCache()
+        func presentation(_ description: String, environment: TimelineLayoutEnvironment) throws
+            -> TimelineRowPresentation
+        {
+            let message = try TimelineTestFixtures.message(
+                id: 1, at: 1, text: "Read https://example.com/article",
+                fields: [
+                    "metadata": [
+                        "linkPreviews": [
+                            [
+                                "url": "https://example.com/article", "status": "ready",
+                                "title": "Article", "description": description,
+                            ]
+                        ]
+                    ]
+                ])
+            return TimelineRowPresentation.make(
+                row: .message(
+                    .init(
+                        entry: .remote(message), isOutgoing: false, groupPosition: .single,
+                        showsSenderName: false)),
+                currentUserID: 1, isThreadTimeline: false, environment: environment)
+        }
+        for width: CGFloat in [321.25, 420] {
+            let environment = TimelineLayoutEnvironment.current(timelineWidth: width)
+            let content = try presentation(
+                String(
+                    repeating: "The description reclaims the full width below the tile. ", count: 4),
+                environment: environment)
+            let layout = cache.layout(for: content, environment: environment)
+            let flow = try XCTUnwrap(layout.linkPreviewLayouts.first.flatMap { $0 })
+            let frame = try XCTUnwrap(layout.linkPreviewFrames.first)
+            XCTAssertEqual(frame.width, flow.width + 20)
+            XCTAssertEqual(frame.height, flow.height + 12)
+            let cached = cache.layout(for: content, environment: environment)
+            XCTAssertTrue(flow === cached.linkPreviewLayouts[0])
+            let changed = try presentation("Short", environment: environment)
+            let revised = cache.layout(for: changed, environment: environment)
+            XCTAssertFalse(flow === revised.linkPreviewLayouts[0])
+            XCTAssertLessThan(try XCTUnwrap(revised.linkPreviewFrames.first).height, frame.height)
+        }
+    }
+
+    #if os(iOS)
+        func testNativeIOSFlowDrawsCachedGeometryAndCapturesRecoveredWidth() throws {
+            let description = String(
+                repeating: "Description wraps beside the tile and continues across the full card. ",
+                count: 3)
+            let message = try TimelineTestFixtures.message(
+                id: 1, at: 1, text: "Worth reading https://example.com/article",
+                fields: [
+                    "metadata": [
+                        "linkPreviews": [
+                            [
+                                "url": "https://example.com/article", "status": "ready",
+                                "title": "Article", "description": description,
+                            ]
+                        ]
+                    ]
+                ])
+            let environment = TimelineLayoutEnvironment.current(timelineWidth: 420)
+            let presentation = TimelineRowPresentation.make(
+                row: .message(
+                    .init(
+                        entry: .remote(message), isOutgoing: false, groupPosition: .single,
+                        showsSenderName: false)),
+                currentUserID: 1, isThreadTimeline: false, environment: environment)
+            let layout = TimelineLayoutCache().layout(for: presentation, environment: environment)
+            let native = TimelineRowView(frame: CGRect(origin: .zero, size: layout.size))
+            native.bind(
+                .init(
+                    presentation: presentation, layout: layout,
+                    context: .init(currentUserID: 1), actions: .init(), mediaContext: nil))
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            let controller = UIViewController()
+            window.rootViewController = controller
+            controller.view.addSubview(native)
+            window.makeKeyAndVisible()
+            defer {
+                native.setVisible(false)
+                window.isHidden = true
+                previousKeyWindow?.makeKey()
+            }
+            native.setVisible(true)
+            controller.view.layoutIfNeeded()
+            native.layoutIfNeeded()
+            func textSurface(in view: UIView) -> LinkPreviewFlowTextView? {
+                if let text = view as? LinkPreviewFlowTextView { return text }
+                return view.subviews.lazy.compactMap { textSurface(in: $0) }.first
+            }
+            let text = try XCTUnwrap(textSurface(in: native))
+            let flow = try XCTUnwrap(text.flowLayout)
+            XCTAssertTrue(flow === layout.linkPreviewLayouts[0])
+            XCTAssertEqual(text.bounds.width, flow.width)
+            XCTAssertEqual(text.bounds.height, flow.height)
+            XCTAssertEqual(try XCTUnwrap(text.superview).bounds.height, flow.height + 12)
+            XCTAssertTrue(flow.lineFragments(for: .description).contains { $0.minX == 0 })
+            let attachment = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: native.bounds).image { _ in
+                    native.drawHierarchy(in: native.bounds, afterScreenUpdates: true)
+                })
+            attachment.name = "Native iOS timeline link preview — recovered thumbnail column"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    #endif
+}

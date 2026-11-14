@@ -454,8 +454,8 @@
                 $0.offsetBy(dx: -bubble.minX, dy: -bubble.minY)
             }
             let previews = binding.presentation.linkPreviews
-            let descriptionHeights = binding.layout.linkPreviewDescriptionHeights
-            let count = min(linkPreviewFrames.count, previews.count, descriptionHeights.count)
+            let flowLayouts = binding.layout.linkPreviewLayouts
+            let count = min(linkPreviewFrames.count, previews.count, flowLayouts.count)
             while linkPreviewViews.count < count {
                 let view = TimelineLinkPreviewView(frame: .zero)
                 sections.addSubview(view)
@@ -472,7 +472,7 @@
                     previews[index], outgoing: row.isOutgoing,
                     bodySize: binding.presentation.environment.bodySize,
                     captionSize: binding.presentation.environment.captionSize,
-                    descriptionHeight: descriptionHeights[index],
+                    flowLayout: flowLayouts[index],
                     displayScale: binding.presentation.environment.displayScale,
                     rightToLeft: binding.presentation.environment.layoutDirection == .rightToLeft,
                     mediaContext: binding.mediaContext,
@@ -590,9 +590,7 @@
     @MainActor
     private final class TimelineLinkPreviewView: NSButton {
         var onActivate: ((URL) -> Void)?
-        private let headline = BubbleLabel()
-        private let descriptionLabel = BubbleLabel()
-        private let domain = BubbleLabel()
+        private let textView = LinkPreviewFlowTextView(frame: .zero)
         private let initial = BubbleLabel()
         private let imageView = TimelineImageView(frame: .zero)
         private let stripe = CALayer()
@@ -605,7 +603,8 @@
         private var outgoing = false
         private var pending = false
         private var thumbnailSize: CGFloat = 36
-        private var descriptionHeight: CGFloat = 0
+        private var titleHeight: CGFloat = 0
+        private var domainHeight: CGFloat = 0
         private var rightToLeft = false
 
         override var isFlipped: Bool { true }
@@ -634,17 +633,7 @@
             imageView.layer?.cornerRadius = 4
             addSubview(initial)
             addSubview(imageView)
-            addSubview(headline)
-            // The zero-inset cell draws attributed text directly. Its paragraph
-            // must wrap; drawing options truncate only the last visible line.
-            descriptionLabel.maximumNumberOfLines = TimelineLinkPreviewMetrics.descriptionLineLimit
-            descriptionLabel.cell?.usesSingleLineMode = false
-            descriptionLabel.cell?.wraps = true
-            descriptionLabel.cell?.isScrollable = false
-            descriptionLabel.lineBreakMode = .byWordWrapping
-            descriptionLabel.isHidden = true
-            addSubview(descriptionLabel)
-            addSubview(domain)
+            addSubview(textView)
             setAccessibilityRole(.link)
         }
 
@@ -652,7 +641,7 @@
 
         func configure(
             _ preview: MessageLinkPreview, outgoing: Bool, bodySize: CGFloat,
-            captionSize: CGFloat, descriptionHeight: CGFloat, displayScale: CGFloat,
+            captionSize: CGFloat, flowLayout: LinkPreviewFlowLayout?, displayScale: CGFloat,
             rightToLeft: Bool,
             mediaContext: AppMediaContext?, enabled: Bool
         ) {
@@ -660,26 +649,16 @@
             self.outgoing = outgoing
             self.rightToLeft = rightToLeft
             pending = preview.status == .pending
-            self.descriptionHeight = pending ? 0 : descriptionHeight
-            descriptionLabel.stringValue =
-                self.descriptionHeight > 0 ? preview.description ?? "" : ""
-            descriptionLabel.isHidden = self.descriptionHeight <= 0
+            textView.flowLayout = flowLayout
+            textView.isHidden = pending
             thumbnailSize = TimelineLinkPreviewMetrics.thumbnailSize(bodySize: bodySize)
             let hostname = url?.host ?? preview.url
-            headline.stringValue = preview.title.flatMap { $0.isEmpty ? nil : $0 } ?? hostname
-            domain.stringValue = hostname
             initial.stringValue = hostname.first.map { String($0).uppercased() } ?? "?"
-            headline.font = .systemFont(ofSize: bodySize * 0.875, weight: .semibold)
-            descriptionLabel.font = .systemFont(
-                ofSize: TimelineLinkPreviewMetrics.descriptionFontSize(bodySize: bodySize))
-            domain.font = .systemFont(ofSize: captionSize)
+            titleHeight = lineHeight(.systemFont(ofSize: bodySize * 0.875, weight: .semibold))
+            domainHeight = lineHeight(.systemFont(ofSize: captionSize))
             initial.font = .systemFont(ofSize: bodySize, weight: .semibold)
             initial.alignment = .center
-            headline.alignment = rightToLeft ? .right : .left
-            descriptionLabel.alignment = rightToLeft ? .right : .left
-            domain.alignment = rightToLeft ? .right : .left
-            headline.isHidden = pending
-            domain.isHidden = pending
+            let headline = preview.title.flatMap { $0.isEmpty ? nil : $0 } ?? hostname
             initial.isHidden = pending || imageAvailable
             titleSkeleton.isHidden = !pending
             domainSkeleton.isHidden = !pending
@@ -710,9 +689,8 @@
             setAccessibilityLabel(
                 pending
                     ? "Loading link preview, \(hostname)"
-                    : descriptionLabel.isHidden
-                        ? "\(headline.stringValue), \(hostname)"
-                        : "\(headline.stringValue), \(descriptionLabel.stringValue), \(hostname)")
+                    : [headline, preview.description, hostname].compactMap { $0 }.joined(
+                        separator: ", "))
             setAccessibilityURL(url)
             updateColors()
             window?.invalidateCursorRects(for: self)
@@ -730,12 +708,7 @@
             onActivate = nil
             isEnabled = false
             imageView.clear()
-            headline.stringValue = ""
-            descriptionLabel.stringValue = ""
-            descriptionLabel.isHidden = true
-            descriptionLabel.frame = .zero
-            descriptionHeight = 0
-            domain.stringValue = ""
+            textView.flowLayout = nil
             initial.stringValue = ""
             setAccessibilityLabel(nil)
             setAccessibilityURL(nil)
@@ -744,34 +717,24 @@
         override func layout() {
             super.layout()
             stripe.frame = CGRect(x: 0, y: 0, width: min(3, bounds.width), height: bounds.height)
+            textView.frame = CGRect(
+                x: 10, y: 6, width: max(0, bounds.width - 20),
+                height: textView.flowLayout?.height ?? 0)
             let size = min(thumbnailSize, max(0, bounds.height - 12), max(0, bounds.width - 20))
-            let thumbnail = CGRect(
-                x: rightToLeft ? bounds.width - 10 - size : 10,
-                y: descriptionHeight > 0 ? 6 : (bounds.height - size) / 2,
-                width: size, height: size)
+            let thumbnail =
+                textView.flowLayout?.thumbnailFrame.offsetBy(dx: 10, dy: 6)
+                ?? CGRect(
+                    x: rightToLeft ? bounds.width - 10 - size : 10,
+                    y: (bounds.height - size) / 2, width: size, height: size)
             tile.frame = thumbnail
             imageView.frame = thumbnail
             let initialHeight = lineHeight(initial.font)
             initial.frame = CGRect(
                 x: thumbnail.minX, y: thumbnail.midY - initialHeight / 2,
-                width: size, height: initialHeight)
+                width: thumbnail.width, height: initialHeight)
             let textX: CGFloat = rightToLeft ? 10 : thumbnail.maxX + 8
             let textWidth = max(0, bounds.width - size - 28)
-            let titleHeight = lineHeight(headline.font)
-            let domainHeight = lineHeight(domain.font)
-            let textY = descriptionHeight > 0 ? 6 : (bounds.height - titleHeight - domainHeight) / 2
-            headline.frame = CGRect(
-                x: textX, y: textY, width: textWidth, height: titleHeight)
-            descriptionLabel.frame =
-                descriptionHeight > 0
-                ? CGRect(
-                    x: textX, y: textY + titleHeight + 2,
-                    width: textWidth, height: descriptionHeight)
-                : .zero
-            domain.frame = CGRect(
-                x: textX,
-                y: textY + titleHeight + (descriptionHeight > 0 ? descriptionHeight + 4 : 0),
-                width: textWidth, height: domainHeight)
+            let textY = (bounds.height - titleHeight - domainHeight) / 2
             let titleWidth = textWidth * 0.76
             let domainWidth = textWidth * 0.46
             titleSkeleton.frame = CGRect(
@@ -811,9 +774,9 @@
         private func updateColors() {
             effectiveAppearance.performAsCurrentDrawingAppearance {
                 let foreground: NSColor = outgoing ? .white : .labelColor
-                headline.textColor = foreground
-                descriptionLabel.textColor = foreground
-                domain.textColor = outgoing ? .white.withAlphaComponent(0.8) : .secondaryLabelColor
+                textView.foregroundColor = foreground
+                textView.secondaryColor =
+                    outgoing ? .white.withAlphaComponent(0.8) : .secondaryLabelColor
                 initial.textColor = .white
                 stripe.backgroundColor =
                     (outgoing ? NSColor.white.withAlphaComponent(0.55) : .systemBlue).cgColor

@@ -103,13 +103,19 @@
             guard let tableView, let window = tableView.window, event.window === window,
                 !tableView.isHiddenOrHasHiddenAncestor
             else { return event }
-            // Intercept neither primary selection nor secondary context gestures
-            // belonging to a code-copy control, even when the control is disabled.
-            if let content = window.contentView {
-                let point =
-                    content.superview?.convert(event.locationInWindow, from: nil)
-                    ?? event.locationInWindow
-                var target = content.hitTest(point)
+            // SwiftUI hit-testing modifiers do not suppress this AppKit monitor.
+            // Only intercept the actual timeline hit, never coordinates underneath
+            // a full-window media viewer or another overlay.
+            guard let content = window.contentView else { return event }
+            let hitTestPoint =
+                content.superview?.convert(event.locationInWindow, from: nil)
+                ?? event.locationInWindow
+            guard let hit = content.hitTest(hitTestPoint),
+                hit === tableView || hit.isDescendant(of: tableView)
+            else { return event }
+            // Code-copy controls keep their native selection/context behavior.
+            do {
+                var target: NSView? = hit
                 while let view = target {
                     if view is MessageCodeCopyButton { return event }
                     target = view.superview

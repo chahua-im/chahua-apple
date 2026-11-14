@@ -127,26 +127,13 @@ private struct DraftLinkPreviewCard: View {
     var body: some View {
         if let url = URL(string: preview.url) {
             Link(destination: url) {
-                HStack(alignment: .top, spacing: 10) {
-                    if let image = preview.image {
-                        DraftLinkPreviewThumbnail(source: image.url)
-                            .frame(width: 60, height: 60)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(
-                            preview.title.flatMap { $0.isEmpty ? nil : $0 } ?? url.host
-                                ?? preview.url
-                        )
-                        .font(.callout.weight(.semibold)).lineLimit(2)
-                        if let description = preview.description, !description.isEmpty {
-                            Text(description).font(.caption).lineLimit(3)
-                        }
-                        Text(url.host ?? preview.url).font(.caption).foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .foregroundStyle(.primary)
+                DraftLinkPreviewFlow(
+                    title: preview.title.flatMap { $0.isEmpty ? nil : $0 } ?? url.host
+                        ?? preview.url,
+                    description: preview.description,
+                    domain: url.host ?? preview.url,
+                    thumbnailSource: preview.image?.url
+                )
                 .padding(10)
                 .background(
                     ChahuaTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 10)
@@ -160,7 +147,7 @@ private struct DraftLinkPreviewCard: View {
     }
 }
 
-private struct DraftLinkPreviewThumbnail: View {
+struct DraftLinkPreviewThumbnail: View {
     let source: String
     @State private var decodedImage: CGImage?
 

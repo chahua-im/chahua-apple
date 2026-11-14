@@ -1,3 +1,4 @@
+import ChahuaAPI
 import CoreGraphics
 import Foundation
 
@@ -15,33 +16,37 @@ enum TimelineLinkPreviewMetrics {
         bodySize * 13 / 17
     }
 
-    /// Measure once with the row, not when native cards scroll or images arrive.
-    static func descriptionHeight(
-        _ text: String?, cardWidth: CGFloat, bodySize: CGFloat
-    ) -> CGFloat {
-        guard let text, text.contains(where: { !$0.isWhitespace }) else { return 0 }
-        let width = max(0, cardWidth - thumbnailSize(bodySize: bodySize) - 29)
-        guard width > 0 else { return 0 }
-        let font = BubbleNativeFont.systemFont(ofSize: descriptionFontSize(bodySize: bodySize))
-        let lineHeight = ceil(font.ascender - font.descender + font.leading)
-        let maximumHeight = lineHeight * CGFloat(descriptionLineLimit)
-        let measured = NSAttributedString(string: text, attributes: [.font: font]).boundingRect(
-            with: CGSize(width: width, height: maximumHeight),
-            options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-        return ceil(min(maximumHeight, measured.height))
+    /// This graph is retained in the row cache and consumed directly by both native hosts.
+    static func layout(
+        _ preview: MessageLinkPreview, cardWidth: CGFloat, bodySize: CGFloat,
+        captionSize: CGFloat, rightToLeft: Bool
+    ) -> LinkPreviewFlowLayout? {
+        guard preview.status == .ready else { return nil }
+        let domain = URL(string: preview.url)?.host ?? preview.url
+        let title = preview.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if os(macOS)
+            let titleSize = bodySize * 0.875
+        #else
+            let titleSize = bodySize * 14 / 17
+        #endif
+        return LinkPreviewFlowLayout(
+            title: title?.isEmpty == false ? title! : domain,
+            description: preview.description, domain: domain, width: max(1, cardWidth - 20),
+            titleFont: .systemFont(ofSize: titleSize, weight: .semibold),
+            descriptionFont: .systemFont(ofSize: descriptionFontSize(bodySize: bodySize)),
+            domainFont: .systemFont(ofSize: captionSize),
+            thumbnailSize: thumbnailSize(bodySize: bodySize), rightToLeft: rightToLeft,
+            descriptionLineLimit: descriptionLineLimit)
     }
 
     static func thumbnailSize(bodySize: CGFloat) -> CGFloat {
         36 * max(1, bodySize / 17)
     }
 
-    static func height(
-        bodySize: CGFloat, captionSize: CGFloat, descriptionHeight: CGFloat = 0
-    ) -> CGFloat {
-        let compact =
-            max(
-                thumbnailSize(bodySize: bodySize),
-                ceil(bodySize * 0.875 * 1.2 + captionSize * 1.2 + 2)) + 12
-        return compact + (descriptionHeight > 0 ? descriptionHeight + 4 : 0)
+    /// Keep the pre-existing pending skeleton extent; image completion never affects it.
+    static func pendingHeight(bodySize: CGFloat, captionSize: CGFloat) -> CGFloat {
+        max(
+            thumbnailSize(bodySize: bodySize),
+            ceil(bodySize * 0.875 * 1.2 + captionSize * 1.2 + 2)) + 12
     }
 }

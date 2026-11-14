@@ -18,7 +18,7 @@ struct TimelineRowLayout {
     var originalReplyContentFrames: [CGRect] = []
     var forwardedCardLayout: TimelineForwardedCardLayout?
     var linkPreviewFrames: [CGRect] = []
-    var linkPreviewDescriptionHeights: [CGFloat] = []
+    var linkPreviewLayouts: [LinkPreviewFlowLayout?] = []
     var standaloneSymbolSize: CGSize = .zero
     var standaloneLabelGap: CGFloat = 0
     /// Footer-local icon, reply label and trailing chevron rectangles.

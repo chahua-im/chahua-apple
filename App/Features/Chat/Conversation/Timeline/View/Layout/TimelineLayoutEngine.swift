@@ -358,25 +358,26 @@ struct TimelineLayoutEngine {
             height += frames[.standalone]!.height + 8
         }
         var linkPreviewFrames: [CGRect] = []
-        var linkPreviewDescriptionHeights: [CGFloat] = []
+        var linkPreviewLayouts: [LinkPreviewFlowLayout?] = []
         // Both native hosts place link cards after the message's text section.
         if !p.linkPreviews.isEmpty {
             if height == 0 { height += 8 }
             if hasMedia && !hasBody { height += 6 }
             let start = height
             for preview in p.linkPreviews {
-                let descriptionHeight = pixel(
-                    TimelineLinkPreviewMetrics.descriptionHeight(
-                        preview.status == .ready ? preview.description : nil,
-                        cardWidth: innerWidth, bodySize: e.bodySize), e)
-                linkPreviewDescriptionHeights.append(descriptionHeight)
+                // Use the final pixel-aligned card width for measurement and drawing.
+                let cardWidth = pixel(innerWidth, e)
+                let flow = TimelineLinkPreviewMetrics.layout(
+                    preview, cardWidth: cardWidth, bodySize: e.bodySize,
+                    captionSize: e.captionSize, rightToLeft: e.layoutDirection == .rightToLeft)
+                linkPreviewLayouts.append(flow)
                 let cardHeight = pixel(
-                    TimelineLinkPreviewMetrics.height(
-                        bodySize: e.bodySize, captionSize: e.captionSize,
-                        descriptionHeight: descriptionHeight), e)
+                    flow.map { $0.height + 12 }
+                        ?? TimelineLinkPreviewMetrics.pendingHeight(
+                            bodySize: e.bodySize, captionSize: e.captionSize), e)
                 linkPreviewFrames.append(
                     CGRect(
-                        x: bubbleX + inset, y: bubbleY + height, width: innerWidth,
+                        x: bubbleX + inset, y: bubbleY + height, width: cardWidth,
                         height: cardHeight))
                 height += cardHeight + 4
             }
@@ -498,7 +499,7 @@ struct TimelineLayoutEngine {
             originalReplyContentFrames: originalReplyContentFrames,
             forwardedCardLayout: forwardedCardLayout,
             linkPreviewFrames: linkPreviewFrames.map { rounded($0, e) },
-            linkPreviewDescriptionHeights: linkPreviewDescriptionHeights,
+            linkPreviewLayouts: linkPreviewLayouts,
             standaloneSymbolSize: displayedSymbolSize,
             standaloneLabelGap: standaloneGap, threadContentFrames: threadContentFrames)
     }

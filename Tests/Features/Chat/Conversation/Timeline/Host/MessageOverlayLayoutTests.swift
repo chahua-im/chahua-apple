@@ -7,6 +7,83 @@
 
     @MainActor
     final class MessageOverlayLayoutTests: XCTestCase {
+        func testImageViewerBlocksMessageContextClicksUntilDismissed() async throws {
+            let previousTickSource = TimelineDisplayScheduler.tickSource
+            TimelineDisplayScheduler.tickSource = .runLoop
+            defer { TimelineDisplayScheduler.tickSource = previousTickSource }
+            let message = try TimelineTestFixtures.message(
+                id: 1, senderID: 2, at: 0, text: "The original message behind the viewer")
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: true,
+                source: OverlayPageSource(page: try TimelineTestFixtures.page([message])),
+                messageStore: ConversationMessageStore())
+            await model.loadInitial()
+            let host = NSHostingController(
+                rootView: ConversationTimelineView(
+                    model: model, loadsInitialAutomatically: false,
+                    interactionContext: .init(canWrite: true, isAdmin: true)
+                ).modifier(TimelineInteractionOverlayRoot()))
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = host
+            window.setContentSize(CGSize(width: 800, height: 600))
+            host.view.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                window.contentViewController = nil
+                window.close()
+            }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while textViews(in: host.view).isEmpty, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+                host.view.layoutSubtreeIfNeeded()
+            }
+            let text = try XCTUnwrap(textViews(in: host.view).first)
+            let clickPoint = text.convert(
+                CGPoint(x: text.bounds.midX, y: text.bounds.midY), to: nil)
+            let gallery = try XCTUnwrap(
+                MessageImageGallery(
+                    messageID: "image",
+                    items: [
+                        .init(
+                            id: "image", url: nil, contentType: "image/png",
+                            fileName: "image.png", width: 16, height: 16)
+                    ],
+                    selectedID: "image"))
+            let viewer = MessageImageDetailMacView(
+                gallery: gallery, mediaContext: nil, onDismiss: {})
+            viewer.frame = host.view.bounds
+            host.view.addSubview(viewer)
+            viewer.layoutSubtreeIfNeeded()
+            defer { viewer.invalidate() }
+            func click(_ type: NSEvent.EventType, modifiers: NSEvent.ModifierFlags = []) throws {
+                let event = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: type, location: clickPoint, modifierFlags: modifiers,
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                        clickCount: 1, pressure: 1))
+                NSApp.postEvent(event, atStart: false)
+            }
+            let frame = try XCTUnwrap(window.contentView?.superview)
+            let copyLabel = MessageMenuAction.copy.label(hasAttachments: false)
+            for (type, modifiers) in [
+                (NSEvent.EventType.rightMouseDown, NSEvent.ModifierFlags()),
+                (.leftMouseDown, .control),
+            ] {
+                try click(type, modifiers: modifiers)
+                try await Task.sleep(for: .milliseconds(100))
+                XCTAssertFalse(buttons(in: frame).contains { $0.accessibilityLabel() == copyLabel })
+            }
+            viewer.invalidate()
+            viewer.removeFromSuperview()
+            try click(.rightMouseDown)
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(buttons(in: frame).contains { $0.accessibilityLabel() == copyLabel })
+        }
+
         func testMenuKeepsMessageInPlaceAndDismissesOnOutsideClick() async throws {
             let previousTickSource = TimelineDisplayScheduler.tickSource
             TimelineDisplayScheduler.tickSource = .runLoop
