@@ -87,10 +87,9 @@ final class RealtimeCoordinator: ObservableObject {
         ).sink { [weak self] _ in
             self?.schedulePresenceWatch()
         }
-        conversationObservation = Publishers.Merge3(
+        conversationObservation = Publishers.Merge(
             store.conversationStateScopeChanges.map { false },
-            store.conversationWatchInvalidations.map { true },
-            store.backBadgeWatchChanges.map { true }
+            store.conversationWatchInvalidations.map { true }
         ).sink { [weak self] includeUnread in
             self?.scheduleConversationWatches(includeUnread: includeUnread)
         }
@@ -295,7 +294,7 @@ final class RealtimeCoordinator: ObservableObject {
                     let appBadge = active
                 #endif
                 self.enqueuePresence(
-                    .unread(requestID, active ? self.store.conversationUnreadViews : [], appBadge),
+                    .unread(requestID, active ? ChatStore.unreadSummaryViews : [], appBadge),
                     on: socket, generation: self.generation, attempt: self.attempt)
             }
             self.nextConversationRequestID &+= 1

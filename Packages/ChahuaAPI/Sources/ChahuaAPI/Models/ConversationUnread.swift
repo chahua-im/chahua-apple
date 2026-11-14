@@ -107,15 +107,20 @@ public struct ConversationUnreadPayload: Codable, Hashable, Sendable {
     public let full: Bool
     public let summaries: [ConversationUnreadSummary]
     public let appBadgeCount: Int64?
+    /// Eligible unread main chats, independent of watched views or navigation.
+    /// When present, replaces the entire set (including []); omitted partials retain it,
+    /// while an omitted full snapshot makes the set unknown.
+    public let unreadChatIds: [String]?
 
     public init(
         requestId: UInt32, full: Bool, summaries: [ConversationUnreadSummary],
-        appBadgeCount: Int64? = nil
+        appBadgeCount: Int64? = nil, unreadChatIds: [String]? = nil
     ) {
         self.requestId = requestId
         self.full = full
         self.summaries = summaries
         self.appBadgeCount = appBadgeCount
+        self.unreadChatIds = unreadChatIds
     }
 }
 

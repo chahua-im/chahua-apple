@@ -343,9 +343,6 @@ struct AuthenticatedShell: View {
             reportVisibleConversation()
         }
         .onChange(of: visibleConversation) { _, _ in reportVisibleConversation() }
-        .onChange(of: backBadgeExclusionChatID) { _, chatID in
-            chatStore.setBackBadgeExclusion(chatID: chatID, for: notificationSceneID)
-        }
         .onChange(of: headerThreadKey, initial: true) { _, key in
             guard threadSubscription?.key != key else { return }
             threadSubscription = key.flatMap { key in
@@ -359,7 +356,6 @@ struct AuthenticatedShell: View {
             navigationActions.clear()
             isVisible = false
             notifications.setVisibleConversation(sceneID: notificationSceneID, conversation: nil)
-            chatStore.removeBackBadgeExclusion(for: notificationSceneID)
         }
         .sheet(
             isPresented: Binding(
@@ -1438,11 +1434,6 @@ struct AuthenticatedShell: View {
             ?? selectedConversationID?.chatID
     }
 
-    private var backBadgeExclusionChatID: String? {
-        guard isVisible, scenePhase == .active, !isSigningOut else { return nil }
-        return backBadgeChatID
-    }
-
     private var headerSubtitle: String? {
         ChatPresenceDisplay.subtitle(for: selectedInfoChat, in: chatStore.state)
     }
@@ -1466,8 +1457,6 @@ struct AuthenticatedShell: View {
     private func reportVisibleConversation() {
         notifications.setVisibleConversation(
             sceneID: notificationSceneID, conversation: visibleConversation)
-        chatStore.setBackBadgeExclusion(
-            chatID: backBadgeExclusionChatID, for: notificationSceneID)
     }
 
     private func claimNotification() {

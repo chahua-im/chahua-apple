@@ -14,6 +14,7 @@ struct ChatState: Equatable {
     var groupPresence: [String: GroupPresenceResponse] = [:]
     var conversationUnreadSummaries: [ConversationUnreadSummary] = []
     var appBadgeCount: Int64?
+    var unreadChatIDs: Set<String>?
     var notificationDefaults: NotificationSettingsResponse?
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
@@ -79,56 +80,13 @@ final class ChatStore: ObservableObject {
     private var presenceRequestID: UInt64?
     static let unreadSummaryViews = ConversationTabBadges.unreadViews
     private static let unreadSummaryKeys = Set(unreadSummaryViews.map(\.key))
-    private var backBadgeExclusions: [UUID: String] = [:]
-    private var backBadgeViews: [String: ConversationView] = [:]
-    private var watchedBackBadgeViews: [String: String] = [:]
-    private var backBadgeCounts: [String: Int] = [:]
-    let backBadgeWatchChanges = PassthroughSubject<Void, Never>()
-
-    var conversationUnreadViews: [ConversationView] {
-        Self.unreadSummaryViews + backBadgeViews.values.sorted { $0.key < $1.key }
-    }
-
-    /// Absolute server counts: never subtract independently delivered chat read states.
-    /// Unknown routes and disconnected sessions hide the badge rather than estimate it.
+    /// One authoritative set serves every route and window without changing the watch.
+    /// Never estimate membership from independently delivered rows or read states.
     func backBadgeCount(excludingChatID chatID: String?) -> Int {
-        guard state.realtimeStatus == .connected, let chatID else { return 0 }
-        return backBadgeCounts[chatID] ?? 0
-    }
-
-    func setBackBadgeExclusion(chatID: String?, for sceneID: UUID) {
-        guard backBadgeExclusions[sceneID] != chatID else { return }
-        backBadgeExclusions[sceneID] = chatID
-        let active = Set(backBadgeExclusions.values)
-        var changed = false
-        for removed in backBadgeViews.keys.filter({ !active.contains($0) }) {
-            backBadgeViews.removeValue(forKey: removed)
-            if backBadgeCounts[removed] != nil {
-                objectWillChange.send()
-                backBadgeCounts.removeValue(forKey: removed)
-            }
-            changed = true
-        }
-        for added in active where backBadgeViews[added] == nil {
-            // A new key prevents an old route's in-flight frame from reviving its count.
-            backBadgeViews[added] = ConversationView(
-                key: "back:\(UUID().uuidString)",
-                selector: .init(
-                    archived: false, categories: [.group, .dm],
-                    exclude: [.init(chatId: added)]))
-            changed = true
-        }
-        if changed { backBadgeWatchChanges.send(()) }
-    }
-
-    func removeBackBadgeExclusion(for sceneID: UUID) {
-        setBackBadgeExclusion(chatID: nil, for: sceneID)
-    }
-
-    private func clearBackBadgeCounts() {
-        guard !backBadgeCounts.isEmpty else { return }
-        objectWillChange.send()
-        backBadgeCounts.removeAll()
+        guard state.realtimeStatus == .connected, let chatID,
+            let unreadChatIDs = state.unreadChatIDs
+        else { return 0 }
+        return unreadChatIDs.count - (unreadChatIDs.contains(chatID) ? 1 : 0)
     }
 
     // Like presence, viewport/read-watch scope changes notify transport without
@@ -1578,7 +1536,7 @@ final class ChatStore: ObservableObject {
         case .conversationUnreadError(let payload):
             guard payload.requestId == unreadRequestID else { return }
             unreadFullRequestID = nil
-            clearBackBadgeCounts()
+            if state.unreadChatIDs != nil { state.unreadChatIDs = nil }
         case .conversationStates(let payload):
             acceptConversationStates(payload)
         case .conversationStatesError(let payload):
@@ -2199,8 +2157,6 @@ final class ChatStore: ObservableObject {
     func beginConversationUnreadWatch(requestID: UInt32) {
         unreadRequestID = requestID
         unreadFullRequestID = nil
-        watchedBackBadgeViews = Dictionary(
-            uniqueKeysWithValues: backBadgeViews.map { ($0.value.key, $0.key) })
     }
 
     func beginConversationStatesWatch(requestID: UInt32) {
@@ -2216,8 +2172,7 @@ final class ChatStore: ObservableObject {
     func clearConversationWatches() {
         unreadRequestID = nil
         unreadFullRequestID = nil
-        watchedBackBadgeViews.removeAll()
-        clearBackBadgeCounts()
+        if state.unreadChatIDs != nil { state.unreadChatIDs = nil }
         statesRequestID = nil
         statesFullRequestID = nil
         watchedConversations.removeAll()
@@ -2256,16 +2211,9 @@ final class ChatStore: ObservableObject {
             let appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
             if state.appBadgeCount != appBadgeCount { state.appBadgeCount = appBadgeCount }
         }
-        var counts = payload.full ? [:] : backBadgeCounts
-        for summary in payload.summaries {
-            guard let chatID = watchedBackBadgeViews[summary.key],
-                backBadgeViews[chatID]?.key == summary.key
-            else { continue }
-            counts[chatID] = Int(clamping: max(0, summary.unreadUnmutedConversationCount))
-        }
-        if counts != backBadgeCounts {
-            objectWillChange.send()
-            backBadgeCounts = counts
+        if payload.full || payload.unreadChatIds != nil {
+            let unreadChatIDs = payload.unreadChatIds.map { Set($0) }
+            if state.unreadChatIDs != unreadChatIDs { state.unreadChatIDs = unreadChatIDs }
         }
     }
 
@@ -3676,10 +3624,6 @@ final class ChatStore: ObservableObject {
         displayPreferences.activate(uid: nil)
         generation += 1
         sessionRevision += 1
-        backBadgeExclusions.removeAll()
-        backBadgeViews.removeAll()
-        watchedBackBadgeViews.removeAll()
-        backBadgeCounts.removeAll()
         confirmedThreadRoots.removeAll()
         groupInfoByChatID.removeAll()
         memberSpeakingModesByChatID.removeAll()
