@@ -136,12 +136,14 @@ struct ReactionDetailsView: View {
                 HStack(spacing: 4) {
                     categoryLabel(category)
                         .font(.body.weight(.medium))
-                    Text(category.count, format: .number)
-                        .font(.caption2.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .frame(minHeight: 18)
-                        .background(Color.accentColor, in: Capsule())
+                    RoundChipLayout(isCircular: category.count < 10) {
+                        Text(category.count, format: .number)
+                            .font(.caption2.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .frame(minHeight: 18)
+                    }
+                    .background(Color.accentColor, in: Capsule(style: .circular))
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(isSelected ? .primary : .secondary)

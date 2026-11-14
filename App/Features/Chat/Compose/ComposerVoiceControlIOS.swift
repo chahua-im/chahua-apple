@@ -77,6 +77,7 @@
                             onActivate: activate
                         )
                         .accessibilityHidden(true)
+                        .contentShape(Circle())
                     }
             }
             .frame(width: 44, height: 44)
@@ -118,7 +119,7 @@
             .font(.system(size: 20))
             .foregroundStyle(action != .disabled ? ChahuaTheme.accent : .secondary)
             .frame(width: 44, height: 44)
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: action != .disabled))
+            .modifier(ChatGlassSurface(shape: Circle(), isInteractive: action != .disabled))
         }
 
         private var holdTargets: some View {
@@ -296,6 +297,13 @@
 
             required init?(coder: NSCoder) { nil }
 
+            override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+                let radius = min(bounds.width, bounds.height) / 2
+                let dx = point.x - bounds.midX
+                let dy = point.y - bounds.midY
+                return dx * dx + dy * dy <= radius * radius
+            }
+
             override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
                 guard trackedTouch == nil, action != .disabled,
                     let touch = touches.first, let window
@@ -317,7 +325,7 @@
                 guard let touch = trackedTouch, touches.contains(touch) else { return }
                 let completedAction = trackedAction
                 let delta = translation(of: touch)
-                let activates = bounds.contains(touch.location(in: self))
+                let activates = point(inside: touch.location(in: self), with: event)
                 clearTracking()
                 if completedAction == .hold {
                     onEnded?(delta)

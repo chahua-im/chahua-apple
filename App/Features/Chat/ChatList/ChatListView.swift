@@ -646,12 +646,14 @@ struct ChatListView: View {
             }
             Spacer(minLength: 8)
             if let label = badges.label(for: scope) {
-                Text(label)
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: Capsule())
-                    .accessibilityLabel(badges.accessibilityValue(for: scope))
+                RoundChipLayout(isCircular: label.count == 1) {
+                    Text(label)
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                }
+                .background(.quaternary, in: Capsule(style: .circular))
+                .accessibilityLabel(badges.accessibilityValue(for: scope))
             }
         }
         .modifier(ConversationListRowLayout())

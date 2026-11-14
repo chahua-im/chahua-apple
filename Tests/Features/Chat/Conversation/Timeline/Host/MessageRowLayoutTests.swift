@@ -834,3 +834,178 @@ final class NativeLinkPreviewFlowTests: XCTestCase {
         }
     #endif
 }
+
+@MainActor
+final class TimelineReactionChipTests: XCTestCase {
+    func testSingleGraphemesAreCirclesAndCompoundReactionsStayHorizontal() throws {
+        let reactions: [[String: Any]] = [
+            ["emoji": "👍", "count": 1], ["emoji": "👨‍👩‍👧‍👦", "count": 1],
+            ["emoji": "🇨🇦", "count": 1], ["emoji": "👍🏽", "count": 1],
+            ["emoji": "❤️", "count": 1], ["emoji": "1️⃣", "count": 1],
+            ["emoji": "﷽", "count": 1], ["emoji": "🎉🎉", "count": 1],
+            ["emoji": "😂", "count": 12345],
+            ["emoji": "🔥", "count": 8, "reactors": (1...5).map { ["uid": $0] }],
+        ]
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 1, fields: ["reactions": reactions])
+        let cache = TimelineLayoutCache()
+        for outgoing in [false, true] {
+            for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+                for scale: CGFloat in [1, 2, 3] {
+                    for width: CGFloat in [125, 320, 600] {
+                        let environment = TimelineLayoutEnvironment.current(
+                            timelineWidth: width, displayScale: scale, layoutDirection: direction)
+                        let presentation = TimelineRowPresentation.make(
+                            row: .message(
+                                .init(
+                                    entry: .remote(message), isOutgoing: outgoing,
+                                    groupPosition: .single, showsSenderName: false)),
+                            currentUserID: 1, isThreadTimeline: false, environment: environment)
+                        let layout = cache.layout(for: presentation, environment: environment)
+                        let sorted = message.reactions.sorted(
+                            by: TimelineRowPresentation.reactionOrder)
+                        XCTAssertEqual(layout.reactionFrames.count, sorted.count)
+                        XCTAssertEqual(
+                            cache.layout(for: presentation, environment: environment)
+                                .reactionFrames,
+                            layout.reactionFrames)
+                        for (index, reaction) in sorted.enumerated() {
+                            let frame = layout.reactionFrames[index]
+                            let content = layout.reactionContentFrames[index]
+                            XCTAssertGreaterThanOrEqual(frame.width, frame.height)
+                            XCTAssertLessThanOrEqual(frame.maxX, environment.centralWidth + 0.001)
+                            XCTAssertGreaterThanOrEqual(frame.minX, -0.001)
+                            if reaction.emoji.count == 1, reaction.count == 1 {
+                                XCTAssertEqual(frame.width, frame.height)
+                                XCTAssertEqual(content[0].midX, frame.width / 2, accuracy: 0.001)
+                            }
+                            XCTAssertEqual(content[0].midY, frame.height / 2, accuracy: 0.001)
+                            if environment.centralWidth > 100 {
+                                for item in content where !item.isEmpty {
+                                    XCTAssertTrue(
+                                        CGRect(origin: .zero, size: frame.size)
+                                            .insetBy(dx: -0.001, dy: -0.001).contains(item))
+                                }
+                            }
+                            if content.count > 2 {
+                                XCTAssertEqual(content[2].width, 23)
+                                XCTAssertEqual(content[3].minX - content[2].minX, 14)
+                                XCTAssertEqual(content[1].minX, content.last!.maxX + 2)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func testNativeReactionPaintHitTargetsAndActionsMatchMeasuredShape() throws {
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 1,
+            fields: [
+                "reactions": [
+                    ["emoji": "👨‍👩‍👧‍👦", "count": 1],
+                    ["emoji": "👍🏽", "count": 1, "reactedByMe": true],
+                    ["emoji": "❤️", "count": 120],
+                    ["emoji": "🔥", "count": 8, "reactors": (1...5).map { ["uid": $0] }],
+                ]
+            ])
+        let environment = TimelineLayoutEnvironment.current(timelineWidth: 420)
+        let presentation = TimelineRowPresentation.make(
+            row: .message(
+                .init(
+                    entry: .remote(message), isOutgoing: false, groupPosition: .single,
+                    showsSenderName: false)),
+            currentUserID: 1, isThreadTimeline: false, environment: environment)
+        let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+        let native = TimelineRowView(frame: CGRect(origin: .zero, size: layout.size))
+        var activated: [String] = []
+        var actions = TimelineBubbleActions()
+        actions.interactionContext.canWrite = true
+        actions.toggleReaction = { _, emoji in activated.append(emoji) }
+        native.bind(
+            .init(
+                presentation: presentation, layout: layout,
+                context: .init(currentUserID: 1), actions: actions, mediaContext: nil))
+        #if os(macOS)
+            let window = NSWindow(
+                contentRect: CGRect(origin: .zero, size: layout.size),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = native
+            window.orderFront(nil)
+            defer { window.close() }
+            native.layoutSubtreeIfNeeded()
+            func reactionView(in view: NSView) -> TimelineReactionsView? {
+                if let result = view as? TimelineReactionsView { return result }
+                return view.subviews.lazy.compactMap { reactionView(in: $0) }.first
+            }
+            let reactions = try XCTUnwrap(reactionView(in: native))
+            let buttons = reactions.subviews.compactMap { $0 as? NSButton }
+            XCTAssertEqual(buttons.count, message.reactions.count)
+            for (index, button) in buttons.enumerated() {
+                XCTAssertEqual(button.frame, layout.reactionFrames[index])
+                XCTAssertEqual(button.layer?.cornerRadius, button.bounds.height / 2)
+                XCTAssertEqual(button.layer?.cornerCurve, .circular)
+                let center = CGPoint(x: button.frame.midX, y: button.frame.midY)
+                XCTAssertTrue(button.hitTest(center) === button)
+                XCTAssertNil(button.hitTest(button.frame.origin))
+                button.performClick(nil)
+            }
+        #else
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            let controller = UIViewController()
+            window.rootViewController = controller
+            controller.view.addSubview(native)
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                previousKeyWindow?.makeKey()
+            }
+            controller.view.layoutIfNeeded()
+            native.layoutIfNeeded()
+            func reactionView(in view: UIView) -> TimelineReactionsView? {
+                if let result = view as? TimelineReactionsView { return result }
+                return view.subviews.lazy.compactMap { reactionView(in: $0) }.first
+            }
+            let reactions = try XCTUnwrap(reactionView(in: native))
+            let buttons = reactions.subviews.compactMap { $0 as? UIControl }
+            XCTAssertEqual(buttons.count, message.reactions.count)
+            for (index, button) in buttons.enumerated() {
+                XCTAssertEqual(button.frame, layout.reactionFrames[index])
+                XCTAssertEqual(button.layer.cornerRadius, button.bounds.height / 2)
+                XCTAssertEqual(button.layer.cornerCurve, .circular)
+                let center = CGPoint(x: button.bounds.midX, y: button.bounds.midY)
+                XCTAssertTrue(button.point(inside: center, with: nil))
+                XCTAssertFalse(button.point(inside: .zero, with: nil))
+                let marker = try XCTUnwrap(
+                    button.subviews.compactMap { $0 as? MessageRowGestureMarker }.first)
+                XCTAssertNotNil(
+                    marker.region(containing: button.convert(center, to: native), in: native))
+                XCTAssertNil(
+                    marker.region(containing: button.convert(.zero, to: native), in: native))
+                button.sendActions(for: .touchUpInside)
+            }
+        #endif
+        XCTAssertEqual(
+            activated,
+            message.reactions.sorted(by: TimelineRowPresentation.reactionOrder).map(\.emoji))
+        #if os(macOS)
+            let bitmap = try XCTUnwrap(native.bitmapImageRepForCachingDisplay(in: native.bounds))
+            native.cacheDisplay(in: native.bounds, to: bitmap)
+            let capture = XCTAttachment(
+                data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+        #else
+            let capture = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: native.bounds).image { _ in
+                    native.drawHierarchy(in: native.bounds, afterScreenUpdates: true)
+                })
+        #endif
+        capture.name = "Native reaction circles and capsules"
+        capture.lifetime = .keepAlways
+        add(capture)
+    }
+}

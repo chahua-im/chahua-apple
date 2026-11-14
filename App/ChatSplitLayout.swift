@@ -212,7 +212,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
     /// The trailing slot holds its own control (e.g. the thread subscription menu)
     /// rather than a decorative avatar.
     var trailingIsControl = false
-    /// Unread count shown beside the back chevron, like the app-icon badge; 0 hides it.
+    /// Server-owned unread chat count outside the current chat; 0 hides it.
     var backBadgeCount = 0
     /// Thread identity shares one glass capsule with its avatar; navigation stays separate.
     var leadingAvatar: ThreadHeaderAvatar? = nil
@@ -307,7 +307,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
         }
         .padding(.horizontal, usesDesktopChrome ? 8 : 4)
         .padding(.vertical, usesDesktopChrome ? 8 : 4)
-        .modifier(ChatGlassSurface(cornerRadius: usesDesktopChrome ? 24 : 26, isInteractive: true))
+        .modifier(ChatGlassSurface(shape: Capsule(style: .circular), isInteractive: true))
     }
 
     private func wideControl(
@@ -373,8 +373,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
         .padding(.vertical, 4)
         .frame(minHeight: usesDesktopChrome ? 48 : 44)
         .frame(maxWidth: isWideChatLayout ? .infinity : nil, alignment: .leading)
-        .contentShape(Capsule())
-        .modifier(ChatGlassSurface(cornerRadius: 24, isInteractive: onOpenInfo != nil))
+        .contentShape(Capsule(style: .circular))
+        .modifier(
+            ChatGlassSurface(shape: Capsule(style: .circular), isInteractive: onOpenInfo != nil))
     }
 
     /// Built like `headerControl`: the glass wraps the button rather than sitting inside
@@ -390,7 +391,7 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Forward Thread")
-                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                .modifier(ChatGlassSurface(shape: Circle(), isInteractive: true))
             }
             trailingAvatar
         }
@@ -410,7 +411,10 @@ struct ChatFloatingHeader<Avatar: View>: View {
                     .accessibilityHidden(!isInteractive)
             }
         }
-        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: isInteractive))
+        // The avatar's online dot overlaps its image edge; preserve it while the
+        // surrounding glass and hit region remain circular.
+        .modifier(
+            ChatGlassSurface(shape: Circle(), isInteractive: isInteractive, clipsContent: false))
     }
 
     /// Avatars own their scaled bounds and presence ring; controls instead fill a
@@ -475,10 +479,10 @@ struct ChatFloatingHeader<Avatar: View>: View {
             .padding(.leading, 12)
             .padding(.trailing, 8)
             .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Capsule())
+            .contentShape(Capsule(style: .circular))
         }
         .buttonStyle(.plain)
-        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+        .modifier(ChatGlassSurface(shape: Capsule(style: .circular), isInteractive: true))
         .accessibilityLabel(Text("Back"))
         .accessibilityValue(Text(UnreadBackBadge.accessibilityValue(backBadgeCount)))
     }
@@ -490,8 +494,8 @@ struct ChatFloatingHeader<Avatar: View>: View {
         let label = Image(systemName: systemImage)
             .font(.system(size: 20, weight: .semibold))
             .frame(width: 44, height: 44)
-            // Plain buttons must hit-test the full control, not just the symbol.
-            .contentShape(Rectangle())
+            // Plain buttons must hit-test the circular control, not just the symbol.
+            .contentShape(Circle())
         #if os(macOS)
             if #available(macOS 26, *) {
                 Button(action: action) {
@@ -507,13 +511,13 @@ struct ChatFloatingHeader<Avatar: View>: View {
             } else {
                 Button(action: action) { label }
                     .buttonStyle(.plain)
-                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                    .modifier(ChatGlassSurface(shape: Circle(), isInteractive: true))
                     .accessibilityLabel(accessibilityLabel)
             }
         #else
             Button(action: action) { label }
                 .buttonStyle(.plain)
-                .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                .modifier(ChatGlassSurface(shape: Circle(), isInteractive: true))
                 .accessibilityLabel(accessibilityLabel)
         #endif
     }
@@ -526,34 +530,53 @@ struct UnreadBackBadge: View {
     let count: Int
     @Environment(\.colorScheme) private var colorScheme
 
+    private var renderedLabel: String { count > 99 ? "99+" : "\(count)" }
+
     var body: some View {
-        Text(count > 99 ? "99+" : "\(count)")
-            .font(.system(size: 13, weight: .semibold).monospacedDigit())
-            .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
-            .padding(.horizontal, 6)
-            .frame(minWidth: 22, minHeight: 22)
-            .background(colorScheme == .dark ? Color.white : Color.black, in: Capsule())
-            .accessibilityHidden(true)
+        RoundChipLayout(isCircular: renderedLabel.count == 1) {
+            Text(renderedLabel)
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
+                .padding(.horizontal, 6)
+                .frame(minWidth: 22, minHeight: 22)
+        }
+        .background(
+            colorScheme == .dark ? Color.white : Color.black, in: Capsule(style: .circular)
+        )
+        .accessibilityHidden(true)
     }
 
     static func accessibilityValue(_ count: Int) -> String {
-        AppLanguage.localized("\(count) unread messages")
+        AppLanguage.localized("\(count) unread chats")
     }
 }
 
-struct ChatGlassSurface: ViewModifier {
-    let cornerRadius: CGFloat
+/// Each caller names its geometry; clipping and hit testing share the glass outline.
+struct ChatGlassSurface<Surface: InsettableShape>: ViewModifier {
+    let shape: Surface
     var isInteractive = false
+    var clipsContent = true
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        // Clip the content, not the glass effect, so interactive glass can still
+        // bulge on press without exposing rectangular content or hit regions.
+        let surface = clippedContent(content).contentShape(shape)
         if #available(macOS 26, iOS 26, *) {
-            content.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
+            surface.glassEffect(isInteractive ? .regular.interactive() : .regular, in: shape)
         } else {
-            content
+            surface
                 .background(.regularMaterial, in: shape)
                 .overlay { shape.strokeBorder(.primary.opacity(0.08)) }
+        }
+    }
+
+    @ViewBuilder
+    private func clippedContent(_ content: Content) -> some View {
+        if clipsContent {
+            content.clipShape(shape)
+        } else {
+            content
         }
     }
 }

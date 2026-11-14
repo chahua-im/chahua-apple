@@ -1427,8 +1427,7 @@ struct AuthenticatedShell: View {
         }
     }
 
-    /// A route-local approximation; independently delivered app/read snapshots
-    /// must never be subtracted on every render.
+    /// Server-authoritative unread main-chat count, excluding this route's parent chat.
     private var backBadgeCount: Int {
         chatStore.backBadgeCount(excludingChatID: backBadgeChatID)
     }

@@ -1,10 +1,16 @@
-#if os(iOS)
-    import ChahuaAPI
-    import SwiftUI
-    import UIKit
-    import XCTest
+import ChahuaAPI
+import SwiftUI
+import XCTest
 
-    @testable import chahua_apple
+@testable import chahua_apple
+
+#if os(macOS)
+    import AppKit
+#else
+    import UIKit
+#endif
+
+#if os(iOS)
 
     /// The timeline must run edge to edge on iPhone, under the status bar and home
     /// indicator, while the floating header, pinned bar, and composer stay clear of the
@@ -224,3 +230,31 @@
         }
     }
 #endif
+
+@MainActor
+final class ChatGlassGeometryTests: XCTestCase {
+    func testUnreadBackBadgeStaysCircularThenGrowsOnlyHorizontally() {
+        func size(_ count: Int) -> CGSize {
+            #if os(macOS)
+                NSHostingView(rootView: UnreadBackBadge(count: count)).fittingSize
+            #else
+                UIHostingController(rootView: UnreadBackBadge(count: count))
+                    .sizeThatFits(in: CGSize(width: 320, height: 200))
+            #endif
+        }
+
+        for count in [1, 7, 9] {
+            let badge = size(count)
+            XCTAssertEqual(badge.width, badge.height, accuracy: 0.01)
+            XCTAssertGreaterThanOrEqual(badge.width, 22)
+        }
+        let single = size(1)
+        for count in [12, 99, 100, 1000] {
+            let badge = size(count)
+            XCTAssertGreaterThanOrEqual(badge.width, badge.height)
+            XCTAssertEqual(badge.height, single.height, accuracy: 0.01)
+        }
+        XCTAssertEqual(size(100), size(1000), "The visible count remains capped at 99+.")
+        XCTAssertGreaterThan(size(100).width, single.width)
+    }
+}

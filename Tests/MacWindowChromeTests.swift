@@ -7,6 +7,44 @@
 
     @MainActor
     final class MacWindowChromeTests: XCTestCase {
+        func testCircularJumpControlAndContentSizedUnreadChips() async throws {
+            for text in ["1", "@", "99+"] {
+                let chip = NSHostingView(
+                    rootView: RoundChipLayout(isCircular: text.count == 1) {
+                        Text(text).font(.system(size: 11, weight: .semibold))
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .frame(minHeight: 18)
+                    }.background(.blue, in: Capsule(style: .circular)))
+                let size = chip.fittingSize
+                if text.count == 1 {
+                    XCTAssertEqual(size.width, size.height, accuracy: 0.01)
+                } else {
+                    XCTAssertGreaterThan(size.width, size.height)
+                }
+            }
+            let controls = TimelineNativeNavigationControls(
+                frame: CGRect(x: 20, y: 20, width: 40, height: 120))
+            controls.configure(
+                showsLatest: true, messages: 1, mentions: 1, reactions: 0,
+                busy: false, badgeColor: ConversationListPreferences.defaultUnreadBadgeColor)
+            let root = NSView(frame: CGRect(x: 0, y: 0, width: 140, height: 180))
+            root.addSubview(controls)
+            let window = NSWindow(
+                contentRect: root.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = root
+            window.makeKeyAndOrderFront(nil)
+            defer { window.close() }
+            await settle(window)
+            let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
+            root.cacheDisplay(in: root.bounds, to: bitmap)
+            let capture = XCTAttachment(
+                data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+            capture.lifetime = .keepAlways
+            add(capture)
+        }
+
         func testNativeTrafficLightsStayFixedThroughConversationChanges() async throws {
             let selection = Selection()
             let host = NSHostingController(rootView: SelectionSurface(selection: selection))

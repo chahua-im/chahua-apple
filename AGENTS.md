@@ -46,6 +46,13 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - Document each new or retained platform-specific UI exception near its implementation: the requirement, the SwiftUI limitation that necessitates the exception, and why the native approach is needed. Do not add custom native UI solely to reproduce behavior SwiftUI already provides.
 - When a control needs different iOS and macOS implementations, keep a small shared wrapper that selects the platform implementation. Put each implementation in its platform subfolder rather than wrapping large view bodies in `#if os(...)`.
 
+## Design — circular controls and chips
+
+- Icon-only floating action buttons, including Jump to Bottom, must be perfect circles: equal width and height with a circular outline, background, and clipping shape. Do not substitute a squircle or a continuous rounded rectangle.
+- Single-character chips must be circular. Keep longer chip content circular while it fits; otherwise grow only horizontally into a capsule with semicircular ends (corner radius = half the height). Never stretch the circle into an ellipse or use rounded-square ends.
+- Size these shapes from the actual content and padding, including localized text and larger text sizes. Use matching geometry for fills, borders, glass effects, and hit targets.
+- Use explicit `Circle` or circular-style `Capsule` shapes for round controls and pills; a half-height radius on a continuous rounded rectangle is not equivalent. Reuse `RoundChipLayout` for content-sized SwiftUI chips rather than independently padding width and height.
+
 ## Verification
 
 - Do not introduce new test fixtures unless explicitly requested by the user. Reuse existing fixtures when appropriate.

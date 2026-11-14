@@ -142,6 +142,7 @@
         private var selected = false
         private var visible = false
         private var contentFrames: [CGRect] = []
+        private var trackingMouse = false
         override var isFlipped: Bool { true }
 
         override init(frame frameRect: NSRect) {
@@ -152,7 +153,7 @@
             target = self
             action = #selector(activate)
             wantsLayer = true
-            layer?.cornerRadius = 12
+            layer?.cornerCurve = .circular
             layer?.masksToBounds = true
             emojiLabel.font = .systemFont(ofSize: 18.5)
             addSubview(emojiLabel)
@@ -240,6 +241,7 @@
         }
         override func layout() {
             super.layout()
+            layer?.cornerRadius = bounds.height / 2
             emojiLabel.frame = contentFrames.first ?? .zero
             countLabel.frame = contentFrames.count > 1 ? contentFrames[1] : .zero
             for index in avatars.indices {
@@ -249,7 +251,23 @@
             }
         }
         override func hitTest(_ point: NSPoint) -> NSView? {
-            super.hitTest(point) == nil ? nil : self
+            guard super.hitTest(point) != nil,
+                containsReactionPoint(convert(point, from: superview))
+            else { return nil }
+            return self
+        }
+        override func mouseDown(with event: NSEvent) {
+            trackingMouse = true
+            defer { trackingMouse = false }
+            super.mouseDown(with: event)
+        }
+        private func containsReactionPoint(_ point: CGPoint) -> Bool {
+            guard bounds.contains(point) else { return false }
+            let radius = min(bounds.width, bounds.height) / 2
+            let x = min(max(point.x, bounds.minX + radius), bounds.maxX - radius)
+            let dx = point.x - x
+            let dy = point.y - bounds.midY
+            return dx * dx + dy * dy <= radius * radius
         }
         override func resetCursorRects() {
             if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
@@ -289,6 +307,16 @@
                 }
             }
         }
-        @objc private func activate() { if isEnabled, emoji != nil { onActivate?() } }
+        @objc private func activate() {
+            guard isEnabled, emoji != nil else { return }
+            // NSButton's native tracking uses a rectangular cell on mouse-up.
+            // Keep its tracking/keyboard behavior, but reject rounded-off corners.
+            if trackingMouse, let event = NSApp.currentEvent,
+                !containsReactionPoint(convert(event.locationInWindow, from: nil))
+            {
+                return
+            }
+            onActivate?()
+        }
     }
 #endif

@@ -134,7 +134,7 @@
                 touch: touch, input: input, origin: point, rowID: row.id, swipe: row.configuration,
                 bubbleID: bubble?.id, bubbleRect: bubble?.rect,
                 bubbleView: bubble?.configuration.view, open: bubble?.configuration.open,
-                tapID: tap?.id, tapRect: tap?.rect, action: tap?.action
+                tapID: tap?.id, action: tap?.action
             )
         }
 
@@ -172,6 +172,13 @@
         fileprivate func windowRect(for rect: CGRect) -> CGRect? {
             guard let view, let window = view.window else { return nil }
             return view.convert(rect, to: window)
+        }
+
+        fileprivate func containsTap(_ session: MessageRowTouchSession, at point: CGPoint) -> Bool {
+            guard let view, let id = session.tapID, let marker = markers[id]?.marker else {
+                return false
+            }
+            return marker.region(containing: point, in: view) != nil
         }
 
         private func containsNativeTextOwnership(_ view: UIView) -> Bool {
@@ -252,15 +259,17 @@
             detach()
         }
 
-        fileprivate func region(containing point: CGPoint, in host: UIView) -> CGRect? {
+        func region(containing point: CGPoint, in host: UIView) -> CGRect? {
             guard role != nil, window != nil, isDescendant(of: host),
                 bounds.contains(convert(point, from: host))
             else { return nil }
             var ancestor: UIView? = self
             while let current = ancestor {
                 guard !current.isHidden, current.alpha > 0 else { return nil }
+                // A clipped reaction control has a circular/capsule hit region,
+                // not merely rectangular bounds. Other ancestors keep native hits.
                 if current.clipsToBounds
-                    && !current.bounds.contains(current.convert(point, from: host))
+                    && !current.point(inside: current.convert(point, from: host), with: nil)
                 {
                     return nil
                 }
@@ -324,7 +333,6 @@
         weak var bubbleView: UIView?
         let open: ((CGRect, MessageBubblePressFeedback?) -> Void)?
         let tapID: ObjectIdentifier?
-        let tapRect: CGRect?
         let action: (() -> Void)?
         var owner = Owner.undecided
         var displacement: CGFloat = 0
@@ -336,7 +344,7 @@
             swipe: MessageRowSwipeConfiguration,
             bubbleID: ObjectIdentifier?, bubbleRect: CGRect?, bubbleView: UIView?,
             open: ((CGRect, MessageBubblePressFeedback?) -> Void)?,
-            tapID: ObjectIdentifier?, tapRect: CGRect?, action: (() -> Void)?
+            tapID: ObjectIdentifier?, action: (() -> Void)?
         ) {
             self.touch = touch
             self.input = input
@@ -348,7 +356,6 @@
             self.bubbleView = bubbleView
             self.open = open
             self.tapID = tapID
-            self.tapRect = tapRect
             self.action = action
         }
 
@@ -423,8 +430,8 @@
                 {
                     captured.owner = .contextMenu
                     state = .recognized
-                } else if captured.input != .secondaryPointer, let rect = captured.tapRect,
-                    rect.contains(point), captured.action != nil
+                } else if captured.input != .secondaryPointer,
+                    coordinator?.containsTap(captured, at: point) == true, captured.action != nil
                 {
                     captured.owner = .tap
                     state = .recognized

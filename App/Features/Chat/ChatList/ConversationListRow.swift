@@ -167,7 +167,7 @@ struct ConversationListRow: View, Equatable {
                         .accessibilityLabel("Unread reactions")
                     }
                     if item.unreadCount > 0 {
-                        activityBadge {
+                        activityBadge(isSingleCharacter: item.unreadCount < 10) {
                             Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
                         }
                         .accessibilityLabel("\(item.unreadCount) unread messages")
@@ -194,25 +194,28 @@ struct ConversationListRow: View, Equatable {
     }
 
     private func activityBadge<Content: View>(
+        isSingleCharacter: Bool = true,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        content()
-            .font(
-                usesDesktopDensity
-                    ? .system(size: 11, weight: .semibold) : .caption.weight(.semibold)
-            )
-            .foregroundStyle(usesMutedBadges ? Color.primary : Color.white)
-            .padding(.horizontal, usesDesktopDensity ? 5 : 8)
-            .padding(.vertical, 2)
-            .frame(minHeight: usesDesktopDensity ? 18 : nil)
-            .background {
-                if usesMutedBadges {
-                    Capsule().fill(.quaternary)
-                } else {
-                    Capsule().fill(badgeColor.color)
-                }
+        RoundChipLayout(isCircular: isSingleCharacter) {
+            content()
+                .font(
+                    usesDesktopDensity
+                        ? .system(size: 11, weight: .semibold) : .caption.weight(.semibold)
+                )
+                .foregroundStyle(usesMutedBadges ? Color.primary : Color.white)
+                .padding(.horizontal, usesDesktopDensity ? 5 : 8)
+                .padding(.vertical, 2)
+                .frame(minHeight: usesDesktopDensity ? 18 : nil)
+        }
+        .background {
+            if usesMutedBadges {
+                Capsule(style: .circular).fill(.quaternary)
+            } else {
+                Capsule(style: .circular).fill(badgeColor.color)
             }
-            .fixedSize()
+        }
+        .fixedSize()
     }
 
     @MainActor private func activityLabel(now: Date) -> String {

@@ -508,7 +508,7 @@ struct ChatDetailView: View {
         }
         .buttonStyle(.plain)
         .padding()
-        .modifier(ChatGlassSurface(cornerRadius: 32, isInteractive: true))
+        .modifier(ChatGlassSurface(shape: Capsule(style: .circular), isInteractive: true))
         .padding(.horizontal, 12).padding(.bottom, 8)
     }
 

@@ -79,113 +79,58 @@ final class ChatStore: ObservableObject {
     private var presenceRequestID: UInt64?
     static let unreadSummaryViews = ConversationTabBadges.unreadViews
     private static let unreadSummaryKeys = Set(unreadSummaryViews.map(\.key))
-    private var backBadgeEstimate = BackBadgeEstimate()
     private var backBadgeExclusions: [UUID: String] = [:]
-    private var backBadgeFallbackViews: [String: ConversationView] = [:]
+    private var backBadgeViews: [String: ConversationView] = [:]
     private var watchedBackBadgeViews: [String: String] = [:]
-    private var backBadgeFallbackTask: Task<Void, Never>?
-    private var backBadgeNeedsReconciliation = false
-    private var uncertainBackBadgeChats = Set<String>()
+    private var backBadgeCounts: [String: Int] = [:]
     let backBadgeWatchChanges = PassthroughSubject<Void, Never>()
 
     var conversationUnreadViews: [ConversationView] {
-        Self.unreadSummaryViews + backBadgeFallbackViews.values.sorted { $0.key < $1.key }
+        Self.unreadSummaryViews + backBadgeViews.values.sorted { $0.key < $1.key }
     }
 
+    /// Absolute server counts: never subtract independently delivered chat read states.
+    /// Unknown routes and disconnected sessions hide the badge rather than estimate it.
     func backBadgeCount(excludingChatID chatID: String?) -> Int {
-        backBadgeEstimate.count(excluding: chatID) ?? 0
-    }
-    private func updateBackBadgeEstimate<Result>(
-        _ update: (inout BackBadgeEstimate) -> Result
-    ) -> Result {
-        let revision = backBadgeEstimate.presentationRevision
-        let result = update(&backBadgeEstimate)
-        if backBadgeEstimate.presentationRevision != revision { objectWillChange.send() }
-        return result
+        guard state.realtimeStatus == .connected, let chatID else { return 0 }
+        return backBadgeCounts[chatID] ?? 0
     }
 
     func setBackBadgeExclusion(chatID: String?, for sceneID: UUID) {
-        if let chatID {
-            if let previous = backBadgeExclusions.updateValue(chatID, forKey: sceneID),
-                previous != chatID, !backBadgeExclusions.values.contains(previous),
-                backBadgeFallbackViews.removeValue(forKey: previous) != nil
-            {
-                backBadgeWatchChanges.send(())
+        guard backBadgeExclusions[sceneID] != chatID else { return }
+        backBadgeExclusions[sceneID] = chatID
+        let active = Set(backBadgeExclusions.values)
+        var changed = false
+        for removed in backBadgeViews.keys.filter({ !active.contains($0) }) {
+            backBadgeViews.removeValue(forKey: removed)
+            if backBadgeCounts[removed] != nil {
+                objectWillChange.send()
+                backBadgeCounts.removeValue(forKey: removed)
             }
-            if backBadgeNeedsReconciliation
-                || backBadgeEstimate.count(excluding: chatID) == nil
-            {
-                scheduleBackBadgeFallback()
-            }
-        } else {
-            removeBackBadgeExclusion(for: sceneID)
+            changed = true
         }
+        for added in active where backBadgeViews[added] == nil {
+            // A new key prevents an old route's in-flight frame from reviving its count.
+            backBadgeViews[added] = ConversationView(
+                key: "back:\(UUID().uuidString)",
+                selector: .init(
+                    archived: false, categories: [.group, .dm],
+                    exclude: [.init(chatId: added)]))
+            changed = true
+        }
+        if changed { backBadgeWatchChanges.send(()) }
     }
 
     func removeBackBadgeExclusion(for sceneID: UUID) {
-        backBadgeExclusions.removeValue(forKey: sceneID)
-        let active = Set(backBadgeExclusions.values)
-        let removed = backBadgeFallbackViews.keys.filter { !active.contains($0) }
-        for chatID in removed { backBadgeFallbackViews.removeValue(forKey: chatID) }
-        if !removed.isEmpty { backBadgeWatchChanges.send(()) }
+        setBackBadgeExclusion(chatID: nil, for: sceneID)
     }
 
-    /// Only uncertainty/reconnect requests filtered snapshots. Known navigation
-    /// and message arrivals remain entirely local, across independent scenes.
-    private func scheduleBackBadgeFallback() {
-        guard backBadgeFallbackTask == nil, !backBadgeExclusions.isEmpty else { return }
-        let requestGeneration = generation
-        backBadgeFallbackTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            guard let self, self.generation == requestGeneration, !Task.isCancelled else { return }
-            self.backBadgeFallbackTask = nil
-            guard self.state.realtimeStatus == .connected else { return }
-            var changed = false
-            for chatID in Set(self.backBadgeExclusions.values) {
-                guard self.backBadgeFallbackViews[chatID] == nil,
-                    self.backBadgeNeedsReconciliation
-                        || self.backBadgeEstimate.count(excluding: chatID) == nil
-                else { continue }
-                self.backBadgeFallbackViews[chatID] = ConversationView(
-                    key: "back:\(UUID().uuidString)",
-                    selector: .init(
-                        archived: false, categories: [.group, .dm],
-                        exclude: [.init(chatId: chatID)]))
-                changed = true
-            }
-            if changed { self.backBadgeWatchChanges.send(()) }
-        }
+    private func clearBackBadgeCounts() {
+        guard !backBadgeCounts.isEmpty else { return }
+        objectWillChange.send()
+        backBadgeCounts.removeAll()
     }
 
-    private func invalidateBackBadgeEstimate() {
-        backBadgeNeedsReconciliation = true
-        scheduleBackBadgeFallback()
-    }
-
-    private func replaceBackBadgeSnapshot(_ chat: ChatListItem) {
-        updateBackBadgeEstimate {
-            $0.replace(
-                chatID: chat.id, unread: chat.unreadCount,
-                eligible: !chat.archived
-                    && !chat.notificationMuted(defaults: state.notificationDefaults),
-                lastReadID: chat.lastReadMessageId?.rawValue,
-                latestMessageID: chat.lastMessage?.id.rawValue)
-        }
-        uncertainBackBadgeChats.remove(chat.id)
-    }
-
-    private func updateBackBadgeEligibility() {
-        for chat in state.chats + state.archivedChats {
-            _ = updateBackBadgeEstimate {
-                $0.setEligibility(
-                    chatID: chat.id,
-                    eligible: !chat.archived
-                        && !chat.notificationMuted(defaults: state.notificationDefaults))
-            }
-        }
-        // Defaults can affect chats absent from every loaded page.
-        invalidateBackBadgeEstimate()
-    }
     // Like presence, viewport/read-watch scope changes notify transport without
     // invalidating views observing the shared store.
     private(set) var conversationStateScope: [ConversationRef] = []
@@ -246,7 +191,6 @@ final class ChatStore: ObservableObject {
             {
                 state.notificationDefaults = .init(
                     muteGroupChatsByDefault: groups, muteDirectChatsByDefault: direct)
-                updateBackBadgeEligibility()
             }
             // Pending rows carry the sender captured in their projection.
             for (key, snapshot) in outgoingQueue.snapshots {
@@ -341,7 +285,6 @@ final class ChatStore: ObservableObject {
             self.notificationExpiry = nil
             self.objectWillChange.send()
             self.notificationPreferenceChanges.send()
-            self.updateBackBadgeEligibility()
             self.scheduleNotificationExpiry()
         }
     }
@@ -548,21 +491,6 @@ final class ChatStore: ObservableObject {
                 || (message.systemKind == .memberAdded
                     && message.systemLinks?.uid == currentUserID))
         if !isOwnMembershipAnnouncement { receivePreview(message, isNew: true) }
-        if message.replyRootId == nil, !message.isDeleted, !isOwnMembershipAnnouncement {
-            let hiddenMembership =
-                message.systemKind?.isMembership == true
-                && conversationMessages.hidesMembershipMessages(chatID: message.chatId)
-            if !hiddenMembership,
-                !updateBackBadgeEstimate({
-                    $0.receive(
-                        chatID: message.chatId, messageID: message.id.rawValue,
-                        isOwn: message.sender.uid == currentUserID)
-                }),
-                uncertainBackBadgeChats.insert(message.chatId).inserted
-            {
-                invalidateBackBadgeEstimate()
-            }
-        }
     }
 
     private func applyMessageUpdate(_ message: MessageResponse, isNew: Bool = false) {
@@ -781,7 +709,6 @@ final class ChatStore: ObservableObject {
                         isMuted: chat.notificationMuted(defaults: state.notificationDefaults))
                     acceptListReadReceipt(.chat(chat), version: receiptVersion)
                     conversationReadStates[.init(chatID: chat.id)] = chat.readState
-                    replaceBackBadgeSnapshot(chat)
                 }
             case .threads, .archivedThreads:
                 var threads = try await fetchThreadList(
@@ -1144,19 +1071,9 @@ final class ChatStore: ObservableObject {
         return status
     }
 
-    private func install(_ chat: ChatListItem, replaceUnreadEstimate: Bool = true) {
+    private func install(_ chat: ChatListItem) {
         let chat = displayFilteredSnapshot(chat)
         let previousExpiry = self.chat(id: chat.id)?.mutedUntil
-        if replaceUnreadEstimate {
-            replaceBackBadgeSnapshot(chat)
-        } else {
-            _ = updateBackBadgeEstimate {
-                $0.setEligibility(
-                    chatID: chat.id,
-                    eligible: !chat.archived
-                        && !chat.notificationMuted(defaults: state.notificationDefaults))
-            }
-        }
         conversationReadStates[.init(chatID: chat.id)] = .init(
             lastReadMessageId: chat.lastReadMessageId, unreadCount: chat.unreadCount,
             unreadMentions: chat.unreadMentions, unreadReactions: chat.unreadReactions)
@@ -1206,7 +1123,7 @@ final class ChatStore: ObservableObject {
         install(
             chat.withNotificationState(
                 mutedUntil: chat.mutedUntil, muteOverride: chat.muteOverride,
-                isMuted: chat.isMuted, archived: archived), replaceUnreadEstimate: false)
+                isMuted: chat.isMuted, archived: archived))
     }
 
     /// Threads may belong to an archived parent absent from the active chat list.
@@ -1410,7 +1327,6 @@ final class ChatStore: ObservableObject {
                                 acceptListReadReceipt(.chat(found), version: receiptVersion)
                             } else {
                                 chatAccessInvalidations.send(key.chatID)
-                                updateBackBadgeEstimate { $0.remove(chatID: key.chatID) }
                                 state.chats.removeAll { $0.id == key.chatID }
                                 state.archivedChats.removeAll { $0.id == key.chatID }
                             }
@@ -1461,7 +1377,7 @@ final class ChatStore: ObservableObject {
                 if current.lastMessage?.id == message.id
                     || (isNew && (current.lastMessage.map { $0.id < message.id } ?? true))
                 {
-                    install(current.withPreview(message.replyPreview), replaceUnreadEstimate: false)
+                    install(current.withPreview(message.replyPreview))
                 }
             } else if isNew {
                 reconcileRow(key)
@@ -1477,8 +1393,6 @@ final class ChatStore: ObservableObject {
     }
 
     private func invalidateChatList() {
-        // Full calibration is reserved for reconnect and changes lacking row identifiers.
-        invalidateBackBadgeEstimate()
         listStateRevision += 1
         invalidateConversationWatches()
         dirtyLists.formUnion(ListKind.allCases)
@@ -1509,14 +1423,12 @@ final class ChatStore: ObservableObject {
         case .memberSpeakingModeChanged(let response):
             acceptMemberSpeakingMode(response)
         case .membershipMessagePolicyChanged(let payload):
-            invalidateBackBadgeEstimate()
             membershipPolicyRevisions[payload.chatId, default: 0] += 1
             conversationMessages.invalidateMembershipSnapshots(chatID: payload.chatId)
             groupInfoRevisions[payload.chatId, default: 0] += 1
             groupInfoInvalidations.insert(payload.chatId)
             invalidateMembershipVisibility(chatID: payload.chatId)
         case .chatMembershipChanged(let payload):
-            invalidateBackBadgeEstimate()
             confirmedThreadRoots.removeAll()
             membershipPolicyRevisions[payload.chatId, default: 0] += 1
             conversationMessages.invalidateMembershipSnapshots(chatID: payload.chatId)
@@ -1570,9 +1482,7 @@ final class ChatStore: ObservableObject {
             if let current = chat(id: payload.chatId), let preview = current.lastMessage,
                 ids.contains(preview.id)
             {
-                install(
-                    current.withPreview(preview.redactedForDeletion()), replaceUnreadEstimate: false
-                )
+                install(current.withPreview(preview.redactedForDeletion()))
             }
             reconcileRow(.init(chatID: payload.chatId))
             for item in state.threads + state.archivedThreads where item.chatId == payload.chatId {
@@ -1608,7 +1518,6 @@ final class ChatStore: ObservableObject {
             listStateRevision += 1
             rowRevisions[.init(chatID: payload.chatId), default: 0] += 1
             if chat(id: payload.chatId) == nil {
-                invalidateBackBadgeEstimate()
                 reconcileRow(.init(chatID: payload.chatId))
             }
         case .notificationSettingsChanged(let payload):
@@ -1616,7 +1525,6 @@ final class ChatStore: ObservableObject {
             state.notificationDefaults = payload
             listStateRevision += 1
             notificationPreferenceChanges.send()
-            updateBackBadgeEligibility()
         case .chatNotificationSettingChanged(let payload):
             notificationRevision += 1
             notificationVersions[payload.chatId] = notificationRevision
@@ -1670,6 +1578,7 @@ final class ChatStore: ObservableObject {
         case .conversationUnreadError(let payload):
             guard payload.requestId == unreadRequestID else { return }
             unreadFullRequestID = nil
+            clearBackBadgeCounts()
         case .conversationStates(let payload):
             acceptConversationStates(payload)
         case .conversationStatesError(let payload):
@@ -1818,7 +1727,6 @@ final class ChatStore: ObservableObject {
         if status == .connected { refreshListReadReceipts(clear: true) }
         if status == .connected {
             Task { try? await loadNotificationDefaults() }
-            invalidateBackBadgeEstimate()
         }
         for model in visibleTimelines() { model.setRealtimeStatus(status) }
     }
@@ -2292,7 +2200,7 @@ final class ChatStore: ObservableObject {
         unreadRequestID = requestID
         unreadFullRequestID = nil
         watchedBackBadgeViews = Dictionary(
-            uniqueKeysWithValues: backBadgeFallbackViews.map { ($0.value.key, $0.key) })
+            uniqueKeysWithValues: backBadgeViews.map { ($0.value.key, $0.key) })
     }
 
     func beginConversationStatesWatch(requestID: UInt32) {
@@ -2309,6 +2217,7 @@ final class ChatStore: ObservableObject {
         unreadRequestID = nil
         unreadFullRequestID = nil
         watchedBackBadgeViews.removeAll()
+        clearBackBadgeCounts()
         statesRequestID = nil
         statesFullRequestID = nil
         watchedConversations.removeAll()
@@ -2343,30 +2252,20 @@ final class ChatStore: ObservableObject {
         if state.conversationUnreadSummaries != summaries {
             state.conversationUnreadSummaries = summaries
         }
-        // The app-icon total has a different scope. Match the active main-chat,
-        // unmuted selector used by filtered back-badge calibration instead.
-        let backBadgeKey = ConversationListScope.messages.summaryKey(
-            archived: false, showThreadsInMessages: false)
-        if let summary = payload.summaries.first(where: { $0.key == backBadgeKey }) {
-            updateBackBadgeEstimate { $0.seed(total: summary.unreadUnmutedMessageCount) }
-        }
         if payload.full || payload.appBadgeCount != nil {
             let appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
             if state.appBadgeCount != appBadgeCount { state.appBadgeCount = appBadgeCount }
         }
-        var fallbackCounts: [String: Int64] = [:]
+        var counts = payload.full ? [:] : backBadgeCounts
         for summary in payload.summaries {
             guard let chatID = watchedBackBadgeViews[summary.key],
-                backBadgeFallbackViews[chatID]?.key == summary.key
+                backBadgeViews[chatID]?.key == summary.key
             else { continue }
-            fallbackCounts[chatID] = summary.unreadUnmutedMessageCount
-            backBadgeFallbackViews.removeValue(forKey: chatID)
-            watchedBackBadgeViews.removeValue(forKey: summary.key)
+            counts[chatID] = Int(clamping: max(0, summary.unreadUnmutedConversationCount))
         }
-        if !fallbackCounts.isEmpty {
-            updateBackBadgeEstimate { $0.replaceFiltered(fallbackCounts) }
-            backBadgeNeedsReconciliation = !backBadgeFallbackViews.isEmpty
-            backBadgeWatchChanges.send(())
+        if counts != backBadgeCounts {
+            objectWillChange.send()
+            backBadgeCounts = counts
         }
     }
 
@@ -2407,7 +2306,6 @@ final class ChatStore: ObservableObject {
             if !value.accessible {
                 conversationReadStates.removeValue(forKey: key)
                 if key.threadID == nil {
-                    updateBackBadgeEstimate { $0.remove(chatID: key.chatID) }
                     if state.chats.contains(where: { $0.id == key.chatID }) {
                         state.chats.removeAll { $0.id == key.chatID }
                     }
@@ -2855,7 +2753,6 @@ final class ChatStore: ObservableObject {
 
     private func acceptChatSettings(_ settings: ChatSettings) {
         guard membershipChatSettings != settings else { return }
-        if membershipChatSettings != nil { invalidateBackBadgeEstimate() }
         membershipChatSettings = settings
         membershipSettingsRevision += 1
         if currentUserProfile?.showMembershipMessages != settings.showMembershipMessages {
@@ -3275,9 +3172,7 @@ final class ChatStore: ObservableObject {
                 }
                 guard revision == self.defaultsRevision else { continue }
                 self.defaultsRevision += 1
-                let changed = self.state.notificationDefaults != response
                 self.state.notificationDefaults = response
-                if changed { self.updateBackBadgeEligibility() }
                 self.notificationPreferenceChanges.send()
             }
         }
@@ -3296,7 +3191,6 @@ final class ChatStore: ObservableObject {
             state.notificationDefaults = .init(
                 muteGroupChatsByDefault: kind == .group ? muted : previous.muteGroupChatsByDefault,
                 muteDirectChatsByDefault: kind == .dm ? muted : previous.muteDirectChatsByDefault)
-            updateBackBadgeEligibility()
         }
         defer {
             if generation == requestGeneration {
@@ -3312,13 +3206,11 @@ final class ChatStore: ObservableObject {
             }
             guard defaultsRevision == revision else { return }
             state.notificationDefaults = response
-            updateBackBadgeEligibility()
             listStateRevision += 1
             notificationPreferenceChanges.send()
         } catch {
             if generation == requestGeneration, defaultsRevision == revision {
                 state.notificationDefaults = previous
-                updateBackBadgeEligibility()
             }
             throw error
         }
@@ -3361,9 +3253,6 @@ final class ChatStore: ObservableObject {
                             ?? false))
             }
         }
-        if payload.chatIds.contains(where: { chat(id: $0) == nil }) {
-            invalidateBackBadgeEstimate()
-        }
         notificationPreferenceChanges.send()
     }
 
@@ -3374,10 +3263,8 @@ final class ChatStore: ObservableObject {
             install(
                 current.withNotificationState(
                     mutedUntil: response.mutedUntil, muteOverride: response.muteOverride,
-                    isMuted: response.isMuted, archived: current.archived),
-                replaceUnreadEstimate: false)
+                    isMuted: response.isMuted, archived: current.archived))
         }
-        if chat(id: response.chatId) == nil { invalidateBackBadgeEstimate() }
         listStateRevision += 1
         rowRevisions[.init(chatID: response.chatId), default: 0] += 1
         scheduleNotificationExpiry()
@@ -3749,15 +3636,6 @@ final class ChatStore: ObservableObject {
             install(thread.withReadState(response))
         } else if threadID == nil, let chat = chat(id: chatID) {
             install(chat.withReadState(response))
-        } else if threadID == nil,
-            !updateBackBadgeEstimate({
-                $0.replaceReadState(
-                    chatID: chatID, unread: response.unreadCount,
-                    lastReadID: response.lastReadMessageId?.rawValue)
-            }),
-            uncertainBackBadgeChats.insert(chatID).inserted
-        {
-            invalidateBackBadgeEstimate()
         }
         // A notification or new thread can be open without an active-list row.
         for model in visibleTimelines() where model.chatID == chatID && model.threadID == threadID {
@@ -3798,14 +3676,10 @@ final class ChatStore: ObservableObject {
         displayPreferences.activate(uid: nil)
         generation += 1
         sessionRevision += 1
-        backBadgeFallbackTask?.cancel()
-        backBadgeFallbackTask = nil
         backBadgeExclusions.removeAll()
-        backBadgeFallbackViews.removeAll()
+        backBadgeViews.removeAll()
         watchedBackBadgeViews.removeAll()
-        uncertainBackBadgeChats.removeAll()
-        backBadgeNeedsReconciliation = false
-        backBadgeEstimate = BackBadgeEstimate()
+        backBadgeCounts.removeAll()
         confirmedThreadRoots.removeAll()
         groupInfoByChatID.removeAll()
         memberSpeakingModesByChatID.removeAll()

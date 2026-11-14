@@ -35,17 +35,19 @@ struct ConversationScopePicker: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
                         if let label = badges.label(for: scope) {
-                            Text(label)
-                                .font(.system(size: desktop ? 9 : 11, weight: .semibold))
-                                .monospacedDigit()
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(
-                                    badges.archived ? Color.gray : badgeColor.color,
-                                    in: Capsule()
-                                )
-                                .accessibilityHidden(true)
+                            RoundChipLayout(isCircular: label.count == 1) {
+                                Text(label)
+                                    .font(.system(size: desktop ? 9 : 11, weight: .semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                            }
+                            .background(
+                                badges.archived ? Color.gray : badgeColor.color,
+                                in: Capsule(style: .circular)
+                            )
+                            .accessibilityHidden(true)
                         }
                     }
                     .foregroundStyle(Color.primary)
@@ -84,16 +86,18 @@ struct ConversationScopePicker: View {
                             .padding(.bottom, 3)
                             .frame(minHeight: 44)
                         if let label = badges.label(for: scope) {
-                            Text(label)
-                                .font(.caption2.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(
-                                    badges.archived ? Color.gray : badgeColor.color,
-                                    in: Capsule()
-                                )
-                                .accessibilityHidden(true)
+                            RoundChipLayout(isCircular: label.count == 1) {
+                                Text(label)
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                            }
+                            .background(
+                                badges.archived ? Color.gray : badgeColor.color,
+                                in: Capsule(style: .circular)
+                            )
+                            .accessibilityHidden(true)
                         }
                     }
                     .foregroundStyle(selection == scope ? Color.primary : Color.secondary)

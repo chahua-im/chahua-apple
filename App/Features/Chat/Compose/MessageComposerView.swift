@@ -236,7 +236,7 @@ struct MessageComposerView: View {
                     }
                     .accessibilityLabel("Discard voice message")
                     .disabled(voiceRecorder.phase == .sending)
-                    .modifier(ChatGlassSurface(cornerRadius: 22))
+                    .modifier(ChatGlassSurface(shape: Circle()))
                     .modifier(ComposerSendFocus())
                 } else if !voiceRecorder.isActive {
                     Menu {
@@ -289,7 +289,7 @@ struct MessageComposerView: View {
                         !isEditing || allowsEditingMedia
                             ? "Add attachments" : "Attachments cannot be changed while editing"
                     )
-                    .modifier(ChatGlassSurface(cornerRadius: 22))
+                    .modifier(ChatGlassSurface(shape: Circle()))
                 }
 
                 VStack(spacing: 0) {
@@ -393,8 +393,8 @@ struct MessageComposerView: View {
                     // columns retain their own non-overlapping 44-point hit regions.
                     .frame(minWidth: 0, maxWidth: .infinity)
                 #endif
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .modifier(ChatGlassSurface(cornerRadius: 22))
+                .modifier(
+                    ChatGlassSurface(shape: RoundedRectangle(cornerRadius: 22, style: .continuous)))
 
                 ZStack {
                     // The user-requested touch hold/drag interaction and pointer click
@@ -437,7 +437,7 @@ struct MessageComposerView: View {
                         .disabled(!hasContent || !canSubmit)
                         .modifier(
                             ChatGlassSurface(
-                                cornerRadius: 22, isInteractive: hasContent && canSubmit)
+                                shape: Circle(), isInteractive: hasContent && canSubmit)
                         )
                         .accessibilityLabel("Send message")
                         .modifier(ComposerSendFocus())

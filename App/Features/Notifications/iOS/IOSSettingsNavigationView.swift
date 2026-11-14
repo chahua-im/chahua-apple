@@ -144,7 +144,7 @@
             .buttonStyle(.plain)
             .font(.system(size: 18, weight: .medium))
             .frame(width: 44, height: 44)
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+            .modifier(ChatGlassSurface(shape: Circle(), isInteractive: true))
             .disabled(protectsEditorEdits)
         }
     }

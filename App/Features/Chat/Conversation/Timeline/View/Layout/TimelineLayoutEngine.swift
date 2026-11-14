@@ -565,9 +565,21 @@ struct TimelineLayoutEngine {
                 w += 2 + label.width
                 h = max(h, label.height)
             }
-            let size = CGSize(width: min(width, pixel(w, e)), height: pixel(h, e))
+            let availableWidth = max(0, width)
+            let circular = reaction.emoji.count == 1 && reactors == 0 && countSize == .zero
+            // String.count counts extended graphemes, including ZWJ families, flags
+            // and skin tones. A wide single emoji grows the circle in both axes.
+            let naturalHeight = pixel(circular ? max(w, h) : h, e)
+            let size = CGSize(
+                width: min(availableWidth, max(pixel(w, e), naturalHeight)),
+                height: min(availableWidth, naturalHeight))
+            // A viewport narrower than the native glyph must clip content, not
+            // turn a circle/capsule into a vertical ellipse. Keep glyph metrics.
+            let contentX =
+                circular ? (size.width - emoji.width) / 2 : max(6, (size.width - w + 12) / 2)
             let emojiFrame = CGRect(
-                x: 6, y: (size.height - emoji.height) / 2, width: emoji.width, height: emoji.height)
+                x: contentX, y: (size.height - emoji.height) / 2,
+                width: emoji.width, height: emoji.height)
             let avatarX = emojiFrame.maxX + 2
             let countX =
                 reactors > 0

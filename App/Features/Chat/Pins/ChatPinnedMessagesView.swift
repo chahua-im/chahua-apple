@@ -108,7 +108,10 @@ struct ChatPinnedMessageBar: View {
         .padding(.leading, isWideChatLayout ? 16 : 14)
         .padding(.trailing, 8)
         .padding(.vertical, isWideChatLayout ? 0 : 6)
-        .modifier(ChatGlassSurface(cornerRadius: barCornerRadius))
+        .modifier(
+            ChatGlassSurface(
+                shape: RoundedRectangle(cornerRadius: barCornerRadius, style: .continuous))
+        )
         .contextMenu {
             Button("View all pinned messages", action: onShowAll)
             if let onUnpin {

@@ -52,7 +52,7 @@
             }
             .buttonStyle(.plain)
             .disabled(!canActivate)
-            .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: canActivate))
+            .modifier(ChatGlassSurface(shape: Circle(), isInteractive: canActivate))
             .accessibilityLabel(Text(label))
             .help(Text(label))
             .modifier(ComposerSendFocus())

@@ -66,7 +66,7 @@ struct ConversationListHeader<Account: View, Actions: View>: View {
             HStack(spacing: 0) {
                 leadingControl
                     .frame(width: 44, height: 44)
-                    .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                    .modifier(ChatGlassSurface(shape: Circle(), isInteractive: true))
                     .frame(width: 52, height: 52)
                 Spacer(minLength: 0)
                 if onBack == nil {
@@ -74,7 +74,7 @@ struct ConversationListHeader<Account: View, Actions: View>: View {
                         .labelStyle(.iconOnly)
                         .font(.system(size: 22, weight: .regular))
                         .frame(width: 44, height: 44)
-                        .modifier(ChatGlassSurface(cornerRadius: 22, isInteractive: true))
+                        .modifier(ChatGlassSurface(shape: Circle(), isInteractive: true))
                         .frame(width: 52, height: 52)
                 } else {
                     Color.clear
@@ -118,7 +118,7 @@ struct ConversationListHeader<Account: View, Actions: View>: View {
                 Image(systemName: "chevron.backward")
                     .font(.system(size: 20, weight: .medium))
                     .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                    .contentShape(Circle())
             }
             .accessibilityLabel("Back to chats")
         } else {

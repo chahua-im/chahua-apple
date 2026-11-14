@@ -50,7 +50,8 @@ struct ChatDetailPinnedMessageBar: View {
                     .padding(.horizontal, 12)
             }
             .buttonStyle(.plain)
-            .modifier(ChatGlassSurface(cornerRadius: 24))
+            .modifier(
+                ChatGlassSurface(shape: RoundedRectangle(cornerRadius: 24, style: .continuous)))
         }
     }
 }

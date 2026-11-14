@@ -122,7 +122,7 @@
         override init(frame: CGRect) {
             super.init(frame: frame)
             clipsToBounds = true
-            layer.cornerRadius = 12
+            layer.cornerCurve = .circular
             emojiLabel.font = .systemFont(ofSize: 18.5)
             for label in [emojiLabel, countLabel] {
                 label.lineBreakMode = .byClipping
@@ -230,6 +230,7 @@
 
         override func layoutSubviews() {
             super.layoutSubviews()
+            layer.cornerRadius = bounds.height / 2
             emojiLabel.frame = contentFrames.first ?? .zero
             countLabel.frame = contentFrames.count > 1 ? contentFrames[1] : .zero
             tapMarker.frame = bounds
@@ -238,6 +239,15 @@
                     index < avatarCount && index + 2 < contentFrames.count
                     ? contentFrames[index + 2] : .zero
             }
+        }
+
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            guard super.point(inside: point, with: event) else { return false }
+            let radius = min(bounds.width, bounds.height) / 2
+            let x = min(max(point.x, bounds.minX + radius), bounds.maxX - radius)
+            let dx = point.x - x
+            let dy = point.y - bounds.midY
+            return dx * dx + dy * dy <= radius * radius
         }
 
         override func accessibilityActivate() -> Bool {

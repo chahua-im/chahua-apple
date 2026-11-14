@@ -62,17 +62,19 @@ struct TimelineNavigationControls: View {
             navigationSymbol(symbol)
                 .overlay(alignment: .topTrailing) {
                     if count > 0 {
-                        Text(count > 999 ? "999+" : String(count))
-                            .font(.caption2.bold())
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .fixedSize()
-                            .padding(.horizontal, 5)
-                            .frame(minWidth: badgeDiameter, minHeight: badgeDiameter)
-                            .foregroundStyle(.white)
-                            .background(badgeColor.color, in: Capsule())
-                            .offset(x: 8, y: -8)
-                            .accessibilityHidden(true)
+                        RoundChipLayout(isCircular: count < 10) {
+                            Text(count > 999 ? "999+" : String(count))
+                                .font(.caption2.bold())
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .fixedSize()
+                                .padding(.horizontal, 5)
+                                .frame(minWidth: badgeDiameter, minHeight: badgeDiameter)
+                                .foregroundStyle(.white)
+                        }
+                        .background(badgeColor.color, in: Capsule(style: .circular))
+                        .offset(x: 8, y: -8)
+                        .accessibilityHidden(true)
                     }
                 }
         }

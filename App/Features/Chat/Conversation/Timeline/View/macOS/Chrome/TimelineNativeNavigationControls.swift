@@ -103,11 +103,11 @@
 
         init(symbol: String) {
             if #available(macOS 26, *) {
-                let glass = NSGlassEffectView()
-                glass.cornerRadius = 16
-                glass.style = .regular
-                if #available(macOS 27, *) { glass.effectIsInteractive = true }
-                material = glass
+                // NSGlassEffectView rounds its rectangle with continuous corners.
+                // SwiftUI's explicit Circle gives this native control circular glass,
+                // including the system-drawn rim, rather than clipping a squircle.
+                material = NSHostingView(
+                    rootView: Color.clear.glassEffect(.regular.interactive(), in: Circle()))
             } else {
                 let effect = NSVisualEffectView()
                 effect.material = .popover
@@ -115,6 +115,7 @@
                 effect.state = .active
                 effect.wantsLayer = true
                 effect.layer?.cornerRadius = 16
+                effect.layer?.cornerCurve = .circular
                 effect.layer?.masksToBounds = true
                 material = effect
             }
@@ -171,16 +172,20 @@
             super.layout()
             material.frame = NSRect(x: 0, y: 0, width: 32, height: 32)
             symbolView.frame = material.frame
-            let height = max(22, badgeFont.pointSize * 2)
+            let minimumHeight = max(22, badgeFont.pointSize * 2)
+            let height =
+                badge.stringValue.count == 1 ? max(minimumHeight, badgeWidth) : minimumHeight
+            let width = max(height, badgeWidth)
             badgeBackground.frame = NSRect(
-                x: 40 - badgeWidth, y: -8, width: badgeWidth, height: height)
+                x: 40 - width, y: -8, width: width, height: height)
             badgeBackground.layer?.cornerRadius = height / 2
+            badgeBackground.layer?.cornerCurve = .circular
             // NSTextField aligns text at the top of a tall frame. Center its
             // measured line box inside the badge instead of stretching the label.
             let labelHeight = min(height, ceil(badge.intrinsicContentSize.height))
             badge.frame = NSRect(
                 x: 0, y: (height - labelHeight) / 2,
-                width: badgeWidth, height: labelHeight)
+                width: width, height: labelHeight)
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? {
