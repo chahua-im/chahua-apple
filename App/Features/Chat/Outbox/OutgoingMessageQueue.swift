@@ -258,7 +258,7 @@ final class OutgoingMessageQueue: ObservableObject {
 
     func saveDraft(
         chatID: String, threadID: String? = nil, text: String, editRevision: Int64, updatedAt: Date,
-        replyToMessage: MessagePreview? = nil
+        replyToMessage: MessagePreview? = nil, linkPreviews: [LinkPreviewInput] = []
     ) async throws {
         let current = generation
         guard let store, requestedUID != nil else {
@@ -272,7 +272,8 @@ final class OutgoingMessageQueue: ObservableObject {
             let snapshot = try await storageOperation {
                 try await store.saveDraft(
                     chatID: chatID, threadID: threadID, text: text, editRevision: editRevision,
-                    updatedAt: updatedAt, replyToMessage: replyToMessage)
+                    updatedAt: updatedAt, replyToMessage: replyToMessage, linkPreviews: linkPreviews
+                )
             }
             try checkGeneration(current)
             publish(snapshot)
@@ -285,7 +286,7 @@ final class OutgoingMessageQueue: ObservableObject {
 
     func enqueueText(
         chatID: String, threadID: String? = nil, text: String, clearedDraftRevision: Int64,
-        replyToMessage: MessagePreview? = nil
+        replyToMessage: MessagePreview? = nil, metadata: MessageMetadataInput? = nil
     ) async throws {
         guard
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -306,7 +307,7 @@ final class OutgoingMessageQueue: ObservableObject {
                 try await store.enqueueText(
                     chatID: chatID, threadID: threadID, senderID: uid, clientGeneratedID: id,
                     text: text, enqueuedAt: date, clearedDraftRevision: clearedDraftRevision,
-                    replyToMessage: replyToMessage)
+                    replyToMessage: replyToMessage, metadata: metadata)
             }
             try checkGeneration(current)
             publish(snapshot)
@@ -1289,7 +1290,9 @@ final class OutgoingMessageQueue: ObservableObject {
                 else { continue }
                 let response = try await apiClient.updateMessage(
                     chatID: item.chatID, messageID: confirmed.id,
-                    body: UpdateMessageBody(message: patch.text, attachmentIds: patch.attachmentIDs)
+                    body: UpdateMessageBody(
+                        message: patch.text, attachmentIds: patch.attachmentIDs,
+                        metadata: patch.metadata)
                 )
                 guard generation == current else { return }
                 guard matches(response, pending: item), response.id == confirmed.id else {
@@ -1414,7 +1417,7 @@ final class OutgoingMessageQueue: ObservableObject {
         let session = PendingEditSession(
             conversationKey: key, clientGeneratedID: item.clientGeneratedID,
             accountGeneration: generation, capturedRevision: item.editRevision,
-            initialText: item.text, initialAttachments: selection)
+            initialText: item.text, initialAttachments: selection, initialMetadata: item.metadata)
         // This registration must precede the first await: an acknowledgement cannot finalize it.
         editSessions[session.id] = session
         sessionOwnedSlots[session.id] = []
@@ -1439,13 +1442,17 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func submitPendingEdit(_ session: PendingEditSession, text: String) async throws {
+    func submitPendingEdit(
+        _ session: PendingEditSession, text: String, metadata: MessageMetadataInput? = nil
+    ) async throws {
         do {
             try validate(session)
             guard !importingSessions.contains(session.id) else {
                 throw LocalStorageError.invalidAttachments
             }
-            guard session.hasChanges(text: text) else { throw LocalStorageError.staleDraft }
+            guard session.hasChanges(text: text, metadata: metadata) else {
+                throw LocalStorageError.staleDraft
+            }
             guard storageState == .ready, let store, !authenticationFailed else {
                 throw QueueError.storageUnavailable
             }
@@ -1459,7 +1466,8 @@ final class OutgoingMessageQueue: ObservableObject {
                 let snapshot = try await store.editOutgoing(
                     chatID: key.chatID, threadID: key.threadID,
                     itemID: session.clientGeneratedID, expectedRevision: session.capturedRevision,
-                    text: text, attachments: session.attachments)
+                    text: text, attachments: session.attachments,
+                    metadata: metadata ?? session.initialMetadata)
                 try self.checkGeneration(current)
                 self.publish(snapshot)
                 self.uncommittedMutationFailures[session.clientGeneratedID] = nil

@@ -34,7 +34,12 @@ struct ChatDetailView: View {
     @State private var editingMessage: MessageResponse?
     @State private var serverEditIdentity = UUID()
     @StateObject private var pendingEditor = PendingEditPresentation()
-    @StateObject private var pendingEditExitGuard = FormExitGuard()
+    @StateObject private var localEditExitGuard = FormExitGuard()
+    @Environment(\.messageEditExitCoordinator) private var editExitCoordinator
+    @Environment(\.dismiss) private var dismiss
+    private var editExitGuard: FormExitGuard {
+        editExitCoordinator?.exitGuard ?? localEditExitGuard
+    }
     @State private var isEnteringEdit = false
     @State private var editEntryTask: Task<Void, Never>?
     private var pendingEditSession: PendingEditSession? {
@@ -42,6 +47,8 @@ struct ChatDetailView: View {
         nonmutating set { pendingEditor.session = newValue }
     }
     @State private var editText = ""
+    @State private var editLinkPreviews: [LinkPreviewInput] = []
+    @State private var initialEditLinkPreviews: [LinkPreviewInput] = []
     @State private var isUpdatingMessage = false
     @State private var isComposerComposing = false
     @State private var editError: String?
@@ -317,7 +324,22 @@ struct ChatDetailView: View {
                     systemTargetError: $systemTargetError, editError: $editError,
                     outboxError: $outboxError)
             )
-            .formDiscardConfirmation(pendingEditExitGuard)
+            .formDiscardConfirmation(editExitGuard)
+            #if os(iOS)
+                // iOS has native Back/swipe to intercept; macOS uses the shell's
+                // guarded floating header and must not gain a second Back toolbar.
+                .formBackProtection(editExitGuard) {
+                    cancelEditing()
+                    dismiss()
+                }
+            #endif
+            .onChange(
+                of: hasEditChanges(editText) || (isEditing && isComposerComposing), initial: true
+            ) { _, _ in
+                refreshEditExitGuard()
+            }
+            .onChange(of: isUpdatingMessage) { _, _ in refreshEditExitGuard() }
+            .onChange(of: composerAttachments.isAcquiring) { _, _ in refreshEditExitGuard() }
             .task(id: pendingEditSession?.isValid) {
                 if pendingEditSession?.isValid == false, !isUpdatingMessage { cancelEditing() }
             }
@@ -341,7 +363,7 @@ struct ChatDetailView: View {
             .onReceive(store.conversationMessages.changes, perform: receiveThreadMetadata)
             .onDisappear {
                 editEntryTask?.cancel()
-                cancelEditing()
+                if editExitCoordinator == nil { cancelEditing() }
                 selectionDeleteTask?.cancel()
                 systemTargetTask?.cancel()
                 systemTargetTask = nil
@@ -693,10 +715,10 @@ struct ChatDetailView: View {
         let hasChanges: ((String) -> Bool)?
         let importFiles: (([URL]) async throws -> Void)?
         if let session = pendingEditSession {
-            hasChanges = { session.hasChanges(text: $0) }
+            hasChanges = { session.hasChanges(text: $0, metadata: composerMetadata(for: $0)) }
             importFiles = nil
         } else {
-            hasChanges = nil
+            hasChanges = isEditing ? { hasEditChanges($0) } : nil
             importFiles = importComposerFiles
         }
         return MessageComposerView(
@@ -736,7 +758,7 @@ struct ChatDetailView: View {
                 ?? editingMessage.map { _ in serverEditIdentity.uuidString },
             editMentionNames: MessageMentions.names(in: editingMessage?.mentions ?? []),
             allowsEditingMedia: pendingEditSession != nil,
-            editExitGuard: pendingEditSession == nil ? nil : pendingEditExitGuard,
+            editExitGuard: isEditing ? editExitGuard : nil,
             onCancelEdit: cancelEditing,
             onEscapeEdit: requestEditingExit,
             onRequestEditLastMessage: requestEditLastOwnMessage,
@@ -775,7 +797,16 @@ struct ChatDetailView: View {
             onSendVoice: sendVoice,
             onSearchMembers: { query in
                 try await store.searchMembers(chatID: chat.id, query: query)
-            }
+            },
+            linkPreviewScope:
+                "\(observation.session.accountID.map(String.init) ?? ""):\(observation.session.revision):\(chat.id):\(threadID ?? ""):\(pendingEditSession?.id.uuidString ?? (isEditing ? serverEditIdentity.uuidString : "draft"))",
+            linkPreviewChoices: composerLinkPreviews,
+            initialLinkPreviews: editingMessage?.metadata?.linkPreviews ?? [],
+            onPreviewLinks: { urls in
+                guard isCurrentSession else { throw CancellationError() }
+                return try await store.previewLinks(chatID: chat.id, urls: urls)
+            },
+            onEditDraftChanged: { if isEditing { editText = $0 } }
         )
     }
 
@@ -1154,20 +1185,62 @@ struct ChatDetailView: View {
 
     private func performEditingExit(_ text: String) {
         guard !isUpdatingMessage else { return }
-        guard let session = pendingEditSession else {
-            if text == editingMessage?.message { cancelEditing() }
-            return
-        }
-        pendingEditExitGuard.update(
-            owner: session.id, isDirty: session.hasChanges(text: text),
-            isSubmitting: isUpdatingMessage || composerAttachments.isAcquiring,
-            accountID: observation.session.accountID, sessionRevision: observation.session.revision)
-        pendingEditExitGuard.requestExit {
-            guard isCurrentSession, pendingEditSession?.id == session.id,
+        guard isEditing else { return }
+        let owner = pendingEditSession?.id ?? serverEditIdentity
+        refreshEditExitGuard(text: text)
+        editExitGuard.requestExit {
+            guard isCurrentSession, (pendingEditSession?.id ?? serverEditIdentity) == owner,
                 !isUpdatingMessage, !composerAttachments.isAcquiring
             else { return }
             cancelEditing()
         }
+    }
+
+    private func refreshEditExitGuard(text: String? = nil) {
+        let owner = pendingEditSession?.id ?? serverEditIdentity
+        guard isEditing, isCurrentSession else {
+            editExitGuard.unregister(owner: owner)
+            return
+        }
+        editExitCoordinator?.register(owner: owner, onLeave: cancelEditing)
+        editExitGuard.update(
+            owner: owner, isDirty: hasEditChanges(text ?? editText) || isComposerComposing,
+            isSubmitting: isUpdatingMessage || composerAttachments.isAcquiring,
+            accountID: observation.session.accountID, sessionRevision: observation.session.revision)
+    }
+
+    private func hasEditChanges(_ text: String) -> Bool {
+        guard isEditing else { return false }
+        if let session = pendingEditSession {
+            return session.hasChanges(text: text, metadata: composerMetadata(for: text))
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            != (editingMessage?.message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            || DraftLinkURLs.disabledURLs(DraftLinkURLs.choices(editLinkPreviews, in: text))
+                != DraftLinkURLs.disabledURLs(initialEditLinkPreviews)
+    }
+
+    private var composerLinkPreviews: Binding<[LinkPreviewInput]> {
+        Binding(
+            get: {
+                isEditing
+                    ? editLinkPreviews
+                    : drafts.draftLinkPreviews(chatID: chat.id, threadID: threadID)
+            },
+            set: {
+                guard isCurrentSession else { return }
+                if isEditing {
+                    editLinkPreviews = $0
+                    refreshEditExitGuard()
+                } else {
+                    drafts.setDraftLinkPreviews($0, chatID: chat.id, threadID: threadID)
+                }
+            })
+    }
+
+    private func composerMetadata(for text: String) -> MessageMetadataInput {
+        MessageMetadataInput(
+            linkPreviews: DraftLinkURLs.choices(composerLinkPreviews.wrappedValue, in: text))
     }
 
     private func importComposerImages(_ urls: [URL], session: PendingEditSession?) async throws {
@@ -1261,13 +1334,9 @@ struct ChatDetailView: View {
         if let session = pendingEditSession {
             return !isUpdatingMessage && session.isValid
         }
-        if let editingMessage {
+        if editingMessage != nil {
             return !isUpdatingMessage
-                && (isComposerComposing
-                    || (!text.isEmpty
-                        && text
-                            != editingMessage.message?.trimmingCharacters(
-                                in: .whitespacesAndNewlines)))
+                && (isComposerComposing || (!text.isEmpty && hasEditChanges(text)))
         }
         return outgoingQueue.storageState == .ready
             && !drafts.committingDrafts.contains(conversationKey)
@@ -1306,14 +1375,15 @@ struct ChatDetailView: View {
         guard canUseComposer, !isEnteringEdit else { return false }
         if let session = pendingEditSession {
             guard session.isValid, !isUpdatingMessage,
-                session.hasChanges(text: text),
+                session.hasChanges(text: text, metadata: composerMetadata(for: text)),
                 !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !session.attachments.isEmpty
             else { return false }
             isUpdatingMessage = true
             defer { isUpdatingMessage = false }
             do {
-                try await outgoingQueue.submitPendingEdit(session, text: text)
+                try await outgoingQueue.submitPendingEdit(
+                    session, text: text, metadata: composerMetadata(for: text))
                 guard isCurrentSession, pendingEditSession?.id == session.id else { return false }
                 cancelEditing()
                 return true
@@ -1328,7 +1398,9 @@ struct ChatDetailView: View {
             }
         }
         guard let message = editingMessage else {
-            let sent = await drafts.submitDraft(chatID: chat.id, threadID: threadID, text: text)
+            let sent = await drafts.submitDraft(
+                chatID: chat.id, threadID: threadID, text: text,
+                metadata: composerMetadata(for: text))
             if sent { model.revealLatestAfterSend() }
             if !sent, let error = drafts.submissionError { outboxError = error }
             return sent
@@ -1337,14 +1409,16 @@ struct ChatDetailView: View {
         isUpdatingMessage = true
         let submittedText = text
         let submittedEditIdentity = serverEditIdentity
-        let didUpdate = await store.updateMessage(message, text: submittedText)
+        let submittedMetadata = composerMetadata(for: submittedText)
+        let didUpdate = await store.updateMessage(
+            message, text: submittedText, metadata: submittedMetadata)
         guard isCurrentSession, !Task.isCancelled else { return false }
         guard editingMessage?.id == message.id, pendingEditSession == nil,
             submittedEditIdentity == serverEditIdentity
         else { return didUpdate }
         isUpdatingMessage = false
         if didUpdate {
-            if editText == submittedText {
+            if editText == submittedText && composerMetadata(for: editText) == submittedMetadata {
                 cancelEditing()
             } else {
                 editingMessage = message.replacingMessageText(
@@ -1369,6 +1443,14 @@ struct ChatDetailView: View {
 
     private func startEditing(_ message: MessageResponse) {
         guard !isUpdatingMessage, !isEnteringEdit, isEditable(message) else { return }
+        guard editingMessage?.id != message.id || pendingEditSession != nil else { return }
+        refreshEditExitGuard()
+        editExitGuard.requestExit {
+            beginEditing(message)
+        }
+    }
+
+    private func beginEditing(_ message: MessageResponse) {
         isEnteringEdit = true
         editEntryTask = Task {
             defer { isEnteringEdit = false }
@@ -1379,17 +1461,25 @@ struct ChatDetailView: View {
                 cancelEditing()
                 editingMessage = message
                 editText = message.message ?? ""
+                editLinkPreviews = (message.metadata?.linkPreviews ?? [])
+                    .filter { $0.status == .disabled }
+                    .map { LinkPreviewInput(url: $0.url, status: .disabled) }
+                initialEditLinkPreviews = editLinkPreviews
+                refreshEditExitGuard()
                 replyFocusRequest &+= 1
             } catch { editError = error.localizedDescription }
         }
     }
 
     private func cancelEditing() {
+        editExitGuard.unregister(owner: pendingEditSession?.id ?? serverEditIdentity)
+        editExitCoordinator?.unregister(owner: pendingEditSession?.id ?? serverEditIdentity)
         serverEditIdentity = UUID()
         composerAttachments.cancelEditingWork?()
         if let session = pendingEditSession { outgoingQueue.endPendingEdit(session) }
         pendingEditSession = nil
-        pendingEditExitGuard.invalidate()
+        editLinkPreviews = []
+        initialEditLinkPreviews = []
         editingMessage = nil
         editText = ""
         isUpdatingMessage = false
@@ -1414,6 +1504,14 @@ struct ChatDetailView: View {
             pending.senderID == model.currentUserID,
             !isUpdatingMessage, !isEnteringEdit
         else { return }
+        guard pendingEditSession?.clientGeneratedID != pending.clientGeneratedID else { return }
+        refreshEditExitGuard()
+        editExitGuard.requestExit {
+            beginPendingEditing(pending)
+        }
+    }
+
+    private func beginPendingEditing(_ pending: PendingOutgoingMessage) {
         isEnteringEdit = true
         editEntryTask = Task {
             var acquiredSession: PendingEditSession?
@@ -1436,6 +1534,9 @@ struct ChatDetailView: View {
                 cancelEditing()
                 pendingEditSession = session
                 editText = session.initialText
+                editLinkPreviews = session.initialMetadata?.linkPreviews ?? []
+                initialEditLinkPreviews = editLinkPreviews
+                refreshEditExitGuard()
                 replyFocusRequest &+= 1
             } catch {
                 if isCurrentSession { editError = error.localizedDescription }

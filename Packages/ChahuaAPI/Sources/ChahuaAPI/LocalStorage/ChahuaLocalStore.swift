@@ -72,10 +72,14 @@ public final class ChahuaLocalStore: Sendable {
 
     public func saveDraft(
         chatID: String, threadID: String? = nil, text: String, editRevision: Int64, updatedAt: Date,
-        replyToMessage: MessagePreview? = nil
+        replyToMessage: MessagePreview? = nil, linkPreviews: [LinkPreviewInput] = []
     ) async throws -> LocalConversationSnapshot {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
+        let metadataData =
+            try linkPreviews.isEmpty
+            ? nil
+            : JSONEncoder().encode(MessageMetadataInput(linkPreviews: linkPreviews))
         return try await database.write { db in
             try Self.ensure(db, key)
             let before = try Self.snapshot(db, key, directory: self.directory)
@@ -83,15 +87,17 @@ public final class ChahuaLocalStore: Sendable {
             if let item = before.composingItem {
                 try db.execute(
                     sql:
-                        "UPDATE outgoing_message SET text = ?, reply_to_message = ?, edit_revision = ?, updated_at = ? WHERE client_generated_id = ?",
+                        "UPDATE outgoing_message SET text = ?, reply_to_message = ?, metadata = ?, edit_revision = ?, updated_at = ? WHERE client_generated_id = ?",
                     arguments: [
-                        text, replyData, editRevision, updatedAt.timeIntervalSince1970,
+                        text, replyData, metadataData, editRevision,
+                        updatedAt.timeIntervalSince1970,
                         item.clientGeneratedID,
                     ])
-            } else if !text.isEmpty || replyData != nil {
+            } else if !text.isEmpty || replyData != nil || metadataData != nil {
                 try Self.insert(
                     db, key, id: UUID().uuidString, senderID: 0, text: text, replyData: replyData,
-                    date: updatedAt, revision: editRevision, blocked: true)
+                    date: updatedAt, revision: editRevision, blocked: true,
+                    metadataData: metadataData)
             }
             try Self.writeRevision(db, key, editRevision, updatedAt)
             try Self.bump(db, key)
@@ -104,7 +110,7 @@ public final class ChahuaLocalStore: Sendable {
     public func enqueueText(
         chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,
         text: String, enqueuedAt: Date, clearedDraftRevision: Int64,
-        replyToMessage: MessagePreview? = nil
+        replyToMessage: MessagePreview? = nil, metadata: MessageMetadataInput? = nil
     ) async throws -> LocalConversationSnapshot {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = ConversationKey(chatID: chatID, threadID: threadID)
@@ -112,6 +118,9 @@ public final class ChahuaLocalStore: Sendable {
         return try await database.write { db in
             try Self.ensure(db, key)
             let before = try Self.snapshot(db, key, directory: self.directory)
+            let metadataData = try (metadata ?? before.composingItem?.metadata).map {
+                try JSONEncoder().encode($0)
+            }
             guard clearedDraftRevision > before.draft.editRevision else {
                 throw LocalStorageError.staleDraft
             }
@@ -124,10 +133,11 @@ public final class ChahuaLocalStore: Sendable {
                 // and sender grouping must agree with the eventual acknowledgement.
                 try db.execute(
                     sql:
-                        "UPDATE outgoing_message SET sender_id = ?, text = ?, reply_to_message = ?, is_blocked = 0, edit_revision = ?, enqueued_at = ?, updated_at = ? WHERE client_generated_id = ?",
+                        "UPDATE outgoing_message SET sender_id = ?, text = ?, reply_to_message = ?, metadata = ?, is_blocked = 0, edit_revision = ?, enqueued_at = ?, updated_at = ? WHERE client_generated_id = ?",
                     arguments: [
                         senderID, item.attachments.contains(where: \.isFile) ? "" : trimmed,
-                        replyData, clearedDraftRevision,
+                        replyData, item.attachments.contains(where: \.isFile) ? nil : metadataData,
+                        clearedDraftRevision,
                         enqueuedAt.timeIntervalSince1970, enqueuedAt.timeIntervalSince1970,
                         item.clientGeneratedID,
                     ])
@@ -137,13 +147,13 @@ public final class ChahuaLocalStore: Sendable {
                     try Self.insert(
                         db, key, id: UUID().uuidString, senderID: senderID, text: trimmed,
                         replyData: nil, date: enqueuedAt, revision: clearedDraftRevision,
-                        blocked: false)
+                        blocked: false, metadataData: metadataData)
                 }
             } else {
                 try Self.insert(
                     db, key, id: clientGeneratedID, senderID: senderID, text: trimmed,
                     replyData: replyData, date: enqueuedAt, revision: clearedDraftRevision,
-                    blocked: false)
+                    blocked: false, metadataData: metadataData)
             }
             try Self.writeRevision(db, key, clearedDraftRevision, enqueuedAt)
             try Self.bump(db, key)
@@ -448,7 +458,7 @@ public final class ChahuaLocalStore: Sendable {
 
     public func editOutgoing(
         chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64,
-        text: String, attachments: [LocalEditAttachment]
+        text: String, attachments: [LocalEditAttachment], metadata: MessageMetadataInput? = nil
     ) async throws -> LocalConversationSnapshot {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -501,12 +511,13 @@ public final class ChahuaLocalStore: Sendable {
                 ? .sending : .queued
             try db.execute(
                 sql: """
-                    UPDATE outgoing_message SET text = ?, intent_attachments = ?, edit_revision = ?,
+                    UPDATE outgoing_message SET text = ?, intent_attachments = ?, metadata = ?, edit_revision = ?,
                         state = ?, mutation_retryable = 0, speaking_restriction = NULL, updated_at = ?
                     WHERE client_generated_id = ?
                     """,
                 arguments: [
                     trimmed, try Self.encodeEditAttachments(selection, directory: self.directory),
+                    try (metadata ?? item.metadata).map { try JSONEncoder().encode($0) },
                     item.editRevision + 1, state.rawValue, Date().timeIntervalSince1970, itemID,
                 ])
             try Self.bump(db, key)
@@ -730,7 +741,7 @@ public final class ChahuaLocalStore: Sendable {
                         case .local(let slot): return slot.attachmentID!
                         case .server(let attachment): return attachment.id
                         }
-                    }, revision: item.editRevision)
+                    }, revision: item.editRevision, metadata: item.metadata)
             }
             try db.execute(
                 sql:
@@ -1060,7 +1071,7 @@ public final class ChahuaLocalStore: Sendable {
 
     private static func insert(
         _ db: Database, _ key: ConversationKey, id: String, senderID: Int32, text: String,
-        replyData: Data?, date: Date, revision: Int64, blocked: Bool
+        replyData: Data?, date: Date, revision: Int64, blocked: Bool, metadataData: Data? = nil
     ) throws {
         let sequence = try Int64.fetchOne(
             db,
@@ -1071,12 +1082,13 @@ public final class ChahuaLocalStore: Sendable {
             sql: """
                 INSERT INTO outgoing_message
                     (client_generated_id, chat_id, thread_id, sender_id, text, enqueued_at, enqueue_sequence,
-                     dispatch_order, state, reply_to_message, is_blocked, edit_revision, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                     dispatch_order, state, reply_to_message, is_blocked, edit_revision, updated_at, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
                 """,
             arguments: [
                 id, key.chatID, key.threadID ?? "", senderID, text, date.timeIntervalSince1970,
                 sequence, sequence, replyData, blocked, revision, date.timeIntervalSince1970,
+                metadataData,
             ])
         try db.execute(
             sql:
@@ -1273,7 +1285,10 @@ public final class ChahuaLocalStore: Sendable {
                 intentAttachments: intent, confirmedMessage: confirmed,
                 isPublished: row["is_published"], isCancelled: row["is_cancelled"],
                 acknowledgedRevision: row["acknowledged_revision"], claimedPatch: patch,
-                mutationRetryable: row["mutation_retryable"])
+                mutationRetryable: row["mutation_retryable"],
+                metadata: try (row["metadata"] as Data?).map {
+                    try JSONDecoder().decode(MessageMetadataInput.self, from: $0)
+                })
             try validateAttachments(attachments, directory: directory, requireSource: false)
             if let intent {
                 guard !item.isBlocked, item.forwardRequest == nil, item.messageType == .text else {
@@ -1337,7 +1352,8 @@ public final class ChahuaLocalStore: Sendable {
             editRevision: composing?.editRevision ?? watermark?["edit_revision"] ?? 0,
             updatedAt: updatedAt, itemID: composing?.clientGeneratedID,
             attachments: composing?.attachments ?? [],
-            compressionEnabled: composing?.compressionEnabled ?? true)
+            compressionEnabled: composing?.compressionEnabled ?? true,
+            linkPreviews: composing?.metadata?.linkPreviews ?? [])
         return LocalConversationSnapshot(
             chatID: key.chatID, threadID: key.threadID, revision: revision, draft: draft,
             outgoing: items.filter { !$0.isBlocked }, composingItem: composing)

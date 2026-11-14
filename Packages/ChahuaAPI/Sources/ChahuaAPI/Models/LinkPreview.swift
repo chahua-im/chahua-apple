@@ -6,6 +6,7 @@ public struct MessageLinkPreview: Codable, Hashable, Sendable {
         case pending
         case ready
         case unavailable
+        case disabled
     }
 
     public struct Image: Codable, Hashable, Sendable {
@@ -44,7 +45,7 @@ public struct MessageLinkPreview: Codable, Hashable, Sendable {
         switch status {
         case .ready: true
         case .pending: expiresAt.map { $0 > now } ?? false
-        case .unavailable: false
+        case .unavailable, .disabled: false
         }
     }
 
@@ -68,5 +69,34 @@ public struct MessageMetadataResponse: Codable, Hashable, Sendable {
         linkPreviews =
             try container.decodeIfPresent([MessageLinkPreview].self, forKey: .linkPreviews)
             ?? []
+    }
+}
+
+/// Only user intent and explicitly supplied content may be submitted, never response statuses.
+public struct LinkPreviewInput: Codable, Hashable, Sendable {
+    public enum Status: String, Codable, Hashable, Sendable {
+        case enabled, disabled
+    }
+
+    public let url: String
+    public let status: Status?
+    public let title: String?
+    public let imageUrl: String?
+
+    public init(
+        url: String, status: Status? = nil, title: String? = nil, imageUrl: String? = nil
+    ) {
+        self.url = url
+        self.status = status
+        self.title = title
+        self.imageUrl = imageUrl
+    }
+}
+
+public struct MessageMetadataInput: Codable, Hashable, Sendable {
+    public let linkPreviews: [LinkPreviewInput]
+
+    public init(linkPreviews: [LinkPreviewInput] = []) {
+        self.linkPreviews = linkPreviews
     }
 }

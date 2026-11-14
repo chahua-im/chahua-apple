@@ -1696,10 +1696,20 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func updateMessage(_ message: MessageResponse, text: String) async -> Bool {
+    func previewLinks(chatID: String, urls: [String]) async throws -> [MessageLinkPreview] {
+        let requestGeneration = generation
+        let previews = try await apiClient.previewLinks(chatID: chatID, urls: urls)
+        guard generation == requestGeneration else { throw CancellationError() }
+        return previews
+    }
+
+    func updateMessage(
+        _ message: MessageResponse, text: String, metadata: MessageMetadataInput? = nil
+    ) async -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty,
             text != message.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+                || metadata != nil
         else {
             return false
         }
@@ -1715,7 +1725,8 @@ final class ChatStore: ObservableObject {
             pins.applyRealtimeEvent(.messageUpdated(optimistic))
             appliedOptimistically = true
             let updated = try await apiClient.updateMessage(
-                chatID: message.chatId, messageID: message.id, body: .init(message: text))
+                chatID: message.chatId, messageID: message.id,
+                body: .init(message: text, metadata: metadata))
             guard generation == requestGeneration else { return false }
             conversationMessages.apply(.messageUpdated(updated))
             pins.applyRealtimeEvent(.messageUpdated(updated))

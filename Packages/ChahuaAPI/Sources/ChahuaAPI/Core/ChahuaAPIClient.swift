@@ -249,6 +249,9 @@ public protocol ChahuaAPIClient: SocialAPIClient, GroupAPIClient {
     /// the returned `MessageResponse.id` is the server message identifier.
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse
 
+    /// Fetches server-owned draft metadata using the authenticated preview RPC.
+    func previewLinks(chatID: String, urls: [String]) async throws -> [MessageLinkPreview]
+
     /// Sends a reply with `POST /chats/{chatID}/threads/{threadID}/messages`.
     ///
     /// `threadID` is the root message identifier within `chatID`; the body uses
@@ -274,6 +277,10 @@ public protocol ChahuaAPIClient: SocialAPIClient, GroupAPIClient {
 }
 
 extension ChahuaAPIClient {
+    public func previewLinks(chatID: String, urls: [String]) async throws -> [MessageLinkPreview] {
+        throw APIError.unavailable
+    }
+
     public func updateGroupSpeakingMode(chatID: String, speakingMode: SpeakingMode) async throws
         -> GroupSpeakingModeResponse
     {

@@ -43,6 +43,14 @@ struct MessageComposerView: View {
     var onSendSticker: ((MessageStickerResponse) async -> Bool)? = nil
     var onSendVoice: ((URL) async -> Bool)? = nil
     nonisolated var onSearchMembers: ComposerMemberSearch? = nil
+    var linkPreviewScope = ""
+    var linkPreviewChoices: Binding<[LinkPreviewInput]> = .constant([])
+    var initialLinkPreviews: [MessageLinkPreview] = []
+    var onPreviewLinks: (([String]) async throws -> [MessageLinkPreview])? = nil
+    var onEditDraftChanged: ((String) -> Void)? = nil
+    @StateObject private var linkPreviews = DraftLinkPreviewState()
+    @State private var showsLinkManagement = false
+    @State private var linkManagementStoleFocus = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showsPhotos = false
     @State private var showsFiles = false
@@ -290,6 +298,11 @@ struct MessageComposerView: View {
                     } else if let reply = replyToMessage {
                         replyMarker(reply)
                     }
+                    if !voiceRecorder.isActive {
+                        DraftLinkPreviewControls(
+                            state: linkPreviews, isEnabled: isEnabled && !isSubmitting,
+                            onOpen: openLinkManagement)
+                    }
 
                     if voiceRecorder.isActive {
                         ComposerVoicePanel(recorder: voiceRecorder)
@@ -455,6 +468,15 @@ struct MessageComposerView: View {
             }
         #endif
         .sheet(
+            isPresented: $showsLinkManagement,
+            onDismiss: {
+                if linkManagementStoleFocus && isEnabled { isInputFocused = true }
+                linkManagementStoleFocus = false
+            }
+        ) {
+            DraftLinkPreviewManagement(state: linkPreviews)
+        }
+        .sheet(
             isPresented: $showsAttachmentDialog,
             onDismiss: {
                 #if os(iOS)
@@ -496,6 +518,7 @@ struct MessageComposerView: View {
                 onImportProviders: importProviders,
                 onTakePhoto: takePhoto,
                 onSubmit: {
+                    guard attachmentDialogEditIdentity == editIdentity else { return false }
                     let sent = await onSubmit(attachmentCaption)
                     if sent { attachmentSubmitted = true }
                     return sent
@@ -512,7 +535,7 @@ struct MessageComposerView: View {
                 onSearchMembers: onSearchMembers,
                 isEditing: isEditing, allowsCompressionChanges: !isEditing,
                 onEscapeEdit: { onEscapeEdit?(attachmentCaption) },
-                editExitGuard: editExitGuard
+                editExitGuard: editExitGuard, linkPreviews: linkPreviews
             )
         }
         #if os(iOS)
@@ -596,6 +619,7 @@ struct MessageComposerView: View {
             Text(voiceRecorder.error ?? "")
         }
         .onDisappear {
+            linkPreviews.suspend()
             acquisitionTask?.cancel()
             acquisitionGeneration = UUID()
             attachmentState.prepareForEditing = nil
@@ -619,11 +643,25 @@ struct MessageComposerView: View {
             voiceRecorder.setSceneActive(scenePhase == .active)
             attachmentState.prepareForEditing = prepareForEditing
             attachmentState.cancelEditingWork = cancelEditingWork
+            refreshLinkPreviews()
         }
         .onChange(of: text) { _, text in
             input.receiveExternalText(text)
             if !text.isEmpty { voiceRecorder.discard() }
+            if !showsAttachmentDialog { refreshLinkPreviews() }
         }
+        .onChange(of: attachmentCaption) { _, _ in
+            if showsAttachmentDialog { refreshLinkPreviews() }
+            if showsAttachmentDialog && isEditing && attachmentDialogEditIdentity == editIdentity {
+                onEditDraftChanged?(attachmentCaption)
+            }
+        }
+        .onChange(of: showsAttachmentDialog) { _, _ in refreshLinkPreviews() }
+        .onChange(of: linkPreviewScope) { _, _ in
+            showsLinkManagement = false
+            refreshLinkPreviews()
+        }
+        .onChange(of: linkPreviewChoices.wrappedValue) { _, _ in refreshLinkPreviews() }
         .onChange(of: isInputFocused) { _, focused in
             if focused { dismissStickerPicker(restoreFocus: false) }
         }
@@ -637,12 +675,16 @@ struct MessageComposerView: View {
             dismissStickerPicker(restoreFocus: false)
             voiceRecorder.discard()
             input.receiveExternalText(text)
+            showsLinkManagement = false
+            refreshLinkPreviews()
         }
         .onChange(of: isEnabled) { _, enabled in
             if !enabled {
+                showsLinkManagement = false
                 dismissStickerPicker(restoreFocus: false)
                 voiceRecorder.suspend()
             }
+            refreshLinkPreviews()
         }
         .onChange(of: attachmentState.dropRequest?.id) { _, id in
             guard id != nil, let providers = attachmentState.takeDrop() else { return }
@@ -657,6 +699,30 @@ struct MessageComposerView: View {
         .onChange(of: replyFocusRequest) { _, _ in
             if isEnabled && !voiceRecorder.isActive { isInputFocused = true }
         }
+    }
+
+    private func refreshLinkPreviews() {
+        guard isEnabled, let onPreviewLinks else {
+            linkPreviews.invalidate()
+            return
+        }
+        linkPreviews.configure(
+            scope: linkPreviewScope,
+            text: showsAttachmentDialog && attachmentDialogEditIdentity == editIdentity
+                ? attachmentCaption : text,
+            automatic: !isEditing, choices: linkPreviewChoices.wrappedValue,
+            initial: initialLinkPreviews, fetch: onPreviewLinks,
+            saveChoices: { linkPreviewChoices.wrappedValue = $0 })
+    }
+
+    private func openLinkManagement() {
+        input.settleNativeInput()
+        guard !input.isComposing else { return }
+        dismissStickerPicker(restoreFocus: false)
+        linkManagementStoleFocus = isInputFocused
+        isInputFocused = false
+        refreshLinkPreviews()
+        showsLinkManagement = true
     }
 
     private func performImageOperation(
@@ -844,7 +910,7 @@ struct MessageComposerView: View {
                     .frame(width: 3)
             }
             Button {
-                onCancelEdit?()
+                onEscapeEdit?(text)
                 isInputFocused = true
             } label: {
                 Image(systemName: "xmark")

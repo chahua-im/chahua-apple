@@ -30,6 +30,9 @@ struct ComposerAttachmentDialog: View {
     var allowsCompressionChanges = true
     var onEscapeEdit: (() -> Void)? = nil
     var editExitGuard: FormExitGuard? = nil
+    var linkPreviews: DraftLinkPreviewState? = nil
+    @State private var showsLinkManagement = false
+    @State private var linkManagementStoleFocus = false
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var input = ComposerInputState()
@@ -111,6 +114,11 @@ struct ComposerAttachmentDialog: View {
                     input: input, wireText: text, isEnabled: canEditCaption,
                     search: onSearchMembers
                 )
+                if let linkPreviews {
+                    DraftLinkPreviewControls(
+                        state: linkPreviews, isEnabled: canEditCaption,
+                        onOpen: openLinkManagement)
+                }
                 captionBar
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -174,6 +182,15 @@ struct ComposerAttachmentDialog: View {
             return .handled
         }
         .modifier(ComposerEditDiscardConfirmation(exitGuard: editExitGuard))
+        .sheet(
+            isPresented: $showsLinkManagement,
+            onDismiss: {
+                if linkManagementStoleFocus && canEditCaption { isCaptionFocused = true }
+                linkManagementStoleFocus = false
+            }
+        ) {
+            if let linkPreviews { DraftLinkPreviewManagement(state: linkPreviews) }
+        }
         .onDisappear { input.settleNativeInput() }
     }
 
@@ -315,6 +332,14 @@ struct ComposerAttachmentDialog: View {
                 )
                 .accessibilityLabel("Caption")
         #endif
+    }
+
+    private func openLinkManagement() {
+        input.settleNativeInput()
+        guard !input.isComposing else { return }
+        linkManagementStoleFocus = isCaptionFocused
+        isCaptionFocused = false
+        showsLinkManagement = true
     }
 
     private func changeAttachments(_ operation: () -> Void) {

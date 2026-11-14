@@ -702,6 +702,39 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(thread(lastReply: nil).previewMessage, root)
     }
 
+    func testShareSummariesKeepServerTitlesLiteralAcrossCompactConsumers() throws {
+        let url = "https://example.com/article"
+        let title = "**Title** ||secret|| [label](https://other.example) @[uid:2]"
+        let message = try TimelineTestFixtures.message(
+            id: 1, at: 1, text: url,
+            fields: [
+                "metadata": ["linkPreviews": [["url": url, "status": "ready", "title": title]]]
+            ])
+        let preview = message.replyPreview
+        let expected = AppLanguage.localized("[Share]") + title
+        let nodes = MessageSummaryContent.summary(preview)
+        XCTAssertEqual(messagePreview(preview), expected)
+        let attributed = MessageSummaryContent.attributedText(
+            nodes, mentions: [], font: .systemFont(ofSize: 15), color: .black)
+        XCTAssertEqual(attributed.string, expected)
+        XCTAssertFalse(MessageSummaryContent.containsSpoilers(nodes))
+        XCTAssertNil(attributed.attribute(.underlineStyle, at: 0, effectiveRange: nil))
+        let forwarded = ForwardedMessagePreviewResponse(
+            originalMessageId: message.id, originalChatId: message.chatId,
+            message: message.message, messageType: message.messageType,
+            sender: message.sender, originalCreatedAt: message.createdAt, metadata: message.metadata
+        )
+        XCTAssertEqual(MessageSummaryContent.forwardedSummary(forwarded), expected)
+        let thread = ConversationListItem.thread(
+            ThreadListItem(
+                chatId: "chat", chatName: "Parent", threadRootMessage: preview, lastReply: preview,
+                replyCount: 1, lastReplyAt: message.createdAt, unreadCount: 0,
+                subscribedAt: .distantPast, archived: false))
+        XCTAssertEqual(thread.title, expected)
+        XCTAssertEqual(thread.previewMessage.map(messagePreview), expected)
+        XCTAssertEqual(message.message, url)
+    }
+
     func testFormattedSummariesKeepStylesAndConcealSpoilersWithoutEmbeddedActions() throws {
         let message = try TimelineTestFixtures.message(
             id: 1, at: 1,

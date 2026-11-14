@@ -82,6 +82,7 @@ public struct LocalDraft: Sendable, Equatable {
     public var itemID: String? = nil
     public var attachments: [LocalOutgoingAttachment] = []
     public var compressionEnabled: Bool = true
+    public var linkPreviews: [LinkPreviewInput] = []
 }
 
 /// Immutable acknowledged source selection captured once before entering the durable outbox.
@@ -120,11 +121,16 @@ public struct LocalClaimedPatch: Codable, Hashable, Sendable {
     public let text: String
     public let attachmentIDs: [String]
     public let revision: Int64
+    public let metadata: MessageMetadataInput?
 
-    public init(text: String, attachmentIDs: [String], revision: Int64) {
+    public init(
+        text: String, attachmentIDs: [String], revision: Int64,
+        metadata: MessageMetadataInput? = nil
+    ) {
         self.text = text
         self.attachmentIDs = attachmentIDs
         self.revision = revision
+        self.metadata = metadata
     }
 }
 
@@ -160,6 +166,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public var acknowledgedRevision: Int64 = -1
     public var claimedPatch: LocalClaimedPatch? = nil
     public var mutationRetryable: Bool = false
+    public var metadata: MessageMetadataInput? = nil
 
     public var messageType: MessageType {
         if let forwardRequest {
@@ -199,7 +206,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
                 case .server(let attachment): return attachment.id
                 }
             },
-            replyToId: replyToMessage?.id, stickerId: sticker?.id
+            replyToId: replyToMessage?.id, stickerId: sticker?.id, metadata: metadata
         )
     }
 }

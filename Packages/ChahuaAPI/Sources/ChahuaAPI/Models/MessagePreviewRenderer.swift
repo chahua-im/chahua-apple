@@ -13,6 +13,7 @@ public enum MessagePreviewRenderer {
         public let pendingAudio: String
         public let nestedForward: String
         public let unavailable: String
+        public let share: String
 
         public init(
             attachment: String,
@@ -25,7 +26,8 @@ public enum MessagePreviewRenderer {
             forwarded: String = "[Forwarded Messages]",
             pendingAudio: String = "[Pending voice message]",
             nestedForward: String = "[Forwarded Messages]",
-            unavailable: String = "[Unavailable message]"
+            unavailable: String = "[Unavailable message]",
+            share: String = "[Share]"
         ) {
             self.attachment = attachment
             self.deleted = deleted
@@ -38,11 +40,13 @@ public enum MessagePreviewRenderer {
             self.pendingAudio = pendingAudio
             self.nestedForward = nestedForward
             self.unavailable = unavailable
+            self.share = share
         }
     }
 
     public static func render(_ preview: MessagePreview, labels: Labels) -> String {
         if preview.isDeleted { return labels.deleted }
+        if let summary = sharedLinkSummary(preview, labels: labels) { return summary }
 
         switch preview.messageType {
         case .forwarded:
@@ -78,6 +82,37 @@ public enum MessagePreviewRenderer {
         }
     }
 
+    /// Share titles are literal server text, never Markdown or mention syntax.
+    public static func sharedLinkSummary(_ preview: MessagePreview, labels: Labels) -> String? {
+        guard !preview.isDeleted, preview.messageType == .text,
+            preview.attachments.isEmpty, preview.sticker == nil,
+            let source = preview.message?.trimmingCharacters(in: .whitespacesAndNewlines),
+            bareHTTPURLPattern.firstMatch(
+                in: source, range: NSRange(source.startIndex..., in: source)) != nil,
+            let previews = preview.metadata?.linkPreviews, previews.count == 1,
+            let link = previews.first, link.status == .ready,
+            let sourceURL = normalizedHTTPURL(source),
+            let previewURL = normalizedHTTPURL(link.url), sourceURL == previewURL
+        else { return nil }
+        let title = link.title.flatMap { $0.isEmpty ? nil : $0 } ?? previewURL.host ?? ""
+        return labels.share + singleLine(title)
+    }
+
+    private static func normalizedHTTPURL(_ source: String) -> URL? {
+        guard var components = URLComponents(string: source),
+            let scheme = components.scheme?.lowercased(),
+            scheme == "https" || scheme == "http",
+            let host = components.host, !host.isEmpty
+        else { return nil }
+        components.scheme = scheme
+        components.host = host.lowercased()
+        if components.port == (scheme == "https" ? 443 : 80) { components.port = nil }
+        if components.path.isEmpty { components.path = "/" }
+        return components.url?.standardized
+    }
+
+    private static let bareHTTPURLPattern = try! NSRegularExpression(
+        pattern: #"^https?://\S+$"#, options: .caseInsensitive)
     private static let mentionPattern = try! NSRegularExpression(pattern: #"@\[uid:(\d+)\]"#)
     private static let newlinePattern = try! NSRegularExpression(pattern: #"\R+"#)
 

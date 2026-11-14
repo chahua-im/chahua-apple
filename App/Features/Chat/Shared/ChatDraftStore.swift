@@ -6,6 +6,7 @@ import Foundation
 final class ChatDraftStore: ObservableObject {
     @Published private(set) var drafts: [ConversationKey: String] = [:]
     @Published private var draftReplies: [ConversationKey: MessagePreview] = [:]
+    @Published private var storedDraftLinkPreviews: [ConversationKey: [LinkPreviewInput]] = [:]
     @Published private(set) var draftUpdatedAt: [ConversationKey: Date] = [:]
     @Published private(set) var committingDrafts = Set<ConversationKey>()
     @Published private(set) var draftSaveFailed = false
@@ -30,12 +31,14 @@ final class ChatDraftStore: ObservableObject {
         let reply = normalizedReply(snapshot.draft.replyToMessage, chatID: snapshot.chatID)
         if unsavedDrafts.contains(key),
             drafts[key] != snapshot.draft.text || draftReplies[key] != reply
+                || storedDraftLinkPreviews[key, default: []] != snapshot.draft.linkPreviews
         {
             draftRevisions[key] = max(
                 draftRevisions[key, default: 0], snapshot.draft.editRevision + 1)
         } else if snapshot.draft.editRevision >= draftRevisions[key, default: 0] {
             drafts[key] = snapshot.draft.text
             draftReplies[key] = reply
+            storedDraftLinkPreviews[key] = snapshot.draft.linkPreviews
             draftRevisions[key] = snapshot.draft.editRevision
             draftUpdatedAt[key] =
                 snapshot.draft.text.isEmpty && snapshot.draft.attachments.isEmpty
@@ -50,6 +53,22 @@ final class ChatDraftStore: ObservableObject {
 
     func draftReply(chatID: String, threadID: String? = nil) -> MessagePreview? {
         draftReplies[ConversationKey(chatID: chatID, threadID: threadID)]
+    }
+
+    func draftLinkPreviews(chatID: String, threadID: String? = nil) -> [LinkPreviewInput] {
+        storedDraftLinkPreviews[ConversationKey(chatID: chatID, threadID: threadID), default: []]
+    }
+
+    func setDraftLinkPreviews(
+        _ previews: [LinkPreviewInput], chatID: String, threadID: String? = nil
+    ) {
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        guard storedDraftLinkPreviews[key, default: []] != previews else { return }
+        storedDraftLinkPreviews[key] = previews
+        if drafts[key] == nil { drafts[key] = "" }
+        unsavedDrafts.insert(key)
+        draftRevisions[key, default: 0] += 1
+        scheduleDraftSave(key: key)
     }
 
     func setDraftReply(_ reply: MessagePreview?, chatID: String, threadID: String? = nil) {
@@ -138,7 +157,8 @@ final class ChatDraftStore: ObservableObject {
         do {
             try await outgoingQueue.saveDraft(
                 chatID: chatID, threadID: threadID, text: text, editRevision: revision,
-                updatedAt: Date(), replyToMessage: draftReplies[key])
+                updatedAt: Date(), replyToMessage: draftReplies[key],
+                linkPreviews: storedDraftLinkPreviews[key, default: []])
             guard generation == requestGeneration else { return }
             draftSaveFailed = false
         } catch {
@@ -171,13 +191,19 @@ final class ChatDraftStore: ObservableObject {
         }
     }
 
-    func submitDraft(chatID: String, threadID: String? = nil, text submittedText: String? = nil)
+    func submitDraft(
+        chatID: String, threadID: String? = nil, text submittedText: String? = nil,
+        metadata: MessageMetadataInput? = nil
+    )
         async -> Bool
     {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         // A media caption stays modal-local until this atomic enqueue.
         let text = (submittedText ?? draftText(chatID: chatID, threadID: threadID))
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let previews = draftLinkPreviews(chatID: chatID, threadID: threadID)
+        let metadata =
+            metadata ?? (previews.isEmpty ? nil : MessageMetadataInput(linkPreviews: previews))
         guard
             !text.isEmpty
                 || !outgoingQueue.draftAttachments(chatID: chatID, threadID: threadID).isEmpty,
@@ -197,11 +223,12 @@ final class ChatDraftStore: ObservableObject {
         do {
             try await outgoingQueue.enqueueText(
                 chatID: chatID, threadID: threadID, text: text, clearedDraftRevision: revision,
-                replyToMessage: draftReplies[key])
+                replyToMessage: draftReplies[key], metadata: metadata)
             guard generation == requestGeneration else { return false }
             if draftRevisions[key] == revision {
                 drafts[key] = ""
                 draftReplies[key] = nil
+                storedDraftLinkPreviews[key] = nil
                 unsavedDrafts.remove(key)
                 draftUpdatedAt[key] = nil
                 deferredDraftFlushes.remove(key)
@@ -298,6 +325,7 @@ final class ChatDraftStore: ObservableObject {
         drafts.removeAll()
         submissionError = nil
         draftReplies.removeAll()
+        storedDraftLinkPreviews.removeAll()
         deletedReplyIDs.removeAll()
         draftRevisions.removeAll()
         unsavedDrafts.removeAll()

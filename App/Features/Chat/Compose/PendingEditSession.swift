@@ -12,6 +12,7 @@ final class PendingEditSession: ObservableObject, Identifiable {
     let capturedRevision: Int64
     let initialText: String
     let initialAttachments: [LocalEditAttachment]
+    let initialMetadata: MessageMetadataInput?
     @Published private(set) var attachments: [LocalEditAttachment]
     @Published private(set) var isValid = true
     @Published private(set) var isUploading = false
@@ -22,11 +23,12 @@ final class PendingEditSession: ObservableObject, Identifiable {
         case server(String)
     }
     private let initialTrimmedText: String
+    private let initialDisabledURLs: Set<String>
 
     init(
         id: UUID = UUID(), conversationKey: ConversationKey, clientGeneratedID: String,
         accountGeneration: UInt64, capturedRevision: Int64, initialText: String,
-        initialAttachments: [LocalEditAttachment]
+        initialAttachments: [LocalEditAttachment], initialMetadata: MessageMetadataInput? = nil
     ) {
         self.id = id
         self.conversationKey = conversationKey
@@ -35,14 +37,24 @@ final class PendingEditSession: ObservableObject, Identifiable {
         self.capturedRevision = capturedRevision
         self.initialText = initialText
         self.initialAttachments = initialAttachments
+        self.initialMetadata = initialMetadata
+        initialDisabledURLs = Self.disabledURLs(initialMetadata)
         initialTrimmedText = initialText.trimmingCharacters(in: .whitespacesAndNewlines)
         attachments = initialAttachments
     }
 
-    func hasChanges(text: String) -> Bool {
+    /// A missing payload leaves choices unchanged; an empty payload explicitly clears disables.
+    /// Merely discovering enabled URLs in the editor is not a user modification.
+    func hasChanges(text: String, metadata: MessageMetadataInput? = nil) -> Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines) != initialTrimmedText
             || !attachments.lazy.map(selectionIdentity)
                 .elementsEqual(initialAttachments.lazy.map(selectionIdentity))
+            || (metadata.map { Self.disabledURLs($0) } ?? initialDisabledURLs)
+                != initialDisabledURLs
+    }
+
+    private static func disabledURLs(_ metadata: MessageMetadataInput?) -> Set<String> {
+        Set((metadata?.linkPreviews ?? []).lazy.filter { $0.status == .disabled }.map(\.url))
     }
 
     static func selectionID(_ attachment: LocalEditAttachment) -> String {

@@ -16,6 +16,140 @@ import XCTest
 
 @MainActor
 final class ComposerFocusTests: XCTestCase {
+    func testMessageEditExitCoordinatorProtectsMetadataOnlyChangesAndRetainsOnCancel() {
+        let coordinator = MessageEditExitCoordinator()
+        let owner = UUID()
+        var editorWasCleared = false
+        var navigated = false
+        coordinator.register(owner: owner) { editorWasCleared = true }
+        coordinator.exitGuard.update(
+            owner: owner, isDirty: true, isSubmitting: false, accountID: 1, sessionRevision: 1)
+        coordinator.requestExit { navigated = true }
+        XCTAssertTrue(coordinator.exitGuard.showsDiscardConfirmation)
+        XCTAssertFalse(editorWasCleared)
+        coordinator.exitGuard.cancelDiscard()
+        XCTAssertFalse(navigated)
+        XCTAssertTrue(coordinator.exitGuard.isProtected)
+        coordinator.requestExit { navigated = true }
+        coordinator.exitGuard.confirmDiscard()
+        XCTAssertTrue(editorWasCleared)
+        XCTAssertTrue(navigated)
+        XCTAssertFalse(coordinator.exitGuard.isProtected)
+    }
+
+    func testDraftLinkPreviewTypingDebouncesAndKeepsFailedFallbackUntilReady() async throws {
+        let state = DraftLinkPreviewState()
+        defer { state.invalidate() }
+        let first = "https://first.example/"
+        let second = "https://second.example/"
+        var requests: [String] = []
+        var release: CheckedContinuation<[MessageLinkPreview], Never>?
+        let fetch: ([String]) async throws -> [MessageLinkPreview] = { targets in
+            let url = targets[0]
+            requests.append(url)
+            if url == first { return [.init(url: url, status: .unavailable)] }
+            return await withCheckedContinuation { release = $0 }
+        }
+        state.configure(
+            scope: "draft", text: "", automatic: true, choices: [], initial: [],
+            fetch: fetch, saveChoices: { _ in })
+        state.configure(
+            scope: "draft", text: first, automatic: true, choices: [], initial: [],
+            fetch: fetch, saveChoices: { _ in })
+        state.configure(
+            scope: "draft", text: "\(first) \(second)", automatic: true, choices: [], initial: [],
+            fetch: fetch, saveChoices: { _ in })
+        XCTAssertTrue(requests.isEmpty, "Typing must not synchronously request metadata.")
+        try await waitUntil { release != nil }
+        XCTAssertEqual(requests, [first, second])
+        XCTAssertEqual(state.fallbackURL, first)
+        XCTAssertNil(state.firstReady)
+        release?.resume(returning: [.init(url: second, status: .ready, title: "Ready")])
+        release = nil
+        try await waitUntil { state.firstReady != nil }
+        XCTAssertEqual(state.firstReady?.url, second)
+        XCTAssertNil(state.fallbackURL)
+        state.configure(
+            scope: "draft", text: "\(first) \(second) caption", automatic: true,
+            choices: [], initial: [], fetch: fetch, saveChoices: { _ in })
+        XCTAssertEqual(state.firstReady?.title, "Ready")
+        XCTAssertEqual(requests.count, 2)
+    }
+
+    func testDraftLinkURLsKeepOccurrenceOrderAndRejectIneligibleLinks() {
+        XCTAssertEqual(
+            DraftLinkURLs.extract(
+                "https://EXAMPLE.com https://example.com/ https://second.example/path "
+                    + "http://plain.example https://user:pass@private.example/ "
+                    + "https://127.0.0.1/ https://[::1]/ https://example.com:8443/"),
+            ["https://example.com/", "https://second.example/path"])
+    }
+
+    func testDraftLinkPreviewsFetchSequentiallyAndDisabledLinksDoNotConsumeQuota() async throws {
+        let state = DraftLinkPreviewState()
+        defer { state.invalidate() }
+        let urls = (1...4).map { "https://link\($0).example/" }
+        var requests: [String] = []
+        var choices: [LinkPreviewInput] = []
+        state.configure(
+            scope: "account:chat:draft", text: urls.joined(separator: " "), automatic: true,
+            choices: [], initial: [],
+            fetch: { targets in
+                let url = targets[0]
+                requests.append(url)
+                return [.init(url: url, status: url == urls[0] ? .unavailable : .ready)]
+            }, saveChoices: { choices = $0 })
+        try await waitUntil { state.firstReady != nil }
+        XCTAssertEqual(requests, Array(urls.prefix(2)))
+        XCTAssertEqual(state.firstReady?.url, urls[1])
+        XCTAssertNil(state.fallbackURL)
+        state.setManagementOpen(true)
+        try await waitUntil { requests.count == 3 }
+        XCTAssertEqual(state.selected, Array(urls.prefix(3)))
+        XCTAssertEqual(state.results[urls[0]]?.status, .unavailable)
+        state.toggle(urls[0])
+        try await waitUntil { requests.count == 4 }
+        XCTAssertEqual(state.selected, Array(urls.dropFirst()))
+        XCTAssertEqual(choices.first?.status, .disabled)
+        state.toggle(urls[0])
+        XCTAssertEqual(state.selected, Array(urls.prefix(3)))
+        XCTAssertEqual(requests.count, 4, "Already fetched URLs must retain their result.")
+    }
+
+    func testDraftLinkPreviewsEditFetchIsExplicitAndLateDeletedResponseIsRejected() async throws {
+        let state = DraftLinkPreviewState()
+        defer { state.invalidate() }
+        let url = "https://example.com/"
+        var requests = 0
+        var release: CheckedContinuation<[MessageLinkPreview], Never>?
+        let fetch: ([String]) async throws -> [MessageLinkPreview] = { _ in
+            requests += 1
+            return await withCheckedContinuation { release = $0 }
+        }
+        state.configure(
+            scope: "account:chat:edit1", text: url, automatic: false, choices: [], initial: [],
+            fetch: fetch, saveChoices: { _ in })
+        try await pause()
+        XCTAssertEqual(requests, 0)
+        state.setManagementOpen(true)
+        try await waitUntil { release != nil }
+        state.configure(
+            scope: "account:chat:edit1", text: "", automatic: false, choices: [], initial: [],
+            fetch: fetch, saveChoices: { _ in })
+        release?.resume(returning: [.init(url: url, status: .ready, title: "Deleted")])
+        release = nil
+        try await pause()
+        XCTAssertTrue(state.urls.isEmpty)
+        XCTAssertTrue(state.results.isEmpty)
+        state.configure(
+            scope: "other-account:chat:edit2", text: url, automatic: false,
+            choices: [.init(url: url, status: .disabled)], initial: [],
+            fetch: fetch, saveChoices: { _ in })
+        XCTAssertTrue(state.isDisabled(url))
+        XCTAssertNil(state.firstReady)
+        XCTAssertEqual(requests, 1)
+    }
+
     func testCaptionWaitsForUserFocus() async throws {
         let h = try FocusComposerHarness(text: "caption", enabled: true, caption: true)
         addTeardownBlock { @MainActor in await h.close() }

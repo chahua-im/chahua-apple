@@ -37,13 +37,7 @@ enum MessageSummaryContent {
     }
 
     static func forwardedSummary(_ preview: ForwardedMessagePreviewResponse) -> String {
-        let value = MessagePreview(
-            id: preview.originalMessageId, clientGeneratedId: "",
-            createdAt: preview.originalCreatedAt,
-            sender: preview.sender, messageType: preview.messageType,
-            attachments: preview.attachments,
-            mentions: preview.mentions, message: preview.message, sticker: preview.sticker)
-        return messagePreview(value)
+        return messagePreview(preview.replyPreview)
     }
     private static let newlinePattern = try! NSRegularExpression(pattern: #"\R+"#)
 
@@ -66,13 +60,17 @@ enum MessageSummaryContent {
             forwarded: forwardedMessagesLabel,
             pendingAudio: AppLanguage.localized("[Pending voice message]"),
             nestedForward: forwardedMessagesLabel,
-            unavailable: AppLanguage.localized("[Unavailable message]"))
+            unavailable: AppLanguage.localized("[Unavailable message]"),
+            share: AppLanguage.localized("[Share]"))
     }
 
     static func summary(_ preview: MessagePreview) -> [MarkdownInline] {
         let trace = ScrollPerformanceTrace.begin("Summary.Parse")
         defer { ScrollPerformanceTrace.end("Summary.Parse", trace) }
         if preview.isDeleted { return [.text(labels.deleted)] }
+        if let shared = MessagePreviewRenderer.sharedLinkSummary(preview, labels: labels) {
+            return [.text(shared)]
+        }
         switch preview.messageType {
         case .invite, .sticker, .audio, .file, .forwarded, .placeholder:
             return [.text(MessagePreviewRenderer.render(preview, labels: labels))]

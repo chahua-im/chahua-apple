@@ -45,6 +45,7 @@ struct AuthenticatedShell: View {
     @State private var navigationActions = ShellNavigationActions()
     @StateObject private var featureExitGuard = FormExitGuard()
     @StateObject private var groupExitGuard = FormExitGuard()
+    @StateObject private var messageEditExitCoordinator = MessageEditExitCoordinator()
     @State private var declinedNotificationIDs = Set<UUID>()
     @State private var retainedSplitPresentation: Bool?
 
@@ -224,6 +225,7 @@ struct AuthenticatedShell: View {
         .onPreferenceChange(ThreadInfoActionKey.self) { threadInfoAction = $0 }
         .environment(\.openUserProfile, navigationActions.openProfile)
         .environment(\.openGroupInvite, navigationActions.openInvite)
+        .environment(\.messageEditExitCoordinator, messageEditExitCoordinator)
         .sheet(
             item: $feature,
             onDismiss: {
@@ -615,7 +617,14 @@ struct AuthenticatedShell: View {
                     return path
                 },
                 set: { path in
-                    requestNavigation { performSetPhonePath(path) }
+                    let conversation = path.compactMap { route -> ConversationKey? in
+                        guard case .conversation(let key) = route else { return nil }
+                        return key
+                    }.last
+                    requestNavigation(
+                        leavesMessageEdit: conversation
+                            != (threadPath.last ?? selectedConversationID)
+                    ) { performSetPhonePath(path) }
                 }
             )
         }
@@ -683,8 +692,10 @@ struct AuthenticatedShell: View {
 
     private func openArchived() {
         guard listPath.isEmpty else { return }
-        archivedScope = selectedScope
-        listPath.append(.archive)
+        requestNavigation {
+            archivedScope = selectedScope
+            listPath.append(.archive)
+        }
     }
 
     private func closeArchived() {
@@ -693,7 +704,7 @@ struct AuthenticatedShell: View {
 
     private func openFriendRequests() {
         guard !isBrowsingFriendRequests else { return }
-        listPath.append(.friendRequests(.list))
+        requestNavigation { listPath.append(.friendRequests(.list)) }
     }
 
     @ViewBuilder
@@ -814,7 +825,7 @@ struct AuthenticatedShell: View {
     }
 
     private func requestNavigation(
-        leavesFeature: Bool = true, leavesGroup: Bool = true,
+        leavesFeature: Bool = true, leavesGroup: Bool = true, leavesMessageEdit: Bool = true,
         isCurrent: @escaping () -> Bool = { true },
         onCancel: (() -> Void)? = nil, _ action: @escaping () -> Void
     ) {
@@ -834,11 +845,18 @@ struct AuthenticatedShell: View {
             }
             action()
         }
-        let leaveGroup = {
-            if leavesGroup {
-                groupExitGuard.requestExit(execute, onCancel: onCancel)
+        let leaveMessageEdit = {
+            if leavesMessageEdit {
+                messageEditExitCoordinator.requestExit(execute, onCancel: onCancel)
             } else {
                 execute()
+            }
+        }
+        let leaveGroup = {
+            if leavesGroup {
+                groupExitGuard.requestExit(leaveMessageEdit, onCancel: onCancel)
+            } else {
+                leaveMessageEdit()
             }
         }
         if leavesFeature {
@@ -851,6 +869,7 @@ struct AuthenticatedShell: View {
     private func invalidateFormGuards() {
         featureExitGuard.invalidate()
         groupExitGuard.invalidate()
+        messageEditExitCoordinator.invalidate()
     }
 
     private var inspectorPresentation: Binding<Bool> {
@@ -864,7 +883,7 @@ struct AuthenticatedShell: View {
         if presented {
             apply()
         } else {
-            requestNavigation(leavesFeature: false, apply)
+            requestNavigation(leavesFeature: false, leavesMessageEdit: false, apply)
         }
     }
 
@@ -874,7 +893,10 @@ struct AuthenticatedShell: View {
         case .createGroup?, .joinGroup?: removesGroupForm = true
         default: removesGroupForm = false
         }
-        requestNavigation(leavesGroup: removesGroupForm) {
+        requestNavigation(
+            leavesGroup: removesGroupForm,
+            leavesMessageEdit: removesGroupForm || destination == .addFriend
+        ) {
             if removesGroupForm {
                 showsInspector = false
                 groupPath.removeAll()
@@ -997,7 +1019,7 @@ struct AuthenticatedShell: View {
     }
 
     private func openMessageSearch(in chat: ChatListItem) {
-        requestNavigation { performOpenMessageSearch(in: chat) }
+        requestNavigation(leavesMessageEdit: false) { performOpenMessageSearch(in: chat) }
     }
 
     private func performOpenMessageSearch(in chat: ChatListItem) {
@@ -1482,7 +1504,14 @@ struct AuthenticatedShell: View {
     }
 
     private func selectConversation(_ conversation: ConversationKey?) {
-        requestNavigation { performSelectConversation(conversation) }
+        guard
+            conversation != selectedConversationID || !threadPath.isEmpty
+                || messageNavigation != nil
+        else { return }
+        requestNavigation(
+            leavesMessageEdit: conversation != (threadPath.last ?? selectedConversationID)
+                || messageNavigation != nil || openedThread != nil
+        ) { performSelectConversation(conversation) }
     }
 
     private func performSelectConversation(_ conversation: ConversationKey?) {

@@ -159,6 +159,10 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
                 ALTER TABLE outgoing_message ADD COLUMN mutation_retryable INTEGER NOT NULL DEFAULT 0;
                 """)
     }
+    migrator.registerMigration("v9_link_preview_intents") { db in
+        // Blocked drafts and released messages share the same durable intent payload.
+        try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN metadata BLOB")
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }

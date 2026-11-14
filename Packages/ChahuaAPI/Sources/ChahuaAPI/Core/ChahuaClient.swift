@@ -76,33 +76,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             if let refreshTask { _ = try await refreshTask.value }
             try checkSession(generation)
             guard let token, !token.isEmpty else { throw APIError.invalidToken }
-            guard
-                var components = URLComponents(
-                    url: configuration.baseURL, resolvingAgainstBaseURL: false)
-            else {
-                throw APIError.invalidBaseURL(configuration.baseURL)
-            }
-            switch components.scheme?.lowercased() {
-            case "https": components.scheme = "wss"
-            case "http": components.scheme = "ws"
-            default: throw APIError.invalidBaseURL(configuration.baseURL)
-            }
-            components.path =
-                components.path.hasSuffix("/")
-                ? components.path + "ws"
-                : components.path + "/ws"
-            components.query = nil
-            components.fragment = nil
-            components.user = nil
-            components.password = nil
-            guard let url = components.url, components.host?.isEmpty == false else {
-                throw APIError.invalidBaseURL(configuration.baseURL)
-            }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = configuration.requestTimeout
-            if let userAgent = configuration.userAgent {
-                request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-            }
+            let request = try webSocketRequest()
             let socket = session.webSocketTask(with: request)
             let opened = URLSessionRealtimeConnection(socket: socket)
             connection = opened
@@ -115,6 +89,45 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             try checkSession(generation)
             throw error
         }
+    }
+
+    public func previewLinks(chatID: String, urls: [String]) async throws -> [MessageLinkPreview] {
+        let generation = sessionGeneration
+        if let refreshTask { _ = try await refreshTask.value }
+        try checkSession(generation)
+        guard let token, !token.isEmpty else { throw APIError.invalidToken }
+        let socket = session.webSocketTask(with: try webSocketRequest())
+        let previews = try await DraftLinkPreviewRPC.fetch(
+            socket: socket, token: token, appVersion: configuration.appVersion,
+            chatID: chatID, urls: urls, timeout: configuration.requestTimeout)
+        try checkSession(generation)
+        return previews
+    }
+
+    private func webSocketRequest() throws -> URLRequest {
+        guard
+            var components = URLComponents(
+                url: configuration.baseURL, resolvingAgainstBaseURL: false)
+        else { throw APIError.invalidBaseURL(configuration.baseURL) }
+        switch components.scheme?.lowercased() {
+        case "https": components.scheme = "wss"
+        case "http": components.scheme = "ws"
+        default: throw APIError.invalidBaseURL(configuration.baseURL)
+        }
+        components.path += components.path.hasSuffix("/") ? "ws" : "/ws"
+        components.query = nil
+        components.fragment = nil
+        components.user = nil
+        components.password = nil
+        guard let url = components.url, components.host?.isEmpty == false else {
+            throw APIError.invalidBaseURL(configuration.baseURL)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = configuration.requestTimeout
+        if let userAgent = configuration.userAgent {
+            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        }
+        return request
     }
 
     private func installSessionToken(_ token: String) {

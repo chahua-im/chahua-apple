@@ -59,7 +59,8 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
                         message: source.message, messageType: source.messageType,
                         sender: source.sender, originalCreatedAt: source.createdAt,
                         attachments: source.replyPreview.attachments,
-                        sticker: source.replyPreview.sticker, mentions: source.mentions)
+                        sticker: source.replyPreview.sticker, mentions: source.mentions,
+                        metadata: source.replyPreview.metadata)
                 })
         }
         let media = single ? first.attachments : []

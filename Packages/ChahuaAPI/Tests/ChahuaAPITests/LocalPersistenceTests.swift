@@ -376,15 +376,17 @@ final class LocalPersistenceTests: XCTestCase {
         let directory = scope.directory(under: root)
         let reply = preview(id: 104)
         let nextReply = preview(id: 105)
+        let choices = [LinkPreviewInput(url: "https://example.com", status: .disabled)]
         var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
         _ = try await store!.saveDraft(
             chatID: "chat", text: "hello\n世界", editRevision: 1, updatedAt: Date(),
-            replyToMessage: reply)
+            replyToMessage: reply, linkPreviews: choices)
         store = nil
         store = try ChahuaLocalStore(directory: directory)
         let restored = try await store!.restore()
         XCTAssertEqual(restored.first?.draft.text, "hello\n世界")
         XCTAssertEqual(restored.first?.draft.replyToMessage, reply)
+        XCTAssertEqual(restored.first?.draft.linkPreviews, choices)
         let originalID = try XCTUnwrap(restored.first?.draft.itemID)
         let sent = try await store!.enqueueText(
             chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "  hello\n世界  ",
@@ -393,6 +395,8 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertNil(sent.draft.replyToMessage)
         XCTAssertEqual(sent.outgoing.first?.replyToMessage, reply)
         XCTAssertEqual(sent.outgoing.map(\.text), ["hello\n世界"])
+        XCTAssertEqual(sent.draft.linkPreviews, [])
+        XCTAssertEqual(sent.outgoing.first?.body.metadata?.linkPreviews, choices)
         let late = try await store!.saveDraft(
             chatID: "chat", text: "stale", editRevision: 1, updatedAt: Date(), replyToMessage: reply
         )
@@ -778,16 +782,22 @@ final class LocalPersistenceTests: XCTestCase {
             UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let disabled = MessageMetadataInput(
+            linkPreviews: [.init(url: "https://example.com", status: .disabled)])
+        let enabled = MessageMetadataInput(
+            linkPreviews: [.init(url: "https://example.com", status: .enabled)])
         _ = try await store!.enqueueText(
             chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "sealed", enqueuedAt: Date(),
-            clearedDraftRevision: 1, replyToMessage: preview(id: 103))
+            clearedDraftRevision: 1, replyToMessage: preview(id: 103), metadata: disabled)
         let claimed = try await store!.claimNext(chatID: "chat")
         let original = try XCTUnwrap(claimed.message)
         let edited = try await store!.editOutgoing(
             chatID: "chat", itemID: "A", expectedRevision: original.editRevision,
-            text: "replacement", attachments: [])
+            text: "replacement", attachments: [], metadata: enabled)
         XCTAssertEqual(edited.outgoing.first?.text, "replacement")
         XCTAssertEqual(edited.outgoing.first?.body, original.body)
+        XCTAssertEqual(original.body.metadata, disabled)
+        XCTAssertEqual(edited.outgoing.first?.metadata, enabled)
         XCTAssertEqual(edited.outgoing.first?.replyToMessage, original.replyToMessage)
         store = nil
         store = try ChahuaLocalStore(directory: directory)
@@ -802,6 +812,7 @@ final class LocalPersistenceTests: XCTestCase {
         let patch = try await store!.claimPatch(chatID: "chat", itemID: "A")
         XCTAssertEqual(patch.patch?.text, "replacement")
         XCTAssertEqual(patch.patch?.revision, original.editRevision + 1)
+        XCTAssertEqual(patch.patch?.metadata, enabled)
     }
 
     func testConcurrentReleaseCreatesOneItemAndReleasedEditPreservesComposition() async throws {
@@ -1061,6 +1072,10 @@ final class LocalPersistenceTests: XCTestCase {
             UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         var store: ChahuaLocalStore? = try ChahuaLocalStore(directory: directory)
+        let disabled = MessageMetadataInput(
+            linkPreviews: [.init(url: "https://example.com", status: .disabled)])
+        let enabled = MessageMetadataInput(
+            linkPreviews: [.init(url: "https://example.com", status: .enabled)])
         _ = try await store!.enqueueIndependentText(
             chatID: "chat", senderID: 1, clientGeneratedID: "A", text: "original",
             enqueuedAt: Date())
@@ -1068,14 +1083,18 @@ final class LocalPersistenceTests: XCTestCase {
         _ = try await store!.acceptCreate(
             confirmation(itemID: "A", text: "original"), published: true)
         _ = try await store!.editOutgoing(
-            chatID: "chat", itemID: "A", expectedRevision: 0, text: "first edit", attachments: [])
+            chatID: "chat", itemID: "A", expectedRevision: 0, text: "first edit", attachments: [],
+            metadata: disabled)
         let first = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(first.patch?.metadata, disabled)
         _ = try await store!.editOutgoing(
-            chatID: "chat", itemID: "A", expectedRevision: 1, text: "second edit", attachments: [])
+            chatID: "chat", itemID: "A", expectedRevision: 1, text: "second edit", attachments: [],
+            metadata: enabled)
         store = nil
         store = try ChahuaLocalStore(directory: directory)
         let restored = try await store!.restore()
         XCTAssertEqual(restored.first?.outgoing.first?.claimedPatch, first.patch)
+        XCTAssertEqual(restored.first?.outgoing.first?.metadata, enabled)
         let replay = try await store!.claimPatch(chatID: "chat", itemID: "A")
         XCTAssertEqual(replay.patch, first.patch)
         let older = try await store!.acceptPatch(
@@ -1083,7 +1102,8 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(older.disposition, .retained)
         XCTAssertEqual(older.snapshot.outgoing.first?.text, "second edit")
         XCTAssertEqual(older.snapshot.outgoing.first?.acknowledgedRevision, 1)
-        _ = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        let latest = try await store!.claimPatch(chatID: "chat", itemID: "A")
+        XCTAssertEqual(latest.patch?.metadata, enabled)
         let cancelled = try await store!.cancelOutgoing(
             chatID: "chat", itemID: "A", expectedRevision: 2)
         XCTAssertTrue(try XCTUnwrap(cancelled.outgoing.first).isCancelled)
@@ -1598,6 +1618,41 @@ final class LocalPersistenceTests: XCTestCase {
             let deleted = try await store!.acceptDelete(chatID: id, itemID: id)
             XCTAssertTrue(deleted.snapshot.outgoing.isEmpty)
         }
+    }
+
+    func testLegacyClaimedPatchDecodesWithoutMetadata() throws {
+        let data = Data(#"{"text":"original","attachmentIDs":[],"revision":1}"#.utf8)
+        let patch = try JSONDecoder().decode(LocalClaimedPatch.self, from: data)
+        XCTAssertNil(patch.metadata)
+        XCTAssertEqual(patch.revision, 1)
+    }
+
+    func testFileCaptionKeepsLinkIntentsOnAdjacentTextMessage() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory)
+        let initial = try await store.beginComposition(chatID: "chat", senderID: 1)
+        var file = try attachment(directory: directory, id: "file", position: 0)
+        file.preservesOriginal = true
+        file.width = 0
+        file.height = 0
+        file.preparedPath = file.sourcePath
+        let attached = try await store.setCompositionAttachments(
+            chatID: "chat", itemID: try XCTUnwrap(initial.draft.itemID),
+            expectedRevision: initial.draft.editRevision, attachments: [file],
+            compressionEnabled: false)
+        let metadata = MessageMetadataInput(
+            linkPreviews: [.init(url: "https://example.com", status: .disabled)])
+        let released = try await store.enqueueText(
+            chatID: "chat", senderID: 1, clientGeneratedID: "unused",
+            text: "https://example.com", enqueuedAt: Date(),
+            clearedDraftRevision: attached.draft.editRevision + 1, metadata: metadata)
+        XCTAssertEqual(released.outgoing.map(\.messageType), [.file, .text])
+        XCTAssertNil(released.outgoing.first?.metadata)
+        XCTAssertEqual(released.outgoing.last?.body.metadata, metadata)
+        let restored = try await store.restore()
+        XCTAssertEqual(restored.first?.outgoing.last?.body.metadata, metadata)
     }
 
     private func removeVersionEightColumns(directory: URL) async throws {

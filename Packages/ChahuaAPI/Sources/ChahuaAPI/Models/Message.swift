@@ -76,7 +76,7 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         id = try container.decode(MessageID.self, forKey: .id)
         chatId = try container.decode(String.self, forKey: .chatId)
         clientGeneratedId = try container.decode(String.self, forKey: .clientGeneratedId)
-        messageType = try container.decode(MessageType.self, forKey: .messageType)
+        messageType = try container.decodeIfPresent(MessageType.self, forKey: .messageType) ?? .text
         sender = try container.decode(User.self, forKey: .sender)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         isEdited = try container.decode(Bool.self, forKey: .isEdited)
@@ -111,7 +111,8 @@ public struct MessageResponse: Codable, Hashable, Sendable {
             sticker: isDeleted ? nil : sticker.map { MessagePreviewSticker(emoji: $0.emoji) },
             forwardedFromName: isDeleted ? nil : forwardedFrom?.sender.name,
             systemKind: isDeleted ? nil : systemKind,
-            systemLinks: isDeleted ? nil : systemLinks
+            systemLinks: isDeleted ? nil : systemLinks,
+            metadata: isDeleted ? nil : metadata
         )
     }
 
@@ -215,13 +216,15 @@ public struct MessagePreview: Codable, Hashable, Sendable {
     public private(set) var forwardedFromName: String?
     public private(set) var systemKind: SystemMessageKind?
     public private(set) var systemLinks: SystemMessageLinks?
+    public private(set) var metadata: MessageMetadataResponse?
 
     public init(
         id: MessageID, clientGeneratedId: String, createdAt: Date, sender: User,
         messageType: MessageType, attachments: [MessagePreviewAttachment] = [],
         mentions: [MentionInfo] = [], isDeleted: Bool = false, message: String? = nil,
         sticker: MessagePreviewSticker? = nil, forwardedFromName: String? = nil,
-        systemKind: SystemMessageKind? = nil, systemLinks: SystemMessageLinks? = nil
+        systemKind: SystemMessageKind? = nil, systemLinks: SystemMessageLinks? = nil,
+        metadata: MessageMetadataResponse? = nil
     ) {
         self.id = id
         self.clientGeneratedId = clientGeneratedId
@@ -236,12 +239,32 @@ public struct MessagePreview: Codable, Hashable, Sendable {
         self.forwardedFromName = forwardedFromName
         self.systemKind = systemKind
         self.systemLinks = systemLinks
+        self.metadata = metadata
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(MessageID.self, forKey: .id)
+        clientGeneratedId = try container.decode(String.self, forKey: .clientGeneratedId)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        sender = try container.decode(User.self, forKey: .sender)
+        messageType = try container.decodeIfPresent(MessageType.self, forKey: .messageType) ?? .text
+        attachments = try container.decode([MessagePreviewAttachment].self, forKey: .attachments)
+        mentions = try container.decodeIfPresent([MentionInfo].self, forKey: .mentions) ?? []
+        isDeleted = try container.decode(Bool.self, forKey: .isDeleted)
+        message = try container.decodeIfPresent(String.self, forKey: .message)
+        sticker = try container.decodeIfPresent(MessagePreviewSticker.self, forKey: .sticker)
+        forwardedFromName = try container.decodeIfPresent(String.self, forKey: .forwardedFromName)
+        systemKind = try container.decodeIfPresent(SystemMessageKind.self, forKey: .systemKind)
+        systemLinks = try container.decodeIfPresent(SystemMessageLinks.self, forKey: .systemLinks)
+        metadata = try container.decodeIfPresent(MessageMetadataResponse.self, forKey: .metadata)
     }
 
     public func redactedForDeletion() -> Self {
         var copy = self
         copy.isDeleted = true
         copy.message = nil
+        copy.metadata = nil
         copy.sticker = nil
         copy.attachments = []
         copy.mentions = []
@@ -441,6 +464,7 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
     public var attachmentIds: [String]
     public var replyToId: MessageID?
     public var stickerId: String?
+    public var metadata: MessageMetadataInput?
 
     public init(
         messageType: MessageType,
@@ -448,7 +472,8 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
         message: String? = nil,
         attachmentIds: [String] = [],
         replyToId: MessageID? = nil,
-        stickerId: String? = nil
+        stickerId: String? = nil,
+        metadata: MessageMetadataInput? = nil
     ) {
         self.messageType = messageType
         self.clientGeneratedId = clientGeneratedId
@@ -456,6 +481,7 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
         self.attachmentIds = attachmentIds
         self.replyToId = replyToId
         self.stickerId = stickerId
+        self.metadata = metadata
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -465,6 +491,7 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
         case attachmentIds
         case replyToId
         case stickerId
+        case metadata
     }
 
     public init(from decoder: any Decoder) throws {
@@ -477,6 +504,7 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
             ? try container.decode([String].self, forKey: .attachmentIds) : []
         replyToId = try container.decodeIfPresent(MessageID.self, forKey: .replyToId)
         stickerId = try container.decodeIfPresent(String.self, forKey: .stickerId)
+        metadata = try container.decodeIfPresent(MessageMetadataInput.self, forKey: .metadata)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -489,5 +517,6 @@ public struct CreateMessageBody: Codable, Hashable, Sendable {
         }
         try container.encodeIfPresent(replyToId, forKey: .replyToId)
         try container.encodeIfPresent(stickerId, forKey: .stickerId)
+        try container.encodeIfPresent(metadata, forKey: .metadata)
     }
 }

@@ -6,6 +6,85 @@ import XCTest
 @testable import ChahuaAPI
 
 final class RealtimeConnectionTests: XCTestCase {
+    func testDraftPreviewUsesAuthenticatedRPCAndPreservesExactChatID() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        do {
+            let client = ChahuaClient(
+                configuration: .init(
+                    baseURL: URL(
+                        string: await server.baseURL.absoluteString + "api/?ignored=secret")!,
+                    appVersion: "preview-test"),
+                token: "installed")
+            let previews = try await client.previewLinks(
+                chatID: "9007199254740995", urls: ["https://example.com/article"])
+            XCTAssertEqual(previews.first?.title, "Article")
+            let requests = await server.requests
+            XCTAssertEqual(requests.map(\.path), ["/api/ws"])
+            let frames = try await server.rpcFrames.map {
+                try XCTUnwrap(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            XCTAssertEqual(
+                frames.compactMap { $0["method"] as? String },
+                ["session.open", "session.setAppState", "messages.previewLinks"])
+            let open = try XCTUnwrap(frames[0]["params"] as? [String: Any])
+            XCTAssertEqual(open["token"] as? String, "installed")
+            XCTAssertEqual(open["appVersion"] as? String, "preview-test")
+            XCTAssertEqual(open["protocolVersion"] as? Int, 1)
+            let state = try XCTUnwrap(frames[1]["params"] as? [String: Any])
+            XCTAssertEqual(state["state"] as? String, "inactive")
+            let params = try XCTUnwrap(frames[2]["params"] as? [String: Any])
+            XCTAssertEqual(params["chatId"] as? String, "9007199254740995")
+            XCTAssertEqual(params["urls"] as? [String], ["https://example.com/article"])
+            await server.stop()
+        } catch {
+            await server.stop()
+            throw error
+        }
+    }
+
+    func testDraftPreviewDeadlineClosesUnansweredRPC() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        await server.setPreviewReply(nil)
+        let client = ChahuaClient(
+            configuration: .init(baseURL: await server.baseURL, requestTimeout: 1),
+            token: "installed")
+        do {
+            _ = try await client.previewLinks(chatID: "1", urls: ["https://example.com/article"])
+            XCTFail("An unanswered preview must time out")
+        } catch APIError.transport(let error) {
+            XCTAssertEqual(error.code, .timedOut)
+        } catch let error as URLError {
+            // URLSession may win the deadline race when the socket is closed.
+            XCTAssertTrue(error.code == .cancelled || error.code == .timedOut)
+        } catch {
+            await server.stop()
+            throw error
+        }
+        let frames = await server.rpcFrames
+        XCTAssertTrue(
+            frames.contains {
+                String(decoding: $0, as: UTF8.self).contains("messages.previewLinks")
+            })
+        await server.stop()
+    }
+
+    func testDraftPreviewDoesNotDecodeRPCFailureAsPreviewContent() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        await server.setPreviewReply(#""error":{"code":1003,"message":"Forbidden"}"#)
+        let client = ChahuaClient(
+            configuration: .init(baseURL: await server.baseURL), token: "installed")
+        do {
+            _ = try await client.previewLinks(chatID: "1", urls: ["https://example.com/article"])
+            XCTFail("A denied preview must not yield content")
+        } catch APIError.http(let status, _) {
+            XCTAssertEqual(status, 403)
+        } catch {
+            await server.stop()
+            throw error
+        }
+        await server.stop()
+    }
+
     func testOpeningUsesInstalledJWTAndPreservesAPIPrefixWithoutTicketOrRefresh() async throws {
         let server = try await RealtimeLoopbackServer.start()
         do {
@@ -400,6 +479,9 @@ private actor RealtimeLoopbackServer {
     private(set) var requests: [Request] = []
     private(set) var authentications: [String] = []
     private(set) var clientFrames: [ClientFrame] = []
+    private(set) var rpcFrames: [Data] = []
+    private var previewReply: String? =
+        #""result":[{"url":"https://example.com/article","status":"ready","title":"Article"}]"#
     private var frames: [URLSessionWebSocketTask.Message] = []
     private var holdsRefresh = false
     private var heldRefresh: CheckedContinuation<Void, Never>?
@@ -436,6 +518,9 @@ private actor RealtimeLoopbackServer {
     var baseURL: URL { URL(string: "http://127.0.0.1:\(listener.port!.rawValue)/")! }
 
     func setFrames(_ frames: [URLSessionWebSocketTask.Message]) { self.frames = frames }
+    func setPreviewReply(_ reply: String?) {
+        previewReply = reply
+    }
     func holdRefresh() { holdsRefresh = true }
     func waitForHeldRefresh() async {
         if heldRefresh != nil { return }
@@ -473,6 +558,30 @@ private actor RealtimeLoopbackServer {
                         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n"
                             .utf8))
                 let (authOpcode, authData) = try await wire.readFrame()
+                if let rpc = try? JSONDecoder().decode(PreviewRPCFrame.self, from: authData) {
+                    guard authOpcode == 1, rpc.method == "session.open" else {
+                        throw APIError.unexpectedResponse
+                    }
+                    rpcFrames.append(authData)
+                    try await wire.sendFrame(
+                        opcode: 1,
+                        data: Data(
+                            #"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"authenticated":true}}"#
+                                .utf8))
+                    while true {
+                        let (opcode, data) = try await wire.readFrame()
+                        if opcode == 8 { break }
+                        let frame = try JSONDecoder().decode(PreviewRPCFrame.self, from: data)
+                        rpcFrames.append(data)
+                        if frame.method == "messages.previewLinks", let previewReply {
+                            try await wire.sendFrame(
+                                opcode: 1,
+                                data: Data("{\"jsonrpc\":\"2.0\",\"id\":2,\(previewReply)}".utf8))
+                        }
+                    }
+                    connection.cancel()
+                    return
+                }
                 let auth = try JSONDecoder().decode(ClientFrame.self, from: authData)
                 guard authOpcode == 1, auth.type == "auth", let ticket = auth.ticket else {
                     throw APIError.unexpectedResponse
@@ -562,6 +671,10 @@ private actor RealtimeLoopbackServer {
         connection.cancel()
     }
 
+    private struct PreviewRPCFrame: Decodable {
+        let method: String
+    }
+
     struct ClientFrame: Decodable, Equatable, Sendable {
         let type: String
         let ticket: String?
@@ -636,11 +749,11 @@ private final class LoopbackWire: @unchecked Sendable {
         let opcode = header[0] & 0x0f
         let masked = header[1] & 0x80 != 0
         var length = Int(header[1] & 0x7f)
+        guard length != 127 else { throw APIError.unexpectedResponse }
         if length == 126 {
             let bytes = try await read(2)
             length = Int(bytes[0]) << 8 | Int(bytes[1])
         }
-        guard length < 65536, length != 127 else { throw APIError.unexpectedResponse }
         let mask = masked ? try await read(4) : Data()
         var data = try await read(length)
         if masked { for index in data.indices { data[index] ^= mask[index % 4] } }

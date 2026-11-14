@@ -231,10 +231,14 @@ extension ChahuaClient {
 public struct UpdateMessageBody: Codable, Hashable, Sendable {
     public let message: String
     public let attachmentIds: [String]?
+    public let metadata: MessageMetadataInput?
 
-    public init(message: String, attachmentIds: [String]? = nil) {
+    public init(
+        message: String, attachmentIds: [String]? = nil, metadata: MessageMetadataInput? = nil
+    ) {
         self.message = message
         self.attachmentIds = attachmentIds
+        self.metadata = metadata
     }
 }
 

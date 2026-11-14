@@ -381,6 +381,9 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let observation = h.queue.events.sink { event in
             if case .snapshot(let snapshot) = event { drafts.install(snapshot) }
         }
+        let choices = [LinkPreviewInput(url: "https://example.com", status: .disabled)]
+        drafts.setDraftLinkPreviews(choices, chatID: "chat")
+        drafts.setDraftLinkPreviews(choices, chatID: "chat", threadID: "two")
         drafts.setDraftText("parent draft", chatID: "chat")
         drafts.setDraftComposing(true, chatID: "chat", threadID: "one")
         drafts.setDraftText("composing draft", chatID: "chat", threadID: "one")
@@ -392,6 +395,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertEqual(drafts.draftText(chatID: "chat"), "parent draft")
         XCTAssertEqual(drafts.draftText(chatID: "chat", threadID: "one"), "composing draft")
         XCTAssertEqual(drafts.draftText(chatID: "chat", threadID: "two"), "")
+        XCTAssertEqual(drafts.draftLinkPreviews(chatID: "chat"), choices)
+        XCTAssertEqual(drafts.draftLinkPreviews(chatID: "chat", threadID: "two"), [])
         XCTAssertNotNil(drafts.draftUpdatedAt[ConversationKey(chatID: "chat", threadID: "one")])
         XCTAssertNil(drafts.draftUpdatedAt[ConversationKey(chatID: "chat", threadID: "two")])
         drafts.setDraftComposing(false, chatID: "chat", threadID: "one")
@@ -406,6 +411,9 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertEqual(restoredDrafts.draftText(chatID: "chat"), "parent draft")
         XCTAssertEqual(restoredDrafts.draftText(chatID: "chat", threadID: "one"), "composing draft")
         XCTAssertEqual(restoredDrafts.draftText(chatID: "chat", threadID: "two"), "")
+        XCTAssertEqual(restoredDrafts.draftLinkPreviews(chatID: "chat"), choices)
+        XCTAssertEqual(restoredDrafts.draftLinkPreviews(chatID: "chat", threadID: "one"), [])
+        XCTAssertEqual(restoredDrafts.draftLinkPreviews(chatID: "chat", threadID: "two"), [])
         XCTAssertTrue(reopened.queue.pendingMessages(chatID: "chat").isEmpty)
         XCTAssertTrue(reopened.queue.pendingMessages(chatID: "chat", threadID: "one").isEmpty)
         XCTAssertEqual(
@@ -414,6 +422,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await reopened.queue.setForegroundActive(true)
         try await eventually { await reopened.api.requests().count == 1 }
         let request = try await firstRequest(reopened.api)
+        XCTAssertEqual(request.body.metadata?.linkPreviews, choices)
         XCTAssertEqual(request.chatID, "chat")
         XCTAssertEqual(request.threadID, "two")
         await reopened.api.finish(0, with: .success(try response(request)))
@@ -1470,6 +1479,30 @@ final class OutgoingMessageQueueTests: XCTestCase {
         }
         XCTAssertEqual(restored.sourcePath, committed.sourcePath)
         XCTAssertTrue(FileManager.default.fileExists(atPath: restored.sourcePath))
+    }
+
+    func testPendingEditPersistsMetadataOnlyChangeAndSeedsNextEditor() async throws {
+        let h = try await openHarness(foreground: false)
+        let text = "https://example.com"
+        try await h.queue.enqueueText(chatID: "chat", text: text, clearedDraftRevision: 1)
+        let item = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        let session = try await h.queue.beginPendingEdit(pendingProjection(item))
+        let metadata = MessageMetadataInput(
+            linkPreviews: [.init(url: text, status: .disabled)])
+        XCTAssertFalse(session.hasChanges(text: text))
+        XCTAssertTrue(session.hasChanges(text: text, metadata: metadata))
+        try await h.queue.submitPendingEdit(session, text: text, metadata: metadata)
+        let changed = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        XCTAssertEqual(changed.text, text)
+        XCTAssertEqual(changed.metadata, metadata)
+        XCTAssertEqual(changed.editRevision, item.editRevision + 1)
+        let next = try await h.queue.beginPendingEdit(pendingProjection(changed))
+        XCTAssertEqual(next.initialMetadata, metadata)
+        XCTAssertFalse(next.hasChanges(text: text, metadata: metadata))
+        XCTAssertTrue(next.hasChanges(text: text, metadata: .init()))
+        await h.close()
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat").first?.metadata, metadata)
     }
 
     func testEditorMediaLimitAndUnchangedWhitespaceRejectWithoutLosingSession() async throws {

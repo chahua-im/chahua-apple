@@ -509,6 +509,14 @@ The following native implementations were found in source. This does **not** new
 
 
 
+## Link previews — compose and compact summaries
+
+- Compose previews use server-owned metadata through `messages.previewLinks`; destination pages are never fetched by the client. New-message drafts automatically try the first three enabled URLs in order, stopping at the first ready result. Editing fetches only when preview management is opened.
+- Preview management preserves URL order, supports per-link enable/disable, and limits enabled previews to three. Disabled links do not consume a slot; unavailable links do. Ordinary draft choices follow account/conversation-scoped persistence; edit choices remain transient. Sending does not wait for fetching, and the backend reuses its draft-preview cache.
+- Bare single-URL text messages with one matching ready preview use a localized `[Share]` title (domain fallback) in compact summaries. Mixed text, multiple URLs, attachments, stickers, and non-ready or disabled previews retain their ordinary summaries. Titles are literal text, not Markdown.
+- **Explicit exclusion:** Standalone single-link message-card rendering is not ported. Timeline messages retain their existing body, author, and inline preview presentation.
+- **Manual acceptance, iOS and macOS:** Paste multiple eligible HTTPS URLs; open management, disable/re-enable early links, and confirm quota/order and draft restoration. Remove a link or switch scope during a delayed request; no late result may restore it. Verify edits fetch only on opening management, link-only changes trigger the edit discard guard, attachment captions use their actual text, and send remains immediate. Check compact summaries in chat lists, replies, pins, topics, and forwarded records. Physical-device interaction and authenticated-backend sign-off remain pending.
+
 ## Differences and exclusions
 
 - **Sticker picker shortcuts:** Discovery now opens directly from the picker and includes Create Pack; newly created or owned packs link to the existing management/upload screens. Existing Settings management remains available. Picker hold-to-preview remains a separate native interaction, not an established PWA parity gap.

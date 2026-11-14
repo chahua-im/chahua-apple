@@ -77,12 +77,13 @@ public struct ForwardedMessagePreviewResponse: Codable, Hashable, Sendable {
     public let attachments: [MessagePreviewAttachment]
     public let sticker: MessagePreviewSticker?
     public let mentions: [MentionInfo]
+    public let metadata: MessageMetadataResponse?
 
     public init(
         originalMessageId: MessageID, originalChatId: String, message: String?,
         messageType: MessageType, sender: User, originalCreatedAt: Date,
         attachments: [MessagePreviewAttachment] = [], sticker: MessagePreviewSticker? = nil,
-        mentions: [MentionInfo] = []
+        mentions: [MentionInfo] = [], metadata: MessageMetadataResponse? = nil
     ) {
         self.originalMessageId = originalMessageId
         self.originalChatId = originalChatId
@@ -93,6 +94,7 @@ public struct ForwardedMessagePreviewResponse: Codable, Hashable, Sendable {
         self.attachments = attachments
         self.sticker = sticker
         self.mentions = mentions
+        self.metadata = metadata
     }
 
     public init(from decoder: any Decoder) throws {
@@ -100,19 +102,21 @@ public struct ForwardedMessagePreviewResponse: Codable, Hashable, Sendable {
         originalMessageId = try c.decode(MessageID.self, forKey: .originalMessageId)
         originalChatId = try c.decode(String.self, forKey: .originalChatId)
         message = try c.decodeIfPresent(String.self, forKey: .message)
-        messageType = try c.decode(MessageType.self, forKey: .messageType)
+        messageType = try c.decodeIfPresent(MessageType.self, forKey: .messageType) ?? .text
         sender = try c.decode(User.self, forKey: .sender)
         originalCreatedAt = try c.decode(Date.self, forKey: .originalCreatedAt)
         attachments = try c.decode([MessagePreviewAttachment].self, forKey: .attachments)
         sticker = try c.decodeIfPresent(MessagePreviewSticker.self, forKey: .sticker)
         mentions = try c.decodeIfPresent([MentionInfo].self, forKey: .mentions) ?? []
+        metadata = try c.decodeIfPresent(MessageMetadataResponse.self, forKey: .metadata)
     }
 
     public var replyPreview: MessagePreview {
         MessagePreview(
             id: originalMessageId, clientGeneratedId: "captured-\(originalMessageId)",
             createdAt: originalCreatedAt, sender: sender, messageType: messageType,
-            attachments: attachments, mentions: mentions, message: message, sticker: sticker)
+            attachments: attachments, mentions: mentions, message: message, sticker: sticker,
+            metadata: metadata)
     }
 }
 
@@ -199,7 +203,7 @@ public struct ForwardedMessageResponse: Codable, Hashable, Sendable {
         originalMessageId = try c.decode(MessageID.self, forKey: .originalMessageId)
         originalChatId = try c.decode(String.self, forKey: .originalChatId)
         message = try c.decodeIfPresent(String.self, forKey: .message)
-        messageType = try c.decode(MessageType.self, forKey: .messageType)
+        messageType = try c.decodeIfPresent(MessageType.self, forKey: .messageType) ?? .text
         sender = try c.decode(User.self, forKey: .sender)
         originalCreatedAt = try c.decode(Date.self, forKey: .originalCreatedAt)
         sticker = try c.decodeIfPresent(MessageStickerResponse.self, forKey: .sticker)
