@@ -541,6 +541,40 @@ final class ConversationScopeTests: XCTestCase {
         let archived = ConversationTabBadges(summaries: summaries, archived: true)
         XCTAssertEqual(archived[.messages], 8)
         XCTAssertEqual(archived.label(for: .messages), "@")
+        XCTAssertEqual(archived.archiveEntryLabel(for: .messages), "8")
+        let messageCounts = ConversationTabBadges(
+            summaries: summaries, showUnreadMessageCount: true)
+        XCTAssertEqual(messageCounts[.groups], 40)
+        XCTAssertEqual(messageCounts.label(for: .groups), "40")
+        XCTAssertEqual(messageCounts[.messages], 50)
+        XCTAssertEqual(messageCounts.label(for: .messages), "@")
+        let archivedMessageCounts = ConversationTabBadges(
+            summaries: summaries, archived: true, showUnreadMessageCount: true)
+        XCTAssertEqual(archivedMessageCounts.archiveEntryLabel(for: .messages), "8")
+        XCTAssertEqual(archivedMessageCounts.label(for: .messages), "@")
+    }
+
+    func testArchiveEntryNeverUsesAttentionOrMessageModeAndTabNumbersCapForDisplay() {
+        let summaries = [
+            ConversationUnreadSummary(
+                key: "groups", unreadAttentionCount: 0, unreadConversationCount: 1,
+                unreadMessageCount: 1000, unreadUnmutedAttentionCount: 0,
+                unreadUnmutedConversationCount: 1, unreadUnmutedMessageCount: 1000),
+            ConversationUnreadSummary(
+                key: "groups-archived", unreadAttentionCount: 9, unreadConversationCount: 0,
+                unreadMessageCount: 0, unreadUnmutedAttentionCount: 0,
+                unreadUnmutedConversationCount: 0, unreadUnmutedMessageCount: 0),
+        ]
+        for showMessages in [false, true] {
+            let active = ConversationTabBadges(
+                summaries: summaries, showUnreadMessageCount: showMessages)
+            XCTAssertEqual(active.label(for: .groups), showMessages ? "999+" : "1")
+            let archived = ConversationTabBadges(
+                summaries: summaries, archived: true, showUnreadMessageCount: showMessages)
+            XCTAssertEqual(archived.label(for: .groups), "@")
+            XCTAssertNil(archived.archiveEntryLabel(for: .groups))
+            XCTAssertEqual(archived.archiveEntryAccessibilityValue(for: .groups), "")
+        }
     }
 
     func testMessagePreferenceSelectsItsOwnServerSummaryAndAllViewsAreRequested() {
@@ -559,6 +593,10 @@ final class ConversationScopeTests: XCTestCase {
         XCTAssertEqual(badges[.threads], 6)
         XCTAssertEqual(Set(ConversationTabBadges.unreadViews.map(\.key)).count, 10)
         XCTAssertEqual(ConversationTabBadges(summaries: summaries)[.messages], 0)
+        let messageCounts = ConversationTabBadges(
+            summaries: summaries, showThreadsInMessages: false, showUnreadMessageCount: true)
+        XCTAssertEqual(messageCounts[.messages], 3)
+        XCTAssertEqual(messageCounts[.threads], 8)
     }
 
     func testNotificationOverrideDefaultsAndTemporaryExpiryMatrix() {

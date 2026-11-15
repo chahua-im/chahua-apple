@@ -212,8 +212,9 @@ struct ChatFloatingHeader<Avatar: View>: View {
     /// The trailing slot holds its own control (e.g. the thread subscription menu)
     /// rather than a decorative avatar.
     var trailingIsControl = false
-    /// Server-owned unread chat count outside the current chat; 0 hides it.
+    /// Server-owned Main badge outside the current parent chat; 0 hides it.
     var backBadgeCount = 0
+    var backBadgeShowsMessageCount = false
     /// Thread identity shares one glass capsule with its avatar; navigation stays separate.
     var leadingAvatar: ThreadHeaderAvatar? = nil
     @ScaledMetric(relativeTo: .body) private var avatarScale: CGFloat = 1
@@ -484,7 +485,10 @@ struct ChatFloatingHeader<Avatar: View>: View {
         .buttonStyle(.plain)
         .modifier(ChatGlassSurface(shape: Capsule(style: .circular), isInteractive: true))
         .accessibilityLabel(Text("Back"))
-        .accessibilityValue(Text(UnreadBackBadge.accessibilityValue(backBadgeCount)))
+        .accessibilityValue(
+            Text(
+                UnreadBackBadge.accessibilityValue(
+                    backBadgeCount, showUnreadMessageCount: backBadgeShowsMessageCount)))
     }
 
     @ViewBuilder
@@ -546,8 +550,10 @@ struct UnreadBackBadge: View {
         .accessibilityHidden(true)
     }
 
-    static func accessibilityValue(_ count: Int) -> String {
-        AppLanguage.localized("\(count) unread chats")
+    static func accessibilityValue(_ count: Int, showUnreadMessageCount: Bool = false) -> String {
+        showUnreadMessageCount
+            ? AppLanguage.localized("\(count) unread messages")
+            : AppLanguage.localized("\(count) unread chats")
     }
 }
 

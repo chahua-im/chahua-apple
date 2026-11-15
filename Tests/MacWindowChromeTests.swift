@@ -1,3 +1,5 @@
+import ChahuaAPI
+
 #if os(macOS)
     import AppKit
     import Combine
@@ -7,6 +9,150 @@
 
     @MainActor
     final class MacWindowChromeTests: XCTestCase {
+        func testSidebarSearchIncludesArchivedAndContinuesPastNonmatchingPages() async throws {
+            let api = FakeChatAPI(
+                chatResults: [
+                    .success(
+                        .init(
+                            chats: [
+                                .init(
+                                    id: "main", name: "Product Crit", unreadCount: 0,
+                                    archived: false, kind: .group)
+                            ], nextCursor: "next")),
+                    .success(
+                        .init(chats: [
+                            .init(
+                                id: "dm", name: "Mika", unreadCount: 0, archived: false, kind: .dm)
+                        ])),
+                ],
+                archivedChatResults: [
+                    .success(
+                        .init(chats: [
+                            .init(
+                                id: "archive", name: "Mika project", unreadCount: 42,
+                                archived: true, kind: .group)
+                        ]))
+                ])
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            defer { store.reset() }
+            store.currentUserProfile = try JSONDecoder().decode(
+                MeResponse.self,
+                from: Data(
+                    """
+                    {"uid":1,"username":"Account 1","gender":0,"stickerPackOrder":[],"permissions":[]}
+                    """.utf8))
+            let model = MacSidebarSearchModel(currentUserID: 1, store: store)
+            defer { model.stop() }
+            model.query = "mika"
+            model.start()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while model.state(for: .active).isLoading || model.state(for: .archived).isLoading {
+                guard ContinuousClock.now < deadline else {
+                    return XCTFail("Search did not settle")
+                }
+                await Task.yield()
+            }
+            XCTAssertEqual(model.results(in: .archived).map(\.id), ["archive"])
+            XCTAssertTrue(model.results(in: .active).isEmpty)
+            XCTAssertTrue(model.state(for: .active).hasMore)
+            model.loadMore(in: .active)
+            while model.state(for: .active).isLoading {
+                guard ContinuousClock.now < deadline else {
+                    return XCTFail("Next page did not settle")
+                }
+                await Task.yield()
+            }
+            XCTAssertEqual(model.results(in: .active).map(\.id), ["dm"])
+            XCTAssertFalse(model.state(for: .active).hasMore)
+            store.currentUserProfile = nil
+            XCTAssertFalse(model.isAvailable)
+            XCTAssertTrue(model.results(in: .archived).isEmpty)
+        }
+
+        func testArchiveSidebarKeepsWindowControlsAndRestoresMainScope() async throws {
+            let api = FakeChatAPI(
+                chatResults: [
+                    .success(
+                        .init(chats: [
+                            .init(
+                                id: "main", name: "Product Crit", unreadCount: 3, archived: false,
+                                kind: .group)
+                        ]))
+                ],
+                archivedChatResults: [
+                    .success(
+                        .init(chats: [
+                            .init(
+                                id: "archive", name: "Old Project", unreadCount: 42, archived: true,
+                                kind: .group)
+                        ]))
+                ])
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            defer { store.reset() }
+            await store.loadActiveChats()
+            await store.loadArchivedChats()
+            var scope = ConversationListScope.messages
+            let scopeBinding = Binding(get: { scope }, set: { scope = $0 })
+            func surface(_ browsingArchived: Bool) -> some View {
+                MacArchiveSidebar(
+                    isArchived: browsingArchived,
+                    activeBadges: ConversationTabBadges(),
+                    archivedBadges: ConversationTabBadges(archived: true),
+                    badgeColor: ConversationListPreferences.defaultUnreadBadgeColor,
+                    selection: scopeBinding, onSearch: {}, onBack: {}
+                ) { opacity in
+                    MacConversationListHeader(
+                        isUpdating: false,
+                        account: { Text("C") }, actions: { Image(systemName: "plus") }
+                    )
+                    .opacity(opacity)
+                } list: { archived in
+                    ChatListView(
+                        store: store, drafts: store.drafts, currentUserID: 1,
+                        scope: scopeBinding, archivedMode: archived,
+                        showsExternalHeader: true, isActive: archived == browsingArchived,
+                        selectedConversationID: nil, onSelectConversation: { _ in })
+                }
+                .frame(width: 300, height: 560)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .environment(\.colorScheme, .light)
+                .environment(\.isWideChatLayout, true)
+                .modifier(MacConversationWindowChrome())
+            }
+            let host = NSHostingController(rootView: surface(false))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
+                styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.titlebarAppearsTransparent = true
+            window.contentViewController = host
+            window.orderFront(nil)
+            defer { window.close() }
+            await settle(window)
+            let original = try positions(in: window)
+            for archived in [false, true, false] {
+                host.rootView = surface(archived)
+                try await Task.sleep(for: .milliseconds(400))
+                await settle(window)
+                try assertPositions(in: window, equalTo: original)
+                let bitmap = try XCTUnwrap(
+                    host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+                let capture = XCTAttachment(
+                    data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                    uniformTypeIdentifier: "public.png")
+                capture.name = archived ? "Archived sidebar" : "Main sidebar"
+                capture.lifetime = .keepAlways
+                add(capture)
+            }
+            XCTAssertEqual(scope, .messages)
+        }
+
         func testCircularJumpControlAndContentSizedUnreadChips() async throws {
             for text in ["1", "@", "99+"] {
                 let chip = NSHostingView(

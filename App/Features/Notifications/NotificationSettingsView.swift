@@ -429,8 +429,12 @@ struct NotificationSettingsView: View {
                     set: { chatStore.displayPreferences.setShowDmDetails($0, for: me.uid) })
             )
             .toggleStyle(.switch)
-            MembershipMessagePreferenceRow(store: chatStore, accountUID: me.uid)
-                .id("\(me.uid)-\(chatStore.sessionRevision)")
+            AccountChatPreferenceRow(store: chatStore, accountUID: me.uid, preference: .membership)
+                .id("membership-\(me.uid)-\(chatStore.sessionRevision)")
+            AccountChatPreferenceRow(
+                store: chatStore, accountUID: me.uid, preference: .unreadMessages
+            )
+            .id("unread-\(me.uid)-\(chatStore.sessionRevision)")
             if showsDividers {
                 Divider()
                 VStack(alignment: .leading, spacing: 12) {
@@ -558,18 +562,53 @@ private struct StickerSortRow: View {
     }
 }
 
-private struct MembershipMessagePreferenceRow: View {
+private struct AccountChatPreferenceRow: View {
+    enum Preference {
+        case membership, unreadMessages
+
+        var title: LocalizedStringKey {
+            switch self {
+            case .membership: "Show group membership messages"
+            case .unreadMessages: "Show unread message count"
+            }
+        }
+
+        var explanation: LocalizedStringKey {
+            switch self {
+            case .membership: "Show join and leave messages when the group policy allows them."
+            case .unreadMessages:
+                "Count unread messages instead of chats in tabs, the back button, and the app badge. Archive always counts conversations."
+            }
+        }
+
+        var unavailable: LocalizedStringKey {
+            switch self {
+            case .membership: "Membership message preference is unavailable."
+            case .unreadMessages: "Unread count preference is unavailable."
+            }
+        }
+
+        var accessibilityIdentifier: String {
+            switch self {
+            case .membership: "show-membership-messages-toggle"
+            case .unreadMessages: "show-unread-message-count-toggle"
+            }
+        }
+    }
+
     @ObservedObject var store: ChatStore
     let accountUID: Int32
+    let preference: Preference
     private let sessionRevision: Int
     @State private var isSaving = false
     @State private var pendingChoice: Bool?
     @State private var failedChoice: Bool?
     @State private var saveError: String?
 
-    init(store: ChatStore, accountUID: Int32) {
+    init(store: ChatStore, accountUID: Int32, preference: Preference) {
         self.store = store
         self.accountUID = accountUID
+        self.preference = preference
         sessionRevision = store.sessionRevision
     }
 
@@ -579,7 +618,10 @@ private struct MembershipMessagePreferenceRow: View {
 
     private var savedValue: Bool? {
         guard authorized else { return nil }
-        return store.currentUserProfile?.showMembershipMessages
+        switch preference {
+        case .membership: return store.currentUserProfile?.showMembershipMessages
+        case .unreadMessages: return store.currentUserProfile?.showUnreadMessageCount
+        }
     }
 
     var body: some View {
@@ -587,14 +629,14 @@ private struct MembershipMessagePreferenceRow: View {
             if let savedValue {
                 HStack {
                     Toggle(
-                        "Show group membership messages",
+                        preference.title,
                         isOn: Binding(
                             get: { pendingChoice ?? savedValue },
                             set: { value in Task { await save(value) } })
                     )
                     .toggleStyle(.switch)
                     .disabled(isSaving)
-                    .accessibilityIdentifier("show-membership-messages-toggle")
+                    .accessibilityIdentifier(preference.accessibilityIdentifier)
                     if isSaving {
                         ProgressView()
                             .controlSize(.small)
@@ -602,10 +644,10 @@ private struct MembershipMessagePreferenceRow: View {
                     }
                 }
             } else {
-                Text("Membership message preference is unavailable.")
+                Text(preference.unavailable)
                     .foregroundStyle(.secondary)
             }
-            Text("Show join and leave messages when the group policy allows them.")
+            Text(preference.explanation)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let saveError {
@@ -631,7 +673,12 @@ private struct MembershipMessagePreferenceRow: View {
             isSaving = false
         }
         do {
-            _ = try await store.updateChatSettings(showMembershipMessages: value)
+            switch preference {
+            case .membership:
+                _ = try await store.updateChatSettings(showMembershipMessages: value)
+            case .unreadMessages:
+                _ = try await store.updateChatSettings(showUnreadMessageCount: value)
+            }
             // The shared store applies only the server-confirmed account preference.
         } catch is CancellationError {} catch {
             guard authorized else { return }

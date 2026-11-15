@@ -101,6 +101,27 @@ public struct ConversationUnreadSummary: Codable, Hashable, Sendable {
     }
 }
 
+/// A coherent main-list snapshot: its counting unit travels with its eligible chats.
+public struct MainUnreadSnapshot: Codable, Hashable, Sendable {
+    public struct Chat: Codable, Hashable, Sendable {
+        public let chatId: String
+        public let unreadCount: Int64
+
+        public init(chatId: String, unreadCount: Int64) {
+            self.chatId = chatId
+            self.unreadCount = unreadCount
+        }
+    }
+
+    public let showUnreadMessageCount: Bool
+    public let chats: [Chat]
+
+    public init(showUnreadMessageCount: Bool, chats: [Chat]) {
+        self.showUnreadMessageCount = showUnreadMessageCount
+        self.chats = chats
+    }
+}
+
 /// Absolute counters for this socket's watch. Partial frames replace only listed keys.
 public struct ConversationUnreadPayload: Codable, Hashable, Sendable {
     public let requestId: UInt32
@@ -108,19 +129,19 @@ public struct ConversationUnreadPayload: Codable, Hashable, Sendable {
     public let summaries: [ConversationUnreadSummary]
     public let appBadgeCount: Int64?
     /// Eligible unread main chats, independent of watched views or navigation.
-    /// When present, replaces the entire set (including []); omitted partials retain it,
-    /// while an omitted full snapshot makes the set unknown.
-    public let unreadChatIds: [String]?
+    /// When present, replaces the entire snapshot (including empty chats); omitted
+    /// partials retain it, while an omitted full snapshot makes it unknown.
+    public let mainUnread: MainUnreadSnapshot?
 
     public init(
         requestId: UInt32, full: Bool, summaries: [ConversationUnreadSummary],
-        appBadgeCount: Int64? = nil, unreadChatIds: [String]? = nil
+        appBadgeCount: Int64? = nil, mainUnread: MainUnreadSnapshot? = nil
     ) {
         self.requestId = requestId
         self.full = full
         self.summaries = summaries
         self.appBadgeCount = appBadgeCount
-        self.unreadChatIds = unreadChatIds
+        self.mainUnread = mainUnread
     }
 }
 

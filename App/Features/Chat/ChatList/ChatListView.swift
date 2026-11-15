@@ -31,9 +31,13 @@ struct ChatListView: View {
     var onOpenFriendRequestHistory: (() -> Void)?
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
     var presentation: ConversationListPresentation? = nil
+    var showsExternalHeader = false
+    var isActive = true
+    var onSearch: (() -> Void)? = nil
     let selectedConversationID: ConversationKey?
     let onSelectConversation: (ConversationListItem) -> Void
     @State private var isPullRefreshing = false
+    @State private var archiveEntrySnapshotCache = ConversationListSnapshotCache()
     @State private var revealedConversationID: ConversationKey?
     @State private var conversationStateConsumer = UUID()
     @State private var listSnapshotCache = ConversationListSnapshotCache()
@@ -56,6 +60,16 @@ struct ChatListView: View {
         let scope: ConversationListScope
         let archived: Bool
         let showThreadsInMessages: Bool
+    }
+
+    private struct ActivityID: Equatable {
+        let list: LoadID
+        let active: Bool
+    }
+
+    private struct ConsumerID: Equatable {
+        let conversations: [ConversationRef]
+        let active: Bool
     }
 
     private struct ArchiveConfirmationContext: Equatable {
@@ -87,6 +101,7 @@ struct ChatListView: View {
     }
 
     private var listAlert: ListAlert? {
+        guard isActive else { return nil }
         if let archiveConfirmation { return .archive(archiveConfirmation) }
         return store.listActionError.map(ListAlert.failure)
     }
@@ -145,7 +160,7 @@ struct ChatListView: View {
             // Native List scroll-offset restoration must not compete with header
             // safe-area insets. Give macOS chrome its own space above the viewport.
             VStack(spacing: 0) {
-                if isWideChatLayout {
+                if isWideChatLayout && !showsExternalHeader {
                     wideSearchHeader
                 }
                 conversationList(bottomInset: bottomInset)
@@ -163,7 +178,9 @@ struct ChatListView: View {
                 badges: ConversationTabBadges(
                     summaries: store.state.conversationUnreadSummaries,
                     archived: archivedMode,
-                    showThreadsInMessages: showThreadsInMessages),
+                    showThreadsInMessages: showThreadsInMessages,
+                    showUnreadMessageCount: store.currentUserProfile?.showUnreadMessageCount
+                        ?? false),
                 badgeColor: badgeColor
             )
             .padding(.horizontal, 12)
@@ -365,7 +382,7 @@ struct ChatListView: View {
             // (including playback chrome) inside the scrollable content.
             .ignoresSafeArea(.container, edges: .bottom)
         #endif
-        .preference(key: ConversationListRefreshingKey.self, value: isPullRefreshing)
+        .preference(key: ConversationListRefreshingKey.self, value: isActive && isPullRefreshing)
         .accessibilityActions {
             Button("Search conversations") { revealSearch() }
             Button("Refresh conversations") { Task { await performManualRefresh() } }
@@ -373,14 +390,18 @@ struct ChatListView: View {
         .background {
             HStack(spacing: 0) {
                 Button("Search conversations") {
-                    revealSearch()
-                    isSearchFocused = true
+                    #if os(macOS)
+                        onSearch?()
+                    #else
+                        revealSearch()
+                        isSearchFocused = true
+                    #endif
                 }
                 .keyboardShortcut("f", modifiers: .command)
                 Button("Refresh conversations") { Task { await performManualRefresh() } }
                     .keyboardShortcut("r", modifiers: .command)
             }
-            .disabled(!isListVisible)
+            .disabled(!isListVisible || !isActive)
             .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
@@ -414,6 +435,13 @@ struct ChatListView: View {
         .onChange(of: archivedMode) { _, _ in resetScopePresentation() }
         .onChange(of: currentUserID) { _, _ in resetScopePresentation(preservingSearch: false) }
         .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
+        .onChange(of: isActive) { _, active in
+            if !active {
+                revealedConversationID = nil
+                archiveConfirmation = nil
+                notificationChat = nil
+            }
+        }
         .onChange(of: archiveConfirmationContext) { _, _ in archiveConfirmation = nil }
         .onDisappear {
             isListVisible = false
@@ -423,15 +451,23 @@ struct ChatListView: View {
             scrollScope.detach()
             store.removeConversationStateScope(for: conversationStateConsumer)
         }
-        .task(id: snapshot.conversationRefs) {
-            store.setConversationStateScope(
-                snapshot.conversationRefs, for: conversationStateConsumer)
+        .task(id: ConsumerID(conversations: snapshot.conversationRefs, active: isActive)) {
+            if isActive {
+                store.setConversationStateScope(
+                    snapshot.conversationRefs, for: conversationStateConsumer)
+            } else {
+                store.removeConversationStateScope(for: conversationStateConsumer)
+            }
         }
         .task(
-            id: LoadID(
-                scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages
-            )
-        ) { await loadScope() }
+            id: ActivityID(
+                list: LoadID(
+                    scope: scope, archived: archivedMode,
+                    showThreadsInMessages: showThreadsInMessages),
+                active: isActive)
+        ) {
+            if isActive { await loadScope() }
+        }
         .sheet(item: $notificationChat) { chat in
             NavigationStack {
                 ChatNotificationSettingsView(store: store, chat: chat)
@@ -494,8 +530,12 @@ struct ChatListView: View {
     }
 
     private func revealSearch() {
-        // Wide search is already visible; revealing a pull drawer would reset the list offset.
-        if !isWideChatLayout { scrollScope.revealSearch() }
+        #if os(macOS)
+            onSearch?()
+        #else
+            // Wide search is already visible; revealing a pull drawer would reset the list offset.
+            if !isWideChatLayout { scrollScope.revealSearch() }
+        #endif
     }
 
     private var searchDrawerHeight: CGFloat {
@@ -527,46 +567,51 @@ struct ChatListView: View {
             .accessibilityIdentifier("conversation-search-unavailable")
     }
 
+    @ViewBuilder
     private var searchControls: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: usesDesktopDensity ? 6 : 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(usesDesktopDensity ? .system(size: 14) : .body)
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                TextField(
-                    isWideChatLayout
-                        ? LocalizedStringKey(usesDesktopDensity ? "Search (⌘K)" : "Search")
-                        : LocalizedStringKey("Search chats, messages, people"),
-                    text: $searchText
-                )
-                .textFieldStyle(.plain)
-                .focused($isSearchFocused)
-                .submitLabel(.search)
-                .accessibilityHint("Search is not available yet.")
-            }
-            .font(usesDesktopDensity ? .system(size: 13) : .body)
-            .padding(.horizontal, usesDesktopDensity ? 8 : (usesPrototypePull ? 14 : 12))
-            .frame(height: searchControlHeight)
-            .background {
-                if isWideChatLayout {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.secondary.opacity(0.1))
-                } else {
-                    Capsule().fill(searchControlFill)
+        #if os(macOS)
+            MacSidebarSearchButton(onSearch: onSearch)
+        #else
+            HStack(spacing: 10) {
+                HStack(spacing: usesDesktopDensity ? 6 : 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(usesDesktopDensity ? .system(size: 14) : .body)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    TextField(
+                        isWideChatLayout
+                            ? LocalizedStringKey(usesDesktopDensity ? "Search (⌘K)" : "Search")
+                            : LocalizedStringKey("Search chats, messages, people"),
+                        text: $searchText
+                    )
+                    .textFieldStyle(.plain)
+                    .focused($isSearchFocused)
+                    .submitLabel(.search)
+                    .accessibilityHint("Search is not available yet.")
+                }
+                .font(usesDesktopDensity ? .system(size: 13) : .body)
+                .padding(.horizontal, usesDesktopDensity ? 8 : (usesPrototypePull ? 14 : 12))
+                .frame(height: searchControlHeight)
+                .background {
+                    if isWideChatLayout {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.secondary.opacity(0.1))
+                    } else {
+                        Capsule().fill(searchControlFill)
+                    }
+                }
+                if isSearchFocused || !searchText.isEmpty {
+                    Button("Cancel") {
+                        isSearchFocused = false
+                        searchText = ""
+                        if !isWideChatLayout { scrollScope.cancelSearch() }
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    .foregroundStyle(.blue)
                 }
             }
-            if isSearchFocused || !searchText.isEmpty {
-                Button("Cancel") {
-                    isSearchFocused = false
-                    searchText = ""
-                    if !isWideChatLayout { scrollScope.cancelSearch() }
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
-                .foregroundStyle(.blue)
-            }
-        }
+        #endif
     }
 
     private var searchControlFill: Color {
@@ -608,7 +653,7 @@ struct ChatListView: View {
     }
 
     private func performManualRefresh() async {
-        guard !isPullRefreshing else { return }
+        guard isActive, !isPullRefreshing else { return }
         isPullRefreshing = true
         scrollScope.isRefreshing = true
         defer {
@@ -641,11 +686,16 @@ struct ChatListView: View {
             VStack(alignment: .leading, spacing: usesDesktopDensity ? 3 : 4) {
                 Text("Archived")
                     .font(usesDesktopDensity ? .system(size: 14, weight: .semibold) : .headline)
-                Text("View archived chats and threads")
-                    .modifier(ConversationListSubtitleStyle(isSelected: false))
+                #if os(macOS)
+                    Text(archivedEntrySubtitle)
+                        .modifier(ConversationListSubtitleStyle(isSelected: false))
+                #else
+                    Text("View archived chats and threads")
+                        .modifier(ConversationListSubtitleStyle(isSelected: false))
+                #endif
             }
             Spacer(minLength: 8)
-            if let label = badges.label(for: scope) {
+            if let label = badges.archiveEntryLabel(for: scope) {
                 RoundChipLayout(isCircular: label.count == 1) {
                     Text(label)
                         .font(.caption.weight(.semibold).monospacedDigit())
@@ -653,11 +703,23 @@ struct ChatListView: View {
                         .padding(.vertical, 2)
                 }
                 .background(.quaternary, in: Capsule(style: .circular))
-                .accessibilityLabel(badges.accessibilityValue(for: scope))
+                .accessibilityLabel(badges.archiveEntryAccessibilityValue(for: scope))
             }
         }
         .modifier(ConversationListRowLayout())
         .contentShape(Rectangle())
+    }
+
+    private var archivedEntrySubtitle: String {
+        let snapshot = archiveEntrySnapshotCache.snapshot(
+            chats: store.state.archivedChats, threads: store.state.archivedThreads,
+            scope: scope, archived: true, showThreadsInMessages: showThreadsInMessages,
+            draftUpdatedAt: drafts.draftUpdatedAt, pendingPreviews: store.pendingListPreviews)
+        let names = snapshot.items.prefix(3).map(\.title).joined(separator: ", ")
+        return names.isEmpty
+            ? AppLanguage.localized("View archived chats and threads")
+            : names
+                + (snapshot.items.count > 3 ? "…" : "")
     }
 
     private var friendRequestHistoryEntry: some View {

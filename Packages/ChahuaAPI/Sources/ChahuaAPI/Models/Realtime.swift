@@ -7,6 +7,7 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case memberSpeakingModeChanged(MemberSpeakingModeResponse)
     case chatMembershipChanged(ChatMembershipChangedPayload)
     case membershipMessagePolicyChanged(MembershipMessagePolicyChangedPayload)
+    case chatSettingsChanged(ChatSettings)
     case message(MessageResponse)
     case messageUpdated(MessageResponse)
     case messageDeleted(MessageResponse)
@@ -55,6 +56,9 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         case "membershipMessagePolicyChanged":
             self = .membershipMessagePolicyChanged(
                 try container.decode(MembershipMessagePolicyChangedPayload.self, forKey: .payload))
+        case "chatSettingsChanged":
+            self = .chatSettingsChanged(
+                try container.decode(ChatSettings.self, forKey: .payload))
         case "message":
             self = .message(try container.decode(MessageResponse.self, forKey: .payload))
         case "messageUpdated":

@@ -14,7 +14,7 @@ struct ChatState: Equatable {
     var groupPresence: [String: GroupPresenceResponse] = [:]
     var conversationUnreadSummaries: [ConversationUnreadSummary] = []
     var appBadgeCount: Int64?
-    var unreadChatIDs: Set<String>?
+    var mainUnread: MainUnreadSnapshot?
     var notificationDefaults: NotificationSettingsResponse?
     var chats: [ChatListItem] = []
     var chatListLoadPhase: ChatListLoadPhase = .idle
@@ -80,13 +80,18 @@ final class ChatStore: ObservableObject {
     private var presenceRequestID: UInt64?
     static let unreadSummaryViews = ConversationTabBadges.unreadViews
     private static let unreadSummaryKeys = Set(unreadSummaryViews.map(\.key))
-    /// One authoritative set serves every route and window without changing the watch.
-    /// Never estimate membership from independently delivered rows or read states.
+    /// Main-list eligibility and counting unit come from one authoritative snapshot,
+    /// regardless of the route (including Archive) or independently delivered settings.
     func backBadgeCount(excludingChatID chatID: String?) -> Int {
         guard state.realtimeStatus == .connected, let chatID,
-            let unreadChatIDs = state.unreadChatIDs
+            let snapshot = state.mainUnread
         else { return 0 }
-        return unreadChatIDs.count - (unreadChatIDs.contains(chatID) ? 1 : 0)
+        var count: Int64 = 0
+        for chat in snapshot.chats where chat.chatId != chatID {
+            count += snapshot.showUnreadMessageCount ? max(0, min(1000, chat.unreadCount)) : 1
+            if snapshot.showUnreadMessageCount && count >= 1000 { return 1000 }
+        }
+        return Int(count)
     }
 
     // Like presence, viewport/read-watch scope changes notify transport without
@@ -138,10 +143,15 @@ final class ChatStore: ObservableObject {
             guard currentUserProfile != oldValue else { return }
             if let settings = membershipChatSettings, currentUserProfile != nil,
                 currentUserProfile?.showMembershipMessages != settings.showMembershipMessages
+                    || currentUserProfile?.showUnreadMessageCount != settings.showUnreadMessageCount
             {
                 currentUserProfile = currentUserProfile?.withChatSettings(settings)
             } else if let show = currentUserProfile?.showMembershipMessages {
-                acceptChatSettings(.init(showMembershipMessages: show))
+                acceptChatSettings(
+                    .init(
+                        showMembershipMessages: show,
+                        showUnreadMessageCount: currentUserProfile?.showUnreadMessageCount ?? false)
+                )
             }
             if state.notificationDefaults == nil, let profile = currentUserProfile,
                 let groups = profile.muteGroupChatsByDefault,
@@ -1380,6 +1390,8 @@ final class ChatStore: ObservableObject {
             acceptGroupSpeakingMode(response)
         case .memberSpeakingModeChanged(let response):
             acceptMemberSpeakingMode(response)
+        case .chatSettingsChanged(let settings):
+            acceptChatSettings(settings)
         case .membershipMessagePolicyChanged(let payload):
             membershipPolicyRevisions[payload.chatId, default: 0] += 1
             conversationMessages.invalidateMembershipSnapshots(chatID: payload.chatId)
@@ -1536,7 +1548,7 @@ final class ChatStore: ObservableObject {
         case .conversationUnreadError(let payload):
             guard payload.requestId == unreadRequestID else { return }
             unreadFullRequestID = nil
-            if state.unreadChatIDs != nil { state.unreadChatIDs = nil }
+            if state.mainUnread != nil { state.mainUnread = nil }
         case .conversationStates(let payload):
             acceptConversationStates(payload)
         case .conversationStatesError(let payload):
@@ -2172,7 +2184,7 @@ final class ChatStore: ObservableObject {
     func clearConversationWatches() {
         unreadRequestID = nil
         unreadFullRequestID = nil
-        if state.unreadChatIDs != nil { state.unreadChatIDs = nil }
+        if state.mainUnread != nil { state.mainUnread = nil }
         statesRequestID = nil
         statesFullRequestID = nil
         watchedConversations.removeAll()
@@ -2211,9 +2223,8 @@ final class ChatStore: ObservableObject {
             let appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
             if state.appBadgeCount != appBadgeCount { state.appBadgeCount = appBadgeCount }
         }
-        if payload.full || payload.unreadChatIds != nil {
-            let unreadChatIDs = payload.unreadChatIds.map { Set($0) }
-            if state.unreadChatIDs != unreadChatIDs { state.unreadChatIDs = unreadChatIDs }
+        if payload.full || payload.mainUnread != nil {
+            if state.mainUnread != payload.mainUnread { state.mainUnread = payload.mainUnread }
         }
     }
 
@@ -2701,13 +2712,17 @@ final class ChatStore: ObservableObject {
 
     private func acceptChatSettings(_ settings: ChatSettings) {
         guard membershipChatSettings != settings else { return }
+        let membershipChanged =
+            membershipChatSettings?.showMembershipMessages != settings.showMembershipMessages
         membershipChatSettings = settings
         membershipSettingsRevision += 1
-        if currentUserProfile?.showMembershipMessages != settings.showMembershipMessages {
+        if currentUserProfile?.showMembershipMessages != settings.showMembershipMessages
+            || currentUserProfile?.showUnreadMessageCount != settings.showUnreadMessageCount
+        {
             currentUserProfile = currentUserProfile?.withChatSettings(settings)
         }
         conversationMessages.setMembershipSettings(settings)
-        invalidateMembershipVisibility()
+        if membershipChanged { invalidateMembershipVisibility() }
     }
 
     private func acceptMembershipPolicy(_ policy: MembershipMessagePolicy, chatID: String) {
@@ -2776,24 +2791,32 @@ final class ChatStore: ObservableObject {
         }
     }
 
-    func updateChatSettings(showMembershipMessages: Bool) async throws -> ChatSettings {
+    func updateChatSettings(
+        showMembershipMessages: Bool? = nil, showUnreadMessageCount: Bool? = nil
+    ) async throws -> ChatSettings {
         let requestGeneration = generation
         membershipSettingsWrites += 1
         membershipSettingsRevision += 1
-        conversationMessages.invalidateMembershipSnapshots()
-        invalidateMembershipVisibility()
+        if showMembershipMessages != nil {
+            conversationMessages.invalidateMembershipSnapshots()
+            invalidateMembershipVisibility()
+        }
         defer {
             if generation == requestGeneration {
                 membershipSettingsWrites -= 1
                 membershipSettingsRevision += 1
-                conversationMessages.invalidateMembershipSnapshots()
-                invalidateMembershipVisibility()
+                if showMembershipMessages != nil {
+                    conversationMessages.invalidateMembershipSnapshots()
+                    invalidateMembershipVisibility()
+                }
             }
         }
         return try await serializeGroupMutation(chatID: "\0membership-settings") {
             let response = try await self.performGroupRequest(generation: requestGeneration) {
                 try await self.apiClient.updateChatSettings(
-                    .init(showMembershipMessages: showMembershipMessages))
+                    .init(
+                        showMembershipMessages: showMembershipMessages,
+                        showUnreadMessageCount: showUnreadMessageCount))
             }
             self.acceptChatSettings(response)
             return response

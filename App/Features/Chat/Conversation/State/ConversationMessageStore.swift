@@ -279,7 +279,7 @@ extension RealtimeServerEvent {
             .threadMembershipChanged, .readReceiptChanged, .notification,
             .notificationSettingsChanged, .chatNotificationSettingChanged,
             .notificationExceptionsCleared, .groupSpeakingModeChanged, .memberSpeakingModeChanged,
-            .membershipMessagePolicyChanged, .chatMembershipChanged,
+            .membershipMessagePolicyChanged, .chatMembershipChanged, .chatSettingsChanged,
             .conversationUnread, .conversationUnreadError, .conversationStates,
             .conversationStatesError,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,

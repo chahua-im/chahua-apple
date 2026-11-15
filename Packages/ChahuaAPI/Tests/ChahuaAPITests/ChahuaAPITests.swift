@@ -1154,7 +1154,7 @@ final class ChahuaAPITests: XCTestCase {
                     #"{"chatId":"chat/one","uid":17,"role":"member","speakingMode":"repliesOnly","groupSpeakingMode":"threadsOnly","effectiveSpeakingMode":"repliesOnly"}"#
                 )
             case ("PUT", "/users/me/chat-settings"):
-                return (200, #"{"showMembershipMessages":false}"#)
+                return (200, #"{"showMembershipMessages":false,"showUnreadMessageCount":true}"#)
             default:
                 return (404, "")
             }
@@ -1181,6 +1181,7 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(groupMode, .init(chatId: "chat/one", speakingMode: .readOnly))
         XCTAssertEqual(memberMode.effectiveSpeakingMode, .repliesOnly)
         XCTAssertFalse(chatSettings.showMembershipMessages)
+        XCTAssertTrue(chatSettings.showUnreadMessageCount)
 
         XCTAssertEqual(group.description, "Release work")
         XCTAssertEqual(group.myRole, .admin)
@@ -1239,6 +1240,37 @@ final class ChahuaAPITests: XCTestCase {
             try JSONSerialization.jsonObject(with: requestBody(recorded[5])) as? [String: Any])
         XCTAssertNil(indefiniteMuteBody["durationSeconds"])
         XCTAssertEqual(indefiniteMuteBody["mode"] as? String, "alwaysMuted")
+        let settingsBody = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: requestBody(recorded[8])) as? [String: Bool])
+        XCTAssertEqual(settingsBody, ["showMembershipMessages": false])
+    }
+
+    func testChatSettingsUnreadPatchAndMePropagation() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (200, #"{"showMembershipMessages":false,"showUnreadMessageCount":true}"#)
+        }
+        let client = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        let settings = try await client.updateChatSettings(.init(showUnreadMessageCount: true))
+        let request = try XCTUnwrap(requests.values.first)
+        XCTAssertEqual(request.httpMethod, "PUT")
+        XCTAssertEqual(request.url?.path, "/users/me/chat-settings")
+        let body = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: requestBody(request)) as? [String: Bool])
+        XCTAssertEqual(body, ["showUnreadMessageCount": true])
+        let me = try JSONCoding.decoder.decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[],"showMembershipMessages":true,"showUnreadMessageCount":false}"#
+                    .utf8))
+        XCTAssertEqual(me.showUnreadMessageCount, false)
+        let updated = me.withChatSettings(settings)
+        XCTAssertEqual(updated.showMembershipMessages, false)
+        XCTAssertEqual(updated.showUnreadMessageCount, true)
+        XCTAssertEqual(updated.uid, me.uid)
     }
 
     func testReactionPathsPreserveEmojiAndReservedCharactersAsSingleSegments() async throws {

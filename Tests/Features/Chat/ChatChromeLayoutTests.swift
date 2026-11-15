@@ -233,6 +233,15 @@ import XCTest
 
 @MainActor
 final class ChatGlassGeometryTests: XCTestCase {
+    func testBackBadgeAccessibilityFollowsSnapshotCountingUnit() {
+        XCTAssertEqual(
+            UnreadBackBadge.accessibilityValue(900, showUnreadMessageCount: true),
+            AppLanguage.localized("\(900) unread messages"))
+        XCTAssertEqual(
+            UnreadBackBadge.accessibilityValue(2, showUnreadMessageCount: false),
+            AppLanguage.localized("\(2) unread chats"))
+    }
+
     func testUnreadBackBadgeStaysCircularThenGrowsOnlyHorizontally() {
         func size(_ count: Int) -> CGSize {
             #if os(macOS)

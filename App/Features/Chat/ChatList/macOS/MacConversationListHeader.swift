@@ -4,6 +4,7 @@
     struct MacConversationListHeader<Account: View, Actions: View>: View {
         var onBack: (() -> Void)?
         var isUpdating: Bool
+        var controlsOpacity: CGFloat = 1
         @ViewBuilder var account: () -> Account
         @ViewBuilder var actions: () -> Actions
         @FocusState private var isHeaderFocused: Bool
@@ -38,16 +39,23 @@
                     ProgressView().controlSize(.small)
                         .accessibilityLabel("Updating…")
                 }
-                account()
-                    .labelStyle(.iconOnly)
-                    .frame(width: 32, height: 32)
-                    .accessibilityLabel("Settings")
-                if onBack == nil {
-                    actions()
+                HStack(spacing: 9) {
+                    account()
                         .labelStyle(.iconOnly)
-                        .font(.system(size: 18))
                         .frame(width: 32, height: 32)
+                        .contentShape(Circle())
+                        .accessibilityLabel("Settings")
+                    if onBack == nil {
+                        actions()
+                            .labelStyle(.iconOnly)
+                            .font(.system(size: 18))
+                            .frame(width: 32, height: 32)
+                            .contentShape(Circle())
+                    }
                 }
+                .opacity(controlsOpacity)
+                .allowsHitTesting(controlsOpacity == 1)
+                .accessibilityHidden(controlsOpacity == 0)
             }
             .buttonStyle(.plain)
             .menuIndicator(.hidden)

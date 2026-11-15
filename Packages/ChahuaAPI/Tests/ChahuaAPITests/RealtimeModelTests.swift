@@ -86,13 +86,20 @@ final class RealtimeModelTests: XCTestCase {
         guard
             case .conversationUnread(let summary) = try event(
                 "conversationUnread",
-                #"{"requestId":4294967295,"full":true,"appBadgeCount":12,"unreadChatIds":["9007199254740993","9223372036854775807"],"summaries":[{"key":"groups","unreadMessageCount":19,"unreadUnmutedMessageCount":11,"unreadConversationCount":3,"unreadUnmutedConversationCount":2,"unreadAttentionCount":7,"unreadUnmutedAttentionCount":5}]}"#
+                #"{"requestId":4294967295,"full":true,"appBadgeCount":12,"mainUnread":{"showUnreadMessageCount":true,"chats":[{"chatId":"9007199254740993","unreadCount":1000},{"chatId":"9223372036854775807","unreadCount":12}]},"summaries":[{"key":"groups","unreadMessageCount":19,"unreadUnmutedMessageCount":11,"unreadConversationCount":3,"unreadUnmutedConversationCount":2,"unreadAttentionCount":7,"unreadUnmutedAttentionCount":5}]}"#
             )
         else { return XCTFail("Expected unread snapshot") }
         XCTAssertEqual(summary.requestId, UInt32.max)
         XCTAssertTrue(summary.full)
         XCTAssertEqual(summary.appBadgeCount, 12)
-        XCTAssertEqual(summary.unreadChatIds, ["9007199254740993", "9223372036854775807"])
+        XCTAssertEqual(
+            summary.mainUnread,
+            .init(
+                showUnreadMessageCount: true,
+                chats: [
+                    .init(chatId: "9007199254740993", unreadCount: 1000),
+                    .init(chatId: "9223372036854775807", unreadCount: 12),
+                ]))
         XCTAssertEqual(
             summary.summaries,
             [
@@ -108,23 +115,24 @@ final class RealtimeModelTests: XCTestCase {
         else { return XCTFail("Expected unread partial") }
         XCTAssertFalse(partial.full)
         XCTAssertNil(partial.appBadgeCount)
-        XCTAssertNil(partial.unreadChatIds)
+        XCTAssertNil(partial.mainUnread)
         for full in [false, true] {
             guard
                 case .conversationUnread(let empty) = try event(
                     "conversationUnread",
-                    "{\"requestId\":1,\"full\":\(full),\"summaries\":[],\"unreadChatIds\":[]}")
-            else { return XCTFail("Expected empty unread chat set") }
-            XCTAssertEqual(empty.unreadChatIds, [])
+                    "{\"requestId\":1,\"full\":\(full),\"summaries\":[],\"mainUnread\":{\"showUnreadMessageCount\":false,\"chats\":[]}}"
+                )
+            else { return XCTFail("Expected empty Main snapshot") }
+            XCTAssertEqual(empty.mainUnread, .init(showUnreadMessageCount: false, chats: []))
             guard
                 case .conversationUnread(let omitted) = try event(
                     "conversationUnread",
                     "{\"requestId\":1,\"full\":\(full),\"summaries\":[]}")
-            else { return XCTFail("Expected omitted unread chat set") }
-            XCTAssertNil(omitted.unreadChatIds)
+            else { return XCTFail("Expected omitted Main snapshot") }
+            XCTAssertNil(omitted.mainUnread)
         }
         XCTAssertNil(
-            ConversationUnreadPayload(requestId: 1, full: true, summaries: []).unreadChatIds)
+            ConversationUnreadPayload(requestId: 1, full: true, summaries: []).mainUnread)
         guard
             case .conversationStates(let states) = try event(
                 "conversationStates",
@@ -162,7 +170,15 @@ final class RealtimeModelTests: XCTestCase {
             ("conversationUnread", #"{"requestId":4294967296,"full":true,"summaries":[]}"#),
             (
                 "conversationUnread",
-                #"{"requestId":1,"full":true,"summaries":[],"unreadChatIds":[42]}"#
+                #"{"requestId":1,"full":true,"summaries":[],"mainUnread":{"showUnreadMessageCount":false,"chats":[{"chatId":42,"unreadCount":1}]}}"#
+            ),
+            (
+                "conversationUnread",
+                #"{"requestId":1,"full":true,"summaries":[],"mainUnread":{"chats":[]}}"#
+            ),
+            (
+                "conversationUnread",
+                #"{"requestId":1,"full":true,"summaries":[],"mainUnread":{"showUnreadMessageCount":true,"chats":[{"chatId":"42"}]}}"#
             ),
             ("conversationUnreadError", #"{"requestId":-1}"#),
             ("conversationStatesError", "{}"),
@@ -407,6 +423,12 @@ final class RealtimeModelTests: XCTestCase {
                 "membershipMessagePolicyChanged", #"{"chatId":"9007199254740993"}"#)
         else { return XCTFail("Expected membership policy invalidation") }
         XCTAssertEqual(policy.chatId, largeID)
+        guard
+            case .chatSettingsChanged(let settings) = try event(
+                "chatSettingsChanged",
+                #"{"showMembershipMessages":false,"showUnreadMessageCount":true}"#)
+        else { return XCTFail("Expected account chat settings") }
+        XCTAssertEqual(settings, .init(showMembershipMessages: false, showUnreadMessageCount: true))
         guard case .pong = try decode(#"{"type":"pong"}"#) else { return XCTFail("Expected pong") }
         guard case .unknown(let type) = try decode(#"{"type":"futureFeature","payload":42}"#) else {
             return XCTFail("Expected unknown")

@@ -48,14 +48,16 @@ struct ConversationTabBadges: Equatable {
     private var summaries: [ConversationUnreadSummary]
     var archived: Bool
     var showThreadsInMessages: Bool
+    var showUnreadMessageCount: Bool
 
     init(
         summaries: [ConversationUnreadSummary] = [], archived: Bool = false,
-        showThreadsInMessages: Bool = true
+        showThreadsInMessages: Bool = true, showUnreadMessageCount: Bool = false
     ) {
         self.summaries = summaries
         self.archived = archived
         self.showThreadsInMessages = showThreadsInMessages
+        self.showUnreadMessageCount = showUnreadMessageCount
     }
 
     private func summary(for scope: ConversationListScope) -> ConversationUnreadSummary? {
@@ -66,6 +68,7 @@ struct ConversationTabBadges: Equatable {
 
     subscript(scope: ConversationListScope) -> Int64 {
         guard let summary = summary(for: scope) else { return 0 }
+        if !archived && showUnreadMessageCount { return summary.unreadUnmutedMessageCount }
         return archived ? summary.unreadConversationCount : summary.unreadUnmutedConversationCount
     }
 
@@ -86,6 +89,20 @@ struct ConversationTabBadges: Equatable {
             return AppLanguage.localized("\(attention) unread mentions and replies")
         }
         let count = self[scope]
+        guard count > 0 else { return "" }
+        return !archived && showUnreadMessageCount
+            ? AppLanguage.localized("\(count) unread messages")
+            : AppLanguage.localized("\(count) unread conversations")
+    }
+
+    /// Archive entry is always a raw conversation count, including muted chats.
+    func archiveEntryLabel(for scope: ConversationListScope) -> String? {
+        let count = summary(for: scope)?.unreadConversationCount ?? 0
+        return count > 0 ? (count > 999 ? "999+" : String(count)) : nil
+    }
+
+    func archiveEntryAccessibilityValue(for scope: ConversationListScope) -> String {
+        let count = summary(for: scope)?.unreadConversationCount ?? 0
         return count > 0 ? AppLanguage.localized("\(count) unread conversations") : ""
     }
 }

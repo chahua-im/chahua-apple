@@ -2982,7 +2982,93 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(store.state.archivedThreads.isEmpty)
     }
 
-    func testBackBadgeUsesAuthoritativeChatSetRatherThanMessagesOrLoadedRows() async throws {
+    func testAccountBadgePreferencePatchesPreserveMembershipAndHandleFailure() async throws {
+        let api = FakeChatAPI()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[],"showMembershipMessages":true,"showUnreadMessageCount":false}"#
+                    .utf8))
+        XCTAssertEqual(store.currentUserProfile?.showUnreadMessageCount, false)
+        _ = try await store.updateChatSettings(showUnreadMessageCount: true)
+        XCTAssertEqual(store.currentUserProfile?.showMembershipMessages, true)
+        XCTAssertEqual(store.currentUserProfile?.showUnreadMessageCount, true)
+        _ = try await store.updateChatSettings(showMembershipMessages: false)
+        XCTAssertEqual(store.currentUserProfile?.showMembershipMessages, false)
+        XCTAssertEqual(store.currentUserProfile?.showUnreadMessageCount, true)
+        let bodies = await api.chatSettingsBodies
+        XCTAssertEqual(
+            bodies,
+            [.init(showUnreadMessageCount: true), .init(showMembershipMessages: false)])
+
+        await api.setChatSettingsFailure(true)
+        do {
+            _ = try await store.updateChatSettings(showUnreadMessageCount: false)
+            XCTFail("Failed saves must not publish an unconfirmed preference.")
+        } catch {}
+        XCTAssertEqual(store.currentUserProfile?.showUnreadMessageCount, true)
+        XCTAssertEqual(store.currentUserProfile?.showMembershipMessages, false)
+        await api.setChatSettingsFailure(false)
+        _ = try await store.updateChatSettings(showUnreadMessageCount: false)
+        XCTAssertEqual(store.currentUserProfile?.showUnreadMessageCount, false)
+        await store.applyRealtimeEvent(
+            .chatSettingsChanged(.init(showMembershipMessages: true, showUnreadMessageCount: true)),
+            currentUserID: 1)
+        XCTAssertEqual(store.currentUserProfile?.showMembershipMessages, true)
+        XCTAssertEqual(store.currentUserProfile?.showUnreadMessageCount, true)
+    }
+
+    func testBackBadgeUsesSnapshotModeAndExcludesParentBeforeMessageCap() async throws {
+        let api = FakeChatAPI()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        defer { store.reset() }
+        store.currentUserProfile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[],"showMembershipMessages":true,"showUnreadMessageCount":false}"#
+                    .utf8))
+        store.setRealtimeStatus(.connected)
+        store.beginConversationUnreadWatch(requestID: 7)
+        let chats: [MainUnreadSnapshot.Chat] = [
+            .init(chatId: "current", unreadCount: 1000),
+            .init(chatId: "other", unreadCount: 600),
+            .init(chatId: "unloaded", unreadCount: 300),
+        ]
+        await store.applyRealtimeEvent(
+            .conversationUnread(
+                .init(
+                    requestId: 7, full: true, summaries: [], appBadgeCount: 1000,
+                    mainUnread: .init(showUnreadMessageCount: true, chats: chats))),
+            currentUserID: 1)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 900)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "other"), 1000)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "archived"), 1000)
+        XCTAssertEqual(store.state.unreadBadgeCount(), 1000)
+        var invalidations = 0
+        let observation = store.conversationWatchInvalidations.sink { invalidations += 1 }
+        defer { observation.cancel() }
+        await store.applyRealtimeEvent(
+            .chatSettingsChanged(.init(showMembershipMessages: true, showUnreadMessageCount: true)),
+            currentUserID: 1)
+        XCTAssertEqual(invalidations, 0, "Count-only settings must not reset loaded conversations.")
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 900)
+        await store.applyRealtimeEvent(
+            .conversationUnread(
+                .init(
+                    requestId: 7, full: false, summaries: [], appBadgeCount: 3,
+                    mainUnread: .init(showUnreadMessageCount: false, chats: chats))),
+            currentUserID: 1)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 2)
+        XCTAssertEqual(store.backBadgeCount(excludingChatID: "archived"), 3)
+        XCTAssertEqual(store.state.unreadBadgeCount(), 3)
+        XCTAssertEqual(store.currentUserProfile?.showUnreadMessageCount, true)
+    }
+
+    func testBackBadgeUsesAuthoritativeSnapshotRatherThanMessagesOrLoadedRows() async throws {
         let api = FakeChatAPI(
             chatResults: [
                 .success(
@@ -3012,7 +3098,13 @@ final class ChatStoreTests: XCTestCase {
             .conversationUnread(
                 .init(
                     requestId: 7, full: true, summaries: [], appBadgeCount: 100,
-                    unreadChatIds: ["current", "other", "unloaded", "unloaded"])),
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [
+                            .init(chatId: "current", unreadCount: 5),
+                            .init(chatId: "other", unreadCount: 2),
+                            .init(chatId: "unloaded", unreadCount: 93),
+                        ]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 2)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "other"), 2)
@@ -3025,7 +3117,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(store.state.conversationUnreadSummaries.isEmpty)
     }
 
-    func testBackBadgePartialSetsReplaceMembershipAndOmissionRetainsIt() async throws {
+    func testBackBadgePartialSnapshotsReplaceMembershipAndOmissionRetainsIt() async throws {
         let api = FakeChatAPI()
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
@@ -3036,7 +3128,12 @@ final class ChatStoreTests: XCTestCase {
             .conversationUnread(
                 .init(
                     requestId: 7, full: true, summaries: [], appBadgeCount: 100,
-                    unreadChatIds: ["current", "other"])),
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [
+                            .init(chatId: "current", unreadCount: 5),
+                            .init(chatId: "other", unreadCount: 95),
+                        ]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         await store.applyRealtimeEvent(
@@ -3048,40 +3145,57 @@ final class ChatStoreTests: XCTestCase {
             .conversationUnread(
                 .init(
                     requestId: 7, full: false, summaries: [],
-                    unreadChatIds: ["other", "third"])),
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [
+                            .init(chatId: "other", unreadCount: 95),
+                            .init(chatId: "third", unreadCount: 6),
+                        ]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 2)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "third"), 1)
         XCTAssertEqual(store.state.appBadgeCount, 101)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: false, summaries: [], unreadChatIds: [])),
+                .init(
+                    requestId: 7, full: false, summaries: [],
+                    mainUnread: .init(showUnreadMessageCount: false, chats: []))),
             currentUserID: 1)
-        XCTAssertEqual(store.state.unreadChatIDs, Set<String>())
+        XCTAssertEqual(store.state.mainUnread?.chats, [])
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: false, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: false, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 95)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         await store.applyRealtimeEvent(
             .conversationUnread(.init(requestId: 7, full: true, summaries: [])),
             currentUserID: 1)
-        XCTAssertNil(store.state.unreadChatIDs)
+        XCTAssertNil(store.state.mainUnread)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: false, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: false, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 95)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: true, summaries: [], unreadChatIds: [])),
+                .init(
+                    requestId: 7, full: true, summaries: [],
+                    mainUnread: .init(showUnreadMessageCount: false, chats: []))),
             currentUserID: 1)
-        XCTAssertEqual(store.state.unreadChatIDs, Set<String>())
+        XCTAssertEqual(store.state.mainUnread?.chats, [])
     }
 
-    func testBackBadgeLocalMessagesAndReadsWaitForAuthoritativeSet() async throws {
+    func testBackBadgeLocalMessagesAndReadsWaitForAuthoritativeSnapshot() async throws {
         let api = FakeChatAPI(
             chatResults: [
                 .success(
@@ -3104,7 +3218,13 @@ final class ChatStoreTests: XCTestCase {
             .conversationUnread(
                 .init(
                     requestId: 7, full: true, summaries: [], appBadgeCount: 100,
-                    unreadChatIds: ["current", "other", "unloaded"])),
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [
+                            .init(chatId: "current", unreadCount: 5),
+                            .init(chatId: "other", unreadCount: 2),
+                            .init(chatId: "unloaded", unreadCount: 93),
+                        ]))),
             currentUserID: 1)
         for (index, chatID) in ["current", "other"].enumerated() {
             let message = try TimelineTestFixtures.message(
@@ -3123,13 +3243,17 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 2)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: false, summaries: [], unreadChatIds: ["unloaded"])),
+                .init(
+                    requestId: 7, full: false, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "unloaded", unreadCount: 95)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         XCTAssertEqual(store.state.appBadgeCount, 95)
     }
 
-    func testBackBadgeRoutesAndWindowsShareSetWithoutRegisteringWatches() async throws {
+    func testBackBadgeRoutesAndWindowsShareSnapshotWithoutRegisteringWatches() async throws {
         let api = FakeChatAPI()
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
@@ -3143,10 +3267,15 @@ final class ChatStoreTests: XCTestCase {
             .conversationUnread(
                 .init(
                     requestId: 7, full: true, summaries: [],
-                    unreadChatIds: ["current", "unloaded"])),
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [
+                            .init(chatId: "current", unreadCount: 5),
+                            .init(chatId: "unloaded", unreadCount: 95),
+                        ]))),
             currentUserID: 1)
         XCTAssertTrue(store.state.chats.isEmpty)
-        // Main chats, threads, searches, and notification routes use the parent chat ID.
+        // Main → Archive → Chat, threads, searches, and notification routes use the parent chat ID.
         for chatID in ["current", "unloaded", "current"] {
             XCTAssertEqual(store.backBadgeCount(excludingChatID: chatID), 1)
         }
@@ -3155,7 +3284,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(invalidations, 0)
         XCTAssertTrue(store.conversationStateScope.isEmpty)
         store.reset()
-        XCTAssertNil(store.state.unreadChatIDs)
+        XCTAssertNil(store.state.mainUnread)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
     }
 
@@ -3168,22 +3297,34 @@ final class ChatStoreTests: XCTestCase {
         store.beginConversationUnreadWatch(requestID: 7)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: false, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: false, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: true, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: true, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         store.setRealtimeStatus(.reconnecting)
-        XCTAssertNil(store.state.unreadChatIDs)
+        XCTAssertNil(store.state.mainUnread)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: true, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: true, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
-        XCTAssertNil(store.state.unreadChatIDs)
+        XCTAssertNil(store.state.mainUnread)
         store.setRealtimeStatus(.connected)
         store.beginConversationUnreadWatch(requestID: 8)
         for (requestID, full) in [(UInt32(7), true), (UInt32(8), false)] {
@@ -3191,33 +3332,43 @@ final class ChatStoreTests: XCTestCase {
                 .conversationUnread(
                     .init(
                         requestId: requestID, full: full, summaries: [],
-                        unreadChatIds: ["other"])),
+                        mainUnread: .init(
+                            showUnreadMessageCount: false,
+                            chats: [.init(chatId: "other", unreadCount: 5)]))),
                 currentUserID: 1)
             XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
         }
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 8, full: true, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 8, full: true, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         store.beginConversationUnreadWatch(requestID: 9)
-        // Retain the last accepted set while a replacement watch awaits its full frame.
+        // Retain the last accepted snapshot while a replacement watch awaits its full frame.
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         for (requestID, full) in [(UInt32(8), true), (UInt32(9), false)] {
             await store.applyRealtimeEvent(
                 .conversationUnread(
-                    .init(requestId: requestID, full: full, summaries: [], unreadChatIds: [])),
+                    .init(
+                        requestId: requestID, full: full, summaries: [],
+                        mainUnread: .init(showUnreadMessageCount: false, chats: []))),
                 currentUserID: 1)
             XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         }
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 9, full: true, summaries: [], unreadChatIds: [])),
+                .init(
+                    requestId: 9, full: true, summaries: [],
+                    mainUnread: .init(showUnreadMessageCount: false, chats: []))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
     }
 
-    func testBackBadgeWatchErrorAndClearHideSetUntilNewFullSnapshot() async throws {
+    func testBackBadgeWatchErrorAndClearHideSnapshotUntilNewFullSnapshot() async throws {
         let api = FakeChatAPI()
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
@@ -3226,30 +3377,46 @@ final class ChatStoreTests: XCTestCase {
         store.beginConversationUnreadWatch(requestID: 7)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: true, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: true, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
         await store.applyRealtimeEvent(
             .conversationUnreadError(.init(requestId: 6)), currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         await store.applyRealtimeEvent(
             .conversationUnreadError(.init(requestId: 7)), currentUserID: 1)
-        XCTAssertNil(store.state.unreadChatIDs)
+        XCTAssertNil(store.state.mainUnread)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: false, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: false, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
-        XCTAssertNil(store.state.unreadChatIDs)
+        XCTAssertNil(store.state.mainUnread)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: true, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: true, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 1)
         store.clearConversationWatches()
-        XCTAssertNil(store.state.unreadChatIDs)
+        XCTAssertNil(store.state.mainUnread)
         await store.applyRealtimeEvent(
             .conversationUnread(
-                .init(requestId: 7, full: true, summaries: [], unreadChatIds: ["other"])),
+                .init(
+                    requestId: 7, full: true, summaries: [],
+                    mainUnread: .init(
+                        showUnreadMessageCount: false,
+                        chats: [.init(chatId: "other", unreadCount: 5)]))),
             currentUserID: 1)
         XCTAssertEqual(store.backBadgeCount(excludingChatID: "current"), 0)
     }
@@ -4330,8 +4497,21 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
         policyTargetedChats[chat.id] = chat
     }
 
+    private var chatSettings = ChatSettings(showMembershipMessages: true)
+    private(set) var chatSettingsBodies: [UpdateChatSettingsBody] = []
+    var failChatSettings = false
+
+    func setChatSettingsFailure(_ fail: Bool) { failChatSettings = fail }
+
     func updateChatSettings(_ body: UpdateChatSettingsBody) async throws -> ChatSettings {
-        .init(showMembershipMessages: body.showMembershipMessages)
+        chatSettingsBodies.append(body)
+        if failChatSettings { throw APIError.unavailable }
+        chatSettings = .init(
+            showMembershipMessages: body.showMembershipMessages
+                ?? chatSettings.showMembershipMessages,
+            showUnreadMessageCount: body.showUnreadMessageCount
+                ?? chatSettings.showUnreadMessageCount)
+        return chatSettings
     }
 
     func setPolicySpeakingMutation(_ response: GroupSpeakingModeResponse) {

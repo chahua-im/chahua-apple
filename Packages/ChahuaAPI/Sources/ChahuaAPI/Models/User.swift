@@ -115,10 +115,12 @@ public struct MeResponse: Codable, Hashable, Sendable {
     public let muteGroupChatsByDefault: Bool?
     public let muteDirectChatsByDefault: Bool?
     public private(set) var showMembershipMessages: Bool?
+    public private(set) var showUnreadMessageCount: Bool?
 
     public func withChatSettings(_ settings: ChatSettings) -> Self {
         var copy = self
         copy.showMembershipMessages = settings.showMembershipMessages
+        copy.showUnreadMessageCount = settings.showUnreadMessageCount
         return copy
     }
 }

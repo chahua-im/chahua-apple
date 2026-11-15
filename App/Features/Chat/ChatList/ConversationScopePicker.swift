@@ -5,6 +5,9 @@ struct ConversationScopePicker: View {
     @Binding var selection: ConversationListScope
     var badges = ConversationTabBadges()
     var badgeColor = ConversationListPreferences.defaultUnreadBadgeColor
+    // macOS archive navigation keeps the tab geometry fixed while only counts fade.
+    var archivedBadges: ConversationTabBadges? = nil
+    var archiveProgress: CGFloat = 0
 
     var body: some View {
         Group {
@@ -34,20 +37,15 @@ struct ConversationScopePicker: View {
                             )
                             .lineLimit(1)
                             .minimumScaleFactor(0.7)
-                        if let label = badges.label(for: scope) {
-                            RoundChipLayout(isCircular: label.count == 1) {
-                                Text(label)
-                                    .font(.system(size: desktop ? 9 : 11, weight: .semibold))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 1)
+                        if let archivedBadges {
+                            ZStack {
+                                wideBadge(badges, scope: scope, desktop: desktop)
+                                    .opacity(1 - archiveProgress)
+                                wideBadge(archivedBadges, scope: scope, desktop: desktop)
+                                    .opacity(archiveProgress)
                             }
-                            .background(
-                                badges.archived ? Color.gray : badgeColor.color,
-                                in: Capsule(style: .circular)
-                            )
-                            .accessibilityHidden(true)
+                        } else {
+                            wideBadge(badges, scope: scope, desktop: desktop)
                         }
                     }
                     .foregroundStyle(Color.primary)
@@ -64,12 +62,38 @@ struct ConversationScopePicker: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text(scope.localizedTitle))
-                .accessibilityValue(Text(badges.accessibilityValue(for: scope)))
+                .accessibilityValue(
+                    Text(
+                        (archiveProgress >= 0.5 ? archivedBadges ?? badges : badges)
+                            .accessibilityValue(for: scope))
+                )
                 .accessibilityAddTraits(selection == scope ? .isSelected : [])
             }
         }
         .padding(2)
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func wideBadge(
+        _ values: ConversationTabBadges, scope: ConversationListScope, desktop: Bool
+    ) -> some View {
+        if let label = values.label(for: scope) {
+            RoundChipLayout(isCircular: label.count == 1) {
+                Text(label)
+                    .font(.system(size: desktop ? 9 : 11, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+            }
+            // The same content-sized circular capsule backs both cross-fade layers.
+            .background(
+                values.archived ? Color.gray : badgeColor.color,
+                in: Capsule(style: .circular)
+            )
+            .accessibilityHidden(true)
+        }
     }
 
     private var compactPicker: some View {

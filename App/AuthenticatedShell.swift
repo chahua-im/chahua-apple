@@ -48,6 +48,9 @@ struct AuthenticatedShell: View {
     @StateObject private var messageEditExitCoordinator = MessageEditExitCoordinator()
     @State private var declinedNotificationIDs = Set<UUID>()
     @State private var retainedSplitPresentation: Bool?
+    #if os(macOS)
+        @State private var isSearchPresented = false
+    #endif
 
     private enum FeatureDestination: Hashable, Identifiable {
         case addFriend, createGroup
@@ -94,8 +97,7 @@ struct AuthenticatedShell: View {
         }
     }
 
-    // macOS archive navigation retains its existing immediate list switch.
-    // Only request/profile destinations push above that list, never into chat detail.
+    // Request/profile destinations push above the sidebar, never into chat detail.
     private var friendRequestPath: Binding<[FriendRequestRoute]> {
         Binding(
             get: {
@@ -276,6 +278,33 @@ struct AuthenticatedShell: View {
                 .modifier(TimelineInteractionOverlayRoot())
             #endif
         }
+        #if os(macOS)
+            .sheet(isPresented: $isSearchPresented) {
+                MacSidebarSearchView(currentUserID: me.uid, store: chatStore) { chat in
+                    isSearchPresented = false
+                    openChat(chat)
+                }
+                .onExitCommand { isSearchPresented = false }
+            }
+            .background {
+                Button("Search conversations") { presentSidebarSearch() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(isSigningOut)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .accessibilityHidden(true)
+            }
+            // The detail editor can own focus while Archived is visible. Install
+            // Escape at the shell boundary as well as the standalone sidebar,
+            // without taking it from sheets or a pushed detail destination.
+            .onExitCommand {
+                if isBrowsingArchived, !isBrowsingFriendRequests, feature == nil,
+                    !showsSettings, !isSearchPresented, groupPath.isEmpty
+                {
+                    closeArchived()
+                }
+            }
+        #endif
         .task(id: pendingURL.wrappedValue) {
             guard let url = pendingURL.wrappedValue else { return }
             requestIncomingURL(url)
@@ -328,6 +357,9 @@ struct AuthenticatedShell: View {
             VoicePlaybackSession.shared.stop()
             VoicePlaybackController.stopAll()
             archivedScope = .messages
+            #if os(macOS)
+                isSearchPresented = false
+            #endif
         }
         .onChange(of: chatStore.sessionRevision) { _, _ in
             invalidateFormGuards()
@@ -336,6 +368,9 @@ struct AuthenticatedShell: View {
             listPath.removeAll()
             showsInspector = false
             declinedNotificationIDs.removeAll()
+            #if os(macOS)
+                isSearchPresented = false
+            #endif
         }
         .onAppear {
             bindNavigationActions()
@@ -448,7 +483,7 @@ struct AuthenticatedShell: View {
                 listNavigation(includesDetail: false)
             #else
                 NavigationStack(path: friendRequestPath) {
-                    chatList(archived: isBrowsingArchived)
+                    macSidebar
                         .navigationDestination(for: FriendRequestRoute.self) { route in
                             friendRequestDestination(route)
                         }
@@ -494,6 +529,8 @@ struct AuthenticatedShell: View {
                                     ? forwardThreadAction?.perform : nil,
                                 trailingIsControl: headerThreadKey != nil,
                                 backBadgeCount: backBadgeCount,
+                                backBadgeShowsMessageCount:
+                                    chatStore.state.mainUnread?.showUnreadMessageCount ?? false,
                                 leadingAvatar: headerLeading(for: headerThreadKey)
                             ) {
                                 headerTrailing(for: headerThreadKey)
@@ -567,6 +604,9 @@ struct AuthenticatedShell: View {
                                         trailingIsControl: key.threadID != nil,
                                         backBadgeCount: chatStore.backBadgeCount(
                                             excludingChatID: key.chatID),
+                                        backBadgeShowsMessageCount:
+                                            chatStore.state.mainUnread?.showUnreadMessageCount
+                                            ?? false,
                                         leadingAvatar: headerLeading(for: key)
                                     ) {
                                         headerTrailing(for: key)
@@ -650,11 +690,14 @@ struct AuthenticatedShell: View {
         }
     #endif
 
-    private func chatList(archived: Bool) -> some View {
+    private func chatList(
+        archived: Bool, externalHeader: Bool = false, active: Bool = true
+    ) -> some View {
         let scope = scopeBinding(archived: archived)
         let badges = ConversationTabBadges(
             summaries: chatStore.state.conversationUnreadSummaries,
-            archived: archived, showThreadsInMessages: showThreadsInMessages)
+            archived: archived, showThreadsInMessages: showThreadsInMessages,
+            showUnreadMessageCount: chatStore.currentUserProfile?.showUnreadMessageCount ?? false)
         let list = ChatListView(
             store: chatStore,
             drafts: chatStore.drafts,
@@ -666,25 +709,83 @@ struct AuthenticatedShell: View {
             onOpenFriendRequestHistory: openFriendRequests,
             badgeColor: unreadBadgeColor,
             presentation: listPresentation,
+            showsExternalHeader: externalHeader,
+            isActive: active,
+            onSearch: sidebarSearchAction,
             selectedConversationID: selectedConversationID,
             onSelectConversation: { selectConversation($0.id) }
         )
-        return VStack(spacing: 0) {
-            ConversationListHeader(
-                selection: scope, badges: badges,
-                badgeColor: unreadBadgeColor, onBack: archived ? { closeArchived() } : nil,
-                isUpdating: isListRefreshing,
-                account: { accountButton },
-                actions: { creationButton })
-            list
+        return Group {
+            if externalHeader {
+                list
+            } else {
+                VStack(spacing: 0) {
+                    ConversationListHeader(
+                        selection: scope, badges: badges,
+                        badgeColor: unreadBadgeColor, onBack: archived ? { closeArchived() } : nil,
+                        isUpdating: isListRefreshing,
+                        account: { accountButton },
+                        actions: { creationButton })
+                    list
+                }
+            }
         }
-        .onPreferenceChange(ConversationListRefreshingKey.self) { isListRefreshing = $0 }
+        .onPreferenceChange(ConversationListRefreshingKey.self) {
+            if !externalHeader { isListRefreshing = $0 }
+        }
         #if os(iOS)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
         #endif
     }
+
+    private var sidebarSearchAction: (() -> Void)? {
+        #if os(macOS)
+            { presentSidebarSearch() }
+        #else
+            nil
+        #endif
+    }
+
+    #if os(macOS)
+        private var macSidebar: some View {
+            MacArchiveSidebar(
+                isArchived: isBrowsingArchived,
+                allowsInteractiveBack: !isBrowsingFriendRequests,
+                activeBadges: ConversationTabBadges(
+                    summaries: chatStore.state.conversationUnreadSummaries,
+                    archived: false, showThreadsInMessages: showThreadsInMessages,
+                    showUnreadMessageCount: chatStore.currentUserProfile?.showUnreadMessageCount
+                        ?? false),
+                archivedBadges: ConversationTabBadges(
+                    summaries: chatStore.state.conversationUnreadSummaries,
+                    archived: true, showThreadsInMessages: showThreadsInMessages,
+                    showUnreadMessageCount: chatStore.currentUserProfile?.showUnreadMessageCount
+                        ?? false),
+                badgeColor: unreadBadgeColor,
+                selection: scopeBinding(archived: isBrowsingArchived),
+                onSearch: presentSidebarSearch,
+                onBack: closeArchived,
+                header: { opacity in
+                    MacConversationListHeader(
+                        isUpdating: isListRefreshing, controlsOpacity: opacity,
+                        account: { accountButton }, actions: { creationButton })
+                },
+                list: { archived in
+                    chatList(
+                        archived: archived, externalHeader: true,
+                        active: archived == isBrowsingArchived && !isBrowsingFriendRequests)
+                }
+            )
+            .onPreferenceChange(ConversationListRefreshingKey.self) { isListRefreshing = $0 }
+        }
+
+        private func presentSidebarSearch() {
+            guard !isSigningOut else { return }
+            requestNavigation { isSearchPresented = true }
+        }
+    #endif
 
     private func openArchived() {
         guard listPath.isEmpty else { return }
@@ -695,7 +796,12 @@ struct AuthenticatedShell: View {
     }
 
     private func closeArchived() {
-        listPath.removeAll()
+        #if os(macOS)
+            guard isBrowsingArchived, !isBrowsingFriendRequests else { return }
+            requestNavigation { listPath.removeAll() }
+        #else
+            listPath.removeAll()
+        #endif
     }
 
     private func openFriendRequests() {
@@ -1423,7 +1529,7 @@ struct AuthenticatedShell: View {
         }
     }
 
-    /// Server-authoritative unread main-chat count, excluding this route's parent chat.
+    /// Server-authoritative Main badge, excluding this route's parent chat.
     private var backBadgeCount: Int {
         chatStore.backBadgeCount(excludingChatID: backBadgeChatID)
     }

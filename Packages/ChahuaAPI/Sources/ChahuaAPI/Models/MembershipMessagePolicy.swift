@@ -16,17 +16,21 @@ public struct MembershipMessagePolicy: Codable, Hashable, Sendable {
 
 public struct ChatSettings: Codable, Hashable, Sendable {
     public let showMembershipMessages: Bool
+    public let showUnreadMessageCount: Bool
 
-    public init(showMembershipMessages: Bool) {
+    public init(showMembershipMessages: Bool, showUnreadMessageCount: Bool = false) {
         self.showMembershipMessages = showMembershipMessages
+        self.showUnreadMessageCount = showUnreadMessageCount
     }
 }
 
 public struct UpdateChatSettingsBody: Codable, Hashable, Sendable {
-    public let showMembershipMessages: Bool
+    public let showMembershipMessages: Bool?
+    public let showUnreadMessageCount: Bool?
 
-    public init(showMembershipMessages: Bool) {
+    public init(showMembershipMessages: Bool? = nil, showUnreadMessageCount: Bool? = nil) {
         self.showMembershipMessages = showMembershipMessages
+        self.showUnreadMessageCount = showUnreadMessageCount
     }
 }
 
