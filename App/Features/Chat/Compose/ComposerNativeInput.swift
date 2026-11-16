@@ -1125,8 +1125,13 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
 
         private func resolveEditor() -> UIView? {
             guard let window else { return nil }
-            if let editor { return scopes(editor) ? editor : nil }
-            guard isComposerFocused, let candidate = firstInput(in: window), scopes(candidate)
+            // UIKit owns a distinct editor per control. Once identified, keep
+            // that identity through keyboard/foreground layout changes; transient
+            // non-overlap must not turn a live edit into an unavailable snapshot.
+            if let editor, editor.window === window { return editor }
+            editor = nil
+            // UIKit can restore first responder before SwiftUI echoes focus.
+            guard let candidate = firstInput(in: window), scopes(candidate)
             else { return nil }
             editor = candidate
             observeMentionStorage((candidate as? UITextView)?.textStorage)
@@ -1207,7 +1212,7 @@ final class ComposerInputMarker: ComposerMarkerView, ComposerNativeInput {
         }
 
         @objc private func nativeChanged(_ notification: Notification) {
-            guard !changingMentionStorage else { return }
+            guard !changingMentionStorage, input?.nativeInput === self else { return }
             if notification.name == UITextField.textDidEndEditingNotification
                 || notification.name == UITextView.textDidEndEditingNotification,
                 let ended = notification.object as? UIView, ended === editor

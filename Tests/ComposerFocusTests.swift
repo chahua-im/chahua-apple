@@ -1054,6 +1054,55 @@ final class ComposerFocusTests: XCTestCase {
 
     #if os(iOS)
 
+        func testTypingSurvivesKeyboardLayoutMovingTheInputMarker() async throws {
+            let h = try await mount(text: "draft ")
+            try h.selectEnd()
+            let marker = try XCTUnwrap(h.inputMarker)
+            _ = marker.snapshot()
+            // Foreground keyboard reconciliation can temporarily put the
+            // background marker outside its already-owned native editor.
+            marker.transform = CGAffineTransform(translationX: h.window.bounds.width * 2, y: 0)
+            defer { marker.transform = .identity }
+
+            try h.insertIntoFocusedEditor("first")
+            try await pause()
+            try h.insertIntoFocusedEditor(" second")
+            try await pause()
+
+            XCTAssertEqual(h.state.text, "draft first second")
+            let editor = try XCTUnwrap(try h.focusedEditor() as? UITextView)
+            XCTAssertEqual(editor.text, "draft first second")
+            XCTAssertEqual(h.state.submits, 0)
+        }
+
+        func testMarkedTextSurvivesKeyboardLayoutAndRefocusing() async throws {
+            let h = try await mount(text: "draft ")
+            try h.selectEnd()
+            let marker = try XCTUnwrap(h.inputMarker)
+            _ = marker.snapshot()
+            marker.transform = CGAffineTransform(translationX: h.window.bounds.width * 2, y: 0)
+
+            try h.mark("ni")
+            try await pause()
+            XCTAssertTrue(h.state.composing)
+            XCTAssertEqual(h.state.text, "draft ")
+            try h.insertIntoFocusedEditor("你")
+            try await pause()
+            XCTAssertEqual(h.state.text, "draft 你")
+            XCTAssertFalse(h.state.composing)
+
+            marker.transform = .identity
+            h.blur()
+            try await pause()
+            try h.focus()
+            try await pause()
+            try h.selectEnd()
+            try h.insertIntoFocusedEditor("!")
+            try await pause()
+            XCTAssertEqual(h.state.text, "draft 你!")
+            XCTAssertEqual(h.state.submits, 0)
+        }
+
         func testAttachmentCaptionAndSendRemainAboveKeyboardWithPortraitPreview() async throws {
             let file = FileManager.default.temporaryDirectory.appendingPathComponent(
                 UUID().uuidString + ".png")
@@ -1289,6 +1338,10 @@ private final class FocusComposerHarness {
     }
 
     #if os(iOS)
+        var inputMarker: ComposerInputMarker? {
+            allViews(editorRoot).compactMap { $0 as? ComposerInputMarker }.first
+        }
+
         var outsideTapObserver: ComposerOutsideTapView? {
             allViews(host.view).compactMap { $0 as? ComposerOutsideTapView }.first
         }
