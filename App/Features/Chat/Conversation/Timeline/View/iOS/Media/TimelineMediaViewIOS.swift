@@ -52,6 +52,7 @@
                 clearTiles(after: 1)
             } else if row.entry.messageType == .text || row.entry.messageType == .file {
                 let attachments = row.entry.mediaAttachments
+                let progress = row.entry.outboxPhase?.preparationProgress ?? [:]
                 let count = attachments.count
                 itemFrames =
                     count == 1
@@ -68,6 +69,7 @@
                         tile.configurePending(
                             attachment, gallery: count > 1, overflow: overflow,
                             asFile: row.entry.messageType == .file,
+                            progress: progress[attachment.id],
                             captionSize: environment.captionSize,
                             canOpen: !binding.context.isInteractionPreview
                                 && (row.entry.messageType == .file
@@ -329,9 +331,10 @@
 
         func configurePending(
             _ attachment: LocalOutgoingAttachment, gallery: Bool, overflow: Int,
-            asFile: Bool = false,
+            asFile: Bool = false, progress: Double?,
             captionSize: CGFloat, canOpen: Bool
         ) {
+            let status = attachment.timelinePreparationStatus(progress: progress)
             if asFile || attachment.isFile {
                 configureRemote(
                     AttachmentResponse(
@@ -341,11 +344,10 @@
                         fileName: attachment.fileName),
                     gallery: gallery, overflow: overflow, asFile: true, displayScale: 1,
                     captionSize: captionSize, mediaContext: nil, canOpen: canOpen)
-                let state =
-                    attachment.error != nil
-                    ? "Upload failed"
-                    : attachment.isUploaded ? "Ready" : "Waiting to upload"
+                let state = status
+                    ?? AppLanguage.localized(attachment.isUploaded ? "Ready" : "Waiting to upload")
                 documentSizeLabel.text = state + " · " + attachment.mimeType
+                accessibilityValue = state
                 return
             }
             clearSticker()
@@ -378,7 +380,15 @@
             accessibilityTraits = isEnabled ? .button : .image
             accessibilityLabel =
                 video && isEnabled ? AppLanguage.localized("Play video") : attachment.fileName
-            accessibilityValue = video && isEnabled ? attachment.fileName : nil
+            accessibilityValue = status ?? (video && isEnabled ? attachment.fileName : nil)
+            if let status {
+                documentSizeLabel.text = status
+                documentSizeLabel.textAlignment = .center
+                documentSizeLabel.textColor = .white
+                documentSizeLabel.font = .systemFont(ofSize: captionSize)
+                documentSizeLabel.backgroundColor = .black.withAlphaComponent(0.65)
+                documentSizeLabel.isHidden = false
+            }
             updateTapMarker()
             setNeedsLayout()
             refreshVisibility()
@@ -520,6 +530,10 @@
                 documentSizeLabel.frame = CGRect(
                     x: 52, y: bounds.midY,
                     width: max(0, bounds.width - 64), height: lineHeight)
+            } else if !documentSizeLabel.isHidden {
+                let height = ceil(captionSize * 1.5)
+                documentSizeLabel.frame = CGRect(
+                    x: 0, y: bounds.maxY - height, width: bounds.width, height: height)
             }
             refreshVisibility()
         }
@@ -600,7 +614,9 @@
 
         private func resetChrome() {
             document = false
+            accessibilityValue = nil
             documentSizeLabel.isHidden = true
+            documentSizeLabel.backgroundColor = .clear
             documentSizeLabel.text = nil
             warningLabel.numberOfLines = 2
             warningLabel.textAlignment = .center

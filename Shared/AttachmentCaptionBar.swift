@@ -4,11 +4,16 @@ import SwiftUI
 /// mention handling, and focus lifecycle rather than replacing it with a second editor.
 struct AttachmentCaptionBar<Editor: View>: View {
     let canSend: Bool
+    private let isEditing: Bool
     let onSend: () -> Void
     private let editor: Editor
 
-    init(canSend: Bool, onSend: @escaping () -> Void, @ViewBuilder editor: () -> Editor) {
+    init(
+        canSend: Bool, isEditing: Bool = false, onSend: @escaping () -> Void,
+        @ViewBuilder editor: () -> Editor
+    ) {
         self.canSend = canSend
+        self.isEditing = isEditing
         self.onSend = onSend
         self.editor = editor()
     }
@@ -20,7 +25,7 @@ struct AttachmentCaptionBar<Editor: View>: View {
                 .padding(.vertical, 14)
                 .background(.background.opacity(0.8), in: RoundedRectangle(cornerRadius: 24))
             Button(action: onSend) {
-                Image(systemName: "paperplane.fill")
+                Image(systemName: isEditing ? "checkmark" : "paperplane.fill")
                     .font(.system(size: sendSymbolSize, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: sendButtonSize, height: sendButtonSize)
@@ -28,7 +33,7 @@ struct AttachmentCaptionBar<Editor: View>: View {
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
-            .accessibilityLabel("Send")
+            .accessibilityLabel(isEditing ? "Save changes" : "Send")
             .modifier(ComposerSendFocus())
         }
         .padding(12)

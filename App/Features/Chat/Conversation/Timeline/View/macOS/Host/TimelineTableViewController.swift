@@ -1090,11 +1090,11 @@
                 pendingReactionMessageIDs: actions.pendingReactionMessageIDs,
                 interactionContext: actions.interactionContext,
                 editablePendingMessageIDs: actions.editablePendingMessageIDs,
-                cancellablePendingMessageIDs: actions.cancellablePendingMessageIDs,
+                removablePendingMessageIDs: actions.removablePendingMessageIDs,
                 editPendingMessage: actions.editPendingMessage == nil
                     ? nil : { [weak self] in self?.actions.editPendingMessage?($0) },
-                cancelPendingMessage: actions.cancelPendingMessage == nil
-                    ? nil : { [weak self] in self?.actions.cancelPendingMessage?($0) },
+                removePendingMessage: actions.removePendingMessage == nil
+                    ? nil : { [weak self] in self?.actions.removePendingMessage?($0) },
                 isSelectingMessages: actions.isSelectingMessages,
                 selectedMessageIDs: actions.selectedMessageIDs,
                 toggleMessageSelection: actions.toggleMessageSelection == nil

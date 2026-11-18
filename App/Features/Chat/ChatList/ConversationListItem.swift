@@ -190,9 +190,16 @@ enum ConversationListItem: Hashable, Identifiable {
     }
 
     func pendingPreview(_ pending: LocalOutgoingMessage?) -> LocalOutgoingMessage? {
+        // A topic root supplies context, not the identity of a sent reply.
+        let confirmed: MessagePreview?
+        switch self {
+        case .chat(let chat): confirmed = chat.lastMessage
+        case .thread(let thread): confirmed = thread.lastReply
+        }
         guard let pending, pending.conversationKey == id,
             pending.enqueuedAt > activityDate,
-            pending.clientGeneratedID != previewMessage?.clientGeneratedId
+            (pending.senderID != confirmed?.sender.uid
+                || pending.clientGeneratedID != confirmed?.clientGeneratedId)
         else { return nil }
         return pending
     }
@@ -206,10 +213,7 @@ enum ConversationListItem: Hashable, Identifiable {
             guard pending.senderID == currentUserID, pending.messageType != .system else {
                 return nil
             }
-            if pending.state == .failed || pending.attachments.contains(where: { $0.error != nil })
-            {
-                return nil
-            }
+            guard pending.state != .failed else { return nil }
             // Match the PWA list: preparation, upload, queueing and dispatch all
             // mean sending here; failures have no list delivery indicator.
             return .sending

@@ -925,6 +925,29 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertEqual(me.uid, 2)
     }
 
+    func testLogoutCannotPurgeWhileSessionExpirationIsInProgress() async {
+        let storage = RealtimeExpiryStorage()
+        let session = AuthSessionModel(
+            apiClient: RealtimeTestHTTP(),
+            credentialLoginClient: PrototypeCredentialLoginClient(),
+            tokenStorage: storage)
+        await session.signIn(candidateJWT: "1")
+        var purged = false
+        session.prepareForSignOut = {
+            purged = true
+            throw APIError.unavailable  // Do not start a second deletion on regression.
+        }
+        let expiry = Task { await session.sessionDidExpire() }
+        await eventually { await storage.isDeleting }
+        await session.logout()
+        await storage.releaseDelete()
+        await expiry.value
+        XCTAssertFalse(purged)
+        guard case .signedOut(.invalidOrRevoked) = session.state else {
+            return XCTFail("Only the expiration should complete")
+        }
+    }
+
     func testSceneTransitionsKeepSocketAndHeartbeatsPublishCurrentPresence() async {
         let clock = RealtimeTestClock()
         let socket = RealtimeTestSocket()

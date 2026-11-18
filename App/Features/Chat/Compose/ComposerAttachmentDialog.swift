@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 /// The caller supplies a modal-local caption draft and transfers it on dismissal.
 struct ComposerAttachmentDialog: View {
     @Binding var text: String
-    let attachments: [ComposerMediaItem]
+    let attachments: [LocalOutgoingAttachment]
     let progress: [String: Double]
     let compressionEnabled: Bool
     let isEnabled: Bool
@@ -27,7 +27,8 @@ struct ComposerAttachmentDialog: View {
     let onCancel: () async throws -> Void
     nonisolated var onSearchMembers: ComposerMemberSearch? = nil
     var isEditing = false
-    var allowsCompressionChanges = true
+    var allowsCaption = true
+    var allowsPhotos = true
     var onEscapeEdit: (() -> Void)? = nil
     var editExitGuard: FormExitGuard? = nil
     var linkPreviews: DraftLinkPreviewState? = nil
@@ -50,7 +51,9 @@ struct ComposerAttachmentDialog: View {
     #endif
 
     private var canInteract: Bool { isEnabled && !isAcquiring && !isSubmitting && !isCancelling }
-    private var canEditCaption: Bool { isEnabled && !isSubmitting && !isCancelling }
+    private var canEditCaption: Bool {
+        allowsCaption && isEnabled && !isSubmitting && !isCancelling
+    }
     private var canSubmit: Bool {
         canInteract && canSend
             && (!attachments.isEmpty
@@ -59,9 +62,9 @@ struct ComposerAttachmentDialog: View {
 
     private var hasMediaOptions: Bool {
         #if os(iOS)
-            true
+            allowsPhotos || !attachments.isEmpty
         #else
-            allowsCompressionChanges && attachments.contains { $0.localAttachment != nil }
+            !attachments.isEmpty
         #endif
     }
     private var editorText: Binding<String> {
@@ -100,9 +103,9 @@ struct ComposerAttachmentDialog: View {
                     ProgressView("Updating attachments…").controlSize(.small)
                 }
                 if sendFailed {
-                    Text(
-                        "Couldn’t send. Your caption and attachments are still here. Retry when local storage is available."
-                    )
+                    Text(isEditing
+                        ? "Couldn’t save your changes. Your edit is still here."
+                        : "Couldn’t send. Your caption and attachments are still here. Retry when local storage is available.")
                     .font(.callout).foregroundStyle(.red)
                     .lineLimit(2)
                 }
@@ -110,14 +113,16 @@ struct ComposerAttachmentDialog: View {
                     Text(attachmentError).font(.callout).foregroundStyle(.red)
                         .lineLimit(2)
                 }
-                ComposerMentionSuggestions(
-                    input: input, wireText: text, isEnabled: canEditCaption,
-                    search: onSearchMembers
-                )
-                if let linkPreviews {
-                    DraftLinkPreviewControls(
-                        state: linkPreviews, isEnabled: canEditCaption,
-                        onOpen: openLinkManagement)
+                if allowsCaption {
+                    ComposerMentionSuggestions(
+                        input: input, wireText: text, isEnabled: canEditCaption,
+                        search: onSearchMembers
+                    )
+                    if let linkPreviews {
+                        DraftLinkPreviewControls(
+                            state: linkPreviews, isEnabled: canEditCaption,
+                            onOpen: openLinkManagement)
+                    }
                 }
                 captionBar
             }
@@ -202,7 +207,7 @@ struct ComposerAttachmentDialog: View {
                     .frame(width: headerButtonSize, height: headerButtonSize)
                     .background(.background.opacity(0.8), in: Circle())
             }
-            .accessibilityLabel("Cancel")
+            .accessibilityLabel(isEditing ? "Close attachments" : "Cancel")
             .disabled(isAcquiring || isSubmitting || isCancelling)
             Spacer()
             Text("\(attachments.count) Attachments")
@@ -228,16 +233,15 @@ struct ComposerAttachmentDialog: View {
             #endif
             Menu {
                 #if os(iOS)
-                    Button("Take Photo", systemImage: "camera") {
-                        dismissKeyboard()
-                        guard !input.isComposing else { return }
-                        onTakePhoto()
+                    if allowsPhotos {
+                        Button("Take Photo", systemImage: "camera") {
+                            dismissKeyboard()
+                            guard !input.isComposing else { return }
+                            onTakePhoto()
+                        }
                     }
                 #endif
-                if allowsCompressionChanges,
-                    attachments.contains(where: {
-                        $0.localAttachment != nil && !$0.isFile && $0.mimeType.hasPrefix("image/")
-                    })
+                if attachments.contains(where: { !$0.isFile && $0.mimeType.hasPrefix("image/") })
                 {
                     Toggle(
                         "Compress images",
@@ -246,8 +250,7 @@ struct ComposerAttachmentDialog: View {
                             set: { enabled in changeAttachments { onCompressionChanged(enabled) } }
                         ))
                 }
-                if allowsCompressionChanges,
-                    attachments.contains(where: { $0.isFile || $0.mimeType.hasPrefix("video/") })
+                if attachments.contains(where: { $0.isFile || $0.mimeType.hasPrefix("video/") })
                 {
                     Text("Files and videos are sent in original quality.")
                 }
@@ -282,8 +285,12 @@ struct ComposerAttachmentDialog: View {
     }
 
     private var captionBar: some View {
-        AttachmentCaptionBar(canSend: canSubmit, onSend: submit) {
-            captionEditor
+        AttachmentCaptionBar(canSend: canSubmit, isEditing: isEditing, onSend: submit) {
+            if allowsCaption {
+                captionEditor
+            } else {
+                Text("Files are sent without a caption.").foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -384,6 +391,10 @@ struct ComposerAttachmentDialog: View {
             input.settleNativeInput()
         #endif
         guard !input.isComposing else { return }
+        if isEditing {
+            dismiss()
+            return
+        }
         isCancelling = true
         cancellationError = nil
         Task {
@@ -410,7 +421,9 @@ struct ComposerAttachmentDialog: View {
     }
 
     private func submit() {
-        guard canSubmit, input.prepareExplicitSubmission(allowEmptyUnfocused: true) else { return }
+        guard canSubmit,
+            !allowsCaption || input.prepareExplicitSubmission(allowEmptyUnfocused: true)
+        else { return }
         sendCommittedCaption()
     }
 
@@ -425,7 +438,7 @@ struct ComposerAttachmentDialog: View {
                 dismiss()
             } else {
                 sendFailed = true
-                isCaptionFocused = true
+                isCaptionFocused = allowsCaption
             }
         }
     }

@@ -102,13 +102,12 @@ These are recommended batches, not a requirement to finish unrelated work before
 
 
 
-### M6 — Queued-message editing and cancellation · Implemented; device verification pending
+### M6 — Queued-message editing and local removal · Implemented; device verification pending
 
-- [ ] Edit writable queued text/media and recall any writable queued type, including middle and already-claimed items, without changing identity or consuming the ordinary text/reply draft.
-- **Current implementation:** [durable outbox](arch/outbound-queue.md), [queue workers](../App/Features/Chat/Outbox/OutgoingMessageQueue.swift), leased pending editor and existing native timeline actions.
-- **Durability decision:** The first create request stays frozen; newer intent becomes an ordered PATCH after confirmation/publication. Recall hides content immediately after local commit, preserves uncertain tombstones and retries DELETE without replaying an unknown cancelled create. Retryable mutation failures resume in foreground; permanent failures require explicit retry. Realtime/history cannot restore obsolete or cancelled content.
-- **Composer decision:** Entering queued edit settles IME, preserves ordinary text/reply and discards ordinary attachments/recording without a new prompt. The separate editor borrows queued media and owns only its new imports. Cancel leaves the send running; submit exits after durable intent commit. Close cancels directly; changed Escape asks before discard. Server editing remains text-only; file/voice/sticker items are recall-only.
-- **Acceptance:** Queue A/B/C plus an occupied composer; edit/recall B before and after claim while C progresses. Include confirmation while its editor is leased, then edit/recall the already-visible identity: neither the old timeline body nor list preview may return while DELETE is held or failed. Confirm original POST bytes, latest ordered media PATCH, hidden failed-recall Retry, cancellation during held responses, account replacement/relaunch, and normal text/reply return without old ordinary attachments. Exercise mixed uploaded/local media, media-only changes, borrowed uploads, Cancel/Close/Escape and acknowledgement while editing.
+- [x] Edit preparing or queued ordinary messages and failed preparation without changing identity or consuming the ordinary draft. Sending cannot be edited or removed.
+- **Current implementation:** [durable outbox](arch/outbound-queue.md), leased pending editor and native timeline actions.
+- **Durability decision:** Retry replays the immutable create. A matching server copy supersedes local intent after committed settlement. **Remove from Outbox** never recalls a server message. Delivered messages keep their online actions.
+- **Acceptance:** Queue media A and text B in one chat and C in another. Hold A's editor while its upload finishes; only C advances. Save sends revised A then B; Cancel sends original A then B. Verify edits preserve matching uploaded slots, changing compression retires old work, and network failure retries unchanged. Check that failed create offers Retry/Remove, and interrupted Sending remains noneditable after relaunch.
 - **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above with isolated transport or a development backend; include real Photos/paste/drop and recording entry behavior. On iOS, physically press hardware-keyboard Escape for unchanged and changed pending edits; on macOS, include Escape/Close and sidebar navigation.
 
 

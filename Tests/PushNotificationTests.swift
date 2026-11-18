@@ -79,8 +79,8 @@ final class PushNotificationTests: XCTestCase {
         let recorder = QuickReplyRecorder()
         let notifications = PushNotificationCoordinator(
             api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
-        notifications.setQuickReplySender { uid, route, text in
-            await recorder.append(.init(uid: uid, route: route, text: text))
+        notifications.setQuickReplySender { uid, route, text, deadline in
+            await recorder.append(.init(uid: uid, route: route, text: text, deadline: deadline))
         }
         notifications.setSession(uid: 1)
         let route = try XCTUnwrap(
@@ -90,11 +90,17 @@ final class PushNotificationTests: XCTestCase {
                 ]
             ]))
 
-        await notifications.receiveQuickReply(route, userText: "  Sent from notification  ")
-        await notifications.receiveQuickReply(route, userText: " \n ")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        let accepted = await notifications.receiveQuickReply(
+            route, userText: "  Sent from notification  ", deadline: deadline)
+        let blankAccepted = await notifications.receiveQuickReply(
+            route, userText: " \n ", deadline: deadline)
 
         let replies = await recorder.replies()
-        XCTAssertEqual(replies, [.init(uid: 1, route: route, text: "Sent from notification")])
+        XCTAssertTrue(accepted)
+        XCTAssertFalse(blankAccepted)
+        XCTAssertEqual(
+            replies, [.init(uid: 1, route: route, text: "Sent from notification", deadline: deadline)])
     }
 
     func testColdQuickReplyWaitsForAuthenticatedDurableHandoff() async throws {
@@ -109,16 +115,18 @@ final class PushNotificationTests: XCTestCase {
         let notifications = PushNotificationCoordinator(
             api: nil, namespace: namespace, defaults: defaults,
             authorizationStatusProvider: { .authorized })
-        notifications.setQuickReplySender { uid, route, text in
-            await recorder.append(.init(uid: uid, route: route, text: text))
+        notifications.setQuickReplySender { uid, route, text, deadline in
+            await recorder.append(.init(uid: uid, route: route, text: text, deadline: deadline))
         }
         let route = try XCTUnwrap(
             PushNotificationRoute(userInfo: [
                 "wettyChat": ["type": "newMessage", "chatId": "42", "messageId": "101"]
             ]))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         let handoff = Task {
             await completion.set(
-                await notifications.receiveQuickReply(route, userText: "Cold reply"))
+                await notifications.receiveQuickReply(
+                    route, userText: "Cold reply", deadline: deadline))
         }
 
         await Task.yield()
@@ -130,7 +138,7 @@ final class PushNotificationTests: XCTestCase {
         let completed = await completion.value()
         let replies = await recorder.replies()
         XCTAssertEqual(completed, true)
-        XCTAssertEqual(replies.map(\.text), ["Cold reply"])
+        XCTAssertEqual(replies, [.init(uid: 1, route: route, text: "Cold reply", deadline: deadline)])
     }
 
     func testColdQuickReplyIsDiscardedForDifferentRegisteredAccount() async throws {
@@ -144,16 +152,19 @@ final class PushNotificationTests: XCTestCase {
         let notifications = PushNotificationCoordinator(
             api: nil, namespace: namespace, defaults: defaults,
             authorizationStatusProvider: { .authorized })
-        notifications.setQuickReplySender { uid, route, text in
-            await recorder.append(.init(uid: uid, route: route, text: text))
+        notifications.setQuickReplySender { uid, route, text, deadline in
+            await recorder.append(.init(uid: uid, route: route, text: text, deadline: deadline))
         }
         let route = try XCTUnwrap(
             PushNotificationRoute(userInfo: [
                 "wettyChat": ["type": "newMessage", "chatId": "42", "messageId": "101"]
             ]))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
 
         let handoff = Task {
-            await notifications.receiveQuickReply(route, userText: "Only for account one")
+            await notifications.receiveQuickReply(
+                route, userText: "Only for account one", deadline: deadline,
+                receivedBeforeCoordinator: true)
         }
         await Task.yield()
         notifications.setSession(uid: 2)
@@ -163,6 +174,84 @@ final class PushNotificationTests: XCTestCase {
         let replies = await recorder.replies()
         XCTAssertFalse(accepted)
         XCTAssertTrue(replies.isEmpty)
+    }
+
+    func testAlreadyExpiredQuickReplyStillEnqueuesWithOriginalDeadline() async throws {
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
+        notifications.setSession(uid: 1)
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "42", "messageId": "101"]
+            ]))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(-1))
+        let enqueued = expectation(description: "Expired reply reached durable handoff")
+        notifications.setQuickReplySender { _, _, _, receivedDeadline in
+            XCTAssertEqual(receivedDeadline, deadline)
+            enqueued.fulfill()
+        }
+
+        let accepted = await notifications.receiveQuickReply(
+            route, userText: "Queue without a background window", deadline: deadline)
+        XCTAssertFalse(accepted)
+        await fulfillment(of: [enqueued], timeout: 2)
+    }
+
+    func testQuickReplyDeadlineFinishesWhileDurableHandoffIsSuspended() async throws {
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
+        notifications.setSession(uid: 1)
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "42", "messageId": "101"]
+            ]))
+        let started = expectation(description: "Started durable handoff")
+        let expired = expectation(description: "Acknowledgment expired during handoff")
+        let enqueued = expectation(description: "Durable handoff completed after deadline")
+        let (release, releaseHandoff) = AsyncStream.makeStream(of: Void.self)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        notifications.setQuickReplySender { _, _, _, receivedDeadline in
+            XCTAssertEqual(receivedDeadline, deadline)
+            started.fulfill()
+            for await _ in release {}
+            XCTAssertFalse(Task.isCancelled)
+            enqueued.fulfill()
+        }
+        let handoff = Task {
+            let accepted = await notifications.receiveQuickReply(
+                route, userText: "Keep this reply", deadline: deadline)
+            XCTAssertFalse(accepted)
+            expired.fulfill()
+        }
+
+        await fulfillment(of: [started, expired], timeout: 3, enforceOrder: true)
+        releaseHandoff.finish()
+        await fulfillment(of: [enqueued], timeout: 2)
+        await handoff.value
+    }
+
+    func testQuickReplySenderFailureIsNotAcknowledgedAndRetainsReply() async throws {
+        let notifications = PushNotificationCoordinator(
+            api: nil, namespace: UUID().uuidString, authorizationStatusProvider: { .authorized })
+        notifications.setSession(uid: 1)
+        let route = try XCTUnwrap(
+            PushNotificationRoute(userInfo: [
+                "wettyChat": ["type": "newMessage", "chatId": "42", "messageId": "101"]
+            ]))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        notifications.setQuickReplySender { _, _, _, _ in throw URLError(.cannotWriteToFile) }
+
+        let accepted = await notifications.receiveQuickReply(
+            route, userText: "Try this handoff again", deadline: deadline)
+        XCTAssertFalse(accepted)
+
+        let retried = expectation(description: "Retried durable handoff")
+        notifications.setQuickReplySender { _, _, text, receivedDeadline in
+            XCTAssertEqual(text, "Try this handoff again")
+            XCTAssertEqual(receivedDeadline, deadline)
+            retried.fulfill()
+        }
+        await fulfillment(of: [retried], timeout: 2)
     }
 
     private func makeNotification(userInfo: [AnyHashable: Any]) throws -> UNNotification {
@@ -348,6 +437,7 @@ private struct QuickReplyRecord: Equatable, Sendable {
     let uid: Int32
     let route: PushNotificationRoute
     let text: String
+    let deadline: ContinuousClock.Instant
 }
 
 private actor QuickReplyRecorder {

@@ -54,6 +54,16 @@ struct AppRootView: View {
                 .frame(width: 0, height: 0)
             }
         #endif
+        .alert(
+            "Couldn’t sign out",
+            isPresented: Binding(
+                get: { model.signOutError != nil },
+                set: { if !$0 { model.signOutError = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let error = model.signOutError { Text(error) }
+        }
         .onOpenURL { pendingURL = $0 }
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
             pendingURL = activity.webpageURL

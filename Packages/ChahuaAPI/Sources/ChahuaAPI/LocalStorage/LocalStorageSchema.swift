@@ -163,6 +163,37 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
         // Blocked drafts and released messages share the same durable intent payload.
         try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN metadata BLOB")
     }
+    migrator.registerMigration("v10_simple_outbox") { db in
+        // The old draft/outbox shared mutation state cannot be carried forward.
+        try db.execute(
+            sql: """
+                DROP TABLE outgoing_message;
+                DROP TABLE draft_revision;
+                DROP TABLE local_conversation;
+
+                CREATE TABLE draft (
+                    chat_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL DEFAULT '',
+                    content BLOB NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(chat_id, thread_id)
+                );
+                CREATE TABLE outgoing_message (
+                    client_generated_id TEXT PRIMARY KEY NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL DEFAULT '',
+                    position INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('pending','sending','failed')),
+                    content BLOB NOT NULL,
+                    failure BLOB,
+                    created_at REAL NOT NULL,
+                    CHECK ((state='failed')=(failure IS NOT NULL)),
+                    UNIQUE(chat_id, thread_id, position)
+                );
+                CREATE UNIQUE INDEX outgoing_one_sending
+                    ON outgoing_message(chat_id, thread_id) WHERE state='sending';
+                """)
+    }
     try queue.read { db in
         if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
     }

@@ -109,7 +109,7 @@ final class TimelineRowsBuilderTests: XCTestCase {
         )
         let rows = builder().build([message])
 
-        XCTAssertEqual(rows[1].id, .message(.clientGenerated("send-9")))
+        XCTAssertEqual(rows[1].id, .message(message.timelineStableKey))
         XCTAssertEqual(rows[1].messageID, MessageID(9))
     }
 
@@ -121,11 +121,11 @@ final class TimelineRowsBuilderTests: XCTestCase {
                 messageType: .text, clientGeneratedId: "send-10", message: "Sending"),
             enqueuedAt: Date(timeIntervalSince1970: 1_788_220_800),
             senderID: 1,
-            state: .sending
+            phase: .sending
         )
         let rows = builder().build([.pending(pending)])
 
-        XCTAssertEqual(rows[1].id, .message(.clientGenerated("send-10")))
+        XCTAssertEqual(rows[1].id, .message(TimelineTestFixtures.stableKey("send-10")))
         XCTAssertNil(rows[1].messageID)
         XCTAssertEqual(messageRow(rows[1])?.entry.displayState, .sending)
     }

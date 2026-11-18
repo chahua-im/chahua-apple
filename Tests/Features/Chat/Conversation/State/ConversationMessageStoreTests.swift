@@ -9,12 +9,15 @@ import XCTest
 final class ConversationMessageStoreTests: XCTestCase {
     func testQueuedMessageImmediatelyAppearsAsSendingPendingEntry() throws {
         let store = ConversationMessageStore()
-        store.enqueue(pending(id: "send-1", state: .queued))
-        store.markSending(chatID: "chat", clientGeneratedID: "send-1")
+        let queued = TimelineTestFixtures.pending(id: "send-1")
+        store.replacePending(chatID: "chat", with: [queued])
+        var sending = queued
+        sending.phase = .sending
+        store.replacePending(chatID: "chat", with: [sending])
 
         let entries = store.pending(chatID: "chat").map(ConversationTimelineEntry.pending)
 
-        XCTAssertEqual(entries.map(\.stableKey), [.clientGenerated("send-1")])
+        XCTAssertEqual(entries.map(\.stableKey), [TimelineTestFixtures.stableKey("send-1")])
         XCTAssertEqual(entries.first?.displayState, .sending)
         XCTAssertNil(entries.first?.serverID)
     }
@@ -24,8 +27,8 @@ final class ConversationMessageStoreTests: XCTestCase {
         store.replacePending(
             chatID: "chat",
             with: [
-                pending(id: "first", state: .sending, enqueuedAt: 20),
-                pending(id: "second", state: .queued, enqueuedAt: 10),
+                TimelineTestFixtures.pending(id: "first", at: 20, phase: .sending),
+                TimelineTestFixtures.pending(id: "second", at: 10),
             ])
 
         XCTAssertEqual(store.pending(chatID: "chat").map(\.clientGeneratedID), ["first", "second"])
@@ -33,17 +36,20 @@ final class ConversationMessageStoreTests: XCTestCase {
 
     func testAcknowledgementRemovesPendingAndKeepsTheClientStableKey() throws {
         let store = ConversationMessageStore()
-        store.enqueue(pending(id: "send-1", state: .sending))
+        let pending = TimelineTestFixtures.pending(id: "send-1", phase: .sending)
+        store.replacePending(chatID: "chat", with: [pending])
         let acknowledgement = try TimelineTestFixtures.message(
             id: 2,
             at: 2,
             clientGeneratedID: "send-1"
         )
 
-        store.acknowledge(acknowledgement)
+        store.replacePending(chatID: "chat", with: [], acknowledging: acknowledgement)
 
         XCTAssertTrue(store.pending(chatID: "chat").isEmpty)
-        XCTAssertEqual(acknowledgement.timelineStableKey, .clientGenerated("send-1"))
+        XCTAssertEqual(
+            acknowledgement.timelineStableKey,
+            ConversationTimelineEntry.pending(pending).stableKey)
         XCTAssertEqual(ConversationTimelineEntry.remote(acknowledgement).displayState, .delivered)
     }
 
@@ -69,7 +75,8 @@ final class ConversationMessageStoreTests: XCTestCase {
 
     func testAcknowledgementBroadcastHasNoIntermediatePendingRemoval() throws {
         let store = ConversationMessageStore()
-        store.enqueue(pending(id: "send-1", state: .sending))
+        store.replacePending(
+            chatID: "chat", with: [TimelineTestFixtures.pending(id: "send-1", phase: .sending)])
         let acknowledgement = try TimelineTestFixtures.message(
             id: 2, at: 2, clientGeneratedID: "send-1")
         var observed: [(pending: [String], acknowledged: MessageID?)] = []
@@ -80,7 +87,7 @@ final class ConversationMessageStoreTests: XCTestCase {
                 (store.pending(chatID: "chat").map(\.clientGeneratedID), acknowledged))
         }
         defer { observation.cancel() }
-        store.acknowledge(acknowledgement)
+        store.replacePending(chatID: "chat", with: [], acknowledging: acknowledgement)
         XCTAssertEqual(observed.count, 1)
         XCTAssertEqual(observed.first?.pending, [])
         XCTAssertEqual(observed.first?.acknowledged, MessageID(2))
@@ -93,8 +100,8 @@ final class ConversationMessageStoreTests: XCTestCase {
         store.replacePending(
             chatID: "chat",
             with: [
-                pending(id: "send-1", state: .sending),
-                pending(id: "send-2", state: .queued),
+                TimelineTestFixtures.pending(id: "send-1", phase: .sending),
+                TimelineTestFixtures.pending(id: "send-2"),
             ])
         let token = store.beginSnapshot(chatID: "chat")
         defer { store.endSnapshot(token) }
@@ -108,15 +115,18 @@ final class ConversationMessageStoreTests: XCTestCase {
         }
         defer { observation.cancel() }
 
+        let failed: OutboxPhase = .failed(
+            .init(stage: .create, reason: .rejected, retry: .manual), nextRetry: nil)
+
         store.replacePending(
-            chatID: "chat", with: [pending(id: "send-2", state: .failed)],
+            chatID: "chat", with: [TimelineTestFixtures.pending(id: "send-2", phase: failed)],
             acknowledging: acknowledgement)
 
         XCTAssertEqual(observed.count, 1)
         let state = try XCTUnwrap(observed.first)
         XCTAssertEqual(state.acknowledged, MessageID(2))
         XCTAssertEqual(state.pending.map(\.clientGeneratedID), ["send-2"])
-        XCTAssertEqual(state.pending.first?.state, .failed)
+        XCTAssertEqual(state.pending.first?.phase, failed)
         XCTAssertEqual(eventNames(store.eventsDuringSnapshot(token)), ["create"])
     }
 
@@ -128,18 +138,5 @@ final class ConversationMessageStoreTests: XCTestCase {
             default: "other"
             }
         }
-    }
-
-    private func pending(
-        id: String, state: PendingOutgoingMessage.State, enqueuedAt second: TimeInterval = 0
-    ) -> PendingOutgoingMessage {
-        PendingOutgoingMessage(
-            chatID: "chat",
-            clientGeneratedID: id,
-            body: CreateMessageBody(messageType: .text, clientGeneratedId: id, message: "hello"),
-            enqueuedAt: Date(timeIntervalSince1970: 1_788_220_800 + second),
-            senderID: 1,
-            state: state
-        )
     }
 }

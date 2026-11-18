@@ -196,7 +196,8 @@ extension ChahuaClient {
     ) async throws -> MessageResponse {
         try await send(
             HTTPRequestSpec.json(
-                .post, ["chats", chatID, "threads", threadID, "messages"], body: body),
+                .post, ["chats", chatID, "threads", threadID, "messages"],
+                body: body, capturesRetryAfter: true),
             decoding: MessageResponse.self
         )
     }

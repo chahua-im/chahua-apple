@@ -9,9 +9,16 @@ enum DesignSystemFixtures {
     #if DEBUG
         static var textBubbleRows: [TimelineRow] {
             var entries = textBubbleMessages.map(ConversationTimelineEntry.remote)
-            for (index, state) in [PendingOutgoingMessage.State.queued, .sending, .failed]
-                .enumerated()
-            {
+            let phases: [(String, OutboxPhase)] = [
+                ("Preparing", .preparing(progress: [:])),
+                ("Queued", .queued(blockedBy: "pending-0")),
+                ("Sending", .sending),
+                (
+                    "Failed",
+                    .failed(.init(stage: .create, reason: .network, retry: .automatic), nextRetry: nil)
+                ),
+            ]
+            for (index, (label, phase)) in phases.enumerated() {
                 let id = "pending-\(index)"
                 entries.append(
                     .pending(
@@ -19,9 +26,9 @@ enum DesignSystemFixtures {
                             chatID: "bubble-fixtures", clientGeneratedID: id,
                             body: CreateMessageBody(
                                 messageType: .text, clientGeneratedId: id,
-                                message: "Pending: \(state.rawValue)"),
+                                message: "Pending: \(label)"),
                             enqueuedAt: bubbleDate.addingTimeInterval(Double(60 + index)),
-                            senderID: 1, state: state
+                            senderID: 1, phase: phase
                         )))
             }
             return bubbleRowsBuilder().build(entries)

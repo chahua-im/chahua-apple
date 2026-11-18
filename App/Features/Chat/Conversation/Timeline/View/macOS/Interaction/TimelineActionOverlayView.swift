@@ -12,7 +12,7 @@
         var onReaction: ((String) -> Void)?
         var onAction: ((MessageMenuAction) -> Void)?
         var onEditPending: (() -> Void)?
-        var onCancelPending: (() -> Void)?
+        var onRemovePending: (() -> Void)?
 
         private let dismissButton = TimelineMenuButton()
         private let scrollView = NSScrollView()
@@ -27,8 +27,8 @@
         private var pickerPopover: NSPopover?
         private var reactionEligibility: MessageReactionEligibility?
         var isShowingReactionPicker: Bool { pickerPopover != nil }
-        private let blockButton = TimelineMenuButton()
-        private let revokeButton = TimelineMenuButton()
+        private let editPendingButton = TimelineMenuButton()
+        private let removePendingButton = TimelineMenuButton()
         private var reactionButtons: [TimelineMenuButton] = []
         private var actionButtons: [TimelineMenuButton] = []
         private var dividers: [NSView] = []
@@ -40,7 +40,9 @@
         private var actionRowHeight: CGFloat = 63
         private var activeActionCount = 0
         private var activeReactionCount = 0
-        private var showsPending = false
+        private var pendingButtonCount: Int {
+            (editPendingButton.isEnabled ? 1 : 0) + (removePendingButton.isEnabled ? 1 : 0)
+        }
         private var isCleared = false
 
         override var isFlipped: Bool { true }
@@ -85,16 +87,16 @@
             progress.setAccessibilityLabel(AppLanguage.localized("Updating reaction"))
             reactionSurface.addSubview(progress)
 
-            blockButton.configureHorizontal(
-                symbol: "square.and.pencil", label: AppLanguage.localized("Edit message"),
+            editPendingButton.configureHorizontal(
+                symbol: "square.and.pencil", label: AppLanguage.localized("Edit queued message"),
                 destructive: false)
-            blockButton.onPress = { [weak self] in self?.onEditPending?() }
-            pendingSurface.addSubview(blockButton)
-            revokeButton.configureHorizontal(
-                symbol: "trash", label: AppLanguage.localized("Recall message"),
+            editPendingButton.onPress = { [weak self] in self?.onEditPending?() }
+            pendingSurface.addSubview(editPendingButton)
+            removePendingButton.configureHorizontal(
+                symbol: "trash", label: AppLanguage.localized("Remove from Outbox"),
                 destructive: true)
-            revokeButton.onPress = { [weak self] in self?.onCancelPending?() }
-            pendingSurface.addSubview(revokeButton)
+            removePendingButton.onPress = { [weak self] in self?.onRemovePending?() }
+            pendingSurface.addSubview(removePendingButton)
         }
 
         required init?(coder: NSCoder) { nil }
@@ -244,20 +246,16 @@
                 divider.isHidden = index >= dividerCount
                 divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
             }
-            blockButton.isEnabled = false
-            revokeButton.isEnabled = false
             if case .pending(let pending) = row.entry {
-                blockButton.isEnabled = actions.canEditPendingMessage(pending)
-                revokeButton.isEnabled = actions.canCancelPendingMessage(pending)
+                editPendingButton.isEnabled = actions.canEditPendingMessage(pending)
+                removePendingButton.isEnabled = actions.canRemovePendingMessage(pending)
+            } else {
+                editPendingButton.isEnabled = false
+                removePendingButton.isEnabled = false
             }
-            showsPending = blockButton.isEnabled || revokeButton.isEnabled
-            pendingSurface.isHidden = !showsPending
-            blockButton.alphaValue = blockButton.isEnabled ? 1 : 0.4
-            revokeButton.alphaValue = revokeButton.isEnabled ? 1 : 0.4
-            blockButton.setAccessibilityHelp(
-                blockButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
-            revokeButton.setAccessibilityHelp(
-                revokeButton.isEnabled ? nil : AppLanguage.localized("Unavailable"))
+            editPendingButton.isHidden = !editPendingButton.isEnabled
+            removePendingButton.isHidden = !removePendingButton.isEnabled
+            pendingSurface.isHidden = pendingButtonCount == 0
             if let pickerView {
                 reactionSurface.isHidden = true
                 scrollView.isHidden = true
@@ -320,7 +318,9 @@
             }
             let rowCount = (activeActionCount + 4) / 5
             let gridHeight = CGFloat(rowCount) * actionRowHeight + CGFloat(max(0, rowCount - 1))
-            contentHeight = gridHeight + (showsPending ? (gridHeight > 0 ? 8 : 0) + 88 : 0)
+            let pendingHeight = CGFloat(pendingButtonCount) * 44
+            contentHeight = gridHeight + (pendingHeight > 0 && gridHeight > 0 ? 8 : 0)
+                + pendingHeight
             let inset = min(16, max(0, min(bounds.width, bounds.height) / 2 - 1))
             let usable = bounds.insetBy(dx: inset, dy: inset)
             let reactionHeight: CGFloat = reactionSurface.isHidden ? 0 : min(52, usable.height)
@@ -366,12 +366,14 @@
                     x: 0, y: CGFloat(index + 1) * actionRowHeight + CGFloat(index),
                     width: controlsWidth, height: 1)
             }
-            if showsPending {
+            if pendingHeight > 0 {
+                let pendingY = gridHeight + (gridHeight > 0 ? 8 : 0)
                 pendingSurface.frame = CGRect(
-                    x: 0, y: gridHeight + (gridHeight > 0 ? 8 : 0), width: controlsWidth, height: 88
-                )
-                blockButton.frame = CGRect(x: 0, y: 0, width: controlsWidth, height: 44)
-                revokeButton.frame = CGRect(x: 0, y: 44, width: controlsWidth, height: 44)
+                    x: 0, y: pendingY, width: controlsWidth, height: pendingHeight)
+                editPendingButton.frame = CGRect(x: 0, y: 0, width: controlsWidth, height: 44)
+                removePendingButton.frame = CGRect(
+                    x: 0, y: editPendingButton.isEnabled ? 44 : 0,
+                    width: controlsWidth, height: 44)
             }
             let clip = scrollView.contentView
             let boundedY = min(max(0, clip.bounds.minY), max(0, contentHeight - clip.bounds.height))
@@ -392,10 +394,8 @@
             controls += actionButtons.prefix(activeActionCount).filter {
                 $0.isEnabled && !$0.isHidden
             }
-            if showsPending {
-                if blockButton.isEnabled { controls.append(blockButton) }
-                if revokeButton.isEnabled { controls.append(revokeButton) }
-            }
+            if editPendingButton.isEnabled { controls.append(editPendingButton) }
+            if removePendingButton.isEnabled { controls.append(removePendingButton) }
             controls.append(dismissButton)
             guard let window else { return false }
             let current = controls.firstIndex { $0 === window.firstResponder }
@@ -449,10 +449,10 @@
             onReaction = nil
             onAction = nil
             onEditPending = nil
-            onCancelPending = nil
+            onRemovePending = nil
             for button in reactionButtons + actionButtons { button.onPress = nil }
-            blockButton.onPress = nil
-            revokeButton.onPress = nil
+            editPendingButton.onPress = nil
+            removePendingButton.onPress = nil
             dismissButton.onPress = nil
             // Programmatic dismissal must not enter the delegate's user-cancel
             // path, which would otherwise re-enter the controller while closing.

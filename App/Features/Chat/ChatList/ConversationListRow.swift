@@ -469,7 +469,7 @@ enum ConversationListMetrics {
             let client = FixtureReactionClient()
             let queue = OutgoingMessageQueue(
                 apiClient: client,
-                localStoreFactory: { _ in throw CancellationError() },
+                storage: AccountLocalStoreOwner(factory: { _ in throw CancellationError() }),
                 onInvalidToken: {})
             store = ChatStore(apiClient: client, outgoingQueue: queue, onInvalidToken: {})
 

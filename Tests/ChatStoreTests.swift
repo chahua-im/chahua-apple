@@ -907,14 +907,16 @@ final class ChatStoreTests: XCTestCase {
             item.deliveryStatus(
                 currentUserID: 1, hasDraft: false, pending: pending, readThrough: MessageID(100)),
             .sending)
-        let claim = try await h.localStore.claimNext(chatID: "chat")
+        let claim = try await h.localStore.claimNext(
+            chatID: "chat", threadID: nil, expectedID: pending.clientGeneratedID, retryCreate: false)
         let sending = try XCTUnwrap(claim.message)
         XCTAssertEqual(
             item.deliveryStatus(
                 currentUserID: 1, hasDraft: false, pending: sending, readThrough: MessageID(100)),
             .sending)
         let failed = try await h.localStore.fail(
-            chatID: "chat", clientGeneratedID: pending.clientGeneratedID)
+            key: key, itemID: pending.clientGeneratedID,
+            failure: .init(stage: .create, reason: .rejected, retry: .manual))
         XCTAssertNil(
             item.deliveryStatus(
                 currentUserID: 1, hasDraft: false, pending: failed.outgoing.first,
@@ -2017,7 +2019,8 @@ final class ChatStoreTests: XCTestCase {
             mediaNamespace: directory.lastPathComponent,
             preferenceDefaults: preferenceDefaults,
             localStoreFactory: { uid in
-                try ChahuaLocalStore(directory: directory.appendingPathComponent(String(uid)))
+                try ChahuaLocalStore(
+                    directory: directory.appendingPathComponent(String(uid)), userID: uid)
             })
         var authenticatedPreferences: [(Int32, ConversationDisplayValues)] = []
         let preferenceObservation = root.sessionModel.$state.sink { state in
@@ -2345,7 +2348,7 @@ final class ChatStoreTests: XCTestCase {
 
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(h.probe.draftWriteAttempts, 0)
-        let duringComposition = try await h.localStore.restore()
+        let duringComposition = try await h.localStore.load()
         XCTAssertTrue(duringComposition.isEmpty)
 
         h.store.drafts.setDraftText("already committed", chatID: "chat")
@@ -2373,7 +2376,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.probe.enqueueAttempts, 0)
         XCTAssertFalse(h.store.drafts.draftSaveFailed)
         XCTAssertEqual(h.queue.storageState, .ready)
-        let duringComposition = try await h.localStore.restore()
+        let duringComposition = try await h.localStore.load()
         XCTAssertEqual(duringComposition.first?.draft.text, "last persisted")
         XCTAssertTrue(duringComposition.flatMap(\.outgoing).isEmpty)
 
@@ -2392,7 +2395,7 @@ final class ChatStoreTests: XCTestCase {
 
         try await Task.sleep(for: .milliseconds(650))
         XCTAssertEqual(h.probe.draftWriteAttempts, 0)
-        let duringComposition = try await h.localStore.restore()
+        let duringComposition = try await h.localStore.load()
         XCTAssertEqual(duringComposition.first?.draft.text, "previous")
 
         h.store.drafts.setDraftComposing(false, chatID: "chat")
@@ -2419,7 +2422,7 @@ final class ChatStoreTests: XCTestCase {
 
         let submitted = await h.store.drafts.submitDraft(chatID: "chat")
         XCTAssertTrue(submitted)
-        let persisted = try await h.localStore.restore()
+        let persisted = try await h.localStore.load()
         XCTAssertEqual(persisted.first?.draft.text, "")
         XCTAssertEqual(persisted.flatMap(\.outgoing).map(\.text), ["replacement session"])
     }
@@ -2443,7 +2446,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "next draft")
         XCTAssertNil(h.store.drafts.draftReply(chatID: "chat"))
         try await waitForPersistedDraft("next draft", in: h)
-        let persisted = try await h.localStore.restore()
+        let persisted = try await h.localStore.load()
         XCTAssertEqual(persisted.flatMap(\.outgoing).map(\.text), ["send this"])
         XCTAssertEqual(persisted.flatMap(\.outgoing).first?.replyToMessage, reply)
         XCTAssertNil(persisted.first?.draft.replyToMessage)
@@ -2463,7 +2466,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(h.store.drafts.draftSaveFailed)
         XCTAssertFalse(h.store.drafts.committingDrafts.contains(ConversationKey(chatID: "chat")))
         XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
-        let afterFailure = try await h.localStore.restore()
+        let afterFailure = try await h.localStore.load()
         XCTAssertEqual(afterFailure.first?.draft.text, "keep this")
         XCTAssertEqual(afterFailure.first?.draft.replyToMessage, reply)
         XCTAssertTrue(afterFailure.flatMap(\.outgoing).isEmpty)
@@ -2475,7 +2478,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "")
         XCTAssertNil(h.store.drafts.draftReply(chatID: "chat"))
         XCTAssertFalse(h.store.drafts.draftSaveFailed)
-        let afterRetry = try await h.localStore.restore()
+        let afterRetry = try await h.localStore.load()
         XCTAssertEqual(afterRetry.flatMap(\.outgoing).map(\.text), ["modal caption"])
         XCTAssertNil(afterRetry.first?.draft.replyToMessage)
         XCTAssertEqual(afterRetry.flatMap(\.outgoing).first?.replyToMessage, reply)
@@ -2486,6 +2489,7 @@ final class ChatStoreTests: XCTestCase {
         let original = try TimelineTestFixtures.message(id: 1, at: 0).replyPreview
         let replacement = try TimelineTestFixtures.message(id: 2, at: 1).replyPreview
         h.store.drafts.setDraftReply(original, chatID: "chat")
+        XCTAssertTrue(h.store.drafts.hasUnsavedWork)
         await h.store.drafts.flushAll()
         await h.queue.deactivate()
         h.store.reset()
@@ -2498,7 +2502,7 @@ final class ChatStoreTests: XCTestCase {
         h.store.drafts.install(stale)
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), replacement)
         await h.store.drafts.flushDraft(chatID: "chat")
-        let replaced = try await h.localStore.restore()
+        let replaced = try await h.localStore.load()
         XCTAssertEqual(replaced.first?.draft.replyToMessage, replacement)
 
         h.store.drafts.setDraftText("keep text", chatID: "chat")
@@ -2507,7 +2511,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertNil(h.store.drafts.draftReply(chatID: "chat"))
         XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "keep text")
         await h.store.drafts.flushDraft(chatID: "chat")
-        let canceled = try await h.localStore.restore()
+        let canceled = try await h.localStore.load()
         XCTAssertNil(canceled.first?.draft.replyToMessage)
         XCTAssertEqual(canceled.first?.draft.text, "keep text")
     }
@@ -2635,7 +2639,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), destinationReply.replyPreview)
         XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "source")]?.draft, sourceDraft)
         XCTAssertEqual(h.queue.snapshots[ConversationKey(chatID: "chat")]?.draft, destinationDraft)
-        let durable = try await h.localStore.restore()
+        let durable = try await h.localStore.load()
         XCTAssertEqual(durable.first { $0.chatID == "source" }?.draft, sourceDraft)
         XCTAssertEqual(durable.first { $0.chatID == "chat" }?.draft, destinationDraft)
         XCTAssertEqual(
@@ -2710,11 +2714,13 @@ final class ChatStoreTests: XCTestCase {
     private func openDraftHarness(api: FakeChatAPI = FakeChatAPI()) async throws -> DraftHarness {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "ChatDraft-\(UUID().uuidString)")
-        let localStore = try await Task.detached { try ChahuaLocalStore(directory: root) }.value
+        let localStore = try await Task.detached {
+            try ChahuaLocalStore(directory: root, userID: 1)
+        }.value
         let probe = DraftStorageProbe()
         let queue = OutgoingMessageQueue(
             apiClient: api,
-            localStoreFactory: { _ in localStore },
+            storage: AccountLocalStoreOwner(factory: { _ in localStore }),
             onInvalidToken: {},
             beforeStorageOperation: { operation in try await probe.check(operation) }
         )
@@ -2739,163 +2745,106 @@ final class ChatStoreTests: XCTestCase {
             }
             try await Task.sleep(for: .milliseconds(1))
         }
-        let persisted = try await harness.localStore.restore()
+        let persisted = try await harness.localStore.load()
         XCTAssertEqual(
             persisted.first { $0.chatID == "chat" }?.draft.text, text, file: file, line: line)
     }
 
-    func testLatestQueuedEditOwnsRealtimeAndHistoryUntilMutationCompletes() async throws {
-        let api = FakeChatAPI()
-        await api.setConversationPageMetadata(
-            group: .init(
-                id: "chat", myRole: .admin, kind: .group, speakingMode: .unrestricted))
-        let h = try await openDraftHarness(api: api)
-        _ = try await h.store.groupInfo(chatID: "chat")
-        h.store.drafts.setDraftText("original queued text", chatID: "chat")
-        let sent = await h.store.drafts.submitDraft(chatID: "chat")
-        XCTAssertTrue(sent)
+    private func restoreInterruptedSend(in h: DraftHarness) async throws -> PendingOutgoingMessage {
+        h.store.drafts.setDraftText("original submitted text", chatID: "chat")
+        let submitted = await h.store.drafts.submitDraft(chatID: "chat")
+        XCTAssertTrue(submitted)
         let item = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
-        _ = try await h.localStore.claimNext(chatID: "chat")
-        _ = try await h.queue.editOutgoing(
-            chatID: "chat", itemID: item.clientGeneratedID, expectedRevision: item.editRevision,
-            text: "latest queued edit", attachments: [])
-        let original = try TimelineTestFixtures.message(
-            id: 11, at: 11, text: "original queued text", clientGeneratedID: item.clientGeneratedID)
-        await h.store.applyRealtimeEvent(.message(original), currentUserID: 1)
-        await h.store.applyRealtimeEvent(
-            .messageUpdated(original.replacingMessageText("obsolete server body")), currentUserID: 1
-        )
-        XCTAssertEqual(
-            h.store.conversationMessages.pending(chatID: "chat").map(\.body.message),
-            ["latest queued edit"])
-        let other = try TimelineTestFixtures.message(
-            id: 12, senderID: 2, at: 12, text: "other message")
-        let page = ListMessagesResponse(
-            messages: [original, other], olderCursor: MessageID(9), newerCursor: MessageID(13),
-            nextCursor: MessageID(8), prevCursor: MessageID(14),
-            membershipMessagePolicy: .init(visibility: .members, canView: true),
-            chatSettings: .init(showMembershipMessages: true))
-        await api.appendMessageResult(chatID: "chat", page: page)
-        let filtered = try await h.store.fetchMessages(chatID: "chat")
-        XCTAssertEqual(filtered.messages.map(\.id), [other.id])
-        XCTAssertEqual(filtered.olderCursor, page.olderCursor)
-        XCTAssertEqual(filtered.newerCursor, page.newerCursor)
-        XCTAssertEqual(filtered.nextCursor, page.nextCursor)
-        XCTAssertEqual(filtered.prevCursor, page.prevCursor)
-        XCTAssertEqual(filtered.membershipMessagePolicy, page.membershipMessagePolicy)
-        XCTAssertEqual(filtered.chatSettings, page.chatSettings)
-        XCTAssertEqual(
-            h.store.conversationMessages.pending(chatID: "chat").map(\.clientGeneratedID),
-            [item.clientGeneratedID])
-
-        let edited = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
-        _ = try await h.queue.cancelOutgoing(
-            chatID: "chat", itemID: edited.clientGeneratedID, expectedRevision: edited.editRevision)
-        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
-        await h.store.applyRealtimeEvent(.messageDeleted(original), currentUserID: 1)
-        await h.store.applyRealtimeEvent(.message(original), currentUserID: 1)
-        await h.store.applyRealtimeEvent(.messageUpdated(original), currentUserID: 1)
-        await api.appendMessageResult(chatID: "chat", page: page)
-        let afterDeletion = try await h.store.fetchMessages(chatID: "chat")
-        XCTAssertEqual(afterDeletion.messages.map(\.id), [other.id])
-        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
-        XCTAssertNil(h.store.pendingListPreviews[ConversationKey(chatID: "chat")])
+        let claim = try await h.localStore.claimNext(
+            chatID: "chat", threadID: nil, expectedID: item.clientGeneratedID, retryCreate: false)
+        XCTAssertEqual(claim.message?.clientGeneratedID, item.clientGeneratedID)
+        await h.queue.deactivate()
+        h.store.reset()
+        await h.queue.activate(uid: 1)
+        let pending = try XCTUnwrap(h.store.conversationMessages.pending(chatID: "chat").first)
+        XCTAssertEqual(pending.clientGeneratedID, item.clientGeneratedID)
+        if case .failed(let failure, _) = pending.phase {
+            XCTAssertEqual(failure.stage, .create)
+            XCTAssertEqual(failure.reason, .unknownOutcome)
+        } else {
+            XCTFail("An interrupted send must restore as a failed create")
+        }
+        XCTAssertFalse(pending.canEdit)
+        return pending
     }
 
-    func testLeasedConfirmedMessageCanSubmitSameIdentityWithoutConsumingOrdinaryDraft() async throws
-    {
+    func testRealtimeDeliveryAdoptsServerCopyWithoutConsumingNewDraft() async throws {
         let api = FakeChatAPI(chatResults: [
-            .success(
-                .init(chats: [
-                    .init(id: "chat", unreadCount: 0, archived: false, kind: .group)
-                ]))
+            .success(.init(chats: [.init(id: "chat", unreadCount: 0, archived: false, kind: .dm)]))
         ])
-        await api.setConversationPageMetadata(
-            group: .init(
-                id: "chat", myRole: .admin, kind: .group, speakingMode: .unrestricted))
         let h = try await openDraftHarness(api: api)
+        let pending = try await restoreInterruptedSend(in: h)
         await h.store.loadActiveChats()
-        _ = try await h.store.groupInfo(chatID: "chat")
-        h.store.drafts.setDraftText("original", chatID: "chat")
-        let sent = await h.store.drafts.submitDraft(chatID: "chat")
-        XCTAssertTrue(sent)
-        let pending = try XCTUnwrap(h.store.conversationMessages.pending(chatID: "chat").first)
-        let session = try await h.queue.beginPendingEdit(pending)
-        defer { h.queue.endPendingEdit(session) }
-        h.store.drafts.setDraftText("ordinary draft", chatID: "chat")
+        h.store.drafts.setDraftText("new draft", chatID: "chat")
         let reply = try TimelineTestFixtures.message(id: 4, senderID: 2, at: 4).replyPreview
         h.store.drafts.setDraftReply(reply, chatID: "chat")
-        _ = try await h.localStore.claimNext(chatID: "chat")
+
+        let unrelated = try TimelineTestFixtures.message(
+            id: 10, senderID: 2, at: 10, text: "another sender",
+            clientGeneratedID: pending.clientGeneratedID)
+        await h.store.applyRealtimeEvent(.message(unrelated), currentUserID: 1)
+        XCTAssertEqual(h.store.conversationMessages.pending(chatID: "chat"), [pending])
+        XCTAssertEqual(h.store.state.chats.first?.lastMessage?.id, unrelated.id)
+
         let remote = try TimelineTestFixtures.message(
-            id: 11, at: 11, text: "original", clientGeneratedID: pending.clientGeneratedID)
+            id: 11, at: 11, text: "server copy", clientGeneratedID: pending.clientGeneratedID)
         await h.store.applyRealtimeEvent(.message(remote), currentUserID: 1)
-        XCTAssertTrue(session.isValid)
+        await h.store.applyRealtimeEvent(
+            .message(remote.replacingMessageText("late duplicate POST content")), currentUserID: 1)
         XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
-        func currentPreview() -> MessagePreview? {
-            h.store.state.chats.first { $0.id == "chat" }?.lastMessage
-        }
-        XCTAssertEqual(currentPreview()?.message, "original")
-        try await h.queue.submitPendingEdit(session, text: "edited after confirmation")
-        XCTAssertEqual(
-            h.store.conversationMessages.pending(chatID: "chat").map(\.clientGeneratedID),
-            [pending.clientGeneratedID])
-        XCTAssertEqual(
-            h.store.conversationMessages.pending(chatID: "chat").map(\.body.message),
-            ["edited after confirmation"])
-        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "ordinary draft")
+        XCTAssertNil(h.store.pendingListPreviews[ConversationKey(chatID: "chat")])
+        XCTAssertEqual(h.store.state.chats.first?.lastMessage?.message, "server copy")
+        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "new draft")
         XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), reply)
-        await api.appendMessageResult(chatID: "chat", page: .init(messages: [remote]))
-        let staleHistory = try await h.store.fetchMessages(chatID: "chat")
-        XCTAssertTrue(staleHistory.messages.isEmpty)
-
-        let latest = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
-        try await h.queue.cancelOutgoing(
-            chatID: "chat", itemID: latest.clientGeneratedID,
-            expectedRevision: latest.editRevision)
-        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
-        XCTAssertNil(currentPreview()?.message)
-        XCTAssertEqual(currentPreview()?.isDeleted, true)
-        XCTAssertEqual(h.store.drafts.draftText(chatID: "chat"), "ordinary draft")
-        XCTAssertEqual(h.store.drafts.draftReply(chatID: "chat"), reply)
-        XCTAssertEqual(
-            h.queue.snapshots[ConversationKey(chatID: "chat")]?.outgoing.first?
-                .confirmedMessage?.isDeleted, false,
-            "Local suppression must not invent authoritative server deletion")
-
-        await api.appendChatResult(
-            .init(chats: [
-                .init(
-                    id: "chat", lastMessageAt: remote.createdAt, unreadCount: 0,
-                    lastMessage: remote.replyPreview, archived: false, kind: .group)
-            ]))
-        await h.store.refreshActiveChats()
-        await h.store.applyRealtimeEvent(.messageUpdated(remote), currentUserID: 1)
-        XCTAssertNil(currentPreview()?.message)
-        XCTAssertEqual(currentPreview()?.isDeleted, true)
     }
 
-    func testHistoryIngressAcknowledgesDurablePendingBeforeReturningSnapshot() async throws {
-        let api = FakeChatAPI()
-        let queue = testOutgoingQueue(apiClient: api)
-        let store = ChatStore(apiClient: api, outgoingQueue: queue, onInvalidToken: {})
-        await queue.activate(uid: 1)
-        store.drafts.setDraftText("delivered before response", chatID: "chat")
-        let submitted = await store.drafts.submitDraft(chatID: "chat")
-        XCTAssertTrue(submitted)
-        let pending = try XCTUnwrap(queue.pendingMessages(chatID: "chat").first)
+    func testRemovingLocalFailureDoesNotSuppressLaterServerPublication() async throws {
+        let api = FakeChatAPI(chatResults: [
+            .success(.init(chats: [.init(id: "chat", unreadCount: 0, archived: false, kind: .dm)]))
+        ])
+        let h = try await openDraftHarness(api: api)
+        let pending = try await restoreInterruptedSend(in: h)
+        await h.store.loadActiveChats()
+        try await h.queue.removeOutgoing(chatID: "chat", itemID: pending.clientGeneratedID)
+        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
+        XCTAssertNil(h.store.pendingListPreviews[ConversationKey(chatID: "chat")])
+
         let remote = try TimelineTestFixtures.message(
-            id: 1, at: 1, text: pending.text, clientGeneratedID: pending.clientGeneratedID)
-        await api.appendMessageResult(chatID: "chat", page: try TimelineTestFixtures.page([remote]))
-        let page = try await store.fetchMessages(chatID: "chat")
-        XCTAssertTrue(queue.pendingMessages(chatID: "chat").isEmpty)
-        XCTAssertEqual(page.messages.map(\.clientGeneratedId), [pending.clientGeneratedID])
-        XCTAssertTrue(store.conversationMessages.pending(chatID: "chat").isEmpty)
-        await queue.deactivate()
-        store.reset()
-        await queue.activate(uid: 1)
-        XCTAssertTrue(queue.pendingMessages(chatID: "chat").isEmpty)
-        await queue.deactivate()
+            id: 11, at: 11, text: "late server copy", clientGeneratedID: pending.clientGeneratedID)
+        await h.store.applyRealtimeEvent(.message(remote), currentUserID: 1)
+        XCTAssertEqual(h.store.state.chats.first?.lastMessage?.message, "late server copy")
+        XCTAssertEqual(h.store.state.chats.first?.lastMessage?.isDeleted, false)
+        await api.appendMessageResult(chatID: "chat", page: .init(messages: [remote]))
+        let page = try await h.store.fetchMessages(chatID: "chat")
+        XCTAssertEqual(page.messages, [remote])
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
     }
+
+    func testHistoryIngressSettlesAndRedactsDeletedReceiptBeforeReturningSnapshot() async throws {
+        let api = FakeChatAPI()
+        let h = try await openDraftHarness(api: api)
+        let pending = try await restoreInterruptedSend(in: h)
+        let remote = try TimelineTestFixtures.message(
+            id: 1, at: 1, text: "private body", isDeleted: true,
+            clientGeneratedID: pending.clientGeneratedID)
+        await api.appendMessageResult(chatID: "chat", page: try TimelineTestFixtures.page([remote]))
+        let page = try await h.store.fetchMessages(chatID: "chat")
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+        XCTAssertEqual(page.messages.map(\.clientGeneratedId), [pending.clientGeneratedID])
+        XCTAssertEqual(page.messages.first?.isDeleted, true)
+        XCTAssertNil(page.messages.first?.message)
+        XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
+        await h.queue.deactivate()
+        h.store.reset()
+        await h.queue.activate(uid: 1)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+    }
+
     func testThreadPaginationDeduplicatesAndFailedRefreshRetainsCompleteSnapshot() async throws {
         let first = try ScopeTestFixtures.thread(id: 1)
         let second = try ScopeTestFixtures.thread(id: 2)

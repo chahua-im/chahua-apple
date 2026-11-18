@@ -181,6 +181,7 @@ final class ConversationTimelineModel: ObservableObject {
         builder = TimelineRowsBuilder(
             currentUserID: currentUserID, calendar: calendar,
             capturedReplyRedactedIDs: capturedReplyRedactedIDs)
+        deletedIDs = messageStore.deletedMessageIDs(chatID: chatID)
         // A final leave acknowledgement can outlive timeline observation. Keep the account
         // fence subscribed until the model dies so it cannot write for a replacement login.
         accountResetObservation = messageStore.changes.sink { [weak self] change in
@@ -1468,6 +1469,7 @@ final class ConversationTimelineModel: ObservableObject {
                     guard case .pending(let pending) = $0 else { return false }
                     return pending.clientGeneratedID == message.clientGeneratedId
                         && pending.senderID == message.sender.uid
+                        && pending.chatID == message.chatId && pending.threadID == message.replyRootId
                 }) == true
             {
                 preHistoryAcknowledgementKeys.insert(message.timelineStableKey)
@@ -1489,7 +1491,12 @@ final class ConversationTimelineModel: ObservableObject {
         guard event.conversationChatID == chatID else { return false }
         switch event {
         case .message(let message):
-            guard accepts(message), replay || !deletedIDs.contains(message.id) else { return false }
+            if message.isDeleted {
+                recordDeletion(message)
+            }
+            guard accepts(message),
+                replay || message.isDeleted || !deletedIDs.contains(message.id)
+            else { return false }
             if window.index(matching: message) != nil || deferredKey(matching: message) != nil {
                 // Publication replaces an acknowledged M4A with canonical Opus
                 // through a create event, not messageUpdated. Merge only that
@@ -1528,10 +1535,7 @@ final class ConversationTimelineModel: ObservableObject {
                 return updated.redactingReplyPreview(messageIDs: deletedIDs)
             }
         case .messageDeleted(let message):
-            deletedIDs.insert(message.id)
-            removeActivityTargets([message.id])
-            if accepts(message) { mutateKnown(message) { _ in message.redactedForDeletion() } }
-            redactDeletedPreviews([message.id])
+            recordDeletion(message)
         case .messagesBulkDeleted(let payload):
             let ids = Set(payload.messageIds)
             deletedIDs.formUnion(ids)
@@ -1558,6 +1562,13 @@ final class ConversationTimelineModel: ObservableObject {
             break
         }
         return false
+    }
+
+    private func recordDeletion(_ message: MessageResponse) {
+        deletedIDs.insert(message.id)
+        removeActivityTargets([message.id])
+        if accepts(message) { mutateKnown(message) { _ in message.redactedForDeletion() } }
+        redactDeletedPreviews([message.id])
     }
 
     private func deferredKey(matching message: MessageResponse) -> ConversationMessageStableKey? {
@@ -1628,7 +1639,7 @@ final class ConversationTimelineModel: ObservableObject {
         deferredCreates.removeAll()
         preHistoryAcknowledgementKeys.removeAll()
         canReuseLatestWindowAfterPendingChange = false
-        deletedIDs.removeAll()
+        deletedIDs = messageStore.deletedMessageIDs(chatID: chatID)
         membershipRefreshRequired = false
         membershipRefreshLowerBound = nil
         membershipRefreshUpperBound = nil
@@ -1750,8 +1761,7 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    /// Confirmed server positions retain their identity while latest durable intent overlays them.
-    /// Items without confirmation follow in outbox order.
+    /// Confirmed messages stay in server order; unsubmitted work follows in FIFO order.
     private func timelineEntries() -> [ConversationTimelineEntry] {
         var confirmed = window.messages
         if isBeforeInitialHistory {
@@ -1763,24 +1773,22 @@ final class ConversationTimelineModel: ObservableObject {
             }
         }
         let pending = messageStore.pending(chatID: chatID, threadID: threadID)
-        var pendingByClientID = Dictionary(
-            uniqueKeysWithValues: pending.map { ($0.clientGeneratedID, $0) })
+        let pendingKeys = Set(pending.lazy.map { ConversationTimelineEntry.pending($0).stableKey })
         var entries: [ConversationTimelineEntry] = []
         entries.reserveCapacity(confirmed.count + pending.count)
         let now = Date()
-        for message in confirmed where !messageStore.isCancelledOutgoing(message) {
-            if let item = pendingByClientID[message.clientGeneratedId],
-                item.senderID == message.sender.uid
-            {
-                entries.append(.pending(item))
-                pendingByClientID.removeValue(forKey: item.clientGeneratedID)
-            } else {
-                entries.append(.remote(message.projectingExpiredLinkPreviews(at: now)))
-            }
+        for message in confirmed {
+            // An ordinary ingress with the exact local identity cannot remove a durable row.
+            if !pendingKeys.isEmpty, pendingKeys.contains(message.timelineStableKey) { continue }
+            let content =
+                !message.isDeleted && deletedIDs.contains(message.id)
+                ? message.redactedForDeletion() : message
+            entries.append(
+                .remote(
+                    content.redactingReplyPreview(messageIDs: deletedIDs)
+                        .projectingExpiredLinkPreviews(at: now)))
         }
-        for item in pending where pendingByClientID[item.clientGeneratedID] != nil {
-            entries.append(.pending(item))
-        }
+        for item in pending { entries.append(.pending(item)) }
         return entries
     }
 

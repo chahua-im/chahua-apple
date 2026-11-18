@@ -48,6 +48,8 @@ The shared [FormExitGuard](../../App/DesignSystem/Components/FormExitGuard.swift
 
 Sign out presents a native confirmation alert naming the account. Cancel does nothing; only the destructive confirmation invokes sign-out. The request is scoped to its account/session and is dismissed on account/session replacement. While signing out or unregistering notifications, repeat requests are disabled. The button owns its confirmation state so it works inside either platform's settings scaffold.
 
+If local work exists or storage has not finished loading, the alert warns that sign-out removes this account's drafts and queued messages from the device. It does not retract possible server delivery. Confirmation stops local writers, unregisters notifications, and purges the account's outbox before deleting the credential. Failed cleanup leaves sign-out retryable; account switching and session expiration do not purge.
+
 Compact iOS leaves Sign out label sizing to the standard List row instead of adding a 44pt label minimum on top of native row insets. The standalone iPad sidebar button retains a 44pt target without extra vertical padding; macOS keeps its desktop sizing.
 
 ## Verification checklist
@@ -60,6 +62,6 @@ Compact iOS leaves Sign out label sizing to the standard List row instead of add
 - Fail a save: remain on the page with the draft and retry. Succeed on retry: split layouts remain on the page with clean controls; compact iOS returns only after server confirmation.
 - Switch account or leave the editor before a delayed response: no stale result changes or closes the new editor.
 - In split layouts, verify dirty/saving drafts block category switching, Sign out, Close and sheet dismissal. After leaving compact editors, verify native Back/swipe still works on another Settings page.
-- Open Sign out, cancel, reopen and confirm: cancellation must preserve the session, and confirmation must execute exactly once.
+- With a draft and queued send, open Sign out, cancel, reopen and confirm. Cancel retains both. Confirmation executes once, and signing back into the same account shows neither. An unregister or purge failure must leave sign-out retryable.
 
 The [parity checklist](../pwa-parity-checklist.md) records device sign-off under **S3** (Friend Request Permission), **S5** (Read Receipts / Last Seen & Online), and **R8** (Language).

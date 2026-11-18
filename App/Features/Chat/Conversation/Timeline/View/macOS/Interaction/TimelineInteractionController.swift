@@ -102,8 +102,8 @@
             overlay.onDismiss = { [weak self] in self?.dismiss() }
             overlay.onReaction = { [weak self] emoji in self?.react(emoji) }
             overlay.onAction = { [weak self] action in self?.perform(action) }
-            overlay.onEditPending = { [weak self] in self?.modifyPending(cancel: false) }
-            overlay.onCancelPending = { [weak self] in self?.modifyPending(cancel: true) }
+            overlay.onEditPending = { [weak self] in self?.modifyPending(remove: false) }
+            overlay.onRemovePending = { [weak self] in self?.modifyPending(remove: true) }
             self.overlay = overlay
             overlay.frame = overlayHost.bounds
             overlay.autoresizingMask = [.width, .height]
@@ -352,16 +352,16 @@
             }
         }
 
-        private func modifyPending(cancel: Bool) {
+        private func modifyPending(remove: Bool) {
             guard let row = selectedRow else {
                 dismiss()
                 return
             }
             guard case .pending(let pending) = row.entry,
-                cancel
-                    ? actions.canCancelPendingMessage(pending)
+                remove
+                    ? actions.canRemovePendingMessage(pending)
                     : actions.canEditPendingMessage(pending),
-                let operation = cancel ? actions.cancelPendingMessage : actions.editPendingMessage
+                let operation = remove ? actions.removePendingMessage : actions.editPendingMessage
             else {
                 refresh()
                 return

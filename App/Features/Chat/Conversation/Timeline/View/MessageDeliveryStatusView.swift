@@ -10,6 +10,7 @@ import SwiftUI
 /// Shared delivery indicator for timeline hosts, conversation lists and the tuning workshop.
 struct MessageDeliveryStatusView: View {
     enum Status: String, CaseIterable, Identifiable {
+        case preparing = "Preparing"
         case queued = "Queued"
         case sending = "Sending"
         case sent = "Sent"
@@ -38,6 +39,8 @@ struct MessageDeliveryStatusView: View {
     var body: some View {
         Group {
             switch status {
+            case .preparing:
+                Image(systemName: "arrow.up.circle")
             case .queued:
                 Image(systemName: "clock")
             case .sending:
@@ -169,7 +172,7 @@ struct MessageDeliveryStatusContent: Equatable {
                 radius: (size - strokeWidth) / 2,
                 startAngle: 0, endAngle: .pi * 2 * 0.72, clockwise: false)
             return path
-        case .queued, .failed:
+        case .preparing, .queued, .failed:
             return nil
         }
     }
@@ -177,6 +180,7 @@ struct MessageDeliveryStatusContent: Equatable {
     func makeSymbol() -> MessageDeliveryStatusSymbol? {
         let name: String
         switch status {
+        case .preparing: name = "arrow.up.circle"
         case .queued: name = "clock"
         case .failed: name = "exclamationmark.circle"
         default: return nil
@@ -506,6 +510,7 @@ private struct DeliveryCheckmark: Shape {
             for status: MessageDeliveryStatusView.Status
         ) -> ConversationMessageDisplayState {
             switch status {
+            case .preparing: .preparing
             case .queued: .queued
             case .sending: .sending
             case .sent, .read: .delivered

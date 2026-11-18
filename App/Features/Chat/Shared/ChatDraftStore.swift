@@ -20,9 +20,16 @@ final class ChatDraftStore: ObservableObject {
 
     private let outgoingQueue: OutgoingMessageQueue
     private var generation = 0
+    private var signOutFenced = false
 
     init(outgoingQueue: OutgoingMessageQueue) {
         self.outgoingQueue = outgoingQueue
+    }
+
+    var hasUnsavedWork: Bool {
+        !composingDrafts.isEmpty || drafts.values.contains { !$0.isEmpty } || !draftReplies.isEmpty
+            || storedDraftLinkPreviews.values.contains { !$0.isEmpty }
+            || outgoingQueue.snapshots.values.contains { !$0.draft.attachments.isEmpty }
     }
 
     /// Receives snapshots after ChatStore rejects stale outgoing revisions.
@@ -36,13 +43,16 @@ final class ChatDraftStore: ObservableObject {
             draftRevisions[key] = max(
                 draftRevisions[key, default: 0], snapshot.draft.editRevision + 1)
         } else if snapshot.draft.editRevision >= draftRevisions[key, default: 0] {
-            drafts[key] = snapshot.draft.text
-            draftReplies[key] = reply
-            storedDraftLinkPreviews[key] = snapshot.draft.linkPreviews
+            if drafts[key] != snapshot.draft.text { drafts[key] = snapshot.draft.text }
+            if draftReplies[key] != reply { draftReplies[key] = reply }
+            if storedDraftLinkPreviews[key, default: []] != snapshot.draft.linkPreviews {
+                storedDraftLinkPreviews[key] = snapshot.draft.linkPreviews
+            }
             draftRevisions[key] = snapshot.draft.editRevision
-            draftUpdatedAt[key] =
+            let updatedAt =
                 snapshot.draft.text.isEmpty && snapshot.draft.attachments.isEmpty
                 ? nil : snapshot.draft.updatedAt
+            if draftUpdatedAt[key] != updatedAt { draftUpdatedAt[key] = updatedAt }
             unsavedDrafts.remove(key)
         }
     }
@@ -62,6 +72,7 @@ final class ChatDraftStore: ObservableObject {
     func setDraftLinkPreviews(
         _ previews: [LinkPreviewInput], chatID: String, threadID: String? = nil
     ) {
+        guard !signOutFenced else { return }
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard storedDraftLinkPreviews[key, default: []] != previews else { return }
         storedDraftLinkPreviews[key] = previews
@@ -72,6 +83,7 @@ final class ChatDraftStore: ObservableObject {
     }
 
     func setDraftReply(_ reply: MessagePreview?, chatID: String, threadID: String? = nil) {
+        guard !signOutFenced else { return }
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let reply = normalizedReply(reply, chatID: chatID)
         guard draftReplies[key] != reply else { return }
@@ -95,11 +107,13 @@ final class ChatDraftStore: ObservableObject {
     }
 
     private func normalizedReply(_ reply: MessagePreview?, chatID: String) -> MessagePreview? {
-        guard let reply, deletedReplyIDs[chatID]?.contains(reply.id) == true else { return reply }
+        guard let reply, reply.isDeleted || deletedReplyIDs[chatID]?.contains(reply.id) == true
+        else { return reply }
         return reply.redactedForDeletion()
     }
 
     func setDraftText(_ text: String, chatID: String, threadID: String? = nil) {
+        guard !signOutFenced else { return }
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         guard drafts[key] != text else { return }
         drafts[key] = text
@@ -113,6 +127,7 @@ final class ChatDraftStore: ObservableObject {
     }
 
     func setDraftComposing(_ isComposing: Bool, chatID: String, threadID: String? = nil) {
+        guard !signOutFenced else { return }
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         if isComposing {
             composingDrafts.insert(key)
@@ -123,6 +138,7 @@ final class ChatDraftStore: ObservableObject {
     }
 
     private func scheduleDraftSave(key: ConversationKey, immediately: Bool = false) {
+        guard !signOutFenced else { return }
         pendingDraftSaves.removeValue(forKey: key)?.cancel()
         if immediately { deferredDraftFlushes.insert(key) }
         guard !composingDrafts.contains(key) else { return }
@@ -143,6 +159,7 @@ final class ChatDraftStore: ObservableObject {
     }
 
     func flushDraft(chatID: String, threadID: String? = nil) async {
+        guard !signOutFenced, !Task.isCancelled else { return }
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         pendingDraftSaves.removeValue(forKey: key)?.cancel()
         guard !composingDrafts.contains(key) else {
@@ -167,14 +184,16 @@ final class ChatDraftStore: ObservableObject {
         }
     }
 
-    /// Attachment commands share the blocked item's revision with text and reply edits.
-    /// Flush committed text first, rather than replacing an in-flight IME composition.
+    /// Keep attachment changes from running ahead of committed text or across account switches.
     func flushForAttachmentChange(chatID: String, threadID: String? = nil) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let requestGeneration = generation
         guard !composingDrafts.contains(key), !committingDrafts.contains(key) else {
             throw AttachmentDraftError.busy
         }
         await flushDraft(chatID: chatID, threadID: threadID)
+        guard generation == requestGeneration else { throw CancellationError() }
+        try Task.checkCancellation()
         guard !draftSaveFailed, !unsavedDrafts.contains(key) else {
             throw AttachmentDraftError.notSaved
         }
@@ -258,33 +277,26 @@ final class ChatDraftStore: ObservableObject {
     func submitSticker(_ sticker: MessageStickerResponse, chatID: String, threadID: String? = nil)
         async throws -> Bool
     {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let requestGeneration = generation
-        let reply = draftReplies[key]
-        // This send preserves the composition; autosaving it is best-effort.
-        await flushDraft(chatID: chatID, threadID: threadID)
-        guard generation == requestGeneration, !committingDrafts.contains(key),
-            !composingDrafts.contains(key), outgoingQueue.storageState == .ready
-        else { return false }
-        committingDrafts.insert(key)
-        defer { if generation == requestGeneration { committingDrafts.remove(key) } }
-        try await outgoingQueue.enqueueSticker(
-            chatID: chatID, threadID: threadID, sticker: sticker, replyToMessage: reply)
-        guard generation == requestGeneration else { return false }
-        if draftReplies[key]?.id == reply?.id {
-            setDraftReply(nil, chatID: chatID, threadID: threadID)
+        try await submitIndependent(chatID: chatID, threadID: threadID) { reply in
+            try await outgoingQueue.enqueueSticker(
+                chatID: chatID, threadID: threadID, sticker: sticker, replyToMessage: reply)
         }
-        return true
     }
 
     func submitVoice(fileURL: URL, chatID: String, threadID: String? = nil) async throws -> Bool {
+        try await submitIndependent(chatID: chatID, threadID: threadID) { reply in
+            try await outgoingQueue.enqueueVoice(
+                chatID: chatID, threadID: threadID, fileURL: fileURL, replyToMessage: reply)
+        }
+    }
+
+    private func submitIndependent(
+        chatID: String, threadID: String?, enqueue: @MainActor (MessagePreview?) async throws -> Void
+    ) async throws -> Bool {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let requestGeneration = generation
-        let reply = draftReplies[key]
-        // A voice send does not consume the text/media draft.
-        await flushDraft(chatID: chatID, threadID: threadID)
-        guard generation == requestGeneration, !committingDrafts.contains(key),
-            !composingDrafts.contains(key), outgoingQueue.storageState == .ready
+        guard !committingDrafts.contains(key), !composingDrafts.contains(key),
+            outgoingQueue.storageState == .ready, !Task.isCancelled
         else { return false }
         committingDrafts.insert(key)
         defer {
@@ -293,33 +305,44 @@ final class ChatDraftStore: ObservableObject {
                 if unsavedDrafts.contains(key) { scheduleDraftSave(key: key) }
             }
         }
-        try await outgoingQueue.enqueueVoice(
-            chatID: chatID, threadID: threadID, fileURL: fileURL, replyToMessage: reply)
-        guard generation == requestGeneration else { return false }
-        // A voice message has no caption. Text/media entered during recording
-        // remains a separate draft, including edits made while enqueue suspends.
-        if draftReplies[key]?.id == reply?.id {
-            setDraftReply(nil, chatID: chatID, threadID: threadID)
-        }
-        return true
+        // Use the current reply without consuming any part of the separate draft.
+        try await enqueue(draftReplies[key])
+        return generation == requestGeneration
     }
 
     func flushAll() async {
         let requestGeneration = generation
-        for key in Array(drafts.keys) {
+        for key in Array(unsavedDrafts) {
+            guard generation == requestGeneration, !Task.isCancelled else { return }
             await flushDraft(chatID: key.chatID, threadID: key.threadID)
-            guard generation == requestGeneration else { return }
         }
     }
 
     func scheduleBackgroundFlush() {
-        for key in drafts.keys {
+        for key in unsavedDrafts {
             scheduleDraftSave(key: key, immediately: true)
         }
     }
 
+    func fenceForSignOut() {
+        signOutFenced = true
+        for task in pendingDraftSaves.values { task.cancel() }
+        pendingDraftSaves.removeAll()
+    }
+
+    func resumeAfterUnregisterFailure() {
+        signOutFenced = false
+        for key in unsavedDrafts { scheduleDraftSave(key: key) }
+    }
+
+    func discardAfterSignOutPurge() {
+        reset()
+        signOutFenced = true
+    }
+
     func reset() {
         generation += 1
+        signOutFenced = false
         for task in pendingDraftSaves.values { task.cancel() }
         pendingDraftSaves.removeAll()
         drafts.removeAll()

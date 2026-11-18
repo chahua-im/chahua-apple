@@ -51,7 +51,8 @@ extension ChahuaClient {
     {
         try await send(
             HTTPRequestSpec.json(
-                .post, ["chats", chatID, "messages", messageID.description, "forward"], body: body),
+                .post, ["chats", chatID, "messages", messageID.description, "forward"],
+                body: body, capturesRetryAfter: true),
             decoding: MessageResponse.self)
     }
 
@@ -59,7 +60,8 @@ extension ChahuaClient {
         async throws -> MessageResponse
     {
         try await send(
-            HTTPRequestSpec.json(.post, ["chats", chatID, "messages", "forward"], body: body),
+            HTTPRequestSpec.json(
+                .post, ["chats", chatID, "messages", "forward"], body: body, capturesRetryAfter: true),
             decoding: MessageResponse.self)
     }
 

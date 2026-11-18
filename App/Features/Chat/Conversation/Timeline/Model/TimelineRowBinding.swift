@@ -44,9 +44,9 @@ struct TimelineBubbleActions {
     var pendingReactionMessageIDs: Set<MessageID> = []
     var interactionContext = MessageInteractionContext()
     var editablePendingMessageIDs: Set<String> = []
-    var cancellablePendingMessageIDs: Set<String> = []
+    var removablePendingMessageIDs: Set<String> = []
     var editPendingMessage: ((PendingOutgoingMessage) -> Void)?
-    var cancelPendingMessage: ((PendingOutgoingMessage) -> Void)?
+    var removePendingMessage: ((PendingOutgoingMessage) -> Void)?
     var isSelectingMessages = false
     var selectedMessageIDs: Set<MessageID> = []
     var toggleMessageSelection: ((MessageResponse) -> Void)?
@@ -99,10 +99,10 @@ extension TimelineBubbleActions {
             && (openContextMenu == nil) == (other.openContextMenu == nil)
             && (toggleReaction == nil) == (other.toggleReaction == nil)
             && (editPendingMessage == nil) == (other.editPendingMessage == nil)
-            && (cancelPendingMessage == nil) == (other.cancelPendingMessage == nil)
+            && (removePendingMessage == nil) == (other.removePendingMessage == nil)
             && pendingReactionMessageIDs == other.pendingReactionMessageIDs
             && editablePendingMessageIDs == other.editablePendingMessageIDs
-            && cancellablePendingMessageIDs == other.cancellablePendingMessageIDs
+            && removablePendingMessageIDs == other.removablePendingMessageIDs
             && interactionContext == other.interactionContext
             && isSelectingMessages == other.isSelectingMessages
             && selectedMessageIDs == other.selectedMessageIDs
@@ -118,13 +118,13 @@ extension TimelineBubbleActions {
     func canEditPendingMessage(_ pending: PendingOutgoingMessage) -> Bool {
         editablePendingMessageIDs.contains(pending.clientGeneratedID)
             && editPendingMessage != nil
-            && pending.messageType == .text
-            && pending.forwardRequest == nil
+            && pending.canEdit
     }
 
-    func canCancelPendingMessage(_ pending: PendingOutgoingMessage) -> Bool {
-        cancellablePendingMessageIDs.contains(pending.clientGeneratedID)
-            && cancelPendingMessage != nil
+    func canRemovePendingMessage(_ pending: PendingOutgoingMessage) -> Bool {
+        removablePendingMessageIDs.contains(pending.clientGeneratedID)
+            && removePendingMessage != nil
+            && pending.canRemove
     }
 
     func pinContext(for row: TimelineMessageRow, base: MessageInteractionContext)

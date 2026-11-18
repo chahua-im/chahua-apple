@@ -58,7 +58,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             allowsTokenRefresh: false,
             headers: ["X-Client-Id": clientID]
         )
-        let (data, status) = try await execute(spec, token: nil)
+        let (data, status, _) = try await execute(spec, token: nil)
         try checkSession(generation)
         guard status == 200 else { throw APIError.invalidResponse(statusCode: status) }
         let devSessionToken = try decodeAuthToken(data, status: status)
@@ -182,7 +182,8 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             return
         case APIError.transport(let error):
             detail = "transport code=\(error.code.rawValue)"
-        case APIError.http(let status, _), APIError.invalidResponse(let status):
+        case APIError.http(let status, _), APIError.retryableHTTP(let status, _, _),
+            APIError.invalidResponse(let status):
             detail = "HTTP status=\(status)"
         case APIError.decoding(let status, let description):
             detail = "decoding status=\(status) \(description)"
@@ -212,6 +213,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         let initialToken = spec.requiresAuth ? token : nil
         let firstResponse = try await execute(spec, token: initialToken)
         try checkSession(generation)
+        let response: (data: Data, status: Int, retryAfter: Date?)
         if firstResponse.status == 401, spec.allowsTokenRefresh, initialToken != nil {
             let refreshed: String
             do { refreshed = try await refreshedToken() } catch {
@@ -219,25 +221,27 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
                 throw error
             }
             try checkSession(generation)
-            let retryResponse = try await execute(spec, token: refreshed)
+            response = try await execute(spec, token: refreshed)
             try checkSession(generation)
-            if retryResponse.status == 401 {
+            if response.status == 401 {
                 token = nil
                 throw APIError.invalidToken
             }
-            guard (200..<300).contains(retryResponse.status) else {
-                throw APIError.http(status: retryResponse.status, body: retryResponse.data)
+        } else {
+            response = firstResponse
+        }
+        guard (200..<300).contains(response.status) else {
+            if let retryAfter = response.retryAfter {
+                throw APIError.retryableHTTP(
+                    status: response.status, body: response.data, retryAfter: retryAfter)
             }
-            return retryResponse
+            throw APIError.http(status: response.status, body: response.data)
         }
-        guard (200..<300).contains(firstResponse.status) else {
-            throw APIError.http(status: firstResponse.status, body: firstResponse.data)
-        }
-        return firstResponse
+        return (response.data, response.status)
     }
 
     private func execute(_ spec: HTTPRequestSpec, token: String?) async throws -> (
-        data: Data, status: Int
+        data: Data, status: Int, retryAfter: Date?
     ) {
         let generation = sessionGeneration
         let request = try makeRequest(spec, token: token)
@@ -247,7 +251,16 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             guard let response = response as? HTTPURLResponse else {
                 throw APIError.unexpectedResponse
             }
-            return (data, response.statusCode)
+            let status = response.statusCode
+            let retryAfter: Date? =
+                if spec.capturesRetryAfter,
+                    status == 408 || status == 429 || (500...599).contains(status)
+                {
+                    APIError.retryDate(from: response.value(forHTTPHeaderField: "Retry-After"))
+                } else {
+                    nil
+                }
+            return (data, status, retryAfter)
         } catch {
             try checkSession(generation)
             if error is CancellationError { throw CancellationError() }
@@ -302,7 +315,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         let generation = sessionGeneration
         let spec = HTTPRequestSpec(
             method: .get, path: ["users", "me"], requiresAuth: false, allowsTokenRefresh: false)
-        let (data, status) = try await execute(spec, token: token)
+        let (data, status, _) = try await execute(spec, token: token)
         try checkSession(generation)
         if status == 401 { throw APIError.invalidToken }
         guard (200..<300).contains(status) else {

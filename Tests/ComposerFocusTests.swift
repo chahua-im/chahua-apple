@@ -186,10 +186,12 @@ final class ComposerFocusTests: XCTestCase {
     func testMediaOnlyPendingEditSubmitsWithoutOpeningOrdinaryCaptionDialog() async throws {
         let h = try await mount(text: "")
         h.state.isEditing = true
-        h.state.serverMedia = [
-            AttachmentResponse(
-                id: "uploaded", url: "", kind: "image/png", size: 20, fileName: "photo.png",
-                width: 4, height: 3)
+        h.state.media = [
+            LocalOutgoingAttachment(
+                id: "slot", generation: "original", position: 0,
+                sourcePath: "/tmp/photo.png", previewPath: "/tmp/photo.png",
+                fileName: "photo.png", mimeType: "image/png", width: 4, height: 3,
+                byteCount: 20, attachmentID: "uploaded")
         ]
         try await pause()
         h.pressSendButton()
@@ -198,17 +200,49 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertEqual(h.state.text, "")
     }
 
-    func testServerComposerSlotKeepsUploadedIdentityWithoutLocalWork() {
-        let server = AttachmentResponse(
-            id: "uploaded", url: "", kind: "video/mp4", size: 20, fileName: "clip.mp4",
-            width: 4, height: 3)
-        let slot = ComposerMediaItem(.server(server))
-        XCTAssertEqual(slot.id, "uploaded")
-        XCTAssertEqual(slot.width, 4)
-        XCTAssertEqual(slot.height, 3)
-        XCTAssertEqual(slot.mimeType, "video/mp4")
-        XCTAssertNil(slot.localAttachment)
-        XCTAssertFalse(slot.isFile)
+    func testPendingFileEditSavesWithoutCaptionInput() async throws {
+        let h = try await mount(text: "")
+        h.state.isEditing = true
+        h.state.media = [
+            LocalOutgoingAttachment(
+                id: "file", generation: "original", position: 0, sourcePath: "/tmp/document",
+                previewPath: "/tmp/document", fileName: "document.txt", mimeType: "text/plain",
+                width: 0, height: 0, byteCount: 20, preservesOriginal: true)
+        ]
+        try await pause()
+        h.pressSendButton()
+        try await pause()
+        XCTAssertEqual(h.state.submits, 1)
+        XCTAssertEqual(h.state.editText, "")
+    }
+
+    func testPendingEditorDistinguishesCheckpointsFromUserChanges() throws {
+        var slot = LocalOutgoingAttachment(
+            id: "slot", generation: "original", position: 0,
+            sourcePath: "/tmp/photo.png", previewPath: "/tmp/photo.png",
+            fileName: "photo.png", mimeType: "image/png", width: 4, height: 3, byteCount: 20)
+        let reply = try TimelineTestFixtures.message(id: 1, at: 0).replyPreview
+        let session = PendingEditSession(
+            conversationKey: .init(chatID: "chat"), clientGeneratedID: "pending",
+            accountGeneration: 1, initialText: "original", initialAttachments: [slot],
+            initialMetadata: nil, initialReplyToMessage: reply, compressionEnabled: true)
+
+        slot.attachmentID = "uploaded"
+        session.replaceAttachments([slot])
+        XCTAssertEqual(session.attachments.first?.attachmentID, "uploaded")
+        XCTAssertFalse(session.hasChanges(text: "original"))
+
+        session.setReplyToMessage(nil)
+        XCTAssertTrue(session.hasChanges(text: "original"))
+        session.setReplyToMessage(reply)
+        XCTAssertFalse(session.hasChanges(text: "original"))
+
+        session.setCompressionEnabled(false)
+        XCTAssertTrue(session.hasChanges(text: "original"))
+        session.setCompressionEnabled(true)
+        slot.generation = "replacement"
+        session.replaceAttachments([slot])
+        XCTAssertTrue(session.hasChanges(text: "original"))
     }
 
     func testEditPreparationCancelsAnImportWithoutReplacingTheOrdinaryDraft() async throws {
@@ -1180,7 +1214,6 @@ private final class FocusComposerState: ObservableObject {
     @Published var enabled = true
     @Published var canSend = true
     @Published var media: [LocalOutgoingAttachment] = []
-    @Published var serverMedia: [AttachmentResponse] = []
     @Published var isEditing = false
     @Published var editText = ""
     var composerText: Binding<String> {
@@ -1230,8 +1263,8 @@ private struct FocusComposerRoot: View {
                     isEditing: state.isEditing, initialEditText: "original",
                     editIdentity: state.isEditing ? "pending-edit" : nil,
                     allowsEditingMedia: state.isEditing,
-                    attachments: state.media.map(ComposerMediaItem.local)
-                        + state.serverMedia.map(ComposerMediaItem.server),
+                    allowsCaption: !state.isEditing || !state.media.contains(where: \.isFile),
+                    attachments: state.media,
                     onImportImages: state.onImportImages,
                     onDiscardAttachments: { state.media = [] },
                     stickerLibrary: state.stickerLibrary, onSendSticker: { _ in true },
@@ -1242,7 +1275,7 @@ private struct FocusComposerRoot: View {
 
     private var captionDialog: some View {
         ComposerAttachmentDialog(
-            text: $state.text, attachments: state.media.map(ComposerMediaItem.local), progress: [:],
+            text: $state.text, attachments: state.media, progress: [:],
             compressionEnabled: true, isEnabled: state.enabled, canSend: state.canSend,
             isAcquiring: false, attachmentError: nil,
             onCompositionChanged: { state.composing = $0 },
@@ -1471,7 +1504,8 @@ private final class FocusComposerHarness {
     #else
         @discardableResult
         func pressSendButton() -> Bool {
-            accessibilityElement(named: "Send message")?.accessibilityActivate() ?? false
+            accessibilityElement(named: state.isEditing ? "Save changes" : "Send message")?
+                .accessibilityActivate() ?? false
         }
 
         func accessibilityElement(named label: String) -> NSObject? {

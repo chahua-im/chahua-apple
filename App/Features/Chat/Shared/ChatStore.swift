@@ -161,11 +161,10 @@ final class ChatStore: ObservableObject {
                     muteGroupChatsByDefault: groups, muteDirectChatsByDefault: direct)
             }
             // Pending rows carry the sender captured in their projection.
-            for (key, snapshot) in outgoingQueue.snapshots {
+            for key in outgoingQueue.snapshots.keys {
                 conversationMessages.replacePending(
                     chatID: key.chatID, threadID: key.threadID,
-                    with: pendingProjection(chatID: key.chatID, threadID: key.threadID),
-                    cancelledClientGeneratedIDs: cancelledOutgoingIDs(in: snapshot))
+                    with: pendingProjection(chatID: key.chatID, threadID: key.threadID))
             }
         }
     }
@@ -388,56 +387,25 @@ final class ChatStore: ObservableObject {
     private func applyOutgoingEvent(_ event: OutgoingQueueEvent) {
         switch event {
         case .snapshot(let snapshot):
-            let key = snapshot.conversationKey
-            guard snapshot.revision >= outgoingRevisions[key, default: -1] else { return }
+            guard installOutgoingSnapshot(snapshot) else { return }
             conversationMessages.replacePending(
                 chatID: snapshot.chatID, threadID: snapshot.threadID,
-                with: pendingProjection(chatID: snapshot.chatID, threadID: snapshot.threadID),
-                cancelledClientGeneratedIDs: cancelledOutgoingIDs(in: snapshot))
+                with: pendingProjection(chatID: snapshot.chatID, threadID: snapshot.threadID))
+        case .delivered(let snapshot, let message):
             _ = installOutgoingSnapshot(snapshot)
-        case .delivered(let snapshot, let message), .updated(let snapshot, let message),
-            .deleted(let snapshot, let message):
-            if let snapshot {
-                _ = installOutgoingSnapshot(snapshot)
-            } else {
-                updatePendingListPreview(
-                    for: .init(chatID: message.chatId, threadID: message.replyRootId))
+            let currentUserID = currentUserProfile?.uid ?? message.sender.uid
+            applyMessageCreation(
+                message.normalizedForRealtime(currentUserID: currentUserID),
+                currentUserID: currentUserID,
+                replacingPending: pendingProjection(
+                    chatID: snapshot.chatID, threadID: snapshot.threadID))
+        case .purged(let keys):
+            for key in keys {
+                conversationMessages.replacePending(chatID: key.chatID, threadID: key.threadID, with: [])
             }
-            let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
-            let pending = pendingProjection(chatID: key.chatID, threadID: key.threadID)
-            if case .deleted = event {
-                conversationMessages.replacePending(
-                    chatID: key.chatID, threadID: key.threadID, with: pending)
-                applyMessageDeletion(message)
-                return
-            }
-            // A later local edit/cancellation can win while an earlier server
-            // completion is awaiting its main-actor handoff.
-            let cancelled =
-                outgoingQueue.snapshots[key]?.outgoing.contains {
-                    $0.clientGeneratedID == message.clientGeneratedId && $0.isCancelled
-                } ?? false
-            guard !cancelled,
-                !pending.contains(where: { $0.clientGeneratedID == message.clientGeneratedId })
-            else {
-                conversationMessages.replacePending(
-                    chatID: key.chatID, threadID: key.threadID, with: pending)
-                return
-            }
-            let normalized =
-                currentUserProfile.map {
-                    message.normalizedForRealtime(currentUserID: $0.uid)
-                } ?? message
-            if case .delivered = event {
-                applyMessageCreation(
-                    normalized, currentUserID: currentUserProfile?.uid ?? message.sender.uid,
-                    replacingPending: pending)
-            } else {
-                conversationMessages.replacePending(
-                    chatID: key.chatID, threadID: key.threadID, with: pending,
-                    acknowledging: normalized)
-                applyMessageUpdate(normalized, isNew: true)
-            }
+            drafts.discardAfterSignOutPurge()
+            outgoingRevisions.removeAll()
+            pendingListPreviews.removeAll()
         }
     }
 
@@ -445,6 +413,10 @@ final class ChatStore: ObservableObject {
         _ message: MessageResponse, currentUserID: Int32,
         replacingPending pending: [PendingOutgoingMessage]? = nil
     ) {
+        let message = deletedContentProjection(message) ?? message
+        if message.isDeleted {
+            drafts.redactReplyTargets([message.id], chatID: message.chatId)
+        }
         if let pending {
             conversationMessages.replacePending(
                 chatID: message.chatId, threadID: message.replyRootId,
@@ -452,7 +424,7 @@ final class ChatStore: ObservableObject {
         } else {
             conversationMessages.apply(.message(message))
         }
-        pins.applyRealtimeEvent(.message(message))
+        pins.applyRealtimeEvent(message.isDeleted ? .messageDeleted(message) : .message(message))
         let isOwnMembershipAnnouncement =
             message.replyRootId == nil
             && ((message.systemKind == .memberJoined && message.sender.uid == currentUserID)
@@ -461,10 +433,15 @@ final class ChatStore: ObservableObject {
         if !isOwnMembershipAnnouncement { receivePreview(message, isNew: true) }
     }
 
-    private func applyMessageUpdate(_ message: MessageResponse, isNew: Bool = false) {
+    private func applyMessageUpdate(_ message: MessageResponse) {
+        let message = deletedContentProjection(message) ?? message
+        if message.isDeleted {
+            applyMessageDeletion(message)
+            return
+        }
         conversationMessages.apply(.messageUpdated(message))
         pins.applyRealtimeEvent(.messageUpdated(message))
-        receivePreview(message, isNew: isNew)
+        receivePreview(message, isNew: false)
         if !conversationStateReady(chatID: message.chatId, threadID: message.replyRootId) {
             reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId))
         }
@@ -482,67 +459,39 @@ final class ChatStore: ObservableObject {
         reconcileRow(.init(chatID: message.chatId, threadID: message.replyRootId))
     }
 
-    @discardableResult
+    private func deletedContentProjection(_ message: MessageResponse) -> MessageResponse? {
+        let ids = conversationMessages.deletedMessageIDs(chatID: message.chatId)
+        let redacted =
+            message.isDeleted || ids.contains(message.id) ? message.redactedForDeletion() : nil
+        if let reply = message.replyToMessage {
+            if ids.contains(reply.id) {
+                return (redacted ?? message).redactingReplyPreview(messageIDs: ids)
+            }
+            if reply.isDeleted {
+                return (redacted ?? message).redactingReplyPreview(messageIDs: [reply.id])
+            }
+        }
+        return redacted
+    }
+
+    private func redactingDeletedPreview(_ preview: MessagePreview, chatID: String) -> MessagePreview {
+        let ids = conversationMessages.deletedMessageIDs(chatID: chatID)
+        return preview.isDeleted || ids.contains(preview.id) ? preview.redactedForDeletion() : preview
+    }
+
     private func installOutgoingSnapshot(_ snapshot: LocalConversationSnapshot) -> Bool {
         let key = ConversationKey(chatID: snapshot.chatID, threadID: snapshot.threadID)
         guard snapshot.revision >= outgoingRevisions[key, default: -1] else { return false }
         outgoingRevisions[key] = snapshot.revision
         drafts.install(snapshot)
-        if snapshot.outgoing.contains(where: \.isCancelled) {
-            redactCancelledListPreviews(in: \.chats, chatID: key.chatID)
-            redactCancelledListPreviews(in: \.archivedChats, chatID: key.chatID)
-            redactCancelledListPreviews(in: \.threads, chatID: key.chatID)
-            redactCancelledListPreviews(in: \.archivedThreads, chatID: key.chatID)
-        }
-        updatePendingListPreview(for: key)
+        let preview = outgoingQueue.pendingMessages(chatID: key.chatID, threadID: key.threadID).last
+        if pendingListPreviews[key] != preview { pendingListPreviews[key] = preview }
         return true
     }
 
-    private func updatePendingListPreview(for key: ConversationKey) {
-        pendingListPreviews[key] = outgoingQueue.pendingMessages(
-            chatID: key.chatID, threadID: key.threadID
-        ).max {
-            $0.enqueuedAt == $1.enqueuedAt
-                ? $0.enqueueSequence < $1.enqueueSequence : $0.enqueuedAt < $1.enqueuedAt
-        }
-    }
-
-    private func cancelledOutgoingIDs(in snapshot: LocalConversationSnapshot) -> Set<String> {
-        Set(snapshot.outgoing.lazy.filter(\.isCancelled).map(\.clientGeneratedID))
-    }
-
-    private func redactCancelledListPreviews(
-        in path: WritableKeyPath<ChatState, [ChatListItem]>, chatID: String
-    ) {
-        for index in state[keyPath: path].indices where state[keyPath: path][index].id == chatID {
-            let current = state[keyPath: path][index]
-            let filtered = displayFilteredSnapshot(current)
-            if filtered != current { state[keyPath: path][index] = filtered }
-        }
-    }
-
-    private func redactCancelledListPreviews(
-        in path: WritableKeyPath<ChatState, [ThreadListItem]>, chatID: String
-    ) {
-        for index in state[keyPath: path].indices where state[keyPath: path][index].chatId == chatID
-        {
-            let current = state[keyPath: path][index]
-            let filtered = displayFilteredSnapshot(current)
-            if filtered != current { state[keyPath: path][index] = filtered }
-        }
-    }
-
     private func pendingProjection(chatID: String, threadID: String?) -> [PendingOutgoingMessage] {
-        outgoingQueue.pendingMessages(chatID: chatID, threadID: threadID).sorted {
-            $0.enqueueSequence < $1.enqueueSequence
-        }.map { message in
-            let state: PendingOutgoingMessage.State =
-                switch message.state {
-                case .queued: .queued
-                case .sending: .sending
-                case .failed: .failed
-                }
-            return PendingOutgoingMessage(
+        outgoingQueue.pendingMessages(chatID: chatID, threadID: threadID).map { message in
+            PendingOutgoingMessage(
                 chatID: message.chatID, threadID: message.threadID,
                 clientGeneratedID: message.clientGeneratedID,
                 body: .init(
@@ -554,10 +503,12 @@ final class ChatStore: ObservableObject {
                 sender: currentUserProfile.flatMap {
                     $0.uid == message.senderID ? $0.asSender : nil
                 },
-                state: state, replyToMessage: message.replyToMessage,
-                attachments: message.attachments, dispatchClaimed: message.dispatchClaimed,
-                editRevision: message.editRevision, sticker: message.sticker,
-                forwardRequest: message.forwardRequest, intentAttachments: message.intentAttachments
+                phase: outgoingQueue.phase(of: message),
+                replyToMessage: message.replyToMessage.map {
+                    redactingDeletedPreview($0, chatID: message.chatID)
+                },
+                attachments: message.attachments, sticker: message.sticker,
+                forwardRequest: message.forwardRequest
             )
         }
     }
@@ -1314,7 +1265,6 @@ final class ChatStore: ObservableObject {
     }
 
     private func receivePreview(_ message: MessageResponse, isNew: Bool) {
-        guard !conversationMessages.isCancelledOutgoing(message) else { return }
         let key = ConversationKey(
             chatID: message.chatId, threadID: message.replyRootId?.description)
         if key.threadID == nil, message.systemKind?.isMembership == true,
@@ -1327,11 +1277,14 @@ final class ChatStore: ObservableObject {
         }
         rowRevisions[key, default: 0] += 1
         listStateRevision += 1
+        func replaces(_ preview: MessagePreview?) -> Bool {
+            guard let preview else { return isNew }
+            if preview.id == message.id { return !isNew || message.isDeleted }
+            return isNew && preview.id < message.id
+        }
         if let rootID = key.threadID {
             if let current = thread(chatID: key.chatID, threadID: rootID) {
-                if current.lastReply?.id == message.id
-                    || (isNew && (current.lastReply.map { $0.id < message.id } ?? true))
-                {
+                if replaces(current.lastReply) {
                     install(
                         current.withActivity(
                             lastReply: message.replyPreview, replyCount: current.replyCount,
@@ -1342,16 +1295,16 @@ final class ChatStore: ObservableObject {
             }
         } else {
             if let current = chat(id: key.chatID) {
-                if current.lastMessage?.id == message.id
-                    || (isNew && (current.lastMessage.map { $0.id < message.id } ?? true))
-                {
+                if replaces(current.lastMessage) {
                     install(current.withPreview(message.replyPreview))
                 }
             } else if isNew {
                 reconcileRow(key)
             }
             for item in state.threads + state.archivedThreads
-            where item.chatId == message.chatId && item.threadRootMessage.id == message.id {
+            where item.chatId == message.chatId && item.threadRootMessage.id == message.id
+                && replaces(item.threadRootMessage)
+            {
                 install(item.withActivity(root: message.replyPreview))
             }
         }
@@ -1412,13 +1365,19 @@ final class ChatStore: ObservableObject {
         case .message(let message):
             let requestGeneration = generation
             let normalized = message.normalizedForRealtime(currentUserID: currentUserID)
-            let disposition = await outgoingQueue.acceptAcknowledgement(normalized)
+            let disposition =
+                normalized.isDeleted
+                ? await outgoingQueue.acceptDeletion(normalized)
+                : await outgoingQueue.acceptAcknowledgement(normalized)
             guard generation == requestGeneration, disposition == .unrelated else { return }
             applyMessageCreation(normalized, currentUserID: currentUserID)
         case .messageUpdated(let message):
             let requestGeneration = generation
             let normalized = message.normalizedForRealtime(currentUserID: currentUserID)
-            let disposition = await outgoingQueue.acceptAcknowledgement(normalized)
+            let disposition =
+                normalized.isDeleted
+                ? await outgoingQueue.acceptDeletion(normalized)
+                : await outgoingQueue.acceptAcknowledgement(normalized)
             guard generation == requestGeneration, disposition == .unrelated else { return }
             applyMessageUpdate(normalized)
         case .messageDeleted(let message):
@@ -1437,15 +1396,12 @@ final class ChatStore: ObservableObject {
                         }
                     )))
         case .messagesBulkDeleted(let payload):
-            let requestGeneration = generation
             let ids = Set(payload.messageIds)
-            for snapshot in outgoingQueue.snapshots.values where snapshot.chatID == payload.chatId {
-                for item in snapshot.outgoing {
-                    guard let confirmed = item.confirmedMessage, ids.contains(confirmed.id)
-                    else { continue }
-                    _ = await outgoingQueue.acceptDeletion(confirmed.redactedForDeletion())
-                    guard generation == requestGeneration else { return }
-                }
+            let requestGeneration = generation
+            for audio in outgoingQueue.acknowledgedPendingAudioMessages
+            where audio.chatId == payload.chatId && ids.contains(audio.id) {
+                _ = await outgoingQueue.acceptDeletion(audio)
+                guard generation == requestGeneration else { return }
             }
             drafts.redactReplyTargets(ids, chatID: payload.chatId)
             conversationMessages.apply(event)
@@ -2738,10 +2694,9 @@ final class ChatStore: ObservableObject {
 
     private func displayFilteredSnapshot(_ chat: ChatListItem) -> ChatListItem {
         var chat = membershipPolicies[chat.id].map { chat.withMembershipMessagePolicy($0) } ?? chat
-        if let preview = chat.lastMessage, !preview.isDeleted,
-            conversationMessages.isCancelledOutgoing(preview, chatID: chat.id)
-        {
-            chat = chat.withPreview(preview.redactedForDeletion())
+        if let preview = chat.lastMessage {
+            let redacted = redactingDeletedPreview(preview, chatID: chat.id)
+            if redacted != preview { chat = chat.withPreview(redacted) }
         }
         guard chat.kind == .group, chat.lastMessage?.systemKind?.isMembership == true,
             conversationMessages.hidesMembershipMessages(chatID: chat.id)
@@ -2751,21 +2706,10 @@ final class ChatStore: ObservableObject {
     }
 
     private func displayFilteredSnapshot(_ thread: ThreadListItem) -> ThreadListItem {
-        let root = thread.threadRootMessage
-        let hideRoot =
-            !root.isDeleted
-            && conversationMessages.isCancelledOutgoing(root, chatID: thread.chatId)
-        let reply = thread.lastReply
-        let hideReply =
-            reply.map {
-                !$0.isDeleted
-                    && conversationMessages.isCancelledOutgoing(
-                        $0, chatID: thread.chatId, threadID: root.id.description)
-            } ?? false
-        guard hideRoot || hideReply else { return thread }
-        return thread.withActivity(
-            root: hideRoot ? root.redactedForDeletion() : nil,
-            lastReply: hideReply ? reply?.redactedForDeletion() : nil)
+        let root = redactingDeletedPreview(thread.threadRootMessage, chatID: thread.chatId)
+        let reply = thread.lastReply.map { redactingDeletedPreview($0, chatID: thread.chatId) }
+        guard root != thread.threadRootMessage || reply != thread.lastReply else { return thread }
+        return thread.withActivity(root: root, lastReply: reply)
     }
 
     private func invalidateMembershipVisibility(chatID: String? = nil) {
@@ -3375,20 +3319,14 @@ final class ChatStore: ObservableObject {
                 }
                 let acceptedSettingsRevision = membershipSettingsRevision
                 let acceptedPolicyRevision = membershipPolicyRevisions[chatID, default: 0]
-                var visibleMessages: [MessageResponse]?
+                var suppressedIndices = Set<Int>()
                 for (index, message) in response.messages.enumerated() {
                     let disposition =
                         message.isDeleted
                         ? await outgoingQueue.acceptDeletion(message)
                         : await outgoingQueue.acceptAcknowledgement(message)
                     guard generation == requestGeneration else { throw CancellationError() }
-                    if disposition == .suppress {
-                        if visibleMessages == nil {
-                            visibleMessages = Array(response.messages[..<index])
-                        }
-                    } else {
-                        visibleMessages?.append(message)
-                    }
+                    if disposition == .suppress { suppressedIndices.insert(index) }
                 }
                 if tracksVisibility {
                     guard membershipSettingsRevision == acceptedSettingsRevision,
@@ -3404,6 +3342,16 @@ final class ChatStore: ObservableObject {
                 let hidesMembership =
                     isGroupRoot
                     && conversationMessages.hidesMembershipMessages(chatID: chatID)
+                // A later receipt in this page may redact a reply in an earlier record.
+                var visibleMessages: [MessageResponse]?
+                for (index, message) in response.messages.enumerated() {
+                    let suppressed = suppressedIndices.contains(index)
+                    let projection = suppressed ? nil : deletedContentProjection(message)
+                    if visibleMessages == nil, suppressed || projection != nil {
+                        visibleMessages = Array(response.messages[..<index])
+                    }
+                    if !suppressed { visibleMessages?.append(projection ?? message) }
+                }
                 guard visibleMessages != nil || hidesMembership else { return response }
                 let messages = visibleMessages ?? response.messages
                 return .init(

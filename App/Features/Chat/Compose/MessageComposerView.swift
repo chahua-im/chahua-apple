@@ -25,11 +25,12 @@ struct MessageComposerView: View {
     var editIdentity: String? = nil
     var editMentionNames: [Int32: String] = [:]
     var allowsEditingMedia = false
+    var allowsCaption = true
     var editExitGuard: FormExitGuard? = nil
     var onCancelEdit: (() -> Void)? = nil
     var onEscapeEdit: ((String) -> Void)? = nil
     var onRequestEditLastMessage: (() -> Bool)? = nil
-    var attachments: [ComposerMediaItem] = []
+    var attachments: [LocalOutgoingAttachment] = []
     var attachmentProgress: [String: Double] = [:]
     var compressionEnabled = true
     var onImportImages: (([URL]) async throws -> Void)? = nil
@@ -258,7 +259,7 @@ struct MessageComposerView: View {
                                 presentAttachmentDialog()
                             }
                         }
-                        if !isEditing {
+                        if !isEditing || allowsEditingMedia {
                             Button("Files", systemImage: "folder") {
                                 dismissStickerPicker(restoreFocus: false)
                                 input.settleNativeInput()
@@ -295,10 +296,11 @@ struct MessageComposerView: View {
                 VStack(spacing: 0) {
                     if isEditing {
                         editMarker
-                    } else if let reply = replyToMessage {
+                    }
+                    if let reply = replyToMessage {
                         replyMarker(reply)
                     }
-                    if !voiceRecorder.isActive {
+                    if allowsCaption && !voiceRecorder.isActive {
                         DraftLinkPreviewControls(
                             state: linkPreviews, isEnabled: isEnabled && !isSubmitting,
                             onOpen: openLinkManagement)
@@ -306,7 +308,7 @@ struct MessageComposerView: View {
 
                     if voiceRecorder.isActive {
                         ComposerVoicePanel(recorder: voiceRecorder)
-                    } else {
+                    } else if allowsCaption {
                         HStack(alignment: .bottom, spacing: 0) {
                             messageTextField
                                 .textFieldStyle(.plain)
@@ -426,7 +428,7 @@ struct MessageComposerView: View {
 
                     if !showsVoiceControl {
                         Button(action: submit) {
-                            Image(systemName: "paperplane.fill")
+                            Image(systemName: isEditing ? "checkmark" : "paperplane.fill")
                                 .font(.system(size: 20))
                                 .foregroundStyle(
                                     hasContent && canSubmit ? ChahuaTheme.accent : .secondary
@@ -439,7 +441,7 @@ struct MessageComposerView: View {
                             ChatGlassSurface(
                                 shape: Circle(), isInteractive: hasContent && canSubmit)
                         )
-                        .accessibilityLabel("Send message")
+                        .accessibilityLabel(isEditing ? "Save changes" : "Send message")
                         .modifier(ComposerSendFocus())
                     }
                 }
@@ -533,7 +535,8 @@ struct MessageComposerView: View {
                     try await onDiscardAttachments()
                 },
                 onSearchMembers: onSearchMembers,
-                isEditing: isEditing, allowsCompressionChanges: !isEditing,
+                isEditing: isEditing, allowsCaption: allowsCaption,
+                allowsPhotos: onImportImages != nil,
                 onEscapeEdit: { onEscapeEdit?(attachmentCaption) },
                 editExitGuard: editExitGuard, linkPreviews: linkPreviews
             )
@@ -697,12 +700,12 @@ struct MessageComposerView: View {
             }
         }
         .onChange(of: replyFocusRequest) { _, _ in
-            if isEnabled && !voiceRecorder.isActive { isInputFocused = true }
+            if isEnabled && allowsCaption && !voiceRecorder.isActive { isInputFocused = true }
         }
     }
 
     private func refreshLinkPreviews() {
-        guard isEnabled, let onPreviewLinks else {
+        guard isEnabled, allowsCaption, let onPreviewLinks else {
             linkPreviews.invalidate()
             return
         }
@@ -710,7 +713,7 @@ struct MessageComposerView: View {
             scope: linkPreviewScope,
             text: showsAttachmentDialog && attachmentDialogEditIdentity == editIdentity
                 ? attachmentCaption : text,
-            automatic: !isEditing, choices: linkPreviewChoices.wrappedValue,
+            automatic: !isEditing || allowsEditingMedia, choices: linkPreviewChoices.wrappedValue,
             initial: initialLinkPreviews, fetch: onPreviewLinks,
             saveChoices: { linkPreviewChoices.wrappedValue = $0 })
     }
@@ -764,7 +767,7 @@ struct MessageComposerView: View {
 
     private func takePhoto() {
         #if os(iOS)
-            guard canAcquire else { return }
+            guard canAcquire, onImportImages != nil else { return }
             guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
                 imageError = "This device doesn’t have an available camera."
                 return
@@ -884,7 +887,7 @@ struct MessageComposerView: View {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Cancel reply")
-            .disabled(voiceRecorder.isBusy)
+            .disabled(!isEnabled || isSubmitting || voiceRecorder.isBusy)
             .modifier(ComposerSendFocus())
         }
         .padding(.horizontal, 12)
@@ -894,7 +897,7 @@ struct MessageComposerView: View {
     private var editMarker: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Edit message")
+                Text(allowsEditingMedia ? "Edit queued message" : "Edit message")
                     .font(.system(size: fontSize * 13 / 15, weight: .semibold))
                     .foregroundStyle(ChahuaTheme.accent)
                 Text(initialEditText)
@@ -911,7 +914,7 @@ struct MessageComposerView: View {
             }
             Button {
                 onEscapeEdit?(text)
-                isInputFocused = true
+                if allowsCaption { isInputFocused = true }
             } label: {
                 Image(systemName: "xmark")
                     .foregroundStyle(.secondary)
@@ -989,8 +992,8 @@ struct MessageComposerView: View {
 
     private func submit() {
         guard canSubmit,
-            input.prepareExplicitSubmission(
-                allowEmptyUnfocused: !attachments.isEmpty)
+            !allowsCaption
+                || input.prepareExplicitSubmission(allowEmptyUnfocused: !attachments.isEmpty)
         else { return }
         sendCommittedText()
     }

@@ -14,6 +14,7 @@ struct MessageMetadata {
     let time: String
     let state: ConversationMessageDisplayState?
     let isRead: Bool
+    private let isBlocked: Bool
     let size: CGSize
     private let timeLine: CTLine
     private let textBounds: CGRect
@@ -29,11 +30,13 @@ struct MessageMetadata {
     init(
         time: String, state: ConversationMessageDisplayState?, isOutgoing: Bool,
         isRead: Bool = false, isOverlay: Bool = false, fontSize: CGFloat = Self.defaultFontSize,
-        checkSeparation: CGFloat = MessageDeliveryStatusView.defaultCheckSeparation
+        checkSeparation: CGFloat = MessageDeliveryStatusView.defaultCheckSeparation,
+        isBlocked: Bool = false
     ) {
         self.time = time
         self.state = state
         self.isRead = isRead && state == .delivered
+        self.isBlocked = isBlocked
         statusFontSize = fontSize * 12 / 11
         self.checkSeparation = checkSeparation
         statusSize = MessageDeliveryStatusView.layoutSize(
@@ -81,7 +84,8 @@ struct MessageMetadata {
                 ? " " + AppLanguage.localized("(Edited)") : "")
         self.init(
             time: time, state: row.isOutgoing ? row.entry.displayState : nil,
-            isOutgoing: row.isOutgoing, isRead: row.isRead, isOverlay: isOverlay, fontSize: fontSize
+            isOutgoing: row.isOutgoing, isRead: row.isRead, isOverlay: isOverlay, fontSize: fontSize,
+            isBlocked: row.entry.isOutboxBlocked
         )
     }
 
@@ -94,6 +98,7 @@ struct MessageMetadata {
 
     var status: MessageDeliveryStatusView.Status? {
         switch state {
+        case .preparing: .preparing
         case .queued: .queued
         case .sending: .sending
         case .delivered: isRead ? .read : .sent
@@ -116,7 +121,11 @@ struct MessageMetadata {
         guard let state else { return time }
         let label: String
         switch state {
-        case .queued: label = AppLanguage.localized("Queued")
+        case .preparing: label = AppLanguage.localized("Preparing")
+        case .queued:
+            label = isBlocked
+                ? AppLanguage.localized("Queued behind an earlier message")
+                : AppLanguage.localized("Queued")
         case .sending: label = AppLanguage.localized("Sending")
         case .delivered: label = AppLanguage.localized(isRead ? "Read" : "Sent")
         case .failed: label = AppLanguage.localized("Failed to send")

@@ -14,10 +14,11 @@ func testOutgoingQueue(apiClient: any ChahuaAPIClient) -> OutgoingMessageQueue {
     let storage = TestOutgoingStorage()
     return OutgoingMessageQueue(
         apiClient: apiClient,
-        localStoreFactory: { uid in
+        storage: AccountLocalStoreOwner { uid in
             try await Task.detached {
                 try ChahuaLocalStore(
-                    directory: storage.directory.appendingPathComponent(String(uid)))
+                    directory: storage.directory.appendingPathComponent(String(uid)),
+                    userID: uid)
             }.value
         }, onInvalidToken: {})
 }

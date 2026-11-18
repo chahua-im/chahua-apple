@@ -18,6 +18,21 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
         static let actionIdentifier = "quickReply"
     }
 
+    @MainActor
+    private final class QuickReplyCompletion {
+        private var handler: (@Sendable () -> Void)?
+
+        init(_ handler: @escaping @Sendable () -> Void) {
+            self.handler = handler
+        }
+
+        func finish() {
+            let handler = self.handler
+            self.handler = nil
+            handler?()
+        }
+    }
+
     weak var coordinator: PushNotificationCoordinator? {
         didSet {
             if let token { coordinator?.didRegister(deviceToken: token) }
@@ -25,22 +40,16 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
                 coordinator?.receiveResponse(response)
                 self.response = nil
             }
-            if let quickReply {
-                self.quickReply = nil
-                let handoff = quickReplyHandoff
-                quickReplyHandoff = nil
-                Task { [weak coordinator] in
-                    _ = await coordinator?.receiveQuickReply(
-                        quickReply.route, userText: quickReply.text)
-                    handoff?.resume()
-                }
+            if let coordinator {
+                let handoffs = quickReplyHandoffs
+                quickReplyHandoffs.removeAll()
+                for handoff in handoffs { handoff(coordinator) }
             }
         }
     }
     private var token: Data?
     private var response: PushNotificationRoute?
-    private var quickReply: (route: PushNotificationRoute, text: String)?
-    private var quickReplyHandoff: CheckedContinuation<Void, Never>?
+    private var quickReplyHandoffs: [@MainActor (PushNotificationCoordinator) -> Void] = []
 
     override init() {
         super.init()
@@ -79,42 +88,54 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
         let route = PushNotificationRoute(userInfo: response.notification.request.content.userInfo)
-        let quickReply =
-            response.actionIdentifier == QuickReply.actionIdentifier
-            ? (response as? UNTextInputNotificationResponse).map { (route, $0.userText) }
-            : nil
-        Task { @MainActor in
-            if let quickReply, let route = quickReply.0 {
-                await receiveQuickReply(route, text: quickReply.1)
-            } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier, let route
-            {
-                receive(route)
+        if response.actionIdentifier == QuickReply.actionIdentifier,
+            let text = (response as? UNTextInputNotificationResponse)?.userText, let route
+        {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+            Task { @MainActor in
+                await receiveQuickReply(
+                    route, text: text, deadline: deadline, completionHandler: completionHandler)
             }
-            completionHandler()
+        } else {
+            let isTap = response.actionIdentifier == UNNotificationDefaultActionIdentifier
+            Task { @MainActor in
+                if isTap, let route { receive(route) }
+                completionHandler()
+            }
         }
     }
 
     private func receive(_ route: PushNotificationRoute) {
         if let coordinator { coordinator.receiveResponse(route) } else { response = route }
     }
-    private func receiveQuickReply(_ route: PushNotificationRoute, text: String) async {
+    private func receiveQuickReply(
+        _ route: PushNotificationRoute, text: String, deadline: ContinuousClock.Instant,
+        completionHandler: @escaping @Sendable () -> Void
+    ) async {
         if let coordinator {
-            _ = await coordinator.receiveQuickReply(route, userText: text)
+            await coordinator.receiveQuickReply(route, userText: text, deadline: deadline)
+            completionHandler()
             return
         }
-        await withCheckedContinuation { continuation in
-            quickReply = (route, text)
-            quickReplyHandoff = continuation
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(20))
-                self?.finishQuickReplyHandoff()
+        let completion = QuickReplyCompletion(completionHandler)
+        let timeout = Task { @MainActor in
+            do {
+                try await ContinuousClock().sleep(until: deadline)
+            } catch {
+                return
+            }
+            completion.finish()
+        }
+        // The OS callback can finish before launch is ready, but handing off
+        // the reply later must not grant a fresh background window.
+        quickReplyHandoffs.append { coordinator in
+            timeout.cancel()
+            Task {
+                await coordinator.receiveQuickReply(
+                    route, userText: text, deadline: deadline, receivedBeforeCoordinator: true)
+                completion.finish()
             }
         }
-    }
-
-    private func finishQuickReplyHandoff() {
-        quickReplyHandoff?.resume()
-        quickReplyHandoff = nil
     }
 
     private func registered(_ token: Data) {

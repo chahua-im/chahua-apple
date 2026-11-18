@@ -130,7 +130,7 @@ nonisolated struct OutgoingImageProcessor: Sendable {
             result.height = metadata.height
             result.byteCount = metadata.byteCount
             result.attachmentID = nil
-            result.error = nil
+            result.failure = nil
             try Task.checkCancellation()
             guard compressionEnabled else { return result }
             switch metadata.content {

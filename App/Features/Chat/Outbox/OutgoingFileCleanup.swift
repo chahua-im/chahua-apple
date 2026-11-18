@@ -3,6 +3,25 @@ import Foundation
 /// Unsent media is not a cache. Only files absent from a durable queue snapshot
 /// are eligible, after readers/workers have settled and the handoff grace period.
 nonisolated enum OutgoingFileCleanup {
+    static func purge(directory: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            let account = try OutgoingImageFiles.root(directory)
+            let outbox = account.appendingPathComponent("Outbox", isDirectory: true)
+            let manager = FileManager.default
+            do {
+                let attributes = try manager.attributesOfItem(atPath: outbox.path)
+                guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+                    throw OutgoingImageError.outsideAccountDirectory
+                }
+                try OutgoingImageFiles.checkOutbox(outbox, root: account)
+                try manager.removeItem(at: outbox)
+            } catch let error as CocoaError
+            where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                // A previous attempt may already have removed the directory.
+            }
+        }.value
+    }
+
     static func reclaim(directory: URL, retaining paths: Set<String>, olderThan cutoff: Date)
         async throws
     {

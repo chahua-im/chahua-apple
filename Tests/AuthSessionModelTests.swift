@@ -50,6 +50,58 @@ final class AuthSessionModelTests: XCTestCase {
         XCTAssertNil(preparedUID)
     }
 
+    func testFailedLocalPurgeKeepsAuthenticatedSessionUntilExplicitRetry() async throws {
+        let api = FakeChatAPI()
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(#"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+        await api.setAuthenticatedProfile(profile)
+        let tokenStorage = InMemorySessionTokenStorage(token: "disposable-session")
+        let model = AuthSessionModel(
+            apiClient: api, credentialLoginClient: PrototypeCredentialLoginClient(),
+            tokenStorage: tokenStorage)
+        await restore(model)
+        model.prepareForSignOut = { throw CocoaError(.fileWriteNoPermission) }
+        await model.logout()
+        guard case .authenticated(let retained) = model.state else {
+            return XCTFail("A failed purge must not complete sign-out")
+        }
+        XCTAssertEqual(retained.uid, profile.uid)
+        XCTAssertNotNil(model.signOutError)
+        let retainedToken = await tokenStorage.loadToken()
+        XCTAssertEqual(retainedToken, "disposable-session")
+        var purged = false
+        model.prepareForSignOut = {
+            let token = await tokenStorage.loadToken()
+            XCTAssertEqual(token, "disposable-session")
+            purged = true
+        }
+        await model.logout()
+        guard case .signedOut(.loggedOut) = model.state else {
+            return XCTFail("Successful purge must allow explicit sign-out")
+        }
+        XCTAssertTrue(purged)
+        let removed = await tokenStorage.loadToken()
+        XCTAssertNil(removed)
+    }
+
+    func testExpirationDoesNotInvokeExplicitSignOutCleanup() async throws {
+        let api = FakeChatAPI()
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(#"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+        await api.setAuthenticatedProfile(profile)
+        let model = AuthSessionModel(
+            apiClient: api, credentialLoginClient: PrototypeCredentialLoginClient(),
+            tokenStorage: InMemorySessionTokenStorage(token: "disposable-expiring-session"))
+        model.prepareForSignOut = { XCTFail("Expiration must never purge local work") }
+        await restore(model)
+        await model.sessionDidExpire()
+        guard case .signedOut(.invalidOrRevoked) = model.state else {
+            return XCTFail("Expiration must keep its existing signed-out reason")
+        }
+    }
+
     func testRetryableRestoreFailuresRetainCredentialAndRetryAuthenticates() async throws {
         let failures: [(APIError, AuthStartupFailure)] = [
             (.transport(URLError(.notConnectedToInternet)), .network),

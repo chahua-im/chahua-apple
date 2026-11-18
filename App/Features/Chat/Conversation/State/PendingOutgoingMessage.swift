@@ -1,13 +1,60 @@
 import ChahuaAPI
 import Foundation
 
-struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
-    enum State: String, Codable, Hashable, Sendable {
-        case queued
-        case sending
-        case failed
+enum OutboxPhase: Codable, Hashable, Sendable {
+    case preparing(progress: [String: Double])
+    case queued(blockedBy: String?)
+    case sending
+    case failed(OutboxFailure, nextRetry: Date?)
+
+    var preparationProgress: [String: Double] {
+        if case .preparing(let progress) = self { return progress }
+        return [:]
     }
 
+    var isFailed: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+}
+
+extension OutboxFailure.Reason {
+    var displayDetail: String {
+        switch self {
+        case .unknownOutcome:
+            AppLanguage.localized("Delivery could not be confirmed. The message may already have been sent.")
+        case .network:
+            AppLanguage.localized("A network or server error interrupted this message.")
+        case .conflict:
+            AppLanguage.localized("A message with this ID already exists, but its delivery could not be verified.")
+        case .invalidReceipt:
+            AppLanguage.localized("The server returned a response that did not match this message.")
+        case .authentication:
+            AppLanguage.localized("Sign in again to send this message.")
+        case .rejected:
+            AppLanguage.localized("The server rejected this message.")
+        case .attachment:
+            AppLanguage.localized("An attachment could not be prepared or uploaded.")
+        case .tooLarge(let bytes):
+            AppLanguage.localized(
+                "The attachment exceeds the \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) limit.")
+        case .speakingRestricted(let mode):
+            mode.restrictionExplanation
+        }
+    }
+}
+
+extension LocalOutgoingAttachment {
+    func timelinePreparationStatus(progress: Double?) -> String? {
+        if failure != nil { return AppLanguage.localized("Upload failed") }
+        if let progress, progress > 0, !isUploaded {
+            return progress.formatted(.percent.precision(.fractionLength(0)))
+        }
+        return nil
+    }
+}
+
+struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     let chatID: String
     var threadID: String? = nil
     let clientGeneratedID: String
@@ -16,21 +63,31 @@ struct PendingOutgoingMessage: Codable, Hashable, Identifiable, Sendable {
     let senderID: Int32
     /// The sender as displayed until acknowledgement, so a row never consults the session.
     var sender: User? = nil
-    var state: State
+    var phase: OutboxPhase
     var replyToMessage: MessagePreview? = nil
     var attachments: [LocalOutgoingAttachment] = []
-    var dispatchClaimed = false
-    var editRevision: Int64 = 0
     var sticker: MessageStickerResponse? = nil
     /// Captured forwarding content is immutable, including confirmed replacements.
     var forwardRequest: LocalForwardRequest? = nil
-    var intentAttachments: [LocalEditAttachment]? = nil
 
     var id: String { clientGeneratedID }
     var messageType: MessageType {
         guard let request = forwardRequest else { return body.messageType }
         return request.sources.count == 1 ? request.sources[0].messageType : .forwarded
     }
+
+    var canEdit: Bool {
+        guard forwardRequest == nil, messageType == .text || messageType == .file else {
+            return false
+        }
+        switch phase {
+        case .preparing, .queued: return true
+        case .failed(let failure, _): return failure.stage == .preparation
+        case .sending: return false
+        }
+    }
+
+    var canRemove: Bool { phase != .sending }
 
     /// Display-only projection. Its source ID must never become a destination action target.
     var optimisticMessage: MessageResponse? {
@@ -95,6 +152,7 @@ enum ForwardPlaceholderProjection {
 
 enum ConversationMessageDisplayState: Hashable {
     case delivered
+    case preparing
     case queued
     case sending
     case failed

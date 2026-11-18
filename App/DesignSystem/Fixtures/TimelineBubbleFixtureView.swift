@@ -240,20 +240,26 @@
                     .onChange(of: threadScope) { _, value in fixture.setThreadScope(value) }
                 HStack {
                     Button {
-                        Task { await fixture.queue() }
+                        fixture.queue()
                     } label: {
                         Text(verbatim: "Queue")
                     }
                     .disabled(fixture.hasQueued)
                     Button {
-                        fixture.store.markSending(
-                            chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending")
+                        fixture.setPendingPhase(.preparing(progress: [:]))
+                    } label: {
+                        Text(verbatim: "Prepare")
+                    }
+                    Button {
+                        fixture.setPendingPhase(.sending)
                     } label: {
                         Text(verbatim: "Sending")
                     }
                     Button {
-                        fixture.store.markFailed(
-                            chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending")
+                        fixture.setPendingPhase(
+                            .failed(
+                                .init(stage: .create, reason: .network, retry: .automatic),
+                                nextRetry: nil))
                     } label: {
                         Text(verbatim: "Fail")
                     }
@@ -614,17 +620,28 @@
             } catch { self.error = "Fixture generation failed: \(error)" }
         }
 
-        func queue() async {
+        func queue() {
             guard let timeline, !hasQueued else { return }
             hasQueued = true
-            store.enqueue(
-                .init(
-                    chatID: "bubble-fixtures", clientGeneratedID: "diagnostic-pending",
+            store.replacePending(chatID: "bubble-fixtures", threadID: timeline.threadID, with: [
+                PendingOutgoingMessage(
+                    chatID: "bubble-fixtures", threadID: timeline.threadID,
+                    clientGeneratedID: "diagnostic-pending",
                     body: .init(
                         messageType: .text, clientGeneratedId: "diagnostic-pending",
                         message: "Pending acknowledgement retains row identity"),
-                    enqueuedAt: Date(), senderID: 1, state: .queued))
+                    enqueuedAt: Date(), senderID: 1, phase: .queued(blockedBy: nil))
+            ])
             timeline.revealLatestAfterSend()
+        }
+
+        func setPendingPhase(_ phase: OutboxPhase) {
+            let threadID = timeline?.threadID
+            var pending = store.pending(chatID: "bubble-fixtures", threadID: threadID)
+            guard let index = pending.firstIndex(where: { $0.id == "diagnostic-pending" })
+            else { return }
+            pending[index].phase = phase
+            store.replacePending(chatID: "bubble-fixtures", threadID: threadID, with: pending)
         }
 
         func acknowledge() {
@@ -636,7 +653,11 @@
                 if let threadID = timeline?.threadID { value["replyRootId"] = threadID }
                 let message = try decoder.decode(
                     MessageResponse.self, from: JSONSerialization.data(withJSONObject: value))
-                store.apply(.message(message))
+                store.replacePending(
+                    chatID: message.chatId, threadID: message.replyRootId,
+                    with: store.pending(chatID: message.chatId, threadID: message.replyRootId)
+                        .filter { $0.id != message.clientGeneratedId },
+                    acknowledging: message)
             } catch { self.error = String(describing: error) }
         }
         func setThreadScope(_ enabled: Bool) {

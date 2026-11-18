@@ -325,7 +325,7 @@ struct MessageSummaryText: View {
     ) {
         let summary = MessageSummaryContent.summary(pending)
         nodes = (prefix.isEmpty ? [] : [.strong([.text(prefix)])]) + summary
-        if let sources = pending.forwardRequest?.sources, sources.count == 1 {
+        if let sources = pending.forwardRequest?.sources, sources.count == 1, !sources[0].isDeleted {
             mentions = sources[0].mentions
         } else {
             mentions = []

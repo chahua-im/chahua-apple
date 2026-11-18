@@ -117,7 +117,8 @@ final class SenderHeaderLayoutTests: XCTestCase {
         var pending = PendingOutgoingMessage(
             chatID: "chat", clientGeneratedID: "queued-sender",
             body: .init(messageType: .text, clientGeneratedId: "queued-sender", message: "Hi"),
-            enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1, state: .queued
+            enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1,
+            phase: .queued(blockedBy: nil)
         )
         let environment = TimelineLayoutEnvironment.current(timelineWidth: 600)
         func make(_ entry: ConversationTimelineEntry) -> TimelineRowPresentation {
@@ -164,7 +165,8 @@ final class SenderHeaderLayoutTests: XCTestCase {
         var pending = PendingOutgoingMessage(
             chatID: "chat", clientGeneratedID: "queued-1",
             body: .init(messageType: .text, clientGeneratedId: "queued-1", message: "Hi"),
-            enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1, state: .queued
+            enqueuedAt: TimelineTestFixtures.date(second: 0), senderID: 1,
+            phase: .queued(blockedBy: nil)
         )
         pending.sender = profile.asSender
         let presentation = TimelineRowPresentation.make(

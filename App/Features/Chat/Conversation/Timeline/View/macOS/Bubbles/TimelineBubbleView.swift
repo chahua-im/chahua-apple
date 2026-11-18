@@ -361,13 +361,13 @@
 
         private var failureAction: (() -> Void)? {
             guard let binding, case .message(let row) = binding.presentation.row, row.isOutgoing,
-                case .pending(let pending) = row.entry, pending.state == .failed,
+                case .pending(let pending) = row.entry, pending.phase.isFailed,
                 binding.actions.openFailedMessage != nil
             else { return nil }
             return { [weak self] in
                 guard let binding = self?.binding,
                     case .message(let row) = binding.presentation.row,
-                    row.isOutgoing, case .pending(let pending) = row.entry, pending.state == .failed
+                    row.isOutgoing, case .pending(let pending) = row.entry, pending.phase.isFailed
                 else { return }
                 binding.actions.openFailedMessage?(pending.clientGeneratedID)
             }

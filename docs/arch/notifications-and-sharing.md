@@ -28,7 +28,7 @@ Exception editor verification: open an Always Off exception, select Always On, a
 
 ## System integrations
 
-- iOS and macOS message notifications offer **Reply**. The server must send `aps.category: "chahua"`; the separate routing envelope remains unchanged. Replies target the notification's chat/thread through the account-scoped outbox without consuming the open composer draft.
+- iOS and macOS message notifications offer **Reply**. The server sends `aps.category: "chahua"`; the routing envelope identifies the chat/thread. Replies enter the account-scoped outbox without consuming the open draft. The notification callback only acknowledges a durable handoff. On iOS, an eligible reply may use a finite background task; it never bypasses an earlier item, and an expired action can still leave a pending reply for foreground delivery.
 - On iOS, **Take Photo** is available from the attachment menu and attachment preview menu. Capture returns to the existing media preview for an explicit Send; cancellation preserves the draft. Camera access requires a physical device and permission. macOS retains Photos and Files.
 - The iOS **Chahua** Share extension accepts text, web links, images, and videos in one unified sheet. Its media preview sits above a searchable grid of recent writable chat and thread avatars; the caption and **Send** stay on that screen with a single destination and no push navigation. Content uploads while the destination is being prepared. Sending replaces the card with a gapped activity ring, then a success checkmark before the share flow dismisses. macOS does not ship a Share extension.
 - Failed content acquisition blocks sending rather than silently omitting items. A failed message request retains its destination and idempotency ID for retry.
@@ -38,7 +38,7 @@ The iOS app and extension share the session token through Keychain Sharing, not 
 
 Manual verification:
 
-1. Leave a draft in a chat/thread, reply to its notification while Chahua is backgrounded or cold, and verify delivery to that destination without changing the draft.
+1. Leave a draft in a chat/thread, then reply to its notification while Chahua is backgrounded or cold. The reply may deliver within the background window if it is the eligible head; with an earlier blocked item, it must still be queued on foregrounding. Neither path changes the draft.
 2. Capture a photo from each attachment entry point, then exercise cancellation and denied camera permission; nothing should send before confirmation.
 3. On iOS, from another app, share a link, text, a photo, and a video. Confirm the unified sheet keeps the preview, search/recent destination grid, caption, and Send together; exercise both chat and thread destinations, offline retry, and sign-out/account switching. For images, verify **Compress images** starts on, then toggle it before and during upload; Send must wait for the current setting, and disabling compression must preserve the provider bytes. Include a long screenshot, a transparent PNG and an animated image. Confirm the sent content in the destination and the brief success check before dismissal.
 

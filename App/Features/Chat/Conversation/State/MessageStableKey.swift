@@ -1,23 +1,18 @@
 import ChahuaAPI
 
-/// Stable client-visible identity for one message within a conversation.
-///
-/// A server acknowledgement may replace a provisional server ID, but it retains
-/// the client-generated ID supplied by the sender. Keeping that value as the
-/// row identity prevents the acknowledgement from becoming a delete/insert.
+/// Keep the sender and conversation context with the client ID so that a receipt
+/// retains its pending row's identity without coalescing another sender or topic.
 enum ConversationMessageStableKey: Hashable {
-    case clientGenerated(String)
+    case clientGenerated(String, senderID: Int32, chatID: String, threadID: String?)
     case server(MessageID)
-
-    init(_ message: MessageResponse) {
-        if message.clientGeneratedId.isEmpty {
-            self = .server(message.id)
-        } else {
-            self = .clientGenerated(message.clientGeneratedId)
-        }
-    }
 }
 
 extension MessageResponse {
-    var timelineStableKey: ConversationMessageStableKey { .init(self) }
+    var timelineClientKey: ConversationMessageStableKey? {
+        guard !clientGeneratedId.isEmpty else { return nil }
+        return .clientGenerated(
+            clientGeneratedId, senderID: sender.uid, chatID: chatId, threadID: replyRootId)
+    }
+
+    var timelineStableKey: ConversationMessageStableKey { timelineClientKey ?? .server(id) }
 }

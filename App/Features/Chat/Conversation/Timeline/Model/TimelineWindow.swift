@@ -8,7 +8,7 @@ import ChahuaAPI
 /// does not depend on array positions and is never rebuilt.
 struct TimelineWindow: Equatable {
     private(set) var messages: [MessageResponse] = []
-    private var serverIDByClientID: [String: MessageID] = [:]
+    private var serverIDByClientKey: [ConversationMessageStableKey: MessageID] = [:]
     private(set) var olderCursor: MessageID?
     private(set) var newerCursor: MessageID?
 
@@ -22,8 +22,8 @@ struct TimelineWindow: Equatable {
             guard let index = index(ofServerID: id), messages[index].clientGeneratedId.isEmpty
             else { return nil }
             return index
-        case .clientGenerated(let clientID):
-            return serverIDByClientID[clientID].flatMap(index(ofServerID:))
+        case .clientGenerated:
+            return serverIDByClientKey[stableKey].flatMap(index(ofServerID:))
         }
     }
 
@@ -34,15 +34,14 @@ struct TimelineWindow: Equatable {
 
     func index(matching message: MessageResponse) -> Int? {
         index(ofServerID: message.id)
-            ?? (message.clientGeneratedId.isEmpty
-                ? nil : index(of: .clientGenerated(message.clientGeneratedId)))
+            ?? message.timelineClientKey.flatMap(index(of:))
     }
 
     mutating func replace(
         with page: ListMessagesResponse, accepting: (MessageResponse) -> Bool = { _ in true }
     ) {
         messages = []
-        serverIDByClientID = [:]
+        serverIDByClientKey = [:]
         mergeAuthoritative(page.messages.filter(accepting))
         olderCursor = page.olderCursor
         newerCursor = page.newerCursor
@@ -78,8 +77,8 @@ struct TimelineWindow: Equatable {
     mutating func removeAll(where shouldRemove: (MessageResponse) -> Bool) {
         messages.removeAll { message in
             guard shouldRemove(message) else { return false }
-            if !message.clientGeneratedId.isEmpty {
-                serverIDByClientID.removeValue(forKey: message.clientGeneratedId)
+            if let key = message.timelineClientKey {
+                serverIDByClientKey.removeValue(forKey: key)
             }
             return true
         }
@@ -148,25 +147,24 @@ struct TimelineWindow: Equatable {
     /// Within a page, a later record for the same identity wins.
     private mutating func mergeAuthoritative(_ incoming: [MessageResponse]) {
         var additionsByID: [MessageID: MessageResponse] = [:]
-        var additionIDByClientID: [String: MessageID] = [:]
+        var additionIDByClientKey: [ConversationMessageStableKey: MessageID] = [:]
         for message in incoming {
             if let index = index(matching: message) {
                 replaceRecord(at: index, with: message)
                 continue
             }
-            if !message.clientGeneratedId.isEmpty {
-                if let previous = additionIDByClientID[message.clientGeneratedId],
-                    previous != message.id
-                {
-                    additionsByID.removeValue(forKey: previous)
-                }
-                additionIDByClientID[message.clientGeneratedId] = message.id
-            }
-            if let previous = additionsByID[message.id], !previous.clientGeneratedId.isEmpty,
-                previous.clientGeneratedId != message.clientGeneratedId
+            let clientKey = message.timelineClientKey
+            if let key = clientKey, let previous = additionIDByClientKey[key],
+                previous != message.id
             {
-                additionIDByClientID.removeValue(forKey: previous.clientGeneratedId)
+                additionsByID.removeValue(forKey: previous)
             }
+            if let previousKey = additionsByID[message.id]?.timelineClientKey,
+                previousKey != clientKey
+            {
+                additionIDByClientKey.removeValue(forKey: previousKey)
+            }
+            if let clientKey { additionIDByClientKey[clientKey] = message.id }
             additionsByID[message.id] = message
         }
         guard !additionsByID.isEmpty else { return }
@@ -199,8 +197,8 @@ struct TimelineWindow: Equatable {
 
     /// Server identity wins: another record holding this client identity is dropped.
     private mutating func removeClientIdentityConflict(with message: MessageResponse) {
-        guard !message.clientGeneratedId.isEmpty,
-            let other = serverIDByClientID[message.clientGeneratedId], other != message.id,
+        guard let key = message.timelineClientKey,
+            let other = serverIDByClientKey[key], other != message.id,
             let index = index(ofServerID: other)
         else { return }
         unregister(messages.remove(at: index))
@@ -217,15 +215,15 @@ struct TimelineWindow: Equatable {
     }
 
     private mutating func register(_ message: MessageResponse) {
-        guard !message.clientGeneratedId.isEmpty else { return }
-        serverIDByClientID[message.clientGeneratedId] = message.id
+        guard let key = message.timelineClientKey else { return }
+        serverIDByClientKey[key] = message.id
     }
 
     private mutating func unregister(_ message: MessageResponse) {
-        guard !message.clientGeneratedId.isEmpty,
-            serverIDByClientID[message.clientGeneratedId] == message.id
-        else { return }
-        serverIDByClientID.removeValue(forKey: message.clientGeneratedId)
+        guard let key = message.timelineClientKey, serverIDByClientKey[key] == message.id else {
+            return
+        }
+        serverIDByClientKey.removeValue(forKey: key)
     }
 
     /// First position whose ID is not less than `id`.

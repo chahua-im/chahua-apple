@@ -44,7 +44,8 @@ private struct AttachmentUploadResponse: Decodable {
 extension ChahuaClient {
     public func attachmentConfig() async throws -> AttachmentConfigResponse {
         try await send(
-            HTTPRequestSpec(method: .get, path: ["attachments", "config"]),
+            HTTPRequestSpec(
+                method: .get, path: ["attachments", "config"], capturesRetryAfter: true),
             decoding: AttachmentConfigResponse.self
         )
     }
@@ -60,7 +61,8 @@ extension ChahuaClient {
                     filename: fileName, contentType: contentType, size: size,
                     purpose: purpose.rawValue,
                     width: width, height: height, order: order
-                )),
+                ),
+                capturesRetryAfter: true),
             decoding: AttachmentUploadResponse.self
         )
         return OutgoingUploadAllocation(

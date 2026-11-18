@@ -9,46 +9,53 @@ final class PendingEditSession: ObservableObject, Identifiable {
     let conversationKey: ConversationKey
     let clientGeneratedID: String
     let accountGeneration: UInt64
-    let capturedRevision: Int64
+    let initialReplyToMessage: MessagePreview?
     let initialText: String
-    let initialAttachments: [LocalEditAttachment]
+    let initialAttachments: [LocalOutgoingAttachment]
     let initialMetadata: MessageMetadataInput?
-    @Published private(set) var attachments: [LocalEditAttachment]
+    @Published private(set) var attachments: [LocalOutgoingAttachment]
+    @Published private(set) var replyToMessage: MessagePreview?
+    @Published private(set) var compressionEnabled: Bool
     @Published private(set) var isValid = true
     @Published private(set) var isUploading = false
     @Published private(set) var error: String?
-    private var uploadedSelectionIdentities: [String: String] = [:]
-    private enum SelectionIdentity: Equatable {
-        case local(String)
-        case server(String)
-    }
     private let initialTrimmedText: String
     private let initialDisabledURLs: Set<String>
+    private let initialCompressionEnabled: Bool
 
     init(
-        id: UUID = UUID(), conversationKey: ConversationKey, clientGeneratedID: String,
-        accountGeneration: UInt64, capturedRevision: Int64, initialText: String,
-        initialAttachments: [LocalEditAttachment], initialMetadata: MessageMetadataInput? = nil
+        conversationKey: ConversationKey, clientGeneratedID: String,
+        accountGeneration: UInt64, initialText: String,
+        initialAttachments: [LocalOutgoingAttachment], initialMetadata: MessageMetadataInput?,
+        initialReplyToMessage: MessagePreview?, compressionEnabled: Bool
     ) {
-        self.id = id
+        id = UUID()
         self.conversationKey = conversationKey
         self.clientGeneratedID = clientGeneratedID
         self.accountGeneration = accountGeneration
-        self.capturedRevision = capturedRevision
+        self.initialReplyToMessage = initialReplyToMessage
         self.initialText = initialText
         self.initialAttachments = initialAttachments
         self.initialMetadata = initialMetadata
         initialDisabledURLs = Self.disabledURLs(initialMetadata)
         initialTrimmedText = initialText.trimmingCharacters(in: .whitespacesAndNewlines)
         attachments = initialAttachments
+        replyToMessage = initialReplyToMessage
+        self.compressionEnabled = compressionEnabled
+        initialCompressionEnabled = compressionEnabled
     }
 
     /// A missing payload leaves choices unchanged; an empty payload explicitly clears disables.
     /// Merely discovering enabled URLs in the editor is not a user modification.
+    /// Progress and checkpoints on an existing generation are not editor changes.
     func hasChanges(text: String, metadata: MessageMetadataInput? = nil) -> Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines) != initialTrimmedText
-            || !attachments.lazy.map(selectionIdentity)
-                .elementsEqual(initialAttachments.lazy.map(selectionIdentity))
+            || replyToMessage?.id != initialReplyToMessage?.id
+            || compressionEnabled != initialCompressionEnabled
+            || !attachments.elementsEqual(initialAttachments, by: {
+                $0.id == $1.id && $0.generation == $1.generation
+                    && ($0.failure != nil || $1.failure == nil)
+            })
             || (metadata.map { Self.disabledURLs($0) } ?? initialDisabledURLs)
                 != initialDisabledURLs
     }
@@ -57,48 +64,31 @@ final class PendingEditSession: ObservableObject, Identifiable {
         Set((metadata?.linkPreviews ?? []).lazy.filter { $0.status == .disabled }.map(\.url))
     }
 
-    static func selectionID(_ attachment: LocalEditAttachment) -> String {
-        switch attachment {
-        case .local(let slot): "local:\(slot.id)"
-        case .server(let attachment): "server:\(attachment.id)"
-        }
-    }
-
-    private func selectionIdentity(_ attachment: LocalEditAttachment) -> SelectionIdentity {
-        switch attachment {
-        case .local(let slot): return .local(slot.id)
-        case .server(let server):
-            if let original = uploadedSelectionIdentities[server.id] { return .local(original) }
-            return .server(server.id)
-        }
-    }
-
-    func replaceUploadedSlots(serverAttachments: [AttachmentResponse]) {
-        guard !serverAttachments.isEmpty else { return }
-        let byID = Dictionary(uniqueKeysWithValues: serverAttachments.lazy.map { ($0.id, $0) })
-        var updated = attachments
-        for (index, selection) in attachments.enumerated() {
-            guard case .local(let slot) = selection, let id = slot.attachmentID,
-                let server = byID[id]
-            else { continue }
-            uploadedSelectionIdentities[id] = slot.id
-            updated[index] = .server(server)
-        }
-        replaceAttachments(updated)
-    }
-
-    func replaceAttachments(_ value: [LocalEditAttachment]) {
-        guard attachments != value else { return }
+    func replaceAttachments(_ value: [LocalOutgoingAttachment]) {
+        guard isValid, attachments != value else { return }
         attachments = value
     }
+
+    func setReplyToMessage(_ value: MessagePreview?) {
+        guard isValid, replyToMessage != value else { return }
+        replyToMessage = value
+    }
+
+    func setCompressionEnabled(_ value: Bool) {
+        guard isValid, compressionEnabled != value else { return }
+        compressionEnabled = value
+    }
+
     func setUploading(_ value: Bool) {
         guard isUploading != value else { return }
         isUploading = value
     }
+
     func setError(_ value: String?) {
         guard error != value else { return }
         error = value
     }
+
     func invalidate() {
         guard isValid else { return }
         isValid = false

@@ -3,10 +3,16 @@ import GRDB
 
 public final class ChahuaLocalStore: Sendable {
     public let directory: URL
+    public let userID: Int32
+    private let accountRoot: URL
     private let database: DatabaseQueue
 
-    public init(directory: URL) throws {
+    // Accessed only on the database writer, and advanced only after commit.
+    private nonisolated(unsafe) var stamps: [ConversationKey: Stamp] = [:]
+
+    public init(directory: URL, userID: Int32) throws {
         self.directory = directory.standardizedFileURL
+        self.userID = userID
         let manager = FileManager.default
         try manager.createDirectory(
             at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
@@ -16,6 +22,7 @@ public final class ChahuaLocalStore: Sendable {
                 [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
                 ofItemAtPath: directory.path)
         #endif
+        accountRoot = directory.resolvingSymlinksInPath().standardizedFileURL
         let path = directory.appendingPathComponent("chat.sqlite").path
         database = try DatabaseQueue(path: path)
         try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
@@ -23,50 +30,34 @@ public final class ChahuaLocalStore: Sendable {
     }
 
     public func restore() async throws -> [LocalConversationSnapshot] {
-        try await database.write { db in
-            let keys = try Row.fetchAll(
-                db,
-                sql: "SELECT chat_id, thread_id FROM local_conversation ORDER BY chat_id, thread_id"
-            )
-            .map(Self.key)
-            for key in keys {
-                let froze = try Self.freezeLegacyClaims(db, key, directory: self.directory)
+        let failure = OutboxFailure(stage: .create, reason: .unknownOutcome, retry: .automatic)
+        return try await database.write { db in
+            let interrupted = try Row.fetchAll(
+                db, sql: "SELECT chat_id, thread_id FROM outgoing_message WHERE state = 'sending'"
+            ).map(Self.key)
+            if !interrupted.isEmpty {
                 try db.execute(
-                    sql: """
-                        UPDATE outgoing_message SET state = 'queued',
-                            dispatch_claimed = CASE WHEN state = 'sending' THEN 1 ELSE dispatch_claimed END
-                        WHERE chat_id = ? AND thread_id = ?
-                        AND (state = 'sending' OR (state = 'failed' AND mutation_retryable = 1))
-                        """,
-                    arguments: [key.chatID, key.threadID ?? ""])
-                if db.changesCount > 0 || froze { try Self.bump(db, key) }
+                    sql: "UPDATE outgoing_message SET state = 'failed', failure = ? WHERE state = 'sending'",
+                    arguments: [try JSONEncoder().encode(failure)])
             }
-            return try keys.map { try Self.snapshot(db, $0, directory: self.directory) }
+            let changed = Dictionary(uniqueKeysWithValues: interrupted.map { key in
+                var stamp = self.stamps[key, default: Stamp()]
+                stamp.revision += 1
+                return (key, stamp)
+            })
+            let snapshots = try Self.keys(db).map { key in
+                try self.snapshot(db, key, changed[key] ?? self.stamps[key, default: Stamp()])
+            }
+            if !changed.isEmpty {
+                db.afterNextTransaction { _ in self.stamps.merge(changed) { _, new in new } }
+            }
+            return snapshots
         }
     }
 
-    public func beginComposition(chatID: String, threadID: String? = nil, senderID: Int32)
-        async throws -> LocalConversationSnapshot
-    {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            if let item = before.composingItem {
-                if item.senderID != senderID {
-                    try db.execute(
-                        sql:
-                            "UPDATE outgoing_message SET sender_id = ? WHERE client_generated_id = ?",
-                        arguments: [senderID, item.clientGeneratedID])
-                    try Self.bump(db, key)
-                }
-            } else {
-                try Self.insert(
-                    db, key, id: UUID().uuidString, senderID: senderID, text: "", replyData: nil,
-                    date: Date(), revision: before.draft.editRevision, blocked: true)
-                try Self.bump(db, key)
-            }
-            return try Self.snapshot(db, key, directory: self.directory)
+    public func load() async throws -> [LocalConversationSnapshot] {
+        try await database.read { db in
+            try Self.keys(db).map { try self.snapshot(db, $0, self.stamps[$0, default: Stamp()]) }
         }
     }
 
@@ -74,132 +65,78 @@ public final class ChahuaLocalStore: Sendable {
         chatID: String, threadID: String? = nil, text: String, editRevision: Int64, updatedAt: Date,
         replyToMessage: MessagePreview? = nil, linkPreviews: [LinkPreviewInput] = []
     ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
-        let metadataData =
-            try linkPreviews.isEmpty
-            ? nil
-            : JSONEncoder().encode(MessageMetadataInput(linkPreviews: linkPreviews))
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard editRevision > before.draft.editRevision else { return before }
-            if let item = before.composingItem {
-                try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET text = ?, reply_to_message = ?, metadata = ?, edit_revision = ?, updated_at = ? WHERE client_generated_id = ?",
-                    arguments: [
-                        text, replyData, metadataData, editRevision,
-                        updatedAt.timeIntervalSince1970,
-                        item.clientGeneratedID,
-                    ])
-            } else if !text.isEmpty || replyData != nil || metadataData != nil {
-                try Self.insert(
-                    db, key, id: UUID().uuidString, senderID: 0, text: text, replyData: replyData,
-                    date: updatedAt, revision: editRevision, blocked: true,
-                    metadataData: metadataData)
-            }
-            try Self.writeRevision(db, key, editRevision, updatedAt)
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+        try await update(ConversationKey(chatID: chatID, threadID: threadID)) { db, key, stamp in
+            guard editRevision > stamp.draftRevision else { return .unchanged }
+            var draft = try self.readDraft(db, key)
+            draft.text = text
+            draft.reply = replyToMessage
+            draft.metadata = linkPreviews.isEmpty ? nil : MessageMetadataInput(linkPreviews: linkPreviews)
+            try self.writeDraft(db, key, draft, date: updatedAt)
+            return .draft(editRevision, updatedAt)
+        }.snapshot
     }
 
-    /// Releases the existing composition in place, or creates an already-released text item.
-    /// The supplied identity is used only when there is no blocked tail.
     public func enqueueText(
-        chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,
-        text: String, enqueuedAt: Date, clearedDraftRevision: Int64,
-        replyToMessage: MessagePreview? = nil, metadata: MessageMetadataInput? = nil
+        chatID: String, threadID: String? = nil, clientGeneratedID: String, text: String,
+        enqueuedAt: Date, clearedDraftRevision: Int64, replyToMessage: MessagePreview? = nil,
+        metadata: MessageMetadataInput? = nil
     ) async throws -> LocalConversationSnapshot {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            let metadataData = try (metadata ?? before.composingItem?.metadata).map {
-                try JSONEncoder().encode($0)
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await update(ConversationKey(chatID: chatID, threadID: threadID)) { db, key, stamp in
+            guard clearedDraftRevision > stamp.draftRevision else { throw LocalStorageError.staleDraft }
+            var draft = try self.readDraft(db, key)
+            guard !text.isEmpty || !draft.attachments.isEmpty else { throw LocalStorageError.blankMessage }
+            let isFile = draft.attachments.contains(where: \.isFile)
+            draft.text = isFile ? "" : text
+            draft.reply = replyToMessage
+            draft.metadata = isFile ? nil : metadata
+            let failure = draft.attachments.lazy.compactMap(\.failure).first.map(Self.preparationFailure)
+            try self.insert(db, key, id: clientGeneratedID, draft, date: enqueuedAt, failure: failure)
+            // File payloads cannot carry a caption. Append it in the same transaction.
+            if isFile, !text.isEmpty {
+                try self.insert(
+                    db, key, id: UUID().uuidString, Content(text: text, metadata: metadata), date: enqueuedAt)
             }
-            guard clearedDraftRevision > before.draft.editRevision else {
-                throw LocalStorageError.staleDraft
-            }
-            guard !trimmed.isEmpty || before.composingItem?.attachments.isEmpty == false else {
-                throw LocalStorageError.blankMessage
-            }
-            if let item = before.composingItem {
-                try Self.validateAttachments(item.attachments, directory: self.directory)
-                // Draft creation time is not send time: optimistic timeline ordering
-                // and sender grouping must agree with the eventual acknowledgement.
-                try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET sender_id = ?, text = ?, reply_to_message = ?, metadata = ?, is_blocked = 0, edit_revision = ?, enqueued_at = ?, updated_at = ? WHERE client_generated_id = ?",
-                    arguments: [
-                        senderID, item.attachments.contains(where: \.isFile) ? "" : trimmed,
-                        replyData, item.attachments.contains(where: \.isFile) ? nil : metadataData,
-                        clearedDraftRevision,
-                        enqueuedAt.timeIntervalSince1970, enqueuedAt.timeIntervalSince1970,
-                        item.clientGeneratedID,
-                    ])
-                // File messages cannot carry text on the wire. Keep the entered caption as
-                // an adjacent durable text message rather than silently dropping the draft.
-                if item.attachments.contains(where: \.isFile), !trimmed.isEmpty {
-                    try Self.insert(
-                        db, key, id: UUID().uuidString, senderID: senderID, text: trimmed,
-                        replyData: nil, date: enqueuedAt, revision: clearedDraftRevision,
-                        blocked: false, metadataData: metadataData)
-                }
-            } else {
-                try Self.insert(
-                    db, key, id: clientGeneratedID, senderID: senderID, text: trimmed,
-                    replyData: replyData, date: enqueuedAt, revision: clearedDraftRevision,
-                    blocked: false, metadataData: metadataData)
-            }
-            try Self.writeRevision(db, key, clearedDraftRevision, enqueuedAt)
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+            try db.execute(
+                sql: "DELETE FROM draft WHERE chat_id = ? AND thread_id = ?", arguments: Self.arguments(key))
+            return .draft(clearedDraftRevision, enqueuedAt)
+        }.snapshot
     }
 
-    /// Queues text without consuming an in-progress composition for the conversation.
     public func enqueueIndependentText(
-        chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,
-        text: String, enqueuedAt: Date
+        chatID: String, threadID: String? = nil, clientGeneratedID: String, text: String, enqueuedAt: Date
     ) async throws -> LocalConversationSnapshot {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw LocalStorageError.blankMessage }
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            try Self.insert(
-                db, key, id: clientGeneratedID, senderID: senderID, text: trimmed, replyData: nil,
-                date: enqueuedAt, revision: 0, blocked: false)
-            if let composition = before.composingItem {
-                // Keep the unsent composition last, after the independently queued item.
-                // Its identity, content, upload checkpoints and draft revision stay intact.
-                let sequence = try Int64.fetchOne(
-                    db,
-                    sql:
-                        "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])!
-                try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET enqueue_sequence = ?, dispatch_order = ? WHERE client_generated_id = ?",
-                    arguments: [sequence, sequence, composition.clientGeneratedID])
-                try db.execute(
-                    sql:
-                        "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])
-            }
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw LocalStorageError.blankMessage }
+        return try await enqueue(
+            ConversationKey(chatID: chatID, threadID: threadID), id: clientGeneratedID,
+            Content(text: text), date: enqueuedAt)
     }
 
-    /// Captures an independent immutable forwarding request without consuming the destination draft.
+    public func enqueueSticker(
+        chatID: String, threadID: String? = nil, clientGeneratedID: String,
+        sticker: MessageStickerResponse, enqueuedAt: Date, replyToMessage: MessagePreview? = nil
+    ) async throws -> LocalConversationSnapshot {
+        try await enqueue(
+            ConversationKey(chatID: chatID, threadID: threadID), id: clientGeneratedID,
+            Content(reply: replyToMessage, sticker: sticker), date: enqueuedAt)
+    }
+
+    public func enqueueVoice(
+        chatID: String, threadID: String? = nil, clientGeneratedID: String,
+        attachment: LocalOutgoingAttachment, enqueuedAt: Date, replyToMessage: MessagePreview? = nil
+    ) async throws -> LocalConversationSnapshot {
+        guard attachment.isAudio, !attachment.isUploaded, attachment.failure == nil else {
+            throw LocalStorageError.invalidAttachments
+        }
+        try validateAttachments([attachment], requireSource: true)
+        return try await enqueue(
+            ConversationKey(chatID: chatID, threadID: threadID), id: clientGeneratedID,
+            Content(reply: replyToMessage, attachments: [attachment], compressionEnabled: false), date: enqueuedAt)
+    }
+
     public func enqueueForward(
-        chatID: String, threadID: String? = nil, senderID: Int32, request: LocalForwardRequest
+        chatID: String, threadID: String? = nil, request: LocalForwardRequest
     ) async throws -> LocalConversationSnapshot {
         guard !request.sources.isEmpty, request.sources.count <= 100,
             Set(request.messageIDs).count == request.sources.count,
@@ -208,835 +145,347 @@ public final class ChahuaLocalStore: Sendable {
                     && $0.messageType != .system && $0.messageType != .invite
             })
         else { throw LocalStorageError.unsupportedMessageType }
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let id = UUID().uuidString
-        let date = Date()
-        let data = try JSONEncoder().encode(request)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            try Self.insert(
-                db, key, id: id, senderID: senderID, text: "", replyData: nil,
-                date: date, revision: 0, blocked: false)
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET forward_request = ? WHERE client_generated_id = ?",
-                arguments: [data, id])
-            if let composition = before.composingItem {
-                // Forwarding is independent: preserve every draft field and keep it as the tail.
-                let sequence = try Int64.fetchOne(
-                    db,
-                    sql:
-                        "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])!
-                try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET enqueue_sequence = ?, dispatch_order = ? WHERE client_generated_id = ?",
-                    arguments: [sequence, sequence, composition.clientGeneratedID])
-                try db.execute(
-                    sql:
-                        "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])
-            }
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+        return try await enqueue(
+            ConversationKey(chatID: chatID, threadID: threadID), id: UUID().uuidString,
+            Content(forward: request), date: Date())
     }
 
-    /// Sends independently of the blocked composition without consuming its draft.
-    public func enqueueSticker(
-        chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,
-        sticker: MessageStickerResponse, enqueuedAt: Date, replyToMessage: MessagePreview? = nil
+    public func setDraftAttachments(
+        key: ConversationKey, attachments: [LocalOutgoingAttachment], compressionEnabled: Bool
     ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
-        let stickerData = try JSONEncoder().encode(sticker)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            try Self.insert(
-                db, key, id: clientGeneratedID, senderID: senderID, text: "", replyData: replyData,
-                date: enqueuedAt, revision: 0, blocked: false)
-            try db.execute(
-                sql: "UPDATE outgoing_message SET sticker = ? WHERE client_generated_id = ?",
-                arguments: [stickerData, clientGeneratedID])
-            if let composition = before.composingItem {
-                // Keep the unsent composition last, after the new released item.
-                // Its identity, content, upload checkpoints and draft revision stay intact.
-                let sequence = try Int64.fetchOne(
-                    db,
-                    sql:
-                        "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])!
-                try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET enqueue_sequence = ?, dispatch_order = ? WHERE client_generated_id = ?",
-                    arguments: [sequence, sequence, composition.clientGeneratedID])
-                try db.execute(
-                    sql:
-                        "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])
-            }
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
-    }
-
-    /// Voice is a released single attachment; it never takes ownership of a text/media draft.
-    public func enqueueVoice(
-        chatID: String, threadID: String? = nil, senderID: Int32, clientGeneratedID: String,
-        attachment: LocalOutgoingAttachment, enqueuedAt: Date, replyToMessage: MessagePreview? = nil
-    ) async throws -> LocalConversationSnapshot {
-        guard attachment.isAudio, attachment.attachmentID == nil, attachment.error == nil else {
-            throw LocalStorageError.invalidAttachments
-        }
-        try Self.validateAttachments([attachment], directory: directory)
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let replyData = try replyToMessage.map { try JSONEncoder().encode($0) }
-        let attachmentData = try Self.encodeAttachments([attachment], directory: directory)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            try Self.insert(
-                db, key, id: clientGeneratedID, senderID: senderID, text: "", replyData: replyData,
-                date: enqueuedAt, revision: 0, blocked: false)
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET attachments = ?, compression_enabled = 0 WHERE client_generated_id = ?",
-                arguments: [attachmentData, clientGeneratedID])
-            if let composition = before.composingItem {
-                let sequence = try Int64.fetchOne(
-                    db,
-                    sql:
-                        "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])!
-                try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET enqueue_sequence = ?, dispatch_order = ? WHERE client_generated_id = ?",
-                    arguments: [sequence, sequence, composition.clientGeneratedID])
-                try db.execute(
-                    sql:
-                        "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?",
-                    arguments: [chatID, threadID ?? ""])
-            }
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
-    }
-
-    public func setCompositionAttachments(
-        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64,
-        attachments: [LocalOutgoingAttachment], compressionEnabled: Bool
-    ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            let item = try Self.editableTail(
-                before, itemID: itemID, expectedRevision: expectedRevision)
-            guard item.isBlocked else { throw LocalStorageError.notTail }
-            guard item.forwardRequest == nil,
-                item.messageType == .text || item.messageType == .file,
-                !attachments.contains(where: \.isAudio)
-            else {
-                throw LocalStorageError.unsupportedMessageType
-            }
-            guard attachments.count <= 20, Set(attachments.map(\.id)).count == attachments.count
-            else { throw LocalStorageError.invalidAttachments }
-            let existing = Dictionary(uniqueKeysWithValues: item.attachments.map { ($0.id, $0) })
-            let optionsChanged = item.compressionEnabled != compressionEnabled
-            let updated = try attachments.enumerated().map { position, proposed in
-                var slot = proposed
-                let old = existing[proposed.id]
-                let sourceChanged = old.map { $0.sourcePath != proposed.sourcePath } ?? false
-                if let old {
-                    guard proposed.generation == old.generation else {
-                        throw LocalStorageError.staleDraft
-                    }
-                    // A caller's snapshot can predate a completed worker checkpoint.
-                    if !sourceChanged { slot = old }
-                }
-                // Position is composition state, not part of the uploaded content generation.
-                if sourceChanged || (optionsChanged && !slot.isFile) {
-                    slot.generation = UUID().uuidString
-                    slot.attachmentID = nil
-                    slot.error = nil
-                    slot.preparedPath = slot.isFile ? slot.sourcePath : nil
-                }
-                slot.position = position
-                return slot
-            }
-            try Self.validateAttachments(updated, directory: self.directory)
-            guard updated != item.attachments || compressionEnabled != item.compressionEnabled
-            else { return before }
-            let revision = item.editRevision + 1
-            let date = Date()
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET attachments = ?, compression_enabled = ?, edit_revision = ?, updated_at = ? WHERE client_generated_id = ?",
-                arguments: [
-                    try Self.encodeAttachments(updated, directory: self.directory),
-                    compressionEnabled, revision, date.timeIntervalSince1970, itemID,
-                ])
-            try Self.writeRevision(db, key, revision, date)
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+        try await update(key) { db, key, _ in
+            var draft = try self.readDraft(db, key)
+            let updated = try self.mergeSelection(
+                attachments, with: draft.attachments,
+                compressionChanged: draft.compressionEnabled != compressionEnabled)
+            guard !draft.isEmptyDraft || !updated.isEmpty,
+                updated != draft.attachments || compressionEnabled != draft.compressionEnabled
+            else { return .unchanged }
+            draft.attachments = updated
+            draft.compressionEnabled = compressionEnabled
+            try self.writeDraft(db, key, draft, date: Date())
+            return .changed
+        }.snapshot
     }
 
     public func checkpointAttachment(
-        chatID: String, threadID: String? = nil, itemID: String, attachment: LocalOutgoingAttachment
+        key: ConversationKey, itemID: String?, attachment: LocalOutgoingAttachment,
+        failure: OutboxFailure? = nil
     ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard
-                let item = (before.outgoing + [before.composingItem].compactMap { $0 })
-                    .first(where: { $0.clientGeneratedID == itemID }), !item.isCancelled
-            else { return before }
-            var originals = item.attachments
-            var intent = item.intentAttachments
-            var changed = false
-            // Checkpoints belong to a slot generation, never to a captured position or revision.
-            // The frozen create is intentionally not touched, even when its local slot is borrowed.
-            let belongsToIntent =
-                intent.map { selection in
-                    selection.contains {
-                        if case .local(let slot) = $0 {
-                            return slot.id == attachment.id
-                                && slot.generation == attachment.generation
-                        }
-                        return false
-                    }
-                } ?? true
-            if belongsToIntent,
-                let index = originals.firstIndex(where: {
-                    $0.id == attachment.id && $0.generation == attachment.generation
-                }), let merged = try Self.mergeCheckpoint(attachment, into: originals[index])
-            {
-                originals[index] = merged
-                changed = true
+        precondition(failure == nil || failure?.stage == .preparation)
+        var checkpoint = attachment
+        if let failure { checkpoint.failure = failure.reason }
+        let slot = checkpoint
+        return try await update(key) { db, key, _ in
+            if itemID == nil, let row = try Self.draftRow(db, key) {
+                var draft = try self.decode(row)
+                if let index = Self.slotIndex(slot, in: draft) {
+                    guard try Self.mergeCheckpoint(slot, into: &draft.attachments[index])
+                    else { return .unchanged }
+                    try self.validateAttachments(draft.attachments)
+                    try self.writeDraft(db, key, draft, date: Date(timeIntervalSince1970: row["updated_at"]))
+                    return .changed
+                }
             }
-            if var selection = intent,
-                let index = selection.firstIndex(where: {
-                    if case .local(let slot) = $0 {
-                        return slot.id == attachment.id && slot.generation == attachment.generation
-                    }
-                    return false
-                }), case .local(let old) = selection[index],
-                let merged = try Self.mergeCheckpoint(attachment, into: old)
-            {
-                selection[index] = .local(merged)
-                intent = selection
-                changed = true
+            // A job started on the draft may finish after submit moved the slot.
+            for row in try Self.outgoingRows(db, key, itemID: itemID) {
+                let state: String = row["state"]
+                guard state != "sending" else { continue }
+                let oldFailure = try Self.failure(row)
+                guard oldFailure?.stage != .create else { continue }
+                var content = try self.decode(row)
+                guard let index = Self.slotIndex(slot, in: content) else { continue }
+                guard try Self.mergeCheckpoint(slot, into: &content.attachments[index])
+                else { return .unchanged }
+                try self.validateAttachments(content.attachments)
+                let rowFailure = oldFailure ?? failure ?? slot.failure.map(Self.preparationFailure)
+                try self.writeContent(db, id: row["client_generated_id"], content, failure: rowFailure)
+                return .changed
             }
-            guard changed else { return before }
-            try Self.validateAttachments(originals, directory: self.directory, requireSource: false)
-            if let intent {
-                try Self.validateEditAttachments(
-                    intent, directory: self.directory, requireSource: false)
-            }
-            let state =
-                !item.isBlocked && (item.messageType == .audio || item.messageType == .file)
-                    && attachment.error != nil && item.confirmedMessage == nil
-                ? LocalOutgoingMessage.State.failed : item.state
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET attachments = ?, intent_attachments = ?, state = ? WHERE client_generated_id = ?",
-                arguments: [
-                    try Self.encodeAttachments(originals, directory: self.directory),
-                    try intent.map {
-                        try Self.encodeEditAttachments($0, directory: self.directory)
-                    },
-                    state.rawValue, itemID,
-                ])
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+            return .unchanged
+        }.snapshot
     }
 
     public func editOutgoing(
-        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64,
-        text: String, attachments: [LocalEditAttachment], metadata: MessageMetadataInput? = nil
+        key: ConversationKey, itemID: String, text: String, replyToMessage: MessagePreview?,
+        attachments: [LocalOutgoingAttachment], compressionEnabled: Bool, metadata: MessageMetadataInput? = nil
     ) async throws -> LocalConversationSnapshot {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try await update(key) { db, key, _ in
+            guard let row = try Self.outgoingRow(db, key, id: itemID) else {
+                throw LocalStorageError.missingOutgoing
+            }
+            let old = try self.message(row, key)
+            guard old.isEditable else { throw LocalStorageError.outgoingNotEditable }
+            guard !text.isEmpty || !attachments.isEmpty else { throw LocalStorageError.blankMessage }
+            let isFile = attachments.contains(where: \.isFile)
+            guard !isFile || text.isEmpty else { throw LocalStorageError.unsupportedMessageType }
+            var updated = try self.mergeSelection(
+                attachments, with: old.attachments, compressionChanged: compressionEnabled != old.compressionEnabled)
+            for i in updated.indices { updated[i].failure = nil }
+            let content = Content(
+                text: text, reply: replyToMessage, attachments: updated, compressionEnabled: compressionEnabled,
+                metadata: isFile ? nil : metadata)
+            try self.writeContent(db, id: itemID, content, failure: nil)
+            return .changed
+        }.snapshot
+    }
+
+    public func removeOutgoing(key: ConversationKey, itemID: String) async throws -> LocalConversationSnapshot {
+        try await update(key) { db, key, _ in
+            guard let row = try Self.outgoingRow(db, key, id: itemID) else { return .unchanged }
+            guard (row["state"] as String) != "sending" else { throw LocalStorageError.outgoingSending }
+            try Self.delete(db, id: itemID)
+            return .changed
+        }.snapshot
+    }
+
+    public func claimNext(
+        chatID: String, threadID: String? = nil, expectedID: String, retryCreate: Bool = false
+    ) async throws -> LocalOutgoingClaim {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            _ = try Self.freezeLegacyClaims(db, key, directory: self.directory)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            let item = try Self.releasedItem(
-                before, itemID: itemID, expectedRevision: expectedRevision)
-            guard item.forwardRequest == nil, item.messageType == .text else {
-                throw LocalStorageError.unsupportedMessageType
-            }
-            guard !trimmed.isEmpty || !attachments.isEmpty else {
-                throw LocalStorageError.blankMessage
-            }
-            let existing =
-                (item.intentAttachments ?? item.attachments.map(LocalEditAttachment.local))
-                .compactMap { selection -> LocalOutgoingAttachment? in
-                    if case .local(let slot) = selection { return slot }
-                    return nil
-                }
-            let knownServer = Set(
-                (item.confirmedMessage?.attachments ?? [])
-                    + (item.intentAttachments ?? []).compactMap {
-                        if case .server(let attachment) = $0 { return attachment }
-                        return nil
-                    })
-            let selection = try attachments.enumerated().map { position, proposed in
-                switch proposed {
-                case .local(var slot):
-                    if let old = existing.first(where: { $0.id == slot.id }) {
-                        guard old.generation == slot.generation,
-                            old.sourcePath == slot.sourcePath, old.previewPath == slot.previewPath
-                        else { throw LocalStorageError.staleDraft }
-                        slot = old
-                    }
-                    slot.position = position
-                    return LocalEditAttachment.local(slot)
-                case .server(let attachment):
-                    guard knownServer.contains(attachment) else {
-                        throw LocalStorageError.invalidAttachments
-                    }
-                    return .server(attachment)
-                }
-            }
-            try Self.validateEditAttachments(selection, directory: self.directory)
-            // A failed, already-claimed PATCH must replay before the newly submitted intent.
-            let state: LocalOutgoingMessage.State =
-                item.confirmedMessage == nil && item.dispatchClaimed && item.state == .sending
-                ? .sending : .queued
+        // The caller serializes this transaction with acquisition/release of editor holds.
+        let (snapshot, changed) = try await update(key) { db, key, _ in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? ORDER BY position LIMIT 1",
+                arguments: Self.arguments(key)),
+                (row["client_generated_id"] as String) == expectedID
+            else { return .unchanged }
+            let head = try self.message(row, key)
+            guard head.isReadyForDispatch,
+                head.state == .pending || (retryCreate && head.failure?.stage == .create)
+            else { return .unchanged }
+            try db.execute(
+                sql: "UPDATE outgoing_message SET state = 'sending', failure = NULL WHERE client_generated_id = ?",
+                arguments: [expectedID])
+            return .changed
+        }
+        return LocalOutgoingClaim(snapshot: snapshot, message: changed ? snapshot.outgoing.first : nil)
+    }
+
+    /// Revert a claim only when the queue can prove it never entered the transport.
+    public func releaseUnsentClaim(key: ConversationKey, itemID: String, priorFailure: OutboxFailure?)
+        async throws -> LocalConversationSnapshot
+    {
+        try await update(key) { db, key, _ in
             try db.execute(
                 sql: """
-                    UPDATE outgoing_message SET text = ?, intent_attachments = ?, metadata = ?, edit_revision = ?,
-                        state = ?, mutation_retryable = 0, speaking_restriction = NULL, updated_at = ?
-                    WHERE client_generated_id = ?
+                    UPDATE outgoing_message SET state = ?, failure = ?
+                    WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND state = 'sending'
                     """,
                 arguments: [
-                    trimmed, try Self.encodeEditAttachments(selection, directory: self.directory),
-                    try (metadata ?? item.metadata).map { try JSONEncoder().encode($0) },
-                    item.editRevision + 1, state.rawValue, Date().timeIntervalSince1970, itemID,
+                    priorFailure == nil ? "pending" : "failed",
+                    try priorFailure.map { try JSONEncoder().encode($0) },
+                    key.chatID, key.threadID ?? "", itemID,
                 ])
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+            return db.changesCount > 0 ? .changed : .unchanged
+        }.snapshot
     }
 
-    public func cancelOutgoing(
-        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64
-    ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            _ = try Self.freezeLegacyClaims(db, key, directory: self.directory)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            let item = try Self.releasedItem(
-                before, itemID: itemID, expectedRevision: expectedRevision)
-            if item.dispatchClaimed || item.confirmedMessage != nil {
-                try db.execute(
-                    sql: """
-                        UPDATE outgoing_message SET is_cancelled = 1, edit_revision = edit_revision + 1,
-                            state = 'queued', mutation_retryable = 0, speaking_restriction = NULL
-                        WHERE client_generated_id = ?
-                        """, arguments: [itemID])
-            } else {
-                try db.execute(
-                    sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?",
-                    arguments: [itemID])
-            }
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
-    }
-
-    public func claimNext(chatID: String, threadID: String? = nil) async throws
-        -> LocalOutgoingClaim
+    public func fail(key: ConversationKey, itemID: String, failure: OutboxFailure) async throws
+        -> LocalConversationSnapshot
     {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let froze = try Self.freezeLegacyClaims(db, key, directory: self.directory)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard
-                let head = before.outgoing.first(where: {
-                    $0.confirmedMessage == nil && !$0.isCancelled
-                }), head.state == .queued, head.isReadyForDispatch
-            else {
-                if froze { try Self.bump(db, key) }
-                return LocalOutgoingClaim(
-                    snapshot: try Self.snapshot(db, key, directory: self.directory), message: nil)
-            }
-            try Self.freeze(db, head)
+        precondition(failure.stage == .create)
+        return try await update(key) { db, key, _ in
             try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET state = 'sending', dispatch_claimed = 1 WHERE client_generated_id = ?",
-                arguments: [head.clientGeneratedID])
-            try Self.bump(db, key)
-            let snapshot = try Self.snapshot(db, key, directory: self.directory)
-            return LocalOutgoingClaim(
-                snapshot: snapshot,
-                message: snapshot.outgoing.first { $0.clientGeneratedID == head.clientGeneratedID })
-        }
+                sql: """
+                    UPDATE outgoing_message SET state = 'failed', failure = ?
+                    WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND state = 'sending'
+                    """,
+                arguments: [try JSONEncoder().encode(failure), key.chatID, key.threadID ?? "", itemID])
+            return db.changesCount > 0 ? .changed : .unchanged
+        }.snapshot
     }
 
-    public func fail(
-        chatID: String, threadID: String? = nil, clientGeneratedID: String,
-        speakingRestriction: SpeakingMode? = nil
-    ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET state = 'failed', speaking_restriction = ? WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ? AND is_blocked = 0 AND confirmed_message IS NULL AND is_cancelled = 0 AND (state != 'failed' OR speaking_restriction IS NOT ?)",
-                arguments: [
-                    speakingRestriction?.rawValue, chatID, threadID ?? "", clientGeneratedID,
-                    speakingRestriction?.rawValue,
-                ])
-            if db.changesCount > 0 { try Self.bump(db, key) }
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
+    public func retryPreparation(key: ConversationKey, itemID: String) async throws -> LocalConversationSnapshot {
+        try await update(key) { db, key, _ in
+            guard let row = try Self.outgoingRow(db, key, id: itemID), try Self.failure(row)?.stage == .preparation
+            else { return .unchanged }
+            var content = try self.decode(row)
+            for i in content.attachments.indices { content.attachments[i].failure = nil }
+            try self.writeContent(db, id: itemID, content, failure: nil)
+            return .changed
+        }.snapshot
     }
 
-    public func retry(
-        chatID: String, threadID: String? = nil, clientGeneratedID: String,
-        scope: OutgoingRetryScope
-    ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            let items = before.outgoing + [before.composingItem].compactMap { $0 }
-            guard let index = items.firstIndex(where: { $0.clientGeneratedID == clientGeneratedID })
-            else { return before }
-            let selected = scope == .message ? [items[index]] : Array(items[index...])
-            var changed = false
-            for item in selected where item.state != .sending {
-                var slots = item.attachments
-                var selection = item.intentAttachments
-                if !item.dispatchClaimed {
-                    for index in slots.indices { slots[index].error = nil }
-                }
-                if var intent = selection {
-                    for index in intent.indices {
-                        if case .local(var slot) = intent[index] {
-                            slot.error = nil
-                            intent[index] = .local(slot)
-                        }
-                    }
-                    selection = intent
-                }
-                guard
-                    item.state == .failed || slots != item.attachments
-                        || selection != item.intentAttachments
-                else { continue }
-                try db.execute(
-                    sql: """
-                        UPDATE outgoing_message SET state = 'queued', attachments = ?,
-                            intent_attachments = ?, mutation_retryable = 0, speaking_restriction = NULL
-                        WHERE client_generated_id = ?
-                        """,
-                    arguments: [
-                        try Self.encodeAttachments(slots, directory: self.directory),
-                        try selection.map {
-                            try Self.encodeEditAttachments($0, directory: self.directory)
-                        },
-                        item.clientGeneratedID,
-                    ])
-                changed = true
-            }
-            if changed { try Self.bump(db, key) }
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
-    }
-
-    public func acceptCreate(_ message: MessageResponse, published: Bool) async throws
-        -> LocalOutgoingTransition
-    {
+    public func settleCreate(_ message: MessageResponse) async throws -> LocalConversationSnapshot? {
+        guard message.sender.uid == userID, message.replyRootId != "" else { return nil }
         let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
-        return try await database.write { db in
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard
-                let item = before.outgoing.first(where: {
-                    $0.clientGeneratedID == message.clientGeneratedId
-                })
-            else {
-                let exists =
-                    try Bool.fetchOne(
-                        db,
-                        sql:
-                            "SELECT EXISTS(SELECT 1 FROM outgoing_message WHERE client_generated_id = ?)",
-                        arguments: [message.clientGeneratedId]) ?? false
-                guard !exists else { throw LocalStorageError.staleDraft }
-                return LocalOutgoingTransition(
-                    snapshot: before, clientGeneratedID: message.clientGeneratedId,
-                    disposition: .completed)
+        let (snapshot, changed) = try await update(key) { db, key, _ in
+            guard let row = try Self.outgoingRow(db, key, id: message.clientGeneratedId) else {
+                return .unchanged
             }
-            try Self.validateIdentity(message, item: item)
-            if item.dispatchClaimed && item.frozenCreate == nil && item.intentAttachments != nil {
-                throw LocalStorageError.corruptRecord
+            let state: String = row["state"]
+            if state != "sending" {
+                guard state == "failed", try Self.failure(row)?.stage == .create else { return .unchanged }
             }
-            try Self.freeze(db, item)
-            let frozenRevision = item.frozenCreate?.revision ?? item.editRevision
-            // Realtime can confirm a PATCH before the held create HTTP response returns.
-            // Never let that older response replace the acknowledged mutation.
-            let replace =
-                item.confirmedMessage == nil
-                || (item.acknowledgedRevision <= frozenRevision && !item.isPublished)
-            try db.execute(
-                sql: """
-                    UPDATE outgoing_message SET confirmed_message = ?, is_published = ?,
-                        acknowledged_revision = ?, dispatch_claimed = 1,
-                        state = ?, mutation_retryable = ?
-                    WHERE client_generated_id = ?
-                    """,
-                arguments: [
-                    try JSONEncoder().encode(replace ? message : item.confirmedMessage!),
-                    item.isPublished || published, max(item.acknowledgedRevision, frozenRevision),
-                    item.state == .failed && (item.isCancelled || item.claimedPatch != nil)
-                        ? "failed" : "queued",
-                    item.mutationRetryable, item.clientGeneratedID,
-                ])
-            try Self.bump(db, key)
-            return try Self.transition(
-                db, key, itemID: item.clientGeneratedID, directory: self.directory)
+            try Self.delete(db, id: message.clientGeneratedId)
+            return .changed
+        }
+        return changed ? snapshot : nil
+    }
+
+    public func hasWork() async throws -> Bool {
+        try await database.read { db in
+            try Bool.fetchOne(
+                db, sql: "SELECT EXISTS (SELECT 1 FROM draft UNION ALL SELECT 1 FROM outgoing_message)"
+            ) ?? false
         }
     }
 
-    public func claimPatch(chatID: String, threadID: String? = nil, itemID: String) async throws
-        -> LocalOutgoingPatchClaim
+    public func purge() async throws {
+        try await database.write { db in
+            try db.execute(sql: "DELETE FROM outgoing_message; DELETE FROM draft;")
+        }
+    }
+
+    private struct Stamp: Sendable {
+        var revision: Int64 = 0
+        var draftRevision: Int64 = 0
+        var draftDate = Date.distantPast
+    }
+
+    private enum Change {
+        case unchanged, changed, draft(Int64, Date)
+    }
+
+    private struct Content: Codable, Sendable {
+        var text = ""
+        var reply: MessagePreview?
+        var attachments: [LocalOutgoingAttachment] = []
+        var compressionEnabled = true
+        var sticker: MessageStickerResponse?
+        var forward: LocalForwardRequest?
+        var metadata: MessageMetadataInput?
+
+        var isEmptyDraft: Bool {
+            text.isEmpty && reply == nil && attachments.isEmpty && (metadata?.linkPreviews.isEmpty ?? true)
+        }
+    }
+
+    private func update(
+        _ key: ConversationKey,
+        _ operation: @escaping @Sendable (Database, ConversationKey, Stamp) throws -> Change
+    ) async throws -> (snapshot: LocalConversationSnapshot, changed: Bool) {
+        let key = key.threadID == "" ? ConversationKey(chatID: key.chatID) : key
+        return try await database.write { db in
+            var stamp = self.stamps[key, default: Stamp()]
+            switch try operation(db, key, stamp) {
+            case .unchanged: return (try self.snapshot(db, key, stamp), false)
+            case .changed: break
+            case .draft(let revision, let date):
+                stamp.draftRevision = revision
+                stamp.draftDate = date
+            }
+            stamp.revision += 1
+            let committed = stamp
+            let snapshot = try self.snapshot(db, key, committed)
+            db.afterNextTransaction { _ in self.stamps[key] = committed }
+            return (snapshot, true)
+        }
+    }
+
+    private func enqueue(_ key: ConversationKey, id: String, _ content: Content, date: Date) async throws
+        -> LocalConversationSnapshot
     {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }),
-                item.confirmedMessage != nil, item.isPublished, !item.isCancelled,
-                item.state != .failed, item.editRevision > item.acknowledgedRevision
-            else { return LocalOutgoingPatchClaim(snapshot: before, patch: nil) }
-            let patch: LocalClaimedPatch
-            if let claimed = item.claimedPatch {
-                patch = claimed
-            } else {
-                let selection =
-                    item.intentAttachments ?? item.attachments.map(LocalEditAttachment.local)
-                guard
-                    selection.allSatisfy({
-                        if case .local(let slot) = $0 {
-                            return slot.attachmentID != nil && slot.error == nil
-                        }
-                        return true
-                    })
-                else { return LocalOutgoingPatchClaim(snapshot: before, patch: nil) }
-                guard item.forwardRequest == nil, item.messageType == .text else {
-                    throw LocalStorageError.unsupportedMessageType
-                }
-                patch = LocalClaimedPatch(
-                    text: item.text,
-                    attachmentIDs: selection.map {
-                        switch $0 {
-                        case .local(let slot): return slot.attachmentID!
-                        case .server(let attachment): return attachment.id
-                        }
-                    }, revision: item.editRevision, metadata: item.metadata)
-            }
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET claimed_patch = ?, state = 'sending', mutation_retryable = 0 WHERE client_generated_id = ?",
-                arguments: [try JSONEncoder().encode(patch), itemID])
-            try Self.bump(db, key)
-            return LocalOutgoingPatchClaim(
-                snapshot: try Self.snapshot(db, key, directory: self.directory), patch: patch)
-        }
+        try await update(key) { db, key, _ in
+            try self.insert(db, key, id: id, content, date: date)
+            return .changed
+        }.snapshot
     }
 
-    public func acceptPatch(_ message: MessageResponse, itemID: String, revision: Int64)
-        async throws
-        -> LocalOutgoingTransition
+    private func insert(
+        _ db: Database, _ key: ConversationKey, id: String, _ content: Content, date: Date,
+        failure: OutboxFailure? = nil
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO outgoing_message
+                    (client_generated_id, chat_id, thread_id, position, state, content, failure, created_at)
+                SELECT ?, ?, ?, COALESCE(MAX(position), -1) + 1, ?, ?, ?, ?
+                FROM outgoing_message WHERE chat_id = ? AND thread_id = ?
+                """,
+            arguments: [
+                id, key.chatID, key.threadID ?? "", failure == nil ? "pending" : "failed",
+                try encode(content), try failure.map { try JSONEncoder().encode($0) },
+                date.timeIntervalSince1970, key.chatID, key.threadID ?? "",
+            ])
+    }
+
+    private func writeContent(_ db: Database, id: String, _ content: Content, failure: OutboxFailure?) throws {
+        try db.execute(
+            sql: "UPDATE outgoing_message SET content = ?, state = ?, failure = ? WHERE client_generated_id = ?",
+            arguments: [
+                try encode(content), failure == nil ? "pending" : "failed",
+                try failure.map { try JSONEncoder().encode($0) }, id,
+            ])
+    }
+
+    private func writeDraft(_ db: Database, _ key: ConversationKey, _ content: Content, date: Date) throws {
+        guard !content.isEmptyDraft else {
+            try db.execute(
+                sql: "DELETE FROM draft WHERE chat_id = ? AND thread_id = ?", arguments: Self.arguments(key))
+            return
+        }
+        try db.execute(
+            sql: """
+                INSERT INTO draft (chat_id, thread_id, content, updated_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, thread_id) DO UPDATE
+                SET content = excluded.content, updated_at = excluded.updated_at
+                """,
+            arguments: [key.chatID, key.threadID ?? "", try encode(content), date.timeIntervalSince1970])
+    }
+
+    private func readDraft(_ db: Database, _ key: ConversationKey) throws -> Content {
+        try Self.draftRow(db, key).map(decode) ?? Content()
+    }
+
+    private func snapshot(_ db: Database, _ key: ConversationKey, _ stamp: Stamp) throws
+        -> LocalConversationSnapshot
     {
-        let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
-        return try await database.write { db in
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard revision >= 0, message.clientGeneratedId == itemID else {
-                throw LocalStorageError.staleDraft
-            }
-            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }) else {
-                let exists =
-                    try Bool.fetchOne(
-                        db,
-                        sql:
-                            "SELECT EXISTS(SELECT 1 FROM outgoing_message WHERE client_generated_id = ?)",
-                        arguments: [itemID]) ?? false
-                guard !exists else { throw LocalStorageError.staleDraft }
-                return LocalOutgoingTransition(
-                    snapshot: before, clientGeneratedID: itemID, disposition: .completed)
-            }
-            try Self.validateIdentity(message, item: item)
-            guard let confirmed = item.confirmedMessage, confirmed.id == message.id else {
-                throw LocalStorageError.staleDraft
-            }
-            if revision <= item.acknowledgedRevision {
-                let disposition: LocalOutgoingDisposition =
-                    item.isCancelled
-                    ? .cancelled
-                    : item.isPublished && item.acknowledgedRevision == item.editRevision
-                        && item.claimedPatch == nil ? .completed : .retained
-                return LocalOutgoingTransition(
-                    snapshot: before, clientGeneratedID: itemID, disposition: disposition)
-            }
-            guard item.claimedPatch?.revision == revision else {
-                throw LocalStorageError.staleDraft
-            }
-            try db.execute(
-                sql: """
-                    UPDATE outgoing_message SET confirmed_message = ?, acknowledged_revision = ?,
-                        claimed_patch = NULL, state = ?, mutation_retryable = ?
-                    WHERE client_generated_id = ?
-                    """,
-                arguments: [
-                    try JSONEncoder().encode(item.isCancelled ? confirmed : message),
-                    max(item.acknowledgedRevision, revision),
-                    item.isCancelled ? item.state.rawValue : "queued",
-                    item.isCancelled && item.mutationRetryable, itemID,
-                ])
-            try Self.bump(db, key)
-            return try Self.transition(db, key, itemID: itemID, directory: self.directory)
-        }
+        let row = try Self.draftRow(db, key)
+        let content = try row.map(decode) ?? Content()
+        return LocalConversationSnapshot(
+            chatID: key.chatID, threadID: key.threadID, revision: stamp.revision,
+            draft: LocalDraft(
+                text: content.text, replyToMessage: content.reply, editRevision: stamp.draftRevision,
+                updatedAt: row.map { Date(timeIntervalSince1970: $0["updated_at"]) } ?? stamp.draftDate,
+                attachments: content.attachments, compressionEnabled: content.compressionEnabled,
+                linkPreviews: content.metadata?.linkPreviews ?? []),
+            outgoing: try Self.outgoingRows(db, key).map { try message($0, key) })
     }
 
-    public func acceptDelete(chatID: String, threadID: String? = nil, itemID: String) async throws
-        -> LocalOutgoingTransition
-    {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }),
-                item.confirmedMessage != nil
-            else { throw LocalStorageError.staleDraft }
-            try db.execute(
-                sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?",
-                arguments: [itemID])
-            try Self.bump(db, key)
-            return LocalOutgoingTransition(
-                snapshot: try Self.snapshot(db, key, directory: self.directory),
-                clientGeneratedID: itemID, disposition: .cancelled)
+    private func message(_ row: Row, _ key: ConversationKey) throws -> LocalOutgoingMessage {
+        guard let state = LocalOutgoingMessage.State(rawValue: row["state"]) else {
+            throw LocalStorageError.corruptRecord
         }
-    }
-
-    public func finalizeOutgoing(
-        chatID: String, threadID: String? = nil, itemID: String, expectedRevision: Int64
-    ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }),
-                item.confirmedMessage != nil, item.isPublished, !item.isCancelled,
-                item.editRevision == expectedRevision,
-                item.acknowledgedRevision == expectedRevision,
-                item.claimedPatch == nil
-            else { return before }
-            try db.execute(
-                sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?",
-                arguments: [itemID])
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
+        let content = try decode(row)
+        let failure = try Self.failure(row)
+        let item = LocalOutgoingMessage(
+            clientGeneratedID: row["client_generated_id"], chatID: key.chatID, threadID: key.threadID,
+            senderID: userID, text: content.text, replyToMessage: content.reply,
+            enqueuedAt: Date(timeIntervalSince1970: row["created_at"]), position: row["position"],
+            state: state, attachments: content.attachments, compressionEnabled: content.compressionEnabled,
+            sticker: content.sticker, forwardRequest: content.forward, metadata: content.metadata, failure: failure)
+        guard (state != .sending && failure?.stage != .create) || item.isReadyForDispatch else {
+            throw LocalStorageError.corruptRecord
         }
-    }
-
-    public func failMutation(
-        chatID: String, threadID: String? = nil, itemID: String, patchRevision: Int64?,
-        retryable: Bool
-    ) async throws -> LocalConversationSnapshot {
-        let key = ConversationKey(chatID: chatID, threadID: threadID)
-        return try await database.write { db in
-            try Self.ensure(db, key)
-            let before = try Self.snapshot(db, key, directory: self.directory)
-            guard let item = before.outgoing.first(where: { $0.clientGeneratedID == itemID }) else {
-                return before
-            }
-            if let patchRevision {
-                guard !item.isCancelled, item.claimedPatch?.revision == patchRevision else {
-                    return before
-                }
-            } else {
-                guard item.isCancelled else { return before }
-            }
-            try db.execute(
-                sql:
-                    "UPDATE outgoing_message SET state = 'failed', mutation_retryable = ? WHERE client_generated_id = ?",
-                arguments: [retryable, itemID])
-            try Self.bump(db, key)
-            return try Self.snapshot(db, key, directory: self.directory)
-        }
-    }
-
-    private static func releasedItem(
-        _ snapshot: LocalConversationSnapshot, itemID: String, expectedRevision: Int64
-    ) throws -> LocalOutgoingMessage {
-        guard let item = snapshot.outgoing.first(where: { $0.clientGeneratedID == itemID }),
-            !item.isCancelled, item.editRevision == expectedRevision
-        else { throw LocalStorageError.staleDraft }
         return item
     }
 
-    private static func validateIdentity(_ message: MessageResponse, item: LocalOutgoingMessage)
-        throws
-    {
-        guard message.chatId == item.chatID, message.replyRootId == item.threadID,
-            message.clientGeneratedId == item.clientGeneratedID,
-            message.sender.uid == item.senderID,
-            item.confirmedMessage.map({ $0.id == message.id }) ?? true
-        else { throw LocalStorageError.staleDraft }
+    private static func failure(_ row: Row) throws -> OutboxFailure? {
+        try (row["failure"] as Data?).map { try JSONDecoder().decode(OutboxFailure.self, from: $0) }
     }
 
-    private static func transition(
-        _ db: Database, _ key: ConversationKey, itemID: String, directory: URL
-    ) throws -> LocalOutgoingTransition {
-        let snapshot = try snapshot(db, key, directory: directory)
-        guard let item = snapshot.outgoing.first(where: { $0.clientGeneratedID == itemID }) else {
-            throw LocalStorageError.staleDraft
-        }
-        let disposition: LocalOutgoingDisposition =
-            item.isCancelled
-            ? .cancelled
-            : item.isPublished && item.acknowledgedRevision == item.editRevision
-                && item.claimedPatch == nil
-                ? .completed : .retained
-        return LocalOutgoingTransition(
-            snapshot: snapshot, clientGeneratedID: itemID, disposition: disposition)
+    private static func preparationFailure(_ reason: OutboxFailure.Reason) -> OutboxFailure {
+        let retry: OutboxFailure.Retry = reason == .network || reason == .unknownOutcome
+            ? .automatic : .manual
+        return OutboxFailure(stage: .preparation, reason: reason, retry: retry)
     }
 
-    private static func freezeLegacyClaims(
-        _ db: Database, _ key: ConversationKey, directory: URL
-    ) throws -> Bool {
-        guard
-            try Bool.fetchOne(
-                db,
-                sql: """
-                    SELECT EXISTS(SELECT 1 FROM outgoing_message
-                        WHERE chat_id = ? AND thread_id = ? AND frozen_create IS NULL
-                        AND (dispatch_claimed = 1 OR state = 'sending'))
-                    """, arguments: [key.chatID, key.threadID ?? ""]) == true
-        else { return false }
-        let items = try snapshot(db, key, directory: directory).outgoing
-        var changed = false
-        for item in items
-        where (item.dispatchClaimed || item.state == .sending) && item.frozenCreate == nil {
-            // Legacy claimed rows had no separate intent. A missing checkpoint or a
-            // post-claim selection cannot be used to guess the original POST payload.
-            guard item.intentAttachments == nil else { throw LocalStorageError.corruptRecord }
-            if !item.dispatchClaimed {
-                try db.execute(
-                    sql:
-                        "UPDATE outgoing_message SET dispatch_claimed = 1 WHERE client_generated_id = ?",
-                    arguments: [item.clientGeneratedID])
-            }
-            try freeze(db, item)
-            changed = true
-        }
-        return changed
-    }
-
-    private static func freeze(_ db: Database, _ item: LocalOutgoingMessage) throws {
-        guard item.frozenCreate == nil else { return }
-        guard !item.isBlocked, item.isReadyForDispatch,
-            item.forwardRequest != nil || item.messageType != .text
-                || !item.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !(item.intentAttachments ?? item.attachments.map(LocalEditAttachment.local))
-                    .isEmpty
-        else { throw LocalStorageError.corruptRecord }
-        let frozen = LocalFrozenCreate(
-            body: item.forwardRequest == nil ? item.body : nil,
-            forwardRequest: item.forwardRequest, revision: item.editRevision)
-        try db.execute(
-            sql:
-                "UPDATE outgoing_message SET frozen_create = ? WHERE client_generated_id = ? AND frozen_create IS NULL",
-            arguments: [try JSONEncoder().encode(frozen), item.clientGeneratedID])
-    }
-
-    private static func mergeCheckpoint(
-        _ proposed: LocalOutgoingAttachment, into old: LocalOutgoingAttachment
-    ) throws -> LocalOutgoingAttachment? {
-        guard old.sourcePath == proposed.sourcePath, old.previewPath == proposed.previewPath else {
-            return nil
-        }
-        guard old.isAudio == proposed.isAudio, old.isFile == proposed.isFile else {
-            throw LocalStorageError.invalidAttachments
-        }
-        if old.isAudio || old.isFile {
-            guard proposed.preparedPath == old.preparedPath, proposed.mimeType == old.mimeType,
-                proposed.fileName == old.fileName, proposed.byteCount == old.byteCount,
-                proposed.width == old.width, proposed.height == old.height
-            else { throw LocalStorageError.invalidAttachments }
-        }
-        guard old.attachmentID == nil || old.attachmentID == proposed.attachmentID else {
-            return nil
-        }
-        var merged = proposed
-        merged.position = old.position
-        return merged == old ? nil : merged
-    }
-
-    private static func validateEditAttachments(
-        _ selection: [LocalEditAttachment], directory: URL, requireSource: Bool = true
-    ) throws {
-        guard selection.count <= 20 else { throw LocalStorageError.invalidAttachments }
-        var slotIDs = Set<String>()
-        var uploadedIDs = Set<String>()
-        for (position, selected) in selection.enumerated() {
-            switch selected {
-            case .local(var slot):
-                let mimeType = slot.mimeType.lowercased()
-                guard !slot.isFile, !slot.isAudio,
-                    mimeType.hasPrefix("image/") || mimeType.hasPrefix("video/"),
-                    slot.position == position, slotIDs.insert(slot.id).inserted
-                else { throw LocalStorageError.invalidAttachments }
-                if let id = slot.attachmentID, !uploadedIDs.insert(id).inserted {
-                    throw LocalStorageError.invalidAttachments
-                }
-                slot.position = 0
-                try validateAttachments([slot], directory: directory, requireSource: requireSource)
-            case .server(let attachment):
-                let kind = attachment.kind.lowercased()
-                guard !attachment.id.isEmpty, kind.hasPrefix("image") || kind.hasPrefix("video"),
-                    !attachment.url.isEmpty, attachment.size > 0,
-                    uploadedIDs.insert(attachment.id).inserted
-                else { throw LocalStorageError.invalidAttachments }
-            }
-        }
-    }
-
-    private static func encodeEditAttachments(
-        _ selection: [LocalEditAttachment], directory: URL
-    ) throws -> Data {
-        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        let stored = try selection.map { selected in
-            switch selected {
-            case .server: return selected
-            case .local(let slot):
-                return .local(try mapPaths(slot) { try relativePath($0, root: root) })
-            }
-        }
-        return try JSONEncoder().encode(stored)
-    }
-
-    private static func decodeEditAttachments(_ data: Data, directory: URL) throws
-        -> [LocalEditAttachment]
-    {
-        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        return try JSONDecoder().decode([LocalEditAttachment].self, from: data).map { selected in
-            switch selected {
-            case .server: return selected
-            case .local(let slot):
-                return .local(
-                    try mapPaths(slot) { try absolutePath($0, directory: directory, root: root) })
-            }
-        }
+    private static func arguments(_ key: ConversationKey) -> StatementArguments {
+        [key.chatID, key.threadID ?? ""]
     }
 
     private static func key(_ row: Row) -> ConversationKey {
@@ -1044,114 +493,160 @@ public final class ChahuaLocalStore: Sendable {
         return ConversationKey(chatID: row["chat_id"], threadID: thread.isEmpty ? nil : thread)
     }
 
-    private static func ensure(_ db: Database, _ key: ConversationKey) throws {
-        try db.execute(
-            sql: "INSERT OR IGNORE INTO local_conversation(chat_id, thread_id) VALUES (?, ?)",
-            arguments: [key.chatID, key.threadID ?? ""])
-    }
-
-    private static func bump(_ db: Database, _ key: ConversationKey) throws {
-        try db.execute(
-            sql:
-                "UPDATE local_conversation SET revision = revision + 1 WHERE chat_id = ? AND thread_id = ?",
-            arguments: [key.chatID, key.threadID ?? ""])
-    }
-
-    private static func writeRevision(
-        _ db: Database, _ key: ConversationKey, _ revision: Int64, _ date: Date
-    ) throws {
-        try db.execute(
-            sql: """
-                INSERT INTO draft_revision (chat_id, thread_id, edit_revision, updated_at) VALUES (?, ?, ?, ?)
-                ON CONFLICT(chat_id, thread_id) DO UPDATE SET edit_revision = excluded.edit_revision, updated_at = excluded.updated_at
-                WHERE excluded.edit_revision > draft_revision.edit_revision
-                """,
-            arguments: [key.chatID, key.threadID ?? "", revision, date.timeIntervalSince1970])
-    }
-
-    private static func insert(
-        _ db: Database, _ key: ConversationKey, id: String, senderID: Int32, text: String,
-        replyData: Data?, date: Date, revision: Int64, blocked: Bool, metadataData: Data? = nil
-    ) throws {
-        let sequence = try Int64.fetchOne(
+    private static func keys(_ db: Database) throws -> [ConversationKey] {
+        try Row.fetchAll(
             db,
-            sql:
-                "SELECT next_enqueue_sequence FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
-            arguments: [key.chatID, key.threadID ?? ""])!
-        try db.execute(
             sql: """
-                INSERT INTO outgoing_message
-                    (client_generated_id, chat_id, thread_id, sender_id, text, enqueued_at, enqueue_sequence,
-                     dispatch_order, state, reply_to_message, is_blocked, edit_revision, updated_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
-                """,
-            arguments: [
-                id, key.chatID, key.threadID ?? "", senderID, text, date.timeIntervalSince1970,
-                sequence, sequence, replyData, blocked, revision, date.timeIntervalSince1970,
-                metadataData,
-            ])
-        try db.execute(
-            sql:
-                "UPDATE local_conversation SET next_enqueue_sequence = next_enqueue_sequence + 1 WHERE chat_id = ? AND thread_id = ?",
-            arguments: [key.chatID, key.threadID ?? ""])
+                SELECT chat_id, thread_id FROM draft
+                UNION SELECT chat_id, thread_id FROM outgoing_message
+                ORDER BY chat_id, thread_id
+                """
+        ).map(key)
     }
 
-    private static func editableTail(
-        _ snapshot: LocalConversationSnapshot, itemID: String, expectedRevision: Int64
-    ) throws -> LocalOutgoingMessage {
-        guard let item = snapshot.composingItem ?? snapshot.outgoing.last,
-            item.clientGeneratedID == itemID
-        else { throw LocalStorageError.notTail }
-        guard !item.dispatchClaimed else { throw LocalStorageError.dispatchAlreadyClaimed }
-        guard item.editRevision == expectedRevision else { throw LocalStorageError.staleDraft }
-        return item
+    private static func draftRow(_ db: Database, _ key: ConversationKey) throws -> Row? {
+        try Row.fetchOne(
+            db, sql: "SELECT content, updated_at FROM draft WHERE chat_id = ? AND thread_id = ?",
+            arguments: arguments(key))
     }
 
-    private static func validateAttachments(
-        _ attachments: [LocalOutgoingAttachment], directory: URL, requireSource: Bool = true
-    ) throws {
-        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        for (position, slot) in attachments.enumerated() {
-            let validDimensions =
-                slot.isAudio || slot.isFile
-                ? slot.width == 0 && slot.height == 0 : slot.width > 0 && slot.height > 0
-            guard slot.position == position, !slot.id.isEmpty, !slot.generation.isEmpty,
-                validDimensions, slot.byteCount > 0,
-                slot.attachmentID?.isEmpty != true
+    private static func outgoingRow(_ db: Database, _ key: ConversationKey, id: String) throws -> Row? {
+        try Row.fetchOne(
+            db,
+            sql: "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ?",
+            arguments: [key.chatID, key.threadID ?? "", id])
+    }
+
+    private static func outgoingRows(_ db: Database, _ key: ConversationKey, itemID: String? = nil) throws -> [Row] {
+        if let itemID {
+            return try outgoingRow(db, key, id: itemID).map { [$0] } ?? []
+        }
+        return try Row.fetchAll(
+            db, sql: "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? ORDER BY position",
+            arguments: arguments(key))
+    }
+
+    private static func delete(_ db: Database, id: String) throws {
+        try db.execute(sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?", arguments: [id])
+    }
+
+    private func mergeSelection(
+        _ selected: [LocalOutgoingAttachment], with existing: [LocalOutgoingAttachment],
+        compressionChanged: Bool
+    ) throws -> [LocalOutgoingAttachment] {
+        guard !selected.contains(where: \.isAudio),
+            !selected.contains(where: \.isFile) || selected.allSatisfy(\.isFile)
+        else { throw LocalStorageError.unsupportedMessageType }
+        let byID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        let updated = selected.enumerated().map { position, choice in
+            var slot = choice
+            if let old = byID[choice.id] {
+                let sameSource = old.sourcePath == choice.sourcePath && old.previewPath == choice.previewPath
+                if sameSource, old.generation == choice.generation { slot = old }
+                if !sameSource || (compressionChanged && !slot.isFile) {
+                    if slot.generation == old.generation { slot.generation = UUID().uuidString }
+                    slot.attachmentID = nil
+                    slot.failure = nil
+                    slot.preparedPath = slot.isFile ? slot.sourcePath : nil
+                } else if old.generation != slot.generation {
+                    slot.attachmentID = nil
+                }
+            }
+            slot.position = position
+            return slot
+        }
+        try validateAttachments(updated)
+        // Existing source files may have vanished. Workers report that as preparation failure.
+        for slot in updated where byID[slot.id]?.sourcePath != slot.sourcePath {
+            try validateFiles(slot, requireSource: true)
+        }
+        return updated
+    }
+
+    private static func slotIndex(_ slot: LocalOutgoingAttachment, in content: Content) -> Int? {
+        content.attachments.firstIndex { $0.id == slot.id && $0.generation == slot.generation }
+    }
+
+    private static func mergeCheckpoint(
+        _ checkpoint: LocalOutgoingAttachment, into current: inout LocalOutgoingAttachment
+    ) throws -> Bool {
+        guard !current.isUploaded, current.sourcePath == checkpoint.sourcePath,
+            current.previewPath == checkpoint.previewPath
+        else { return false }
+        guard current.isFile == checkpoint.isFile, current.isAudio == checkpoint.isAudio else {
+            throw LocalStorageError.invalidAttachments
+        }
+        if current.isAudio || current.isFile {
+            guard current.preparedPath == checkpoint.preparedPath, current.mimeType == checkpoint.mimeType,
+                current.fileName == checkpoint.fileName, current.byteCount == checkpoint.byteCount,
+                current.width == checkpoint.width, current.height == checkpoint.height
             else { throw LocalStorageError.invalidAttachments }
-            if slot.isFile {
+        }
+        var merged = checkpoint
+        merged.position = current.position
+        guard merged != current else { return false }
+        current = merged
+        return true
+    }
+
+    private func validateAttachments(_ attachments: [LocalOutgoingAttachment], requireSource: Bool = false) throws {
+        guard attachments.count <= 20 else { throw LocalStorageError.invalidAttachments }
+        var ids = Set<String>()
+        var uploaded = Set<String>()
+        for (position, slot) in attachments.enumerated() {
+            let validDimensions = slot.isAudio || slot.isFile
+                ? slot.width == 0 && slot.height == 0 : slot.width > 0 && slot.height > 0
+            guard slot.position == position, !slot.id.isEmpty, ids.insert(slot.id).inserted,
+                !slot.generation.isEmpty, validDimensions, slot.byteCount > 0
+            else { throw LocalStorageError.invalidAttachments }
+            if let id = slot.attachmentID {
+                guard !id.isEmpty, uploaded.insert(id).inserted, slot.failure == nil
+                else { throw LocalStorageError.invalidAttachments }
+            }
+            if slot.isFile || slot.isAudio {
                 guard slot.preparedPath == slot.sourcePath, slot.previewPath == slot.sourcePath,
                     !slot.fileName.isEmpty, !slot.mimeType.isEmpty
                 else { throw LocalStorageError.invalidAttachments }
             }
             if slot.isAudio {
                 guard attachments.count == 1, slot.mimeType == "audio/mp4",
-                    slot.preparedPath == slot.sourcePath, slot.previewPath == slot.sourcePath,
                     URL(fileURLWithPath: slot.fileName).pathExtension.lowercased() == "m4a"
-                else {
-                    throw LocalStorageError.invalidAttachments
-                }
-            }
-            for path in [slot.sourcePath, slot.previewPath] + [slot.preparedPath].compactMap({ $0 })
-            {
-                let url = URL(fileURLWithPath: path)
-                guard path.hasPrefix("/"),
-                    url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root)
                 else { throw LocalStorageError.invalidAttachments }
-                if FileManager.default.fileExists(atPath: path) {
-                    guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
-                    else { throw LocalStorageError.invalidAttachments }
-                } else if requireSource && slot.attachmentID == nil {
-                    throw LocalStorageError.invalidAttachments
-                }
+            }
+            try validateFiles(slot, requireSource: requireSource)
+        }
+    }
+
+    private func validateFiles(_ slot: LocalOutgoingAttachment, requireSource: Bool) throws {
+        for path in [slot.sourcePath, slot.previewPath] + [slot.preparedPath].compactMap({ $0 }) {
+            _ = try relativePath(path)
+            if FileManager.default.fileExists(atPath: path) {
+                guard try URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey])
+                    .isRegularFile == true
+                else { throw LocalStorageError.invalidAttachments }
+            } else if requireSource && !slot.isUploaded {
+                throw LocalStorageError.invalidAttachments
             }
         }
     }
 
-    // SQLite stores account-relative references; the public worker/UI model uses absolute URLs.
-    // Application containers can relocate while the account directory and database survive.
+    private func encode(_ content: Content) throws -> Data {
+        var stored = content
+        stored.attachments = try content.attachments.map { try Self.mapPaths($0, relativePath) }
+        return try JSONEncoder().encode(stored)
+    }
+
+    private func decode(_ row: Row) throws -> Content {
+        var stored = try JSONDecoder().decode(Content.self, from: row["content"])
+        guard Set(stored.attachments.map(\.id)).count == stored.attachments.count,
+            stored.attachments.enumerated().allSatisfy({ $0.offset == $0.element.position })
+        else { throw LocalStorageError.corruptRecord }
+        stored.attachments = try stored.attachments.map { try Self.mapPaths($0, absolutePath) }
+        return stored
+    }
+
     private static func mapPaths(
-        _ attachment: LocalOutgoingAttachment, transform: (String) throws -> String
+        _ attachment: LocalOutgoingAttachment, _ transform: (String) throws -> String
     ) rethrows -> LocalOutgoingAttachment {
         var slot = attachment
         slot.sourcePath = try transform(slot.sourcePath)
@@ -1160,206 +655,22 @@ public final class ChahuaLocalStore: Sendable {
         return slot
     }
 
-    private static func relativePath(_ path: String, root: String) throws -> String {
+    // SQLite owns account-relative references; worker/UI models use absolute paths.
+    private func relativePath(_ path: String) throws -> String {
+        let root = accountRoot.path + "/"
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-        guard path.hasPrefix("/"), resolved.hasPrefix(root) else {
-            throw LocalStorageError.invalidAttachments
-        }
+        guard path.hasPrefix("/"), resolved.hasPrefix(root) else { throw LocalStorageError.invalidAttachments }
         return String(resolved.dropFirst(root.count))
     }
 
-    private static func absolutePath(_ path: String, directory: URL, root: String) throws -> String
-    {
+    private func absolutePath(_ path: String) throws -> String {
         guard !path.isEmpty, !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else {
             throw LocalStorageError.corruptRecord
         }
-        let url = directory.appendingPathComponent(path).standardizedFileURL
-        guard url.resolvingSymlinksInPath().path.hasPrefix(root) else {
+        let url = accountRoot.appendingPathComponent(path).standardizedFileURL
+        guard url.resolvingSymlinksInPath().path.hasPrefix(accountRoot.path + "/") else {
             throw LocalStorageError.corruptRecord
         }
         return url.path
-    }
-
-    private static func encodeAttachments(_ attachments: [LocalOutgoingAttachment], directory: URL)
-        throws -> Data
-    {
-        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        return try JSONEncoder().encode(
-            attachments.map {
-                try mapPaths($0) { try relativePath($0, root: root) }
-            })
-    }
-
-    private static func decodeAttachments(_ data: Data, directory: URL) throws
-        -> [LocalOutgoingAttachment]
-    {
-        let root = directory.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        return try JSONDecoder().decode([LocalOutgoingAttachment].self, from: data).map {
-            try mapPaths($0) { try absolutePath($0, directory: directory, root: root) }
-        }
-    }
-
-    private static func snapshot(_ db: Database, _ key: ConversationKey, directory: URL) throws
-        -> LocalConversationSnapshot
-    {
-        let arguments: StatementArguments = [key.chatID, key.threadID ?? ""]
-        let revision =
-            try Int64.fetchOne(
-                db,
-                sql: "SELECT revision FROM local_conversation WHERE chat_id = ? AND thread_id = ?",
-                arguments: arguments) ?? 0
-        let watermark = try Row.fetchOne(
-            db,
-            sql:
-                "SELECT edit_revision, updated_at FROM draft_revision WHERE chat_id = ? AND thread_id = ?",
-            arguments: arguments)
-        let rows = try Row.fetchAll(
-            db,
-            sql:
-                "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? ORDER BY enqueue_sequence",
-            arguments: arguments)
-        let items = try rows.map { row in
-            guard let state = LocalOutgoingMessage.State(rawValue: row["state"]),
-                let sender = Int32(exactly: row["sender_id"] as Int64)
-            else { throw LocalStorageError.corruptRecord }
-            let attachments = try decodeAttachments(
-                row["attachments"] as Data, directory: directory)
-            guard Set(attachments.map(\.id)).count == attachments.count,
-                attachments.enumerated().allSatisfy({ $0.offset == $0.element.position })
-            else { throw LocalStorageError.corruptRecord }
-            let sticker = try (row["sticker"] as Data?).map {
-                try JSONDecoder().decode(MessageStickerResponse.self, from: $0)
-            }
-            let forward = try (row["forward_request"] as Data?).map {
-                try JSONDecoder().decode(LocalForwardRequest.self, from: $0)
-            }
-            let frozen = try (row["frozen_create"] as Data?).map {
-                try JSONDecoder().decode(LocalFrozenCreate.self, from: $0)
-            }
-            let intent = try (row["intent_attachments"] as Data?).map {
-                try decodeEditAttachments($0, directory: directory)
-            }
-            let confirmed = try (row["confirmed_message"] as Data?).map {
-                try JSONDecoder().decode(MessageResponse.self, from: $0)
-            }
-            let patch = try (row["claimed_patch"] as Data?).map {
-                try JSONDecoder().decode(LocalClaimedPatch.self, from: $0)
-            }
-            let speakingRestriction = try (row["speaking_restriction"] as String?).map {
-                guard let mode = SpeakingMode(rawValue: $0) else {
-                    throw LocalStorageError.corruptRecord
-                }
-                return mode
-            }
-            if let forward {
-                guard !forward.sources.isEmpty, forward.sources.count <= 100,
-                    Set(forward.messageIDs).count == forward.sources.count,
-                    forward.sources.allSatisfy({ $0.chatId == forward.sourceChatID }),
-                    attachments.isEmpty, sticker == nil, !(row["is_blocked"] as Bool),
-                    (row["text"] as String).isEmpty,
-                    (row["reply_to_message"] as Data?) == nil
-                else { throw LocalStorageError.corruptRecord }
-            }
-            guard sticker == nil || (attachments.isEmpty && !(row["is_blocked"] as Bool)) else {
-                throw LocalStorageError.corruptRecord
-            }
-            if attachments.contains(where: \.isAudio) {
-                guard attachments.count == 1, let audio = attachments.first,
-                    audio.mimeType == "audio/mp4", audio.width == 0, audio.height == 0,
-                    audio.preparedPath == audio.sourcePath, audio.previewPath == audio.sourcePath,
-                    (row["text"] as String).isEmpty, !(row["is_blocked"] as Bool), sticker == nil
-                else {
-                    throw LocalStorageError.corruptRecord
-                }
-            }
-            let item = LocalOutgoingMessage(
-                clientGeneratedID: row["client_generated_id"], chatID: key.chatID,
-                threadID: key.threadID, senderID: sender, text: row["text"],
-                replyToMessage: try decodeReply(row["reply_to_message"]),
-                enqueuedAt: Date(timeIntervalSince1970: row["enqueued_at"]),
-                enqueueSequence: row["enqueue_sequence"], dispatchOrder: row["enqueue_sequence"],
-                state: state, attachments: attachments, isBlocked: row["is_blocked"],
-                editRevision: row["edit_revision"], compressionEnabled: row["compression_enabled"],
-                dispatchClaimed: row["dispatch_claimed"], sticker: sticker, forwardRequest: forward,
-                speakingRestriction: speakingRestriction, frozenCreate: frozen,
-                intentAttachments: intent, confirmedMessage: confirmed,
-                isPublished: row["is_published"], isCancelled: row["is_cancelled"],
-                acknowledgedRevision: row["acknowledged_revision"], claimedPatch: patch,
-                mutationRetryable: row["mutation_retryable"],
-                metadata: try (row["metadata"] as Data?).map {
-                    try JSONDecoder().decode(MessageMetadataInput.self, from: $0)
-                })
-            try validateAttachments(attachments, directory: directory, requireSource: false)
-            if let intent {
-                guard !item.isBlocked, item.forwardRequest == nil, item.messageType == .text else {
-                    throw LocalStorageError.corruptRecord
-                }
-                try validateEditAttachments(intent, directory: directory, requireSource: false)
-            }
-            guard item.editRevision >= 0, item.acknowledgedRevision >= -1,
-                item.acknowledgedRevision <= item.editRevision,
-                !item.isBlocked || (frozen == nil && confirmed == nil && !item.isCancelled),
-                confirmed != nil
-                    || (item.acknowledgedRevision == -1 && !item.isPublished && patch == nil)
-            else { throw LocalStorageError.corruptRecord }
-            if let frozen {
-                guard (frozen.body == nil) != (frozen.forwardRequest == nil),
-                    frozen.revision >= 0, frozen.revision <= item.editRevision,
-                    frozen.forwardRequest == item.forwardRequest
-                else { throw LocalStorageError.corruptRecord }
-                if let body = frozen.body {
-                    guard body.clientGeneratedId == item.clientGeneratedID,
-                        body.messageType == item.messageType,
-                        body.replyToId == item.replyToMessage?.id,
-                        body.stickerId == item.sticker?.id,
-                        body.attachmentIds.allSatisfy({ !$0.isEmpty }),
-                        Set(body.attachmentIds).count == body.attachmentIds.count,
-                        body.messageType != .text || body.message?.isEmpty == false
-                            || !body.attachmentIds.isEmpty
-                    else { throw LocalStorageError.corruptRecord }
-                }
-            }
-            if let confirmed {
-                guard frozen != nil, item.acknowledgedRevision >= frozen!.revision else {
-                    throw LocalStorageError.corruptRecord
-                }
-                try validateIdentity(confirmed, item: item)
-            }
-            if let patch {
-                guard confirmed != nil, item.isPublished,
-                    patch.revision > item.acknowledgedRevision, patch.revision <= item.editRevision,
-                    !patch.text.isEmpty || !patch.attachmentIDs.isEmpty,
-                    patch.attachmentIDs.allSatisfy({ !$0.isEmpty }),
-                    Set(patch.attachmentIDs).count == patch.attachmentIDs.count
-                else { throw LocalStorageError.corruptRecord }
-            }
-            return item
-        }
-        let composing = items.last?.isBlocked == true ? items.last : nil
-        guard items.filter(\.isBlocked).count == (composing == nil ? 0 : 1) else {
-            throw LocalStorageError.corruptRecord
-        }
-        let updatedAt: Date
-        if composing != nil, let row = rows.last {
-            updatedAt = Date(timeIntervalSince1970: row["updated_at"])
-        } else if let watermark {
-            updatedAt = Date(timeIntervalSince1970: watermark["updated_at"])
-        } else {
-            updatedAt = .distantPast
-        }
-        let draft = LocalDraft(
-            text: composing?.text ?? "", replyToMessage: composing?.replyToMessage,
-            editRevision: composing?.editRevision ?? watermark?["edit_revision"] ?? 0,
-            updatedAt: updatedAt, itemID: composing?.clientGeneratedID,
-            attachments: composing?.attachments ?? [],
-            compressionEnabled: composing?.compressionEnabled ?? true,
-            linkPreviews: composing?.metadata?.linkPreviews ?? [])
-        return LocalConversationSnapshot(
-            chatID: key.chatID, threadID: key.threadID, revision: revision, draft: draft,
-            outgoing: items.filter { !$0.isBlocked }, composingItem: composing)
-    }
-
-    private static func decodeReply(_ data: Data?) throws -> MessagePreview? {
-        try data.map { try JSONDecoder().decode(MessagePreview.self, from: $0) }
     }
 }

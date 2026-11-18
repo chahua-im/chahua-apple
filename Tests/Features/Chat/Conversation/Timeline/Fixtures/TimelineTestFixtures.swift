@@ -60,13 +60,18 @@ enum TimelineTestFixtures {
 
     static func pending(
         id: String, at second: Int = 0, type: MessageType = .text,
-        text: String = "Queued message", claimed: Bool = false
+        text: String = "Queued message", phase: OutboxPhase = .queued(blockedBy: nil)
     ) -> PendingOutgoingMessage {
         PendingOutgoingMessage(
             chatID: "chat", clientGeneratedID: id,
             body: .init(messageType: type, clientGeneratedId: id, message: text),
-            enqueuedAt: date(second: second), senderID: 1, state: claimed ? .sending : .queued,
-            dispatchClaimed: claimed)
+            enqueuedAt: date(second: second), senderID: 1, phase: phase)
+    }
+
+    static func stableKey(
+        _ id: String, senderID: Int32 = 1, chatID: String = "chat", threadID: String? = nil
+    ) -> ConversationMessageStableKey {
+        .clientGenerated(id, senderID: senderID, chatID: chatID, threadID: threadID)
     }
 
     static func capturedPreferenceSnapshot(firstID: UInt64, name: String) throws

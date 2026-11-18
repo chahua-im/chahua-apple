@@ -91,10 +91,10 @@
                         self.target = nil
                         actions.editPendingMessage?(pending)
                     },
-                    onCancelPending: { pending in
-                        guard actions.canCancelPendingMessage(pending) else { return }
+                    onRemovePending: { pending in
+                        guard actions.canRemovePendingMessage(pending) else { return }
                         self.target = nil
-                        actions.cancelPendingMessage?(pending)
+                        actions.removePendingMessage?(pending)
                     },
                     isReacting: actions.isReacting(to: row.entry),
                     onReaction: { emoji in

@@ -13,7 +13,7 @@
         let actions: TimelineBubbleActions
         let interfaceStyle: UIUserInterfaceStyle
         let onEditPending: (PendingOutgoingMessage) -> Void
-        let onCancelPending: (PendingOutgoingMessage) -> Void
+        let onRemovePending: (PendingOutgoingMessage) -> Void
         let isReacting: Bool
         let onReaction: (String) -> Void
         let onAction: (MessageMenuAction) -> Void
@@ -444,7 +444,7 @@
             }
             if case .pending(let pending) = value.row.entry,
                 value.actions.canEditPendingMessage(pending)
-                    || value.actions.canCancelPendingMessage(pending)
+                    || value.actions.canRemovePendingMessage(pending)
             {
                 let surface = MessageInteractionSurface(radius: 14)
                 let stack = UIStackView()
@@ -457,31 +457,29 @@
                     stack.topAnchor.constraint(equalTo: surface.content.topAnchor),
                     stack.bottomAnchor.constraint(equalTo: surface.content.bottomAnchor),
                 ])
-                for revoke in [false, true] {
+                let canEdit = value.actions.canEditPendingMessage(pending)
+                let canRemove = value.actions.canRemovePendingMessage(pending)
+                for remove in [false, true] where (remove ? canRemove : canEdit) {
                     let title: String.LocalizationValue =
-                        revoke ? "Recall message" : "Edit message"
+                        remove ? "Remove from Outbox" : "Edit queued message"
                     var config = UIButton.Configuration.plain()
                     config.title = AppLanguage.localized(title)
-                    config.image = UIImage(systemName: revoke ? "trash" : "square.and.pencil")
+                    config.image = UIImage(systemName: remove ? "trash" : "square.and.pencil")
                     config.imagePadding = 8
-                    config.baseForegroundColor = revoke ? .systemRed : .label
+                    config.baseForegroundColor = remove ? .systemRed : .label
                     let button = UIButton(configuration: config)
-                    button.isEnabled =
-                        revoke
-                        ? value.actions.canCancelPendingMessage(pending)
-                        : value.actions.canEditPendingMessage(pending)
                     button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
                     button.addAction(
                         UIAction { [weak self] _ in
                             guard let self else { return }
-                            if revoke {
-                                self.presentation.onCancelPending(pending)
+                            if remove {
+                                self.presentation.onRemovePending(pending)
                             } else {
                                 self.presentation.onEditPending(pending)
                             }
                         }, for: .touchUpInside)
                     stack.addArrangedSubview(button)
-                    if !revoke {
+                    if !remove && canRemove {
                         let divider = UIView()
                         divider.backgroundColor = .separator
                         divider.heightAnchor.constraint(equalToConstant: 1 / UIScreen.main.scale)
@@ -489,8 +487,10 @@
                         stack.addArrangedSubview(divider)
                     }
                 }
-                surface.heightAnchor.constraint(equalToConstant: 88 + 1 / UIScreen.main.scale)
-                    .isActive = true
+                let hasBoth = canEdit && canRemove
+                surface.heightAnchor.constraint(
+                    equalToConstant: hasBoth ? 88 + 1 / UIScreen.main.scale : 44
+                ).isActive = true
                 actionStack.addArrangedSubview(surface)
             }
             view.setNeedsLayout()

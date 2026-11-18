@@ -124,9 +124,11 @@
             }
         }
 
-        func testMiddleClaimedPendingMenuAndIndependentEligibilityRefresh() async throws {
+        func testQueuedMiddlePendingMenuAndIndependentEligibilityRefresh() async throws {
             let pending = ["first", "middle", "last"].enumerated().map {
-                TimelineTestFixtures.pending(id: $0.element, at: $0.offset, claimed: true)
+                TimelineTestFixtures.pending(
+                    id: $0.element, at: $0.offset,
+                    phase: $0.offset == 0 ? .sending : .queued(blockedBy: "first"))
             }
             let store = ConversationMessageStore()
             store.replacePending(chatID: "chat", with: pending)
@@ -134,11 +136,11 @@
                 chatID: "chat", currentUserID: 1, isGroupChat: false,
                 source: BubbleSource(page: ListMessagesResponse(messages: [])), messageStore: store)
             var edited: [String] = []
-            var cancelled: [String] = []
+            var removed: [String] = []
             var actions = TimelineBubbleActions(
-                editablePendingMessageIDs: ["middle"], cancellablePendingMessageIDs: ["middle"],
+                editablePendingMessageIDs: ["middle"], removablePendingMessageIDs: ["middle"],
                 editPendingMessage: { edited.append($0.clientGeneratedID) },
-                cancelPendingMessage: { cancelled.append($0.clientGeneratedID) })
+                removePendingMessage: { removed.append($0.clientGeneratedID) })
             let controller = TimelineCollectionViewController(model: model, actions: actions)
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
             let window = UIWindow(windowScene: scene)
@@ -160,7 +162,8 @@
             func middleBinding() throws -> TimelineRowBinding {
                 try XCTUnwrap(
                     descendants(TimelineRowView.self, in: controller.view).first {
-                        $0.binding?.presentation.row.stableMessageKey == .clientGenerated("middle")
+                        $0.binding?.presentation.row.stableMessageKey
+                            == TimelineTestFixtures.stableKey("middle")
                     }?.binding)
             }
             func present(_ binding: TimelineRowBinding) throws {
@@ -176,46 +179,45 @@
                         presentation: binding.presentation, layout: binding.layout),
                     mediaContext: nil, actions: binding.actions, interfaceStyle: .light,
                     onEditPending: { binding.actions.editPendingMessage?($0) },
-                    onCancelPending: { binding.actions.cancelPendingMessage?($0) },
+                    onRemovePending: { binding.actions.removePendingMessage?($0) },
                     isReacting: false, onReaction: { _ in }, onAction: { _ in }, onClose: {})
                 coordinator.attach(to: window)
                 window.layoutIfNeeded()
             }
-            func menuButton(_ key: String.LocalizationValue) throws -> UIButton {
-                try XCTUnwrap(
-                    descendants(UIButton.self, in: window).first {
-                        $0.configuration?.title == AppLanguage.localized(key)
-                    })
+            func menuButton(_ key: String.LocalizationValue) -> UIButton? {
+                descendants(UIButton.self, in: window).first {
+                    $0.configuration?.title == AppLanguage.localized(key)
+                }
             }
             let initial = try middleBinding()
             XCTAssertEqual(initial.actions.editablePendingMessageIDs, ["middle"])
-            XCTAssertEqual(initial.actions.cancellablePendingMessageIDs, ["middle"])
+            XCTAssertEqual(initial.actions.removablePendingMessageIDs, ["middle"])
             try present(initial)
-            XCTAssertTrue(try menuButton("Edit message").isEnabled)
-            XCTAssertTrue(try menuButton("Recall message").isEnabled)
+            XCTAssertTrue(try XCTUnwrap(menuButton("Edit queued message")).isEnabled)
+            XCTAssertTrue(try XCTUnwrap(menuButton("Remove from Outbox")).isEnabled)
             try await Task.sleep(for: .milliseconds(350))
             let capture = XCTAttachment(
                 image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
                     window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
                 })
-            capture.name = "Claimed middle queued message with independent edit and recall"
+            capture.name = "Queued middle message with independent edit and local removal"
             capture.lifetime = .keepAlways
             add(capture)
-            try menuButton("Edit message").sendActions(for: .touchUpInside)
+            try XCTUnwrap(menuButton("Edit queued message")).sendActions(for: .touchUpInside)
             XCTAssertEqual(edited, ["middle"])
             actions.editablePendingMessageIDs = []
             controller.actions = actions
             try present(middleBinding())
-            XCTAssertFalse(try menuButton("Edit message").isEnabled)
-            XCTAssertTrue(try menuButton("Recall message").isEnabled)
-            try menuButton("Recall message").sendActions(for: .touchUpInside)
-            XCTAssertEqual(cancelled, ["middle"])
+            XCTAssertNil(menuButton("Edit queued message"))
+            XCTAssertTrue(try XCTUnwrap(menuButton("Remove from Outbox")).isEnabled)
+            try XCTUnwrap(menuButton("Remove from Outbox")).sendActions(for: .touchUpInside)
+            XCTAssertEqual(removed, ["middle"])
             actions.editablePendingMessageIDs = ["middle"]
-            actions.cancellablePendingMessageIDs = []
+            actions.removablePendingMessageIDs = []
             controller.actions = actions
             try present(middleBinding())
-            XCTAssertTrue(try menuButton("Edit message").isEnabled)
-            XCTAssertFalse(try menuButton("Recall message").isEnabled)
+            XCTAssertTrue(try XCTUnwrap(menuButton("Edit queued message")).isEnabled)
+            XCTAssertNil(menuButton("Remove from Outbox"))
         }
 
         func testForwardedContentUsesNativeTimelineCardsAndPlaceholderBoundaries() async throws {
@@ -833,7 +835,8 @@
                 chatID: "chat", clientGeneratedID: "pending",
                 body: .init(
                     messageType: .text, clientGeneratedId: "pending", message: "Not confirmed"),
-                enqueuedAt: TimelineTestFixtures.date(second: 16), senderID: 1, state: .queued
+                enqueuedAt: TimelineTestFixtures.date(second: 16), senderID: 1,
+                phase: .queued(blockedBy: nil)
             )
             let store = ConversationMessageStore()
             store.replacePending(chatID: "chat", with: [pending])

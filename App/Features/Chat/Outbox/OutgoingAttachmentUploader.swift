@@ -4,13 +4,13 @@ import Foundation
 nonisolated enum OutgoingAttachmentUploadError: LocalizedError {
     case unsafeAllocation
     case invalidResponse
-    case httpStatus(Int)
+    case httpStatus(Int, retryAfter: Date?)
 
     var errorDescription: String? {
         switch self {
         case .unsafeAllocation: "The attachment upload URL or headers are invalid."
         case .invalidResponse: "The attachment upload returned an invalid response."
-        case .httpStatus(let status): "The attachment upload failed (HTTP \(status))."
+        case .httpStatus(let status, _): "The attachment upload failed (HTTP \(status))."
         }
     }
 }
@@ -68,7 +68,9 @@ nonisolated struct OutgoingAttachmentUploader: Sendable {
                 throw OutgoingAttachmentUploadError.invalidResponse
             }
             guard (200..<300).contains(response.statusCode) else {
-                throw OutgoingAttachmentUploadError.httpStatus(response.statusCode)
+                throw OutgoingAttachmentUploadError.httpStatus(
+                    response.statusCode,
+                    retryAfter: APIError.retryDate(from: response.value(forHTTPHeaderField: "Retry-After")))
             }
             onProgress(1)
         } catch {

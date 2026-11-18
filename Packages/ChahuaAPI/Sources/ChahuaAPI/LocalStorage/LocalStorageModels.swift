@@ -42,8 +42,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
     public var height: Int
     public var byteCount: Int64
     public var attachmentID: String?
-    public var error: String?
-    // Optional for compatibility with durable rows written before general-file acquisition.
+    public var failure: OutboxFailure.Reason?
     public var preservesOriginal: Bool?
     public var isFile: Bool { preservesOriginal == true }
     public var isUploaded: Bool { attachmentID != nil }
@@ -54,7 +53,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
         id: String, generation: String, position: Int, sourcePath: String,
         preparedPath: String? = nil, previewPath: String, fileName: String, mimeType: String,
         width: Int, height: Int, byteCount: Int64, attachmentID: String? = nil,
-        error: String? = nil,
+        failure: OutboxFailure.Reason? = nil,
         preservesOriginal: Bool? = nil
     ) {
         self.id = id
@@ -69,7 +68,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
         self.height = height
         self.byteCount = byteCount
         self.attachmentID = attachmentID
-        self.error = error
+        self.failure = failure
         self.preservesOriginal = preservesOriginal
     }
 }
@@ -79,10 +78,9 @@ public struct LocalDraft: Sendable, Equatable {
     public let replyToMessage: MessagePreview?
     public let editRevision: Int64
     public let updatedAt: Date
-    public var itemID: String? = nil
-    public var attachments: [LocalOutgoingAttachment] = []
-    public var compressionEnabled: Bool = true
-    public var linkPreviews: [LinkPreviewInput] = []
+    public let attachments: [LocalOutgoingAttachment]
+    public let compressionEnabled: Bool
+    public let linkPreviews: [LinkPreviewInput]
 }
 
 /// Immutable acknowledged source selection captured once before entering the durable outbox.
@@ -105,37 +103,27 @@ public enum LocalEditAttachment: Codable, Hashable, Sendable {
     case server(AttachmentResponse)
 }
 
-public struct LocalFrozenCreate: Codable, Hashable, Sendable {
-    public let body: CreateMessageBody?
-    public let forwardRequest: LocalForwardRequest?
-    public let revision: Int64
-
-    public init(body: CreateMessageBody?, forwardRequest: LocalForwardRequest?, revision: Int64) {
-        self.body = body
-        self.forwardRequest = forwardRequest
-        self.revision = revision
+public struct OutboxFailure: Codable, Hashable, Sendable {
+    public enum Stage: String, Codable, Hashable, Sendable { case preparation, create }
+    public enum Retry: String, Codable, Hashable, Sendable { case automatic, manual }
+    public enum Reason: Codable, Hashable, Sendable {
+        case unknownOutcome, network, conflict, invalidReceipt, authentication, rejected
+        case attachment, tooLarge(Int64), speakingRestricted(SpeakingMode)
     }
-}
 
-public struct LocalClaimedPatch: Codable, Hashable, Sendable {
-    public let text: String
-    public let attachmentIDs: [String]
-    public let revision: Int64
-    public let metadata: MessageMetadataInput?
+    public let stage: Stage
+    public let reason: Reason
+    public let retry: Retry
 
-    public init(
-        text: String, attachmentIDs: [String], revision: Int64,
-        metadata: MessageMetadataInput? = nil
-    ) {
-        self.text = text
-        self.attachmentIDs = attachmentIDs
-        self.revision = revision
-        self.metadata = metadata
+    public init(stage: Stage, reason: Reason, retry: Retry) {
+        self.stage = stage
+        self.reason = reason
+        self.retry = retry
     }
 }
 
 public struct LocalOutgoingMessage: Sendable, Equatable {
-    public enum State: String, Sendable { case queued, sending, failed }
+    public enum State: String, Sendable { case pending, sending, failed }
     public let clientGeneratedID: String
     public let chatID: String
     public let threadID: String?
@@ -146,27 +134,19 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public let text: String
     public let replyToMessage: MessagePreview?
     public let enqueuedAt: Date
-    public let enqueueSequence: Int64
-    public let dispatchOrder: Int64
+    public let position: Int64
     public let state: State
-    public var attachments: [LocalOutgoingAttachment] = []
-    public var isBlocked: Bool = false
-    public var editRevision: Int64 = 0
-    public var compressionEnabled: Bool = true
-    /// Once claimed, even an interrupted or failed request must replay the same payload.
-    public var dispatchClaimed: Bool = false
-    public var sticker: MessageStickerResponse? = nil
-    public var forwardRequest: LocalForwardRequest? = nil
-    public var speakingRestriction: SpeakingMode? = nil
-    public var frozenCreate: LocalFrozenCreate? = nil
-    public var intentAttachments: [LocalEditAttachment]? = nil
-    public var confirmedMessage: MessageResponse? = nil
-    public var isPublished: Bool = false
-    public var isCancelled: Bool = false
-    public var acknowledgedRevision: Int64 = -1
-    public var claimedPatch: LocalClaimedPatch? = nil
-    public var mutationRetryable: Bool = false
-    public var metadata: MessageMetadataInput? = nil
+    public let attachments: [LocalOutgoingAttachment]
+    public let compressionEnabled: Bool
+    public let sticker: MessageStickerResponse?
+    public let forwardRequest: LocalForwardRequest?
+    public let metadata: MessageMetadataInput?
+    public let failure: OutboxFailure?
+
+    public var isEditable: Bool {
+        guard forwardRequest == nil, sticker == nil, messageType != .audio else { return false }
+        return state == .pending || failure?.stage == .preparation
+    }
 
     public var messageType: MessageType {
         if let forwardRequest {
@@ -180,32 +160,17 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     }
 
     public var isReadyForDispatch: Bool {
-        if frozenCreate != nil { return true }
-        return (intentAttachments ?? attachments.map(LocalEditAttachment.local)).allSatisfy {
-            switch $0 {
-            case .local(let slot): return slot.attachmentID != nil && slot.error == nil
-            case .server: return true
-            }
-        }
+        attachments.allSatisfy { $0.isUploaded && $0.failure == nil }
     }
 
     public var body: CreateMessageBody {
-        if let frozenCreate {
-            precondition(frozenCreate.body != nil, "Forwarding must use the forwarding endpoints")
-            return frozenCreate.body!
-        }
         precondition(forwardRequest == nil, "Forwarding must use the forwarding endpoints")
         precondition(
             isReadyForDispatch, "An unresolved attachment must never be omitted from a message")
         return CreateMessageBody(
             messageType: messageType, clientGeneratedId: clientGeneratedID,
             message: messageType == .text ? text : nil,
-            attachmentIds: (intentAttachments ?? attachments.map(LocalEditAttachment.local)).map {
-                switch $0 {
-                case .local(let slot): return slot.attachmentID!
-                case .server(let attachment): return attachment.id
-                }
-            },
+            attachmentIds: attachments.map { $0.attachmentID! },
             replyToId: replyToMessage?.id, stickerId: sticker?.id, metadata: metadata
         )
     }
@@ -220,7 +185,6 @@ public struct LocalConversationSnapshot: Sendable, Equatable {
     public let revision: Int64
     public let draft: LocalDraft
     public let outgoing: [LocalOutgoingMessage]
-    public var composingItem: LocalOutgoingMessage? = nil
 }
 
 public struct LocalOutgoingClaim: Sendable {
@@ -228,30 +192,14 @@ public struct LocalOutgoingClaim: Sendable {
     public let message: LocalOutgoingMessage?
 }
 
-public enum LocalOutgoingDisposition: Equatable, Sendable {
-    case retained, completed, cancelled
-}
-
-public struct LocalOutgoingTransition: Sendable {
-    public let snapshot: LocalConversationSnapshot
-    public let clientGeneratedID: String
-    public let disposition: LocalOutgoingDisposition
-}
-
-public struct LocalOutgoingPatchClaim: Sendable {
-    public let snapshot: LocalConversationSnapshot
-    public let patch: LocalClaimedPatch?
-}
-
-public enum OutgoingRetryScope: Sendable { case message, messageAndSubsequent }
-
 public enum LocalStorageError: Error, Sendable {
     case unsupportedSchema
     case corruptRecord
     case blankMessage
     case staleDraft
-    case notTail
-    case dispatchAlreadyClaimed
+    case missingOutgoing
+    case outgoingNotEditable
+    case outgoingSending
     case invalidAttachments
     case unsupportedMessageType
 }

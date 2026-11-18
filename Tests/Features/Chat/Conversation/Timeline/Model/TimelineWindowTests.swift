@@ -78,7 +78,7 @@ final class TimelineWindowTests: XCTestCase {
         for (index, id) in window.messages.map(\.id).enumerated() {
             XCTAssertEqual(window.index(ofServerID: id), index)
         }
-        XCTAssertEqual(window.index(of: .clientGenerated("late")), 3)
+        XCTAssertEqual(window.index(of: TimelineTestFixtures.stableKey("late")), 3)
         XCTAssertNil(window.index(ofServerID: MessageID(7)))
     }
 
@@ -103,7 +103,7 @@ final class TimelineWindowTests: XCTestCase {
 
         window.appendNewer(try page([acknowledged]))
         XCTAssertEqual(window.messages.map(\.id), ids(50, 99))
-        XCTAssertEqual(window.index(of: .clientGenerated("send-1")), 1)
+        XCTAssertEqual(window.index(of: provisional.timelineStableKey), 1)
         XCTAssertEqual(window.index(ofServerID: MessageID(99)), 1)
         XCTAssertNil(window.index(ofServerID: MessageID(1)))
     }
@@ -120,7 +120,7 @@ final class TimelineWindowTests: XCTestCase {
             window.insertLive(message(7, at: 1, text: "old", clientGeneratedID: "other")),
             .duplicate)
         XCTAssertEqual(window.messages.map(\.message), ["current"])
-        XCTAssertEqual(window.index(of: .clientGenerated("send")), 0)
+        XCTAssertEqual(window.index(of: TimelineTestFixtures.stableKey("send")), 0)
     }
 
     func testEmptyClientGeneratedIDFallsBackToServerID() throws {
@@ -139,7 +139,7 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertFalse(window.remove(serverID: MessageID(2)))
         XCTAssertTrue(window.remove(serverID: MessageID(1)))
         XCTAssertTrue(window.messages.isEmpty)
-        XCTAssertNil(window.index(of: .clientGenerated("client-1")))
+        XCTAssertNil(window.index(of: TimelineTestFixtures.stableKey("client-1")))
     }
 
     func testTrimNewestCreatesBoundaryCursorAndLeavesLiveEdge() throws {
@@ -150,7 +150,7 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(window.messages.map(\.id), ids(1, 2, 3))
         XCTAssertEqual(window.newerCursor, MessageID(3))
         XCTAssertFalse(window.isAtLiveEdge)
-        XCTAssertNil(window.index(of: .clientGenerated("client-4")))
+        XCTAssertNil(window.index(of: TimelineTestFixtures.stableKey("client-4")))
     }
 
     func testTrimOldestCreatesBoundaryCursor() throws {

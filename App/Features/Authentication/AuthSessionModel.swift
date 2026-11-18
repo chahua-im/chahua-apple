@@ -30,6 +30,7 @@ final class AuthSessionModel: ObservableObject {
     @Published private(set) var validationMessage: LocalizedStringKey?
     @Published private(set) var isSubmitting = false
     @Published private(set) var isSlow = false
+    @Published var signOutError: LocalizedStringKey?
     var prepareForSignOut: (() async throws -> Void)?
     var willTransitionSession: ((AuthSessionState) -> Void)?
 
@@ -206,7 +207,8 @@ final class AuthSessionModel: ObservableObject {
     }
 
     func logout() async {
-        guard case .authenticated = state else { return }
+        guard case .authenticated = state, !isSubmitting else { return }
+        signOutError = nil
         isSubmitting = true
         defer { isSubmitting = false }
         do {
@@ -215,12 +217,14 @@ final class AuthSessionModel: ObservableObject {
             state = .signedOut(.loggedOut)
         } catch {
             logFailure(operation: "logout", error: error)
-            validationMessage = "Could not sign out. Try again."
+            signOutError = "Could not sign out. Your session is still active. Try again."
         }
     }
 
     func sessionDidExpire() async {
-        guard case .authenticated = state else { return }
+        guard case .authenticated = state, !isSubmitting else { return }
+        isSubmitting = true
+        defer { isSubmitting = false }
         let expiredGeneration = stateGeneration
         logger.notice("Authenticated session expired")
         try? await tokenStorage.deleteToken()

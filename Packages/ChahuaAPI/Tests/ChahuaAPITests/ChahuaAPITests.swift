@@ -6,6 +6,7 @@ import XCTest
 final class ChahuaAPITests: XCTestCase {
     override func tearDown() {
         StubURLProtocol.handler = nil
+        StubURLProtocol.responseHeaders = [:]
         super.tearDown()
     }
 
@@ -976,6 +977,138 @@ final class ChahuaAPITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
     }
 
+    func testOutboxConflictDecodesOnlyStructured409FromSendAndForward() async throws {
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        let detail = #"""
+            {"code":"clientGeneratedIdConflict","existingMessage":{
+                "id":"42","chatId":"10","clientGeneratedId":"same-id",
+                "messageType":"text","message":"Already accepted","replyRootId":"20",
+                "sender":{"uid":1,"gender":0,"name":"Ada"},
+                "createdAt":"2026-09-01T01:02:03.125Z","isEdited":false,"isDeleted":false,
+                "hasAttachments":false,"attachments":[],"reactions":[]
+            }}
+            """#
+        let create = CreateMessageBody(messageType: .text, clientGeneratedId: "same-id", message: "different")
+        let forward = ForwardMessageBody(sourceChatId: "30", clientGeneratedId: "same-id")
+        for isForward in [false, true] {
+            StubURLProtocol.handler = { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+                return (409, detail)
+            }
+            do {
+                if isForward {
+                    _ = try await client.forwardMessage(chatID: "10", messageID: MessageID(7), body: forward)
+                } else {
+                    _ = try await client.sendThreadMessage(chatID: "10", threadID: "20", body: create)
+                }
+                XCTFail("A 409 must not return as a successful create")
+            } catch let error as APIError {
+                let existing = try XCTUnwrap(error.conflictingExistingMessage)
+                XCTAssertEqual(existing.id, MessageID(42))
+                XCTAssertEqual(existing.clientGeneratedId, "same-id")
+                XCTAssertEqual(existing.replyRootId, "20")
+                XCTAssertEqual(existing.sender.uid, 1)
+                XCTAssertEqual(existing.message, "Already accepted")
+                XCTAssertEqual(existing.createdAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1), 0.125)
+            }
+        }
+
+        for body in ["Duplicate client generated id", #"{"code":"clientGeneratedIdConflict","existingMessage":{}}"#] {
+            StubURLProtocol.handler = { _ in (409, body) }
+            do {
+                _ = try await client.sendMessage(chatID: "10", body: create)
+                XCTFail("Expected a conflict")
+            } catch let error as APIError {
+                XCTAssertNil(error.conflictingExistingMessage)
+            }
+        }
+    }
+
+    func testOutboxRequestsCaptureRetryAfterWithoutChangingOtherHTTPErrors() async throws {
+        let client = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: nil, session: testSession())
+        let create = CreateMessageBody(messageType: .text, clientGeneratedId: "one", message: "text")
+        let sourceID = MessageID(7)
+        let requests: [(Int, () async throws -> Void)] = [
+            (408, { _ = try await client.sendMessage(chatID: "10", body: create) }),
+            (429, {
+                _ = try await client.sendThreadMessage(chatID: "10", threadID: "20", body: create)
+            }),
+            (503, {
+                _ = try await client.forwardMessage(
+                    chatID: "10", messageID: sourceID,
+                    body: ForwardMessageBody(sourceChatId: "30", clientGeneratedId: "two"))
+            }),
+            (502, {
+                _ = try await client.forwardMessages(
+                    chatID: "10",
+                    body: ForwardMessagesBody(
+                        sourceChatId: "30", messageIds: [sourceID], clientGeneratedId: "three"))
+            }),
+            (500, { _ = try await client.attachmentConfig() }),
+            (429, {
+                _ = try await client.requestAttachmentUpload(
+                    fileName: "file.txt", contentType: "text/plain", purpose: .file,
+                    size: 10, width: 0, height: 0, order: 0)
+            }),
+        ]
+        let responseBody = "Try again later"
+        let dateHeader = "Sun, 06 Nov 1994 08:49:37 GMT"
+        let expectedDate = Date(timeIntervalSince1970: 784_111_777)
+        StubURLProtocol.responseHeaders = ["retry-after": dateHeader]
+        for (status, request) in requests {
+            StubURLProtocol.handler = { _ in (status, responseBody) }
+            do {
+                try await request()
+                XCTFail("Expected a retryable HTTP \(status)")
+            } catch let error as APIError {
+                guard case .retryableHTTP(let actualStatus, let body, _) = error else {
+                    XCTFail("Expected retry metadata, got \(error)")
+                    continue
+                }
+                XCTAssertEqual(actualStatus, status)
+                XCTAssertEqual(body, Data(responseBody.utf8))
+                XCTAssertEqual(error.bodyText, responseBody)
+                XCTAssertEqual(error.retryAfter, expectedDate)
+            }
+        }
+
+        for (status, field, usesOutboxEndpoint) in [
+            (429, nil, true), (503, "-2", true), (409, dateHeader, true),
+            (401, dateHeader, true), (503, dateHeader, false),
+        ] {
+            StubURLProtocol.responseHeaders = field.map { ["Retry-After": $0] } ?? [:]
+            StubURLProtocol.handler = { _ in (status, responseBody) }
+            do {
+                if usesOutboxEndpoint {
+                    _ = try await client.sendMessage(chatID: "10", body: create)
+                } else {
+                    _ = try await client.me()
+                }
+                XCTFail("Expected a plain HTTP \(status)")
+            } catch APIError.http(let actualStatus, let body) {
+                XCTAssertEqual(actualStatus, status)
+                XCTAssertEqual(body, Data(responseBody.utf8))
+            }
+        }
+    }
+
+    func testRetryAfterParsesDeltaSecondsAndHTTPDates() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let expectedDate = Date(timeIntervalSince1970: 784_111_777)
+        XCTAssertEqual(APIError.retryDate(from: " 15\t", now: now), now.addingTimeInterval(15))
+        XCTAssertEqual(APIError.retryDate(from: "0", now: now), now)
+        XCTAssertEqual(
+            APIError.retryDate(from: "Sunday, 06-Nov-94 08:49:37 GMT", now: now), expectedDate)
+        XCTAssertEqual(APIError.retryDate(from: "Sun Nov  6 08:49:37 1994", now: now), expectedDate)
+        for invalid in [nil, "", "-5", "+5", "1.5", "tomorrow", "99999999999999999999"] {
+            XCTAssertNil(APIError.retryDate(from: invalid, now: now))
+        }
+    }
+
     func testUnarchiveUsesDeleteArchiveRoutesAndAcceptsEmpty204() async throws {
         let requests = RequestRecorder()
         StubURLProtocol.handler = { request in
@@ -1623,14 +1756,18 @@ private final class RequestRecorder: @unchecked Sendable {
 
 private final class StubURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) -> (Int, String))?
+    nonisolated(unsafe) static var responseHeaders: [String: String] = [:]
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         guard let handler = Self.handler else { fatalError("Missing handler") }
         let result = handler(request)
+        let headers = ["Content-Type": "application/json"].merging(Self.responseHeaders) { _, value in
+            value
+        }
         let response = HTTPURLResponse(
             url: request.url!, statusCode: result.0, httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"])!
+            headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(result.1.utf8))
         client?.urlProtocolDidFinishLoading(self)

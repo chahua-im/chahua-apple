@@ -232,6 +232,7 @@ struct NotificationSettingsView: View {
             username: me.username,
             sessionRevision: chatStore.sessionRevision,
             isBusy: isSigningOut || notifications.isUnregistering,
+            hasLocalWork: { chatStore.drafts.hasUnsavedWork || chatStore.outgoingQueue.hasSignOutWork },
             onSignOut: onSignOut
         )
     }
@@ -693,19 +694,23 @@ private struct SettingsSignOutButton: View {
     let username: String
     let sessionRevision: Int
     let isBusy: Bool
+    let hasLocalWork: () -> Bool
     let onSignOut: () -> Void
     @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
 
     private struct Request {
         let accountID: Int32
         let sessionRevision: Int
+        let warnsAboutLocalWork: Bool
     }
     @State private var request: Request?
 
     var body: some View {
         Button(role: .destructive) {
             guard !isBusy else { return }
-            request = Request(accountID: accountID, sessionRevision: sessionRevision)
+            request = Request(
+                accountID: accountID, sessionRevision: sessionRevision,
+                warnsAboutLocalWork: hasLocalWork())
         } label: {
             Label("Sign out…", systemImage: "rectangle.portrait.and.arrow.right")
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -732,12 +737,12 @@ private struct SettingsSignOutButton: View {
                 else { return }
                 onSignOut()
             }
-        } message: { _ in
-            #if os(macOS)
-                Text("You’ll need to sign in again to see your chats on this Mac.")
-            #else
+        } message: { pending in
+            if pending.warnsAboutLocalWork {
+                Text("Signing out removes this account’s drafts and queued messages from this device. Messages already sent, or whose delivery couldn’t be confirmed, may still exist on the server.")
+            } else {
                 Text("You’ll need to sign in again to see your chats on this device.")
-            #endif
+            }
         }
         .onChange(of: accountID) { _, _ in request = nil }
         .onChange(of: sessionRevision) { _, _ in request = nil }

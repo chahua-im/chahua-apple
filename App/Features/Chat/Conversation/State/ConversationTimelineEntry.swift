@@ -8,7 +8,10 @@ enum ConversationTimelineEntry: Hashable {
     var stableKey: ConversationMessageStableKey {
         switch self {
         case .remote(let message): message.timelineStableKey
-        case .pending(let pending): .clientGenerated(pending.clientGeneratedID)
+        case .pending(let pending):
+            .clientGenerated(
+                pending.clientGeneratedID, senderID: pending.senderID, chatID: pending.chatID,
+                threadID: pending.threadID)
         }
     }
 
@@ -71,12 +74,23 @@ enum ConversationTimelineEntry: Hashable {
         switch self {
         case .remote: .delivered
         case .pending(let pending):
-            switch pending.state {
+            switch pending.phase {
+            case .preparing: .preparing
             case .queued: .queued
             case .sending: .sending
             case .failed: .failed
             }
         }
+    }
+
+    var outboxPhase: OutboxPhase? {
+        guard case .pending(let pending) = self else { return nil }
+        return pending.phase
+    }
+
+    var isOutboxBlocked: Bool {
+        guard case .queued(let blocker)? = outboxPhase else { return false }
+        return blocker != nil
     }
 
     var remoteMessage: MessageResponse? {
@@ -99,12 +113,3 @@ enum ConversationTimelineEntry: Hashable {
     var attachments: [AttachmentResponse] { presentationMessage?.attachments ?? [] }
 }
 
-extension ConversationMessageStableKey {
-    init(clientGeneratedID: String, fallbackServerID: MessageID? = nil) {
-        if clientGeneratedID.isEmpty, let fallbackServerID {
-            self = .server(fallbackServerID)
-        } else {
-            self = .clientGenerated(clientGeneratedID)
-        }
-    }
-}

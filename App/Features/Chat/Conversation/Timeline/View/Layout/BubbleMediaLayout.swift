@@ -33,7 +33,10 @@ extension LocalOutgoingAttachment: BubbleMediaAttachment {
     }
 }
 
-extension LocalEditAttachment: BubbleMediaAttachment {
+enum TimelineMediaAttachment: BubbleMediaAttachment {
+    case local(LocalOutgoingAttachment)
+    case server(AttachmentResponse)
+
     var id: String {
         switch self {
         case .local(let attachment): attachment.id
@@ -57,12 +60,11 @@ extension LocalEditAttachment: BubbleMediaAttachment {
 }
 
 extension ConversationTimelineEntry {
-    /// A submitted selection is authoritative even when it is explicitly empty.
-    var mediaAttachments: [LocalEditAttachment] {
+    var mediaAttachments: [TimelineMediaAttachment] {
         if case .pending(let pending) = self, pending.forwardRequest == nil {
-            return pending.intentAttachments ?? pending.attachments.map(LocalEditAttachment.local)
+            return pending.attachments.map(TimelineMediaAttachment.local)
         }
-        return (presentationMessage?.attachments ?? []).map(LocalEditAttachment.server)
+        return (presentationMessage?.attachments ?? []).map(TimelineMediaAttachment.server)
     }
 }
 

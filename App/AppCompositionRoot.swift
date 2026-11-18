@@ -9,6 +9,7 @@ final class AppCompositionRoot {
     let mediaContext: AppMediaContext
     let realtimeCoordinator: RealtimeCoordinator
     let notifications: PushNotificationCoordinator
+    let localStorage: AccountLocalStoreOwner
     private var chatObservation: AnyCancellable?
 
     convenience init(apiConfiguration: ChahuaConfiguration) {
@@ -27,7 +28,7 @@ final class AppCompositionRoot {
                     let directory = LocalStorageScope(
                         apiBaseURL: apiConfiguration.baseURL, userID: uid
                     ).directory(under: root)
-                    return try ChahuaLocalStore(directory: directory)
+                    return try ChahuaLocalStore(directory: directory, userID: uid)
                 }.value
             }
         )
@@ -51,8 +52,11 @@ final class AppCompositionRoot {
         let invalidToken: @MainActor @Sendable () async -> Void = { [weak sessionModel] in
             await sessionModel?.sessionDidExpire()
         }
+        let localStorage = AccountLocalStoreOwner(factory: localStoreFactory)
+        self.localStorage = localStorage
         let outgoingQueue = OutgoingMessageQueue(
-            apiClient: apiClient, localStoreFactory: localStoreFactory, onInvalidToken: invalidToken
+            apiClient: apiClient, storage: localStorage, onInvalidToken: invalidToken,
+            monitorNetwork: true
         )
         chatStore = ChatStore(
             apiClient: apiClient, outgoingQueue: outgoingQueue,
@@ -65,7 +69,7 @@ final class AppCompositionRoot {
         notifications = PushNotificationCoordinator(
             api: apiClient as? any PushSubscriptionProviding, namespace: mediaNamespace)
         notifications.setQuickReplySender {
-            [weak sessionModel, weak outgoingQueue] uid, route, text in
+            [weak sessionModel, weak outgoingQueue] uid, route, text, deadline in
             guard let sessionModel, let outgoingQueue,
                 case .authenticated(let me) = sessionModel.state, me.uid == uid
             else { throw CancellationError() }
@@ -77,10 +81,21 @@ final class AppCompositionRoot {
                 throw CancellationError()
             }
             try await outgoingQueue.enqueueIndependentText(
-                chatID: route.chatID, threadID: route.threadID, text: text)
+                chatID: route.chatID, threadID: route.threadID, text: text,
+                notificationDeadline: deadline)
         }
-        sessionModel.prepareForSignOut = { [weak notifications] in
-            try await notifications?.prepareForSignOut()
+        sessionModel.prepareForSignOut = { [weak notifications, weak chatStore, weak outgoingQueue] in
+            guard let notifications, let chatStore, let outgoingQueue else { throw CancellationError() }
+            chatStore.drafts.fenceForSignOut()
+            outgoingQueue.fenceForSignOut()
+            do {
+                try await notifications.prepareForSignOut()
+            } catch {
+                await outgoingQueue.resumeAfterUnregisterFailure()
+                chatStore.drafts.resumeAfterUnregisterFailure()
+                throw error
+            }
+            try await outgoingQueue.purgeForSignOut()
         }
         chatStore.onNotificationRead = { [weak notifications] conversation, messageID in
             notifications?.didRead(conversation: conversation, through: messageID)

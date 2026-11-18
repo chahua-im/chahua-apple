@@ -663,18 +663,21 @@ final class ConversationScopeTests: XCTestCase {
         for (id, threadID) in [("parent", nil), ("one", "one"), ("two", "two")]
             as [(String, String?)]
         {
-            store.enqueue(
-                PendingOutgoingMessage(
-                    chatID: "chat", threadID: threadID, clientGeneratedID: id,
-                    body: .init(messageType: .text, clientGeneratedId: id, message: id),
-                    enqueuedAt: Date(), senderID: 1, state: .queued))
+            store.replacePending(
+                chatID: "chat", threadID: threadID,
+                with: [
+                    PendingOutgoingMessage(
+                        chatID: "chat", threadID: threadID, clientGeneratedID: id,
+                        body: .init(messageType: .text, clientGeneratedId: id, message: id),
+                        enqueuedAt: Date(), senderID: 1, phase: .queued(blockedBy: nil))
+                ])
         }
         XCTAssertEqual(store.pending(chatID: "chat").map(\.clientGeneratedID), ["parent"])
         XCTAssertEqual(
             store.pending(chatID: "chat", threadID: "one").map(\.clientGeneratedID), ["one"])
         let acknowledged = try TimelineTestFixtures.message(
             id: 1, at: 1, clientGeneratedID: "one", fields: ["replyRootId": "one"])
-        store.apply(.message(acknowledged))
+        store.replacePending(chatID: "chat", threadID: "one", with: [], acknowledging: acknowledged)
         XCTAssertTrue(store.pending(chatID: "chat", threadID: "one").isEmpty)
         XCTAssertEqual(
             store.pending(chatID: "chat", threadID: "two").map(\.clientGeneratedID), ["two"])

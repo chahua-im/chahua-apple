@@ -9,6 +9,7 @@ struct HTTPRequestSpec: Sendable {
     var requiresAuth = true
     var allowsTokenRefresh = true
     var headers: [String: String] = [:]
+    var capturesRetryAfter = false
 
     private static let segmentCharacters = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
@@ -33,7 +34,8 @@ struct HTTPRequestSpec: Sendable {
         body: Body,
         requiresAuth: Bool = true,
         allowsTokenRefresh: Bool = true,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        capturesRetryAfter: Bool = false
     ) throws -> HTTPRequestSpec {
         do {
             return HTTPRequestSpec(
@@ -44,7 +46,8 @@ struct HTTPRequestSpec: Sendable {
                 contentType: "application/json",
                 requiresAuth: requiresAuth,
                 allowsTokenRefresh: allowsTokenRefresh,
-                headers: headers
+                headers: headers,
+                capturesRetryAfter: capturesRetryAfter
             )
         } catch {
             throw APIError.encoding(description: String(describing: error))
