@@ -908,7 +908,8 @@ final class ChatStoreTests: XCTestCase {
                 currentUserID: 1, hasDraft: false, pending: pending, readThrough: MessageID(100)),
             .sending)
         let claim = try await h.localStore.claimNext(
-            chatID: "chat", threadID: nil, expectedID: pending.clientGeneratedID, retryCreate: false)
+            chatID: "chat", threadID: nil, expectedID: pending.clientGeneratedID, retryCreate: false
+        )
         let sending = try XCTUnwrap(claim.message)
         XCTAssertEqual(
             item.deliveryStatus(

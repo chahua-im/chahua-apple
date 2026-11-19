@@ -1212,7 +1212,8 @@
         }
 
         private var hasCurrentViewport: Bool {
-            !isTornDown && !applying && !settingScrollOrigin && !handlingWheel && scrollAnimation == nil
+            !isTornDown && !applying && !settingScrollOrigin && !handlingWheel
+                && scrollAnimation == nil
                 && latestSnapshot == nil && installedRevision >= 0
                 && installedRevision == model.updates.value.revision
                 && installedGeometry == currentGeometry && layoutEnvironment == currentEnvironment
@@ -1275,7 +1276,8 @@
                 distanceToBottom: maxTop - top,
                 height: unobscured.height,
                 visibleMessageIDs: visibleMessageIDs,
-                visibleReactionMessageIDs: visibleReactionMessageIDs, userScrollDelta: userScrollDelta)
+                visibleReactionMessageIDs: visibleReactionMessageIDs,
+                userScrollDelta: userScrollDelta)
             let revision = installedRevision
             let geometry = installedGeometry
             let environment = layoutEnvironment

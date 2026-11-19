@@ -1195,15 +1195,17 @@ final class ConversationTimelineModel: ObservableObject {
 
         let extent = viewport.distanceToTop + viewport.distanceToBottom
         let previous = rangeScrollReference
-        let comparable = previous.map {
-            $0.height == viewport.height
-                && abs(extent - $0.distanceToTop - $0.distanceToBottom) < 0.5
-        } ?? false
+        let comparable =
+            previous.map {
+                $0.height == viewport.height
+                    && abs(extent - $0.distanceToTop - $0.distanceToBottom) < 0.5
+            } ?? false
         // A layout read can see the new offset before the user-scroll report.
         // Do not consume that movement, but do rebase if layout changed the scroll extent.
         if reason != .layout || !comparable { rangeScrollReference = viewport }
         guard reason == .user, pendingScroll == nil else { return }
-        let delta = viewport.userScrollDelta
+        let delta =
+            viewport.userScrollDelta
             ?? (comparable ? viewport.distanceToTop - (previous?.distanceToTop ?? 0) : 0)
         guard delta != 0 else { return }
         let newer = delta > 0
@@ -1613,7 +1615,8 @@ final class ConversationTimelineModel: ObservableObject {
                     guard case .pending(let pending) = $0 else { return false }
                     return pending.clientGeneratedID == message.clientGeneratedId
                         && pending.senderID == message.sender.uid
-                        && pending.chatID == message.chatId && pending.threadID == message.replyRootId
+                        && pending.chatID == message.chatId
+                        && pending.threadID == message.replyRootId
                 }) == true
             {
                 preHistoryAcknowledgementKeys.insert(message.timelineStableKey)

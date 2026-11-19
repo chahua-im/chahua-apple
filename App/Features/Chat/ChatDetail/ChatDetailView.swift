@@ -733,7 +733,8 @@ struct ChatDetailView: View {
             guard !isEditing else { return }
             drafts.setDraftComposing(composing, chatID: chat.id, threadID: threadID)
         }
-        composer.replyToMessage = isEditing
+        composer.replyToMessage =
+            isEditing
             ? session?.replyToMessage : drafts.draftReply(chatID: chat.id, threadID: threadID)
         composer.replyFocusRequest = replyFocusRequest
         composer.onCancelReply = {
@@ -762,7 +763,8 @@ struct ChatDetailView: View {
 
         composer.attachments = composerMedia
         composer.attachmentProgress = session == nil ? outgoingQueue.attachmentProgress : [:]
-        composer.compressionEnabled = session?.compressionEnabled
+        composer.compressionEnabled =
+            session?.compressionEnabled
             ?? outgoingQueue.compressionEnabled(chatID: chat.id, threadID: threadID)
         if session != nil || !isEditing {
             if allowsCaption {
@@ -1005,7 +1007,8 @@ struct ChatDetailView: View {
             actions.togglePin = requestPinChange
         }
         if isCurrentSession {
-            let heldID = pendingEditSession?.clientGeneratedID ?? enteringPendingEdit?.clientGeneratedID
+            let heldID =
+                pendingEditSession?.clientGeneratedID ?? enteringPendingEdit?.clientGeneratedID
             let pending = outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID)
                 .filter { $0.clientGeneratedID != heldID }
             actions.removablePendingMessageIDs = Set(
@@ -1262,7 +1265,8 @@ struct ChatDetailView: View {
             if asFiles {
                 try await outgoingQueue.importFiles(urls: urls, chatID: chat.id, threadID: threadID)
             } else {
-                try await outgoingQueue.importImages(urls: urls, chatID: chat.id, threadID: threadID)
+                try await outgoingQueue.importImages(
+                    urls: urls, chatID: chat.id, threadID: threadID)
             }
         }
     }
@@ -1276,7 +1280,8 @@ struct ChatDetailView: View {
             case .mixedAttachments:
                 AppLanguage.localized("Files must be sent separately from photos and videos.")
             case .caption:
-                AppLanguage.localized("Remove the caption before adding files to this queued message.")
+                AppLanguage.localized(
+                    "Remove the caption before adding files to this queued message.")
             }
         }
     }
@@ -1590,8 +1595,11 @@ struct ChatDetailView: View {
                 detail += "\n" + AppLanguage.localized("Next retry at \(time).")
             }
             if failure.stage == .create {
-                detail += "\n" + AppLanguage.localized(
-                    "Removing it from the outbox does not delete a message that was already sent.")
+                detail +=
+                    "\n"
+                    + AppLanguage.localized(
+                        "Removing it from the outbox does not delete a message that was already sent."
+                    )
             }
             return detail
         }

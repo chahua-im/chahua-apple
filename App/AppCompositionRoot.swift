@@ -84,8 +84,11 @@ final class AppCompositionRoot {
                 chatID: route.chatID, threadID: route.threadID, text: text,
                 notificationDeadline: deadline)
         }
-        sessionModel.prepareForSignOut = { [weak notifications, weak chatStore, weak outgoingQueue] in
-            guard let notifications, let chatStore, let outgoingQueue else { throw CancellationError() }
+        sessionModel.prepareForSignOut = {
+            [weak notifications, weak chatStore, weak outgoingQueue] in
+            guard let notifications, let chatStore, let outgoingQueue else {
+                throw CancellationError()
+            }
             chatStore.drafts.fenceForSignOut()
             outgoingQueue.fenceForSignOut()
             do {

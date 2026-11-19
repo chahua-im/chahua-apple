@@ -111,15 +111,19 @@ final class ConversationTimelineModelTests: XCTestCase {
         source.store.replacePending(chatID: "chat", threadID: "1", with: [pending])
         source.store.apply(.message(otherSender))
 
-        let keys = [root.timelineStableKey, otherSender.timelineStableKey, delivered.timelineStableKey]
+        let keys = [
+            root.timelineStableKey, otherSender.timelineStableKey, delivered.timelineStableKey,
+        ]
         XCTAssertEqual(Set(keys).count, 3)
         XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), keys)
         XCTAssertEqual(remoteMessages(model).map(\.message), ["root", "other sender"])
         XCTAssertEqual(source.store.pending(chatID: "chat", threadID: "1"), [pending])
 
-        source.store.replacePending(chatID: "chat", threadID: "1", with: [], acknowledging: delivered)
+        source.store.replacePending(
+            chatID: "chat", threadID: "1", with: [], acknowledging: delivered)
         XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), keys)
-        XCTAssertEqual(remoteMessages(model).map(\.message), ["root", "other sender", "server copy"])
+        XCTAssertEqual(
+            remoteMessages(model).map(\.message), ["root", "other sender", "server copy"])
         await model.reconcileAfterReconnect()
         XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), keys)
     }
@@ -323,7 +327,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .reveal(
-                .message(TimelineTestFixtures.stableKey("client-2")), animated: false, highlight: true))
+                .message(TimelineTestFixtures.stableKey("client-2")), animated: false,
+                highlight: true))
     }
 
     func testFailedReplyJumpKeepsHistoryAndCanBeRetried() async throws {
@@ -460,7 +465,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(
             model.rows.filter { $0.stableMessageKey == acknowledged.timelineStableKey }.count, 1)
         XCTAssertTrue(
-            visibleKeys.allSatisfy { $0.filter { $0 == acknowledged.timelineStableKey }.count == 1 })
+            visibleKeys.allSatisfy { $0.filter { $0 == acknowledged.timelineStableKey }.count == 1 }
+        )
     }
 
     func testAcknowledgementAfterInitialFailureRemainsDeliveredUntilSnapshot() async throws {
@@ -495,7 +501,8 @@ final class ConversationTimelineModelTests: XCTestCase {
 
         XCTAssertEqual(source.queries.count, 1)
         XCTAssertEqual(
-            model.rows.filter { $0.stableMessageKey == TimelineTestFixtures.stableKey("send") }.count, 1)
+            model.rows.filter { $0.stableMessageKey == TimelineTestFixtures.stableKey("send") }
+                .count, 1)
         XCTAssertEqual(model.updates.value.pendingScroll?.intent, .bottom(animated: false))
         XCTAssertFalse(model.updates.value.animateFollowing)
         XCTAssertTrue(model.state.live.followsLatest)
@@ -870,7 +877,8 @@ final class ConversationTimelineModelTests: XCTestCase {
             if !websocketFirst {
                 source.store.replacePending(chatID: "chat", with: [], acknowledging: acknowledged)
             }
-            XCTAssertEqual(model.rows.compactMap(\.stableMessageKey), [acknowledged.timelineStableKey])
+            XCTAssertEqual(
+                model.rows.compactMap(\.stableMessageKey), [acknowledged.timelineStableKey])
             XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(1)])
             XCTAssertFalse(updates.value.contains { $0.animateFollowing })
         }
@@ -1148,7 +1156,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(
             remoteMessages(model).map(\.id), [MessageID(10), MessageID(11), MessageID(12)])
         source.store.apply(
-            .messageUpdated(try TimelineTestFixtures.message(id: 11, senderID: 2, at: 11, text: "new")))
+            .messageUpdated(
+                try TimelineTestFixtures.message(id: 11, senderID: 2, at: 11, text: "new")))
         source.store.apply(.message(try TimelineTestFixtures.message(id: 13, at: 13)))
         source.release()
         await recovering.value
@@ -2405,7 +2414,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(
             model.updates.value.pendingScroll?.intent,
             .reveal(
-                .message(TimelineTestFixtures.stableKey("client-2")), animated: false, highlight: true))
+                .message(TimelineTestFixtures.stableKey("client-2")), animated: false,
+                highlight: true))
         model.close()
     }
 

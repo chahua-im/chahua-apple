@@ -401,7 +401,8 @@ final class ChatStore: ObservableObject {
                     chatID: snapshot.chatID, threadID: snapshot.threadID))
         case .purged(let keys):
             for key in keys {
-                conversationMessages.replacePending(chatID: key.chatID, threadID: key.threadID, with: [])
+                conversationMessages.replacePending(
+                    chatID: key.chatID, threadID: key.threadID, with: [])
             }
             drafts.discardAfterSignOutPurge()
             outgoingRevisions.removeAll()
@@ -474,9 +475,12 @@ final class ChatStore: ObservableObject {
         return redacted
     }
 
-    private func redactingDeletedPreview(_ preview: MessagePreview, chatID: String) -> MessagePreview {
+    private func redactingDeletedPreview(_ preview: MessagePreview, chatID: String)
+        -> MessagePreview
+    {
         let ids = conversationMessages.deletedMessageIDs(chatID: chatID)
-        return preview.isDeleted || ids.contains(preview.id) ? preview.redactedForDeletion() : preview
+        return preview.isDeleted || ids.contains(preview.id)
+            ? preview.redactedForDeletion() : preview
     }
 
     private func installOutgoingSnapshot(_ snapshot: LocalConversationSnapshot) -> Bool {

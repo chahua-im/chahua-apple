@@ -1,8 +1,8 @@
 import ChahuaAPI
 import Combine
 import Foundation
-import OSLog
 import Network
+import OSLog
 
 enum OutgoingStorageState: Equatable {
     case inactive, loading, ready, failed
@@ -25,20 +25,24 @@ final class OutgoingMessageQueue: ObservableObject {
         case purge
     }
 
-    typealias UploadFile = @Sendable (
-        _ directory: URL, _ file: URL, _ allocation: OutgoingUploadAllocation,
-        _ progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> Void
+    typealias UploadFile =
+        @Sendable (
+            _ directory: URL, _ file: URL, _ allocation: OutgoingUploadAllocation,
+            _ progress: @escaping @Sendable (Double) -> Void
+        ) async throws -> Void
 
     enum QueueError: LocalizedError {
-        case storageUnavailable, invalidAcknowledgement, invalidForwardSources, unavailableEditTarget
+        case storageUnavailable, invalidAcknowledgement, invalidForwardSources,
+            unavailableEditTarget
 
         var errorDescription: String? {
             switch self {
             case .storageUnavailable: AppLanguage.localized("Local message storage is unavailable.")
-            case .invalidAcknowledgement: AppLanguage.localized("The server returned a different message.")
+            case .invalidAcknowledgement:
+                AppLanguage.localized("The server returned a different message.")
             case .invalidForwardSources: AppLanguage.localized("These messages can’t be forwarded.")
-            case .unavailableEditTarget: AppLanguage.localized("This queued message is no longer editable.")
+            case .unavailableEditTarget:
+                AppLanguage.localized("This queued message is no longer editable.")
             }
         }
     }
@@ -86,7 +90,8 @@ final class OutgoingMessageQueue: ObservableObject {
     private let apiClient: any ChahuaAPIClient
     private let storage: AccountLocalStoreOwner
     private let onInvalidToken: @MainActor @Sendable () async -> Void
-    private let beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)?
+    private let beforeStorageOperation:
+        (@MainActor @Sendable (StorageOperation) async throws -> Void)?
     private let uploadFile: UploadFile
     private let startBackgroundExecution: OutboxBackgroundExecution.Start
     private let clock = ContinuousClock()
@@ -111,7 +116,8 @@ final class OutgoingMessageQueue: ObservableObject {
     private var importing = Set<ConversationKey>()
     private var fileLeases: [URL: Int] = [:]
     private var fileDrainWaiters: [URL: [CheckedContinuation<Void, Never>]] = [:]
-    private var fileWorkers: [SlotIdentity: (directory: URL, work: AttachmentWork, task: Task<Void, Never>)] = [:]
+    private var fileWorkers:
+        [SlotIdentity: (directory: URL, work: AttachmentWork, task: Task<Void, Never>)] = [:]
     private var cleanup: Task<Void, Never>?
     private var retryWindows: [String: RetryWindow] = [:]
     private var retryTimer: (id: UUID, due: ContinuousClock.Instant, task: Task<Void, Never>)?
@@ -124,9 +130,11 @@ final class OutgoingMessageQueue: ObservableObject {
     init(
         apiClient: any ChahuaAPIClient, storage: AccountLocalStoreOwner,
         onInvalidToken: @escaping @MainActor @Sendable () async -> Void,
-        beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)? = nil,
+        beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)? =
+            nil,
         monitorNetwork: Bool = false,
-        startBackgroundExecution: @escaping OutboxBackgroundExecution.Start = OutboxBackgroundExecution.start,
+        startBackgroundExecution: @escaping OutboxBackgroundExecution.Start =
+            OutboxBackgroundExecution.start,
         uploadFile: @escaping UploadFile = { directory, file, allocation, progress in
             try await OutgoingAttachmentUploader(directory: directory)
                 .upload(file: file, allocation: allocation, onProgress: progress)
@@ -202,10 +210,11 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     var hasSignOutWork: Bool {
-        storageState != .ready || !editors.isEmpty || snapshots.values.contains {
-            !$0.outgoing.isEmpty || !$0.draft.text.isEmpty || $0.draft.replyToMessage != nil
-                || !$0.draft.attachments.isEmpty || !$0.draft.linkPreviews.isEmpty
-        }
+        storageState != .ready || !editors.isEmpty
+            || snapshots.values.contains {
+                !$0.outgoing.isEmpty || !$0.draft.text.isEmpty || $0.draft.replyToMessage != nil
+                    || !$0.draft.attachments.isEmpty || !$0.draft.linkPreviews.isEmpty
+            }
     }
 
     func fenceForSignOut() {
@@ -358,7 +367,8 @@ final class OutgoingMessageQueue: ObservableObject {
                     self.publish(snapshot)
                 }
                 for snapshot in snapshots {
-                    for item in snapshot.outgoing where self.completions[item.clientGeneratedID] != nil {
+                    for item in snapshot.outgoing
+                    where self.completions[item.clientGeneratedID] != nil {
                         try await self.commitCompletion(
                             key: snapshot.conversationKey, itemID: item.clientGeneratedID,
                             store: store, generation: current)
@@ -387,7 +397,8 @@ final class OutgoingMessageQueue: ObservableObject {
         return try await task.value
     }
 
-    private func checkpoint(_ operation: StorageOperation, generation current: UInt64) async throws {
+    private func checkpoint(_ operation: StorageOperation, generation current: UInt64) async throws
+    {
         try checkGeneration(current)
         try await beforeStorageOperation?(operation)
         try checkGeneration(current)
@@ -398,7 +409,9 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func requireStore() throws -> ChahuaLocalStore {
-        guard storageState == .ready, let store = storage.store else { throw QueueError.storageUnavailable }
+        guard storageState == .ready, let store = storage.store else {
+            throw QueueError.storageUnavailable
+        }
         return store
     }
 
@@ -411,7 +424,9 @@ final class OutgoingMessageQueue: ObservableObject {
             default: return
             }
         }
-        Self.logger.error("The outbox transaction failed: \(String(reflecting: type(of: error)), privacy: .public)")
+        Self.logger.error(
+            "The outbox transaction failed: \(String(reflecting: type(of: error)), privacy: .public)"
+        )
         storageState = .failed
     }
 
@@ -422,12 +437,14 @@ final class OutgoingMessageQueue: ObservableObject {
         for item in snapshot.outgoing {
             guard let session = editors[item.clientGeneratedID], session.isValid else { continue }
             let byID = Dictionary(uniqueKeysWithValues: item.attachments.map { ($0.id, $0) })
-            session.replaceAttachments(session.attachments.map { selection in
-                guard var checkpoint = byID[selection.id], checkpoint.generation == selection.generation
-                else { return selection }
-                checkpoint.position = selection.position
-                return checkpoint
-            })
+            session.replaceAttachments(
+                session.attachments.map { selection in
+                    guard var checkpoint = byID[selection.id],
+                        checkpoint.generation == selection.generation
+                    else { return selection }
+                    checkpoint.position = selection.position
+                    return checkpoint
+                })
         }
         for (id, worker) in fileWorkers
         where id.accountGeneration == generation && worker.work.key == key
@@ -448,7 +465,9 @@ final class OutgoingMessageQueue: ObservableObject {
         case .sending:
             return .sending
         case .failed:
-            guard let failure = item.failure else { preconditionFailure("Failed row without failure") }
+            guard let failure = item.failure else {
+                preconditionFailure("Failed row without failure")
+            }
             let retry = retryWindows[item.clientGeneratedID].map {
                 Date().addingTimeInterval(max(0, Self.seconds(clock.now.duration(to: $0.due))))
             }
@@ -457,7 +476,8 @@ final class OutgoingMessageQueue: ObservableObject {
             if !item.isReadyForDispatch {
                 var progress: [String: Double] = [:]
                 for slot in item.attachments {
-                    progress[slot.id] = slot.isUploaded ? 1 : attachmentProgress[slot.id, default: 0]
+                    progress[slot.id] =
+                        slot.isUploaded ? 1 : attachmentProgress[slot.id, default: 0]
                 }
                 return .preparing(progress: progress)
             }
@@ -468,7 +488,8 @@ final class OutgoingMessageQueue: ObservableObject {
 
     private func editSnapshot(
         _ operation: StorageOperation,
-        _ transaction: @escaping @MainActor (ChahuaLocalStore) async throws -> LocalConversationSnapshot
+        _ transaction:
+            @escaping @MainActor (ChahuaLocalStore) async throws -> LocalConversationSnapshot
     ) async throws {
         let current = generation
         try Task.checkCancellation()
@@ -709,7 +730,9 @@ final class OutgoingMessageQueue: ObservableObject {
         let now = clock.now
         let previous = retryWindows[id]
         let interval = previous.map { min(60, $0.interval * 2) } ?? 1
-        let serverDue = retryAfter.map { now.advanced(by: .seconds(max(0, $0.timeIntervalSinceNow))) }
+        let serverDue = retryAfter.map {
+            now.advanced(by: .seconds(max(0, $0.timeIntervalSinceNow)))
+        }
         guard failure.retry == .automatic else {
             retryWindows[id] = nil
             return
@@ -726,16 +749,21 @@ final class OutgoingMessageQueue: ObservableObject {
         retryTimer = nil
         guard let due else { return }
         let id = UUID()
-        retryTimer = (id, due, Task { [weak self, clock] in
-            do { try await clock.sleep(until: due) } catch { return }
-            guard let self, self.retryTimer?.id == id else { return }
-            self.retryTimer = nil
-            self.wakeWorkers()
-        })
+        retryTimer = (
+            id, due,
+            Task { [weak self, clock] in
+                do { try await clock.sleep(until: due) } catch { return }
+                guard let self, self.retryTimer?.id == id else { return }
+                self.retryTimer = nil
+                self.wakeWorkers()
+            }
+        )
     }
 
     private func nextRetryDeadline() -> ContinuousClock.Instant? {
-        guard storageState == .ready, online, foregroundActive, !authenticationFailed else { return nil }
+        guard storageState == .ready, online, foregroundActive, !authenticationFailed else {
+            return nil
+        }
         var next: ContinuousClock.Instant?
         let now = clock.now
         for (key, snapshot) in snapshots {
@@ -754,27 +782,29 @@ final class OutgoingMessageQueue: ObservableObject {
         let id = head.clientGeneratedID
         let workerID = UUID()
         let current = generation
-        workers[key] = Worker(id: workerID, itemID: id, task: Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.ordered {
-                    try await self.checkpoint(.retry, generation: current)
-                    guard self.online, self.foregroundActive, !self.authenticationFailed,
-                        self.editors[id] == nil, let item = self.item(key, id),
-                        item.failure?.stage == .preparation, self.automaticRetryDue(item)
-                    else { return }
-                    let store = try self.requireStore()
-                    let snapshot = try await store.retryPreparation(key: key, itemID: id)
-                    try self.checkGeneration(current)
-                    self.publish(snapshot)
+        workers[key] = Worker(
+            id: workerID, itemID: id,
+            task: Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.ordered {
+                        try await self.checkpoint(.retry, generation: current)
+                        guard self.online, self.foregroundActive, !self.authenticationFailed,
+                            self.editors[id] == nil, let item = self.item(key, id),
+                            item.failure?.stage == .preparation, self.automaticRetryDue(item)
+                        else { return }
+                        let store = try self.requireStore()
+                        let snapshot = try await store.retryPreparation(key: key, itemID: id)
+                        try self.checkGeneration(current)
+                        self.publish(snapshot)
+                    }
+                } catch {
+                    self.storageFailed(error, generation: current)
                 }
-            } catch {
-                self.storageFailed(error, generation: current)
-            }
-            guard self.workers[key]?.id == workerID else { return }
-            self.workers[key] = nil
-            self.wakeWorkers()
-        })
+                guard self.workers[key]?.id == workerID else { return }
+                self.workers[key] = nil
+                self.wakeWorkers()
+            })
     }
 
     private static func retryAfter(from error: Error) -> Date? {
@@ -809,10 +839,13 @@ final class OutgoingMessageQueue: ObservableObject {
 
     private func wakeWorker(_ key: ConversationKey) {
         guard online, storageState == .ready, !authenticationFailed, workers[key] == nil,
-            let head = snapshots[key]?.outgoing.first, canStart(key: key, rowID: head.clientGeneratedID)
+            let head = snapshots[key]?.outgoing.first,
+            canStart(key: key, rowID: head.clientGeneratedID)
         else { return }
         if head.failure?.stage == .preparation {
-            if editors[head.clientGeneratedID] == nil, automaticRetryDue(head) { wakePreparationRetry(head) }
+            if editors[head.clientGeneratedID] == nil, automaticRetryDue(head) {
+                wakePreparationRetry(head)
+            }
             return
         }
         guard eligible(head) else { return }
@@ -827,18 +860,19 @@ final class OutgoingMessageQueue: ObservableObject {
                 return
             }
         }
-        workers[key] = Worker(id: workerID, itemID: id, task: Task { [weak self] in
-            guard let self else { return }
-            await self.sendHead(key: key, itemID: id, workerID: workerID, generation: current)
-            self.handedOff.remove(workerID)
-            self.endBackgroundExecution(workerID)
-            guard self.workers[key]?.id == workerID else { return }
-            self.workers[key] = nil
-            self.wakeWorker(key)
-            self.scheduleRetries()
-        })
+        workers[key] = Worker(
+            id: workerID, itemID: id,
+            task: Task { [weak self] in
+                guard let self else { return }
+                await self.sendHead(key: key, itemID: id, workerID: workerID, generation: current)
+                self.handedOff.remove(workerID)
+                self.endBackgroundExecution(workerID)
+                guard self.workers[key]?.id == workerID else { return }
+                self.workers[key] = nil
+                self.wakeWorker(key)
+                self.scheduleRetries()
+            })
     }
-
 
     private func serverAllowsRetry(id: String) -> Bool {
         guard let date = retryWindows[id]?.serverDue else { return true }
@@ -854,7 +888,9 @@ final class OutgoingMessageQueue: ObservableObject {
         return (manualRetries.contains(id) && serverAllowsRetry(id: id)) || automaticRetryDue(head)
     }
 
-    private func sendHead(key: ConversationKey, itemID id: String, workerID: UUID, generation current: UInt64)
+    private func sendHead(
+        key: ConversationKey, itemID id: String, workerID: UUID, generation current: UInt64
+    )
         async
     {
         let claimedHead: (message: LocalOutgoingMessage, priorFailure: OutboxFailure?)
@@ -862,7 +898,8 @@ final class OutgoingMessageQueue: ObservableObject {
             let message = try await ordered {
                 try await self.checkpoint(.claim, generation: current)
                 guard self.canStart(key: key, rowID: id), !self.authenticationFailed,
-                    self.workers[key]?.id == workerID, let head = self.snapshots[key]?.outgoing.first,
+                    self.workers[key]?.id == workerID,
+                    let head = self.snapshots[key]?.outgoing.first,
                     head.clientGeneratedID == id, self.eligible(head)
                 else { return Optional<(LocalOutgoingMessage, OutboxFailure?)>.none }
                 let store = try self.requireStore()
@@ -898,7 +935,8 @@ final class OutgoingMessageQueue: ObservableObject {
             guard workers[key]?.id == workerID else { return }
             guard matches(message, pending) else { throw QueueError.invalidAcknowledgement }
             _ = await acceptAcknowledgement(
-                message, published: pending.forwardRequest != nil || pending.messageType != .audio
+                message,
+                published: pending.forwardRequest != nil || pending.messageType != .audio
                     || message.attachments.contains { $0.kind == "audio/ogg" })
         } catch {
             guard current == generation, workers[key]?.id == workerID, item(key, id) != nil,
@@ -909,7 +947,9 @@ final class OutgoingMessageQueue: ObservableObject {
                 await finish(key: key, itemID: id, generation: current)
                 return
             }
-            if let existing = (error as? APIError)?.conflictingExistingMessage, matches(existing, pending) {
+            if let existing = (error as? APIError)?.conflictingExistingMessage,
+                matches(existing, pending)
+            {
                 _ = await acceptAcknowledgement(existing)
                 return
             }
@@ -931,7 +971,8 @@ final class OutgoingMessageQueue: ObservableObject {
                 return try await apiClient.forwardMessage(
                     chatID: pending.chatID, messageID: ids[0],
                     body: .init(
-                        sourceChatId: forward.sourceChatID, clientGeneratedId: pending.clientGeneratedID,
+                        sourceChatId: forward.sourceChatID,
+                        clientGeneratedId: pending.clientGeneratedID,
                         threadId: pending.threadID, allowPlaceholders: forward.allowPlaceholders))
             }
             return try await apiClient.forwardMessages(
@@ -950,7 +991,8 @@ final class OutgoingMessageQueue: ObservableObject {
 
     private func matches(_ message: MessageResponse, _ item: LocalOutgoingMessage) -> Bool {
         message.clientGeneratedId == item.clientGeneratedID && message.sender.uid == item.senderID
-            && message.sender.uid == uid && message.chatId == item.chatID && message.replyRootId == item.threadID
+            && message.sender.uid == uid && message.chatId == item.chatID
+            && message.replyRootId == item.threadID
     }
 
     func acceptPublishedForwardSource(_ message: MessageResponse) {
@@ -997,7 +1039,8 @@ final class OutgoingMessageQueue: ObservableObject {
                 else { return .unrelated }
                 let redacted = message.isDeleted ? message.redactedForDeletion() : message
                 self.completions[id] = .delivery(Receipt(message: redacted, published: published))
-                try await self.commitCompletion(key: key, itemID: id, store: store, generation: current)
+                try await self.commitCompletion(
+                    key: key, itemID: id, store: store, generation: current)
                 return .consumed
             }
         } catch {
@@ -1011,7 +1054,8 @@ final class OutgoingMessageQueue: ObservableObject {
             try await ordered {
                 try self.checkGeneration(current)
                 guard let store = self.storage.store else { return }
-                try await self.commitCompletion(key: key, itemID: itemID, store: store, generation: current)
+                try await self.commitCompletion(
+                    key: key, itemID: itemID, store: store, generation: current)
             }
         } catch {
             storageFailed(error, generation: current)
@@ -1080,7 +1124,8 @@ final class OutgoingMessageQueue: ObservableObject {
                 return .init(stage: stage, reason: .conflict, retry: .manual)
             case .transport, .unavailable, .retryableHTTP:
                 return .init(stage: stage, reason: .network, retry: .automatic)
-            case .http(let status, _) where status == 408 || status == 429 || (500...599).contains(status):
+            case .http(let status, _)
+            where status == 408 || status == 429 || (500...599).contains(status):
                 return .init(stage: stage, reason: .network, retry: .automatic)
             default: break
             }
@@ -1099,7 +1144,8 @@ final class OutgoingMessageQueue: ObservableObject {
         if let size = error as? AttachmentSizeError {
             return .init(stage: stage, reason: .tooLarge(size.limit), retry: .manual)
         }
-        return .init(stage: stage, reason: stage == .create ? .rejected : .attachment, retry: .manual)
+        return .init(
+            stage: stage, reason: stage == .create ? .rejected : .attachment, retry: .manual)
     }
 
     func beginPendingEdit(_ pending: PendingOutgoingMessage) throws -> PendingEditSession {
@@ -1111,7 +1157,8 @@ final class OutgoingMessageQueue: ObservableObject {
         else { throw QueueError.unavailableEditTarget }
         let session = PendingEditSession(
             conversationKey: key, clientGeneratedID: id, accountGeneration: generation,
-            initialText: item.text, initialAttachments: item.attachments, initialMetadata: item.metadata,
+            initialText: item.text, initialAttachments: item.attachments,
+            initialMetadata: item.metadata,
             initialReplyToMessage: item.replyToMessage, compressionEnabled: item.compressionEnabled)
         editors[id] = session
         return session
@@ -1151,7 +1198,8 @@ final class OutgoingMessageQueue: ObservableObject {
         else { throw QueueError.unavailableEditTarget }
     }
 
-    func importEditAttachments(urls: [URL], session: PendingEditSession, asFiles: Bool) async throws {
+    func importEditAttachments(urls: [URL], session: PendingEditSession, asFiles: Bool) async throws
+    {
         try validate(session)
         guard !session.isUploading, !savingEditors.contains(session.id),
             session.attachments.count + urls.count <= 20
@@ -1180,13 +1228,14 @@ final class OutgoingMessageQueue: ObservableObject {
 
     func retryEditAttachment(id: String, session: PendingEditSession) {
         guard (try? validate(session)) != nil, !savingEditors.contains(session.id) else { return }
-        session.replaceAttachments(session.attachments.map { slot in
-            guard slot.id == id else { return slot }
-            var updated = slot
-            updated.generation = UUID().uuidString
-            updated.failure = nil
-            return updated
-        })
+        session.replaceAttachments(
+            session.attachments.map { slot in
+                guard slot.id == id else { return slot }
+                var updated = slot
+                updated.generation = UUID().uuidString
+                updated.failure = nil
+                return updated
+            })
     }
 
     func setEditCompression(_ enabled: Bool, session: PendingEditSession) throws {
@@ -1206,11 +1255,13 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     func importImages(urls: [URL], chatID: String, threadID: String? = nil) async throws {
-        try await importAttachments(urls: urls, key: .init(chatID: chatID, threadID: threadID), asFiles: false)
+        try await importAttachments(
+            urls: urls, key: .init(chatID: chatID, threadID: threadID), asFiles: false)
     }
 
     func importFiles(urls: [URL], chatID: String, threadID: String? = nil) async throws {
-        try await importAttachments(urls: urls, key: .init(chatID: chatID, threadID: threadID), asFiles: true)
+        try await importAttachments(
+            urls: urls, key: .init(chatID: chatID, threadID: threadID), asFiles: true)
     }
 
     private func importAttachments(urls: [URL], key: ConversationKey, asFiles: Bool) async throws {
@@ -1232,7 +1283,8 @@ final class OutgoingMessageQueue: ObservableObject {
     {
         try await withFileLease(in: directory) {
             if asFile {
-                return try await OutgoingFileImporter(directory: directory).importFile(from: url, position: 0)
+                return try await OutgoingFileImporter(directory: directory).importFile(
+                    from: url, position: 0)
             }
             return try await OutgoingImageProcessor(directory: directory)
                 .importImage(from: url, directory: directory, position: 0)
@@ -1244,7 +1296,9 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     func removeAttachment(id: String, chatID: String, threadID: String? = nil) async throws {
-        try await changeDraft(.init(chatID: chatID, threadID: threadID)) { $0.filter { $0.id != id } }
+        try await changeDraft(.init(chatID: chatID, threadID: threadID)) {
+            $0.filter { $0.id != id }
+        }
     }
 
     func reorderAttachments(ids: [String], chatID: String, threadID: String? = nil) async throws {
@@ -1253,7 +1307,9 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func setCompressionEnabled(_ enabled: Bool, chatID: String, threadID: String? = nil) async throws {
+    func setCompressionEnabled(_ enabled: Bool, chatID: String, threadID: String? = nil)
+        async throws
+    {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         try await changeDraft(key, compression: enabled) { slots in
             guard self.snapshots[key]?.draft.compressionEnabled != enabled else { return slots }
@@ -1276,10 +1332,13 @@ final class OutgoingMessageQueue: ObservableObject {
 
     private func changeDraft(
         _ key: ConversationKey, compression: Bool? = nil, duringImport: Bool = false,
-        transform: @escaping @MainActor ([LocalOutgoingAttachment]) throws -> [LocalOutgoingAttachment]
+        transform:
+            @escaping @MainActor ([LocalOutgoingAttachment]) throws -> [LocalOutgoingAttachment]
     ) async throws {
         try await editSnapshot(.saveDraft) { store in
-            guard duringImport || !self.importing.contains(key) else { throw QueueError.storageUnavailable }
+            guard duringImport || !self.importing.contains(key) else {
+                throw QueueError.storageUnavailable
+            }
             let draft = self.snapshots[key]?.draft
             return try await store.setDraftAttachments(
                 key: key, attachments: Self.positioned(try transform(draft?.attachments ?? [])),
@@ -1287,7 +1346,8 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    private static func positioned(_ slots: [LocalOutgoingAttachment]) -> [LocalOutgoingAttachment] {
+    private static func positioned(_ slots: [LocalOutgoingAttachment]) -> [LocalOutgoingAttachment]
+    {
         slots.enumerated().map { position, value in
             var slot = value
             slot.position = position
@@ -1305,7 +1365,9 @@ final class OutgoingMessageQueue: ObservableObject {
         return positioned(ids.compactMap { byID[$0] })
     }
 
-    private static func resetCompression(_ slots: [LocalOutgoingAttachment]) -> [LocalOutgoingAttachment] {
+    private static func resetCompression(_ slots: [LocalOutgoingAttachment])
+        -> [LocalOutgoingAttachment]
+    {
         slots.map {
             guard !$0.isFile, !$0.isAudio else { return $0 }
             var slot = $0
@@ -1350,8 +1412,11 @@ final class OutgoingMessageQueue: ObservableObject {
         }
         guard prepares < 1 || uploads < 2 else { return }
         for (key, snapshot) in snapshots {
-            for item in snapshot.outgoing where item.state == .pending && editors[item.clientGeneratedID] == nil {
-                for slot in item.attachments { start(slot, key: key, compression: item.compressionEnabled) }
+            for item in snapshot.outgoing
+            where item.state == .pending && editors[item.clientGeneratedID] == nil {
+                for slot in item.attachments {
+                    start(slot, key: key, compression: item.compressionEnabled)
+                }
             }
             for slot in snapshot.draft.attachments {
                 start(slot, key: key, compression: snapshot.draft.compressionEnabled)
@@ -1370,33 +1435,42 @@ final class OutgoingMessageQueue: ObservableObject {
                 guard uploads < 2 else { return }
                 uploads += 1
             }
-            fileWorkers[id] = (store.directory, work, Task { [weak self] in
-                guard let self else { return }
-                await self.runAttachment(work, id: id, store: store, generation: current)
-                self.fileWorkers[id] = nil
-                if current == self.generation,
-                    !self.fileWorkers.keys.contains(where: {
-                        $0.accountGeneration == current && $0.id == id.id
-                    })
-                {
-                    self.updateProgress(nil, slotID: id.id, key: key)
+            fileWorkers[id] = (
+                store.directory, work,
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.runAttachment(work, id: id, store: store, generation: current)
+                    self.fileWorkers[id] = nil
+                    if current == self.generation,
+                        !self.fileWorkers.keys.contains(where: {
+                            $0.accountGeneration == current && $0.id == id.id
+                        })
+                    {
+                        self.updateProgress(nil, slotID: id.id, key: key)
+                    }
+                    self.wakeAttachmentWorkers()
+                    self.scheduleFileCleanup()
                 }
-                self.wakeAttachmentWorkers()
-                self.scheduleFileCleanup()
-            })
+            )
         }
     }
 
-    private func attachmentOwner(_ key: ConversationKey, _ id: SlotIdentity) -> (itemID: String?, found: Bool) {
+    private func attachmentOwner(_ key: ConversationKey, _ id: SlotIdentity) -> (
+        itemID: String?, found: Bool
+    ) {
         guard let snapshot = snapshots[key] else { return (nil, false) }
-        for item in snapshot.outgoing where item.state == .pending || item.failure?.stage == .preparation {
-            if item.attachments.contains(where: id.matches) { return (item.clientGeneratedID, true) }
+        for item in snapshot.outgoing
+        where item.state == .pending || item.failure?.stage == .preparation {
+            if item.attachments.contains(where: id.matches) {
+                return (item.clientGeneratedID, true)
+            }
         }
         return (nil, snapshot.draft.attachments.contains(where: id.matches))
     }
 
     private func runAttachment(
-        _ work: AttachmentWork, id: SlotIdentity, store: ChahuaLocalStore, generation current: UInt64
+        _ work: AttachmentWork, id: SlotIdentity, store: ChahuaLocalStore,
+        generation current: UInt64
     ) async {
         do {
             try checkGeneration(current)
@@ -1406,12 +1480,15 @@ final class OutgoingMessageQueue: ObservableObject {
                 attachment = try await OutgoingImageProcessor(directory: store.directory)
                     .prepare(work.slot, compressionEnabled: work.compression)
             } else {
-                attachment = try await upload(work, id: id, directory: store.directory, generation: current)
+                attachment = try await upload(
+                    work, id: id, directory: store.directory, generation: current)
             }
-            try await checkpointAttachment(attachment, work: work, failure: nil, generation: current)
+            try await checkpointAttachment(
+                attachment, work: work, failure: nil, generation: current)
         } catch is CancellationError {
         } catch {
-            guard current == generation, !Task.isCancelled, attachmentOwner(work.key, id).found else { return }
+            guard current == generation, !Task.isCancelled, attachmentOwner(work.key, id).found
+            else { return }
             let failure = Self.failure(error, stage: .preparation)
             if failure.reason == .authentication { authenticationFailed = true }
             var slot = work.slot
@@ -1445,12 +1522,15 @@ final class OutgoingMessageQueue: ObservableObject {
             size: slot.byteCount, width: slot.width, height: slot.height, order: slot.position)
         try checkGeneration(current)
         guard attachmentOwner(work.key, id).found else { throw CancellationError() }
-        try await uploadFile(directory, URL(fileURLWithPath: slot.uploadPath), allocation) { [weak self] progress in
+        try await uploadFile(directory, URL(fileURLWithPath: slot.uploadPath), allocation) {
+            [weak self] progress in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == current, self.fileWorkers[id] != nil,
                     self.attachmentOwner(work.key, id).found
                 else { return }
-                if progress == 1 || abs(progress - self.attachmentProgress[id.id, default: -1]) >= 0.01 {
+                if progress == 1
+                    || abs(progress - self.attachmentProgress[id.id, default: -1]) >= 0.01
+                {
                     self.updateProgress(progress, slotID: id.id, key: work.key)
                 }
             }
@@ -1495,7 +1575,8 @@ final class OutgoingMessageQueue: ObservableObject {
                 let item = snapshot.outgoing.first(where: { $0.clientGeneratedID == id })
             {
                 if let failure {
-                    self.recordRetryWindow(id: id, failure: item.failure ?? failure, retryAfter: retryAfter)
+                    self.recordRetryWindow(
+                        id: id, failure: item.failure ?? failure, retryAfter: retryAfter)
                 } else if slot.isUploaded && item.state == .pending {
                     self.retryWindows[id] = nil
                 }
@@ -1554,7 +1635,8 @@ final class OutgoingMessageQueue: ObservableObject {
             }
             for editor in self.editors.values { retain(editor.attachments) }
             try? await OutgoingFileCleanup.reclaim(
-                directory: store.directory, retaining: retained, olderThan: Date().addingTimeInterval(-60))
+                directory: store.directory, retaining: retained,
+                olderThan: Date().addingTimeInterval(-60))
         }
     }
 }

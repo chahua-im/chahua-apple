@@ -54,7 +54,9 @@ final class AuthSessionModelTests: XCTestCase {
         let api = FakeChatAPI()
         let profile = try JSONDecoder().decode(
             MeResponse.self,
-            from: Data(#"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
         await api.setAuthenticatedProfile(profile)
         let tokenStorage = InMemorySessionTokenStorage(token: "disposable-session")
         let model = AuthSessionModel(
@@ -89,7 +91,9 @@ final class AuthSessionModelTests: XCTestCase {
         let api = FakeChatAPI()
         let profile = try JSONDecoder().decode(
             MeResponse.self,
-            from: Data(#"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
         await api.setAuthenticatedProfile(profile)
         let model = AuthSessionModel(
             apiClient: api, credentialLoginClient: PrototypeCredentialLoginClient(),

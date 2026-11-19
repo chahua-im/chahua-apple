@@ -52,10 +52,12 @@ final class PendingEditSession: ObservableObject, Identifiable {
         text.trimmingCharacters(in: .whitespacesAndNewlines) != initialTrimmedText
             || replyToMessage?.id != initialReplyToMessage?.id
             || compressionEnabled != initialCompressionEnabled
-            || !attachments.elementsEqual(initialAttachments, by: {
-                $0.id == $1.id && $0.generation == $1.generation
-                    && ($0.failure != nil || $1.failure == nil)
-            })
+            || !attachments.elementsEqual(
+                initialAttachments,
+                by: {
+                    $0.id == $1.id && $0.generation == $1.generation
+                        && ($0.failure != nil || $1.failure == nil)
+                })
             || (metadata.map { Self.disabledURLs($0) } ?? initialDisabledURLs)
                 != initialDisabledURLs
     }

@@ -990,18 +990,22 @@ final class ChahuaAPITests: XCTestCase {
                 "hasAttachments":false,"attachments":[],"reactions":[]
             }}
             """#
-        let create = CreateMessageBody(messageType: .text, clientGeneratedId: "same-id", message: "different")
+        let create = CreateMessageBody(
+            messageType: .text, clientGeneratedId: "same-id", message: "different")
         let forward = ForwardMessageBody(sourceChatId: "30", clientGeneratedId: "same-id")
         for isForward in [false, true] {
             StubURLProtocol.handler = { request in
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
+                XCTAssertEqual(
+                    request.value(forHTTPHeaderField: "Authorization"), "Bearer candidate")
                 return (409, detail)
             }
             do {
                 if isForward {
-                    _ = try await client.forwardMessage(chatID: "10", messageID: MessageID(7), body: forward)
+                    _ = try await client.forwardMessage(
+                        chatID: "10", messageID: MessageID(7), body: forward)
                 } else {
-                    _ = try await client.sendThreadMessage(chatID: "10", threadID: "20", body: create)
+                    _ = try await client.sendThreadMessage(
+                        chatID: "10", threadID: "20", body: create)
                 }
                 XCTFail("A 409 must not return as a successful create")
             } catch let error as APIError {
@@ -1011,11 +1015,16 @@ final class ChahuaAPITests: XCTestCase {
                 XCTAssertEqual(existing.replyRootId, "20")
                 XCTAssertEqual(existing.sender.uid, 1)
                 XCTAssertEqual(existing.message, "Already accepted")
-                XCTAssertEqual(existing.createdAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1), 0.125)
+                XCTAssertEqual(
+                    existing.createdAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1),
+                    0.125)
             }
         }
 
-        for body in ["Duplicate client generated id", #"{"code":"clientGeneratedIdConflict","existingMessage":{}}"#] {
+        for body in [
+            "Duplicate client generated id",
+            #"{"code":"clientGeneratedIdConflict","existingMessage":{}}"#,
+        ] {
             StubURLProtocol.handler = { _ in (409, body) }
             do {
                 _ = try await client.sendMessage(chatID: "10", body: create)
@@ -1030,30 +1039,44 @@ final class ChahuaAPITests: XCTestCase {
         let client = ChahuaClient(
             configuration: .init(baseURL: URL(string: "https://api.example")!),
             token: nil, session: testSession())
-        let create = CreateMessageBody(messageType: .text, clientGeneratedId: "one", message: "text")
+        let create = CreateMessageBody(
+            messageType: .text, clientGeneratedId: "one", message: "text")
         let sourceID = MessageID(7)
         let requests: [(Int, () async throws -> Void)] = [
             (408, { _ = try await client.sendMessage(chatID: "10", body: create) }),
-            (429, {
-                _ = try await client.sendThreadMessage(chatID: "10", threadID: "20", body: create)
-            }),
-            (503, {
-                _ = try await client.forwardMessage(
-                    chatID: "10", messageID: sourceID,
-                    body: ForwardMessageBody(sourceChatId: "30", clientGeneratedId: "two"))
-            }),
-            (502, {
-                _ = try await client.forwardMessages(
-                    chatID: "10",
-                    body: ForwardMessagesBody(
-                        sourceChatId: "30", messageIds: [sourceID], clientGeneratedId: "three"))
-            }),
+            (
+                429,
+                {
+                    _ = try await client.sendThreadMessage(
+                        chatID: "10", threadID: "20", body: create)
+                }
+            ),
+            (
+                503,
+                {
+                    _ = try await client.forwardMessage(
+                        chatID: "10", messageID: sourceID,
+                        body: ForwardMessageBody(sourceChatId: "30", clientGeneratedId: "two"))
+                }
+            ),
+            (
+                502,
+                {
+                    _ = try await client.forwardMessages(
+                        chatID: "10",
+                        body: ForwardMessagesBody(
+                            sourceChatId: "30", messageIds: [sourceID], clientGeneratedId: "three"))
+                }
+            ),
             (500, { _ = try await client.attachmentConfig() }),
-            (429, {
-                _ = try await client.requestAttachmentUpload(
-                    fileName: "file.txt", contentType: "text/plain", purpose: .file,
-                    size: 10, width: 0, height: 0, order: 0)
-            }),
+            (
+                429,
+                {
+                    _ = try await client.requestAttachmentUpload(
+                        fileName: "file.txt", contentType: "text/plain", purpose: .file,
+                        size: 10, width: 0, height: 0, order: 0)
+                }
+            ),
         ]
         let responseBody = "Try again later"
         let dateHeader = "Sun, 06 Nov 1994 08:49:37 GMT"
@@ -1762,7 +1785,8 @@ private final class StubURLProtocol: URLProtocol {
     override func startLoading() {
         guard let handler = Self.handler else { fatalError("Missing handler") }
         let result = handler(request)
-        let headers = ["Content-Type": "application/json"].merging(Self.responseHeaders) { _, value in
+        let headers = ["Content-Type": "application/json"].merging(Self.responseHeaders) {
+            _, value in
             value
         }
         let response = HTTPURLResponse(

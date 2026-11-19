@@ -623,15 +623,17 @@
         func queue() {
             guard let timeline, !hasQueued else { return }
             hasQueued = true
-            store.replacePending(chatID: "bubble-fixtures", threadID: timeline.threadID, with: [
-                PendingOutgoingMessage(
-                    chatID: "bubble-fixtures", threadID: timeline.threadID,
-                    clientGeneratedID: "diagnostic-pending",
-                    body: .init(
-                        messageType: .text, clientGeneratedId: "diagnostic-pending",
-                        message: "Pending acknowledgement retains row identity"),
-                    enqueuedAt: Date(), senderID: 1, phase: .queued(blockedBy: nil))
-            ])
+            store.replacePending(
+                chatID: "bubble-fixtures", threadID: timeline.threadID,
+                with: [
+                    PendingOutgoingMessage(
+                        chatID: "bubble-fixtures", threadID: timeline.threadID,
+                        clientGeneratedID: "diagnostic-pending",
+                        body: .init(
+                            messageType: .text, clientGeneratedId: "diagnostic-pending",
+                            message: "Pending acknowledgement retains row identity"),
+                        enqueuedAt: Date(), senderID: 1, phase: .queued(blockedBy: nil))
+                ])
             timeline.revealLatestAfterSend()
         }
 

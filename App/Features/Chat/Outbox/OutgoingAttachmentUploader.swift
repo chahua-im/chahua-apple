@@ -70,7 +70,8 @@ nonisolated struct OutgoingAttachmentUploader: Sendable {
             guard (200..<300).contains(response.statusCode) else {
                 throw OutgoingAttachmentUploadError.httpStatus(
                     response.statusCode,
-                    retryAfter: APIError.retryDate(from: response.value(forHTTPHeaderField: "Retry-After")))
+                    retryAfter: APIError.retryDate(
+                        from: response.value(forHTTPHeaderField: "Retry-After")))
             }
             onProgress(1)
         } catch {

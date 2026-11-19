@@ -291,7 +291,8 @@ final class ChatDraftStore: ObservableObject {
     }
 
     private func submitIndependent(
-        chatID: String, threadID: String?, enqueue: @MainActor (MessagePreview?) async throws -> Void
+        chatID: String, threadID: String?,
+        enqueue: @MainActor (MessagePreview?) async throws -> Void
     ) async throws -> Bool {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let requestGeneration = generation

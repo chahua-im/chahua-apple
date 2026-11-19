@@ -112,4 +112,3 @@ enum ConversationTimelineEntry: Hashable {
     }
     var attachments: [AttachmentResponse] { presentationMessage?.attachments ?? [] }
 }
-

@@ -232,7 +232,9 @@ struct NotificationSettingsView: View {
             username: me.username,
             sessionRevision: chatStore.sessionRevision,
             isBusy: isSigningOut || notifications.isUnregistering,
-            hasLocalWork: { chatStore.drafts.hasUnsavedWork || chatStore.outgoingQueue.hasSignOutWork },
+            hasLocalWork: {
+                chatStore.drafts.hasUnsavedWork || chatStore.outgoingQueue.hasSignOutWork
+            },
             onSignOut: onSignOut
         )
     }
@@ -739,7 +741,9 @@ private struct SettingsSignOutButton: View {
             }
         } message: { pending in
             if pending.warnsAboutLocalWork {
-                Text("Signing out removes this account’s drafts and queued messages from this device. Messages already sent, or whose delivery couldn’t be confirmed, may still exist on the server.")
+                Text(
+                    "Signing out removes this account’s drafts and queued messages from this device. Messages already sent, or whose delivery couldn’t be confirmed, may still exist on the server."
+                )
             } else {
                 Text("You’ll need to sign in again to see your chats on this device.")
             }

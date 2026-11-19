@@ -9,9 +9,10 @@ import Foundation
 /// or a request that was already handed to the transport.
 @MainActor
 final class OutboxBackgroundExecution {
-    typealias Start = @MainActor (
-        _ expire: @escaping @MainActor () -> Void
-    ) -> OutboxBackgroundExecution?
+    typealias Start =
+        @MainActor (
+            _ expire: @escaping @MainActor () -> Void
+        ) -> OutboxBackgroundExecution?
 
     private var end: (() -> Void)?
 

@@ -15,7 +15,8 @@ enum DesignSystemFixtures {
                 ("Sending", .sending),
                 (
                     "Failed",
-                    .failed(.init(stage: .create, reason: .network, retry: .automatic), nextRetry: nil)
+                    .failed(
+                        .init(stage: .create, reason: .network, retry: .automatic), nextRetry: nil)
                 ),
             ]
             for (index, (label, phase)) in phases.enumerated() {

@@ -282,7 +282,7 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertEqual(h.state.submits, 0)
     }
 
-    func testServerEditToPendingEditDiscardsOrdinaryMediaAndRestoresTextAndReply() async throws {
+    func testServerEditToPendingEditPreservesOrdinaryDraft() async throws {
         let remote = try TimelineTestFixtures.message(id: 1, at: 1, text: "Server original")
         let api = FakeChatAPI(messageResults: [
             "chat": [.success(.init(messages: [remote]))]
@@ -417,16 +417,14 @@ final class ComposerFocusTests: XCTestCase {
 
         let editPending = try XCTUnwrap(actions()?.editPendingMessage)
         editPending(pending)
-        try await waitUntil {
-            text() == "Queued original" && queue.draftAttachments(chatID: "chat").isEmpty
-        }
+        try await waitUntil { text() == "Queued original" }
         XCTAssertEqual(text(), "Queued original")
-        XCTAssertTrue(queue.draftAttachments(chatID: "chat").isEmpty)
+        XCTAssertEqual(queue.draftAttachments(chatID: "chat").map(\.id), ordinaryMediaIDs)
         XCTAssertTrue(
             queue.pendingMessages(chatID: "chat").contains {
                 $0.clientGeneratedID == pending.id
             })
-        try capture("Queued edit header after ordinary draft media disposal")
+        try capture("Queued edit keeps ordinary draft media separate")
 
         #if os(macOS)
             let input = try XCTUnwrap(editor())
@@ -442,14 +440,14 @@ final class ComposerFocusTests: XCTestCase {
             NSApp.sendEvent(escape)
             try await waitUntil { text() == "Ordinary draft" }
             XCTAssertEqual(text(), "Ordinary draft")
-            try capture("Native Escape restores ordinary text and reply without discarded media")
+            try capture("Native Escape restores ordinary text and reply")
         #else
             // Native iOS Close and hardware Escape are device-verification steps;
-            // hosted XCTest covers actual edit entry, media disposal and draft ownership.
+            // hosted XCTest covers actual edit entry and draft ownership.
         #endif
         XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
         XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), remote.replyPreview)
-        XCTAssertTrue(queue.draftAttachments(chatID: "chat").isEmpty)
+        XCTAssertEqual(queue.draftAttachments(chatID: "chat").map(\.id), ordinaryMediaIDs)
         XCTAssertEqual(
             queue.pendingMessages(chatID: "chat").first {
                 $0.clientGeneratedID == pending.id

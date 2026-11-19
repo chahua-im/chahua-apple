@@ -319,7 +319,8 @@
             let rowCount = (activeActionCount + 4) / 5
             let gridHeight = CGFloat(rowCount) * actionRowHeight + CGFloat(max(0, rowCount - 1))
             let pendingHeight = CGFloat(pendingButtonCount) * 44
-            contentHeight = gridHeight + (pendingHeight > 0 && gridHeight > 0 ? 8 : 0)
+            contentHeight =
+                gridHeight + (pendingHeight > 0 && gridHeight > 0 ? 8 : 0)
                 + pendingHeight
             let inset = min(16, max(0, min(bounds.width, bounds.height) / 2 - 1))
             let usable = bounds.insetBy(dx: inset, dy: inset)

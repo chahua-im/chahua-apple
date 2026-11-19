@@ -203,7 +203,9 @@ final class OutgoingMessageQueueTests: XCTestCase {
                 XCTAssertNil(sending.queue.forwardPlaceholderReason(for: audio, merging: false))
             } else {
                 XCTAssertEqual(sending.queue.acknowledgedPendingAudioMessages, [audio])
-                XCTAssertEqual(sending.queue.forwardPlaceholderReason(for: audio, merging: false), "pendingAudio")
+                XCTAssertEqual(
+                    sending.queue.forwardPlaceholderReason(for: audio, merging: false),
+                    "pendingAudio")
                 await sending.queue.setForegroundActive(false)
                 try await sending.queue.enqueueForward(
                     chatID: "chat", sources: [audio], allowPlaceholders: true)
@@ -216,7 +218,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
                 XCTAssertNil(snapshot.sticker)
                 _ = await sending.queue.acceptAcknowledgement(audio)
                 XCTAssertTrue(sending.queue.acknowledgedPendingAudioMessages.isEmpty)
-                XCTAssertEqual(sending.queue.pendingMessages(chatID: "chat").first?.forwardRequest,
+                XCTAssertEqual(
+                    sending.queue.pendingMessages(chatID: "chat").first?.forwardRequest,
                     pending.forwardRequest)
                 await sending.queue.setForegroundActive(true)
                 try await eventually { await sending.api.requests().count == 3 }
@@ -691,7 +694,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         await h.queue.setForegroundActive(false)
         await h.queue.activate(uid: 1)
         XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.text), ["old account"])
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").first?.failure?.reason, .unknownOutcome)
+        XCTAssertEqual(
+            h.queue.pendingMessages(chatID: "chat").first?.failure?.reason, .unknownOutcome)
         observation.cancel()
         await h.close()
     }
@@ -705,7 +709,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let firstRun = await h.api.requests()
         await h.close()
         let second = try await openHarness(root: h.root, foreground: false)
-        XCTAssertEqual(second.queue.pendingMessages(chatID: "chat").first?.failure?.reason, .unknownOutcome)
+        XCTAssertEqual(
+            second.queue.pendingMessages(chatID: "chat").first?.failure?.reason, .unknownOutcome)
         XCTAssertThrowsError(try second.queue.beginPendingEdit(pendingProjection(rows[0])))
         try await second.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID)
         await second.queue.setForegroundActive(true)
@@ -929,7 +934,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertEqual(h.queue.snapshots, [:])
         h.queue.requestForegroundActive(false)
         await h.queue.activate(uid: 1)
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").first?.failure?.reason, .unknownOutcome)
+        XCTAssertEqual(
+            h.queue.pendingMessages(chatID: "chat").first?.failure?.reason, .unknownOutcome)
         let requests = await h.api.requests()
         XCTAssertEqual(requests.count, 1)
         await h.api.finish(0, with: .success(try response(original)))
@@ -953,7 +959,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
             id: "slot", generation: "generation", position: 0, sourcePath: file.path,
             preparedPath: file.path, previewPath: file.path, fileName: file.lastPathComponent,
             mimeType: "image/png", width: 1, height: 1, byteCount: 1, attachmentID: "image")
-        _ = try await localStore.setDraftAttachments(key: key, attachments: [uploaded], compressionEnabled: true)
+        _ = try await localStore.setDraftAttachments(
+            key: key, attachments: [uploaded], compressionEnabled: true)
         _ = try await localStore.enqueueText(
             chatID: "chat", clientGeneratedID: "caption-send", text: "Caption",
             enqueuedAt: TimelineTestFixtures.date(second: 4), clearedDraftRevision: 1)
@@ -963,7 +970,9 @@ final class OutgoingMessageQueueTests: XCTestCase {
         defer { chatStore.cancelRealtimeRecovery() }
         chatStore.currentUserProfile = try JSONDecoder().decode(
             MeResponse.self,
-            from: Data(#"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            from: Data(
+                #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
 
         let history = try [
             TimelineTestFixtures.message(id: 1, at: 0),
@@ -1155,7 +1164,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         h.queue.endPendingEdit(session)
         XCTAssertTrue(FileManager.default.fileExists(atPath: borrowed.sourcePath))
         XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").first?.attachments, [borrowed])
-        XCTAssertFalse(h.queue.pendingMessages(chatID: "chat").first?.attachments.contains(imported) ?? true)
+        XCTAssertFalse(
+            h.queue.pendingMessages(chatID: "chat").first?.attachments.contains(imported) ?? true)
         let replacement = try h.queue.beginPendingEdit(pendingProjection(item))
         try await h.queue.importEditAttachments(urls: [image], session: replacement, asFiles: false)
         let committed = try XCTUnwrap(replacement.attachments.last)
@@ -1165,7 +1175,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertFalse(replacement.isValid)
         await h.close()
         let reopened = try await openHarness(root: h.root, foreground: false)
-        let restored = try XCTUnwrap(reopened.queue.pendingMessages(chatID: "chat").first?.attachments.first)
+        let restored = try XCTUnwrap(
+            reopened.queue.pendingMessages(chatID: "chat").first?.attachments.first)
         XCTAssertEqual(restored.sourcePath, committed.sourcePath)
         XCTAssertTrue(FileManager.default.fileExists(atPath: restored.sourcePath))
     }
@@ -1260,7 +1271,9 @@ final class OutgoingMessageQueueTests: XCTestCase {
             let head = await h.api.requests()[1]
             XCTAssertEqual(head.body.message, save ? "edited A" : "A")
             XCTAssertEqual(head.body.replyToId, save ? MessageID(42) : nil)
-            XCTAssertEqual(head.body.attachmentIds, save ? ["remote-1", "remote-0"] : ["remote-0", "remote-1", "remote-2"])
+            XCTAssertEqual(
+                head.body.attachmentIds,
+                save ? ["remote-1", "remote-0"] : ["remote-0", "remote-1", "remote-2"])
             XCTAssertEqual(head.body.clientGeneratedId, item.clientGeneratedID)
             await h.api.finish(1, with: .success(try response(head)))
             try await eventually { await h.api.requests().count == 3 }
@@ -1287,7 +1300,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
                 encoder.dateEncodingStrategy = .iso8601
                 conflict = try JSONSerialization.data(withJSONObject: [
                     "code": "clientGeneratedIdConflict",
-                    "existingMessage": try JSONSerialization.jsonObject(with: encoder.encode(unrelated)),
+                    "existingMessage": try JSONSerialization.jsonObject(
+                        with: encoder.encode(unrelated)),
                 ])
             } else {
                 conflict = Data("clientGeneratedId already exists".utf8)
@@ -1362,8 +1376,11 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let h = try await openHarness()
         let rows = try await enqueueABC(h)
         let date = Date().addingTimeInterval(60)
-        await h.api.finish(0, with: .failure(APIError.retryableHTTP(
-            status: 429, body: Data(), retryAfter: date)))
+        await h.api.finish(
+            0,
+            with: .failure(
+                APIError.retryableHTTP(
+                    status: 429, body: Data(), retryAfter: date)))
         try await eventually {
             guard let item = h.queue.pendingMessages(chatID: "chat").first,
                 case .failed(_, let nextRetry) = h.queue.phase(of: item), let nextRetry
@@ -1404,7 +1421,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let receipt = await h.queue.acceptAcknowledgement(message)
         XCTAssertEqual(receipt, .consumed)
         XCTAssertTrue(h.queue.pendingMessages(chatID: "allowed").isEmpty)
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "blocked").map(\.text), ["older", "blocked reply"])
+        XCTAssertEqual(
+            h.queue.pendingMessages(chatID: "blocked").map(\.text), ["older", "blocked reply"])
         XCTAssertEqual(h.queue.pendingMessages(chatID: "expired").map(\.text), ["expired reply"])
         XCTAssertEqual(h.background.ended, 1)
     }
@@ -1420,7 +1438,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
         h.queue.requestForegroundActive(true)
         try await eventually { await h.api.uploadCount() == 2 }
         await h.api.finishUpload("remote-0")
-        await h.api.finishUpload("remote-1", with: .failure(APIError.transport(URLError(.timedOut))))
+        await h.api.finishUpload(
+            "remote-1", with: .failure(APIError.transport(URLError(.timedOut))))
         try await eventually {
             h.queue.pendingMessages(chatID: "chat").first?.failure?.stage == .preparation
         }
@@ -1637,7 +1656,8 @@ private final class Harness {
                 try await Task.detached {
                     let scope = LocalStorageScope(
                         apiBaseURL: URL(string: "https://queue.invalid/api")!, userID: uid)
-                    return try ChahuaLocalStore(directory: scope.directory(under: root), userID: uid)
+                    return try ChahuaLocalStore(
+                        directory: scope.directory(under: root), userID: uid)
                 }.value
             },
             onInvalidToken: { [weak self] in
@@ -1753,7 +1773,8 @@ private actor HeldQueueAPI: ChahuaAPIClient {
     ) async throws -> OutgoingUploadAllocation {
         guard uploadsEnabled else { throw APIError.unavailable }
         return OutgoingUploadAllocation(
-            attachmentId: "remote-\(order)", uploadURL: URL(string: "https://unused.invalid")!, headers: [:])
+            attachmentId: "remote-\(order)", uploadURL: URL(string: "https://unused.invalid")!,
+            headers: [:])
     }
     func listOwnedStickerPacks() async throws -> [StickerPackSummary] { throw APIError.unavailable }
     func listSubscribedStickerPacks() async throws -> [StickerPackSummary] {

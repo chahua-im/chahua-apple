@@ -84,7 +84,8 @@ struct MessageMetadata {
                 ? " " + AppLanguage.localized("(Edited)") : "")
         self.init(
             time: time, state: row.isOutgoing ? row.entry.displayState : nil,
-            isOutgoing: row.isOutgoing, isRead: row.isRead, isOverlay: isOverlay, fontSize: fontSize,
+            isOutgoing: row.isOutgoing, isRead: row.isRead, isOverlay: isOverlay,
+            fontSize: fontSize,
             isBlocked: row.entry.isOutboxBlocked
         )
     }
@@ -123,7 +124,8 @@ struct MessageMetadata {
         switch state {
         case .preparing: label = AppLanguage.localized("Preparing")
         case .queued:
-            label = isBlocked
+            label =
+                isBlocked
                 ? AppLanguage.localized("Queued behind an earlier message")
                 : AppLanguage.localized("Queued")
         case .sending: label = AppLanguage.localized("Sending")

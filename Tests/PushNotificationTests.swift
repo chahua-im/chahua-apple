@@ -100,7 +100,8 @@ final class PushNotificationTests: XCTestCase {
         XCTAssertTrue(accepted)
         XCTAssertFalse(blankAccepted)
         XCTAssertEqual(
-            replies, [.init(uid: 1, route: route, text: "Sent from notification", deadline: deadline)])
+            replies,
+            [.init(uid: 1, route: route, text: "Sent from notification", deadline: deadline)])
     }
 
     func testColdQuickReplyWaitsForAuthenticatedDurableHandoff() async throws {
@@ -138,7 +139,8 @@ final class PushNotificationTests: XCTestCase {
         let completed = await completion.value()
         let replies = await recorder.replies()
         XCTAssertEqual(completed, true)
-        XCTAssertEqual(replies, [.init(uid: 1, route: route, text: "Cold reply", deadline: deadline)])
+        XCTAssertEqual(
+            replies, [.init(uid: 1, route: route, text: "Cold reply", deadline: deadline)])
     }
 
     func testColdQuickReplyIsDiscardedForDifferentRegisteredAccount() async throws {

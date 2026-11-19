@@ -462,8 +462,8 @@
                 ConversationTimelineView(
                     model: model, loadsInitialAutomatically: false, actions: routed
                 )
-                    .onAppear { actions = routed }
-                    .onChange(of: routed.selectedMessageIDs) { _, _ in actions = routed }
+                .onAppear { actions = routed }
+                .onChange(of: routed.selectedMessageIDs) { _, _ in actions = routed }
             }
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
             let window = UIWindow(windowScene: scene)
@@ -482,10 +482,15 @@
 
             let anchor = try XCTUnwrap(messages.last)
             try XCTUnwrap(actions.toggleMessageSelection)(anchor)
-            await drainNativeHandoffs()
-            window.layoutIfNeeded()
-            native.viewDidLayoutSubviews()
-            await drainNativeHandoffs()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            while native.visibleMessageIDsForSelection() == nil
+                || actions.selectedMessageIDs != [anchor.id]
+            {
+                guard ContinuousClock.now < deadline else {
+                    return XCTFail("The selection layout did not settle before dragging.")
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
             let list = try XCTUnwrap(native.view.subviews.first as? UICollectionView)
             XCTAssertGreaterThan(list.contentOffset.y, -list.adjustedContentInset.top)
             native.scrollViewWillBeginDragging(list)
