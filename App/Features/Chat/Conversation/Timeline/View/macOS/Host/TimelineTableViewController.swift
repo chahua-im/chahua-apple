@@ -19,7 +19,7 @@
 
     @MainActor
     final class TimelineTableViewController: NSViewController, NSTableViewDataSource,
-        NSTableViewDelegate
+        NSTableViewDelegate, TimelineSelectionViewportSource
     {
         private struct Geometry: Equatable {
             let size: NSSize
@@ -170,6 +170,7 @@
         private var applying = false
         private var settingScrollOrigin = false
         private var handlingWheel = false
+        private var selectionWheelTop: CGFloat?
         private var liveScrolling = false
         private var isTornDown = false
         private var windowLiveResizing = false
@@ -207,6 +208,7 @@
         override func loadView() { view = NSView() }
         override func viewDidLoad() {
             super.viewDidLoad()
+            model.selectionViewportSource = self
             applyConversationBackground()
             scrollView.translatesAutoresizingMaskIntoConstraints = false
             scrollView.hasVerticalScroller = true
@@ -229,12 +231,16 @@
                 guard let self else { return }
                 self.handlingWheel = true
                 self.cancelForUserScroll()
+                self.selectionWheelTop =
+                    self.actions.isSelectingMessages ? self.selectionScrollTop : nil
             }
             scrollView.wheelDidScroll = { [weak self] in
                 guard let self else { return }
+                let delta = self.selectionWheelTop.map { self.selectionScrollTop - $0 }
+                self.selectionWheelTop = nil
                 self.handlingWheel = false
                 self.installIfPossible()
-                self.reportViewport(reason: .user)
+                self.reportViewport(reason: .user, userScrollDelta: delta)
             }
             tableView.headerView = nil
             // The column fills the viewport; automatic table styles add overflowing row padding.
@@ -297,6 +303,7 @@
         func tearDown() {
             guard !isTornDown else { return }
             isTornDown = true
+            if model.selectionViewportSource === self { model.selectionViewportSource = nil }
             cancellable = nil
             displayScheduler?.cancel()
             displayScheduler = nil
@@ -1204,52 +1211,71 @@
             reportViewport(reason: .user)
         }
 
-        private func reportViewport(reason: TimelineViewportChangeReason) {
+        private var hasCurrentViewport: Bool {
+            !isTornDown && !applying && !settingScrollOrigin && !handlingWheel && scrollAnimation == nil
+                && latestSnapshot == nil && installedRevision >= 0
+                && installedRevision == model.updates.value.revision
+                && installedGeometry == currentGeometry && layoutEnvironment == currentEnvironment
+        }
+
+        private func visibleRows(in rect: NSRect) -> Range<Int> {
+            guard !rect.isEmpty else { return 0..<0 }
+            let range = tableView.rows(in: rect)
+            guard range.location != NSNotFound, range.length > 0, range.location < rows.count
+            else { return 0..<0 }
+            return range.location..<min(NSMaxRange(range), rows.count)
+        }
+
+        func visibleMessageIDsForSelection() -> [MessageID]? {
+            let viewport = unobscuredDocumentRect
+            guard hasCurrentViewport, view.window != nil, !viewport.isEmpty else { return nil }
+            return visibleRows(in: viewport).compactMap { index in
+                guard viewport.intersects(tableView.rect(ofRow: index)) else { return nil }
+                return rows[index].messageID
+            }
+        }
+
+        private var selectionScrollTop: CGFloat {
+            let viewport = unobscuredDocumentRect
+            return min(max(0, tableView.bounds.maxY - viewport.height), max(0, viewport.minY))
+        }
+
+        private func reportViewport(
+            reason: TimelineViewportChangeReason, userScrollDelta: CGFloat? = nil
+        ) {
             updateVisibleMedia()
-            guard !applying, !settingScrollOrigin, !handlingWheel, scrollAnimation == nil,
-                latestSnapshot == nil, installedRevision >= 0,
-                installedRevision == model.updates.value.revision,
-                installedGeometry == currentGeometry, layoutEnvironment == currentEnvironment,
-                !liveScrolling || reason == .user
-            else { return }
+            guard hasCurrentViewport, !liveScrolling || reason == .user else { return }
             // Rendering and height preparation retain the full document viewport
             // for the blur. Read, jump, paging and visible-media candidates use
             // only the area between the floating header/pins and composer.
             let unobscured = unobscuredDocumentRect
             // A fully covered viewport must cancel the previous read candidate,
             // not leave its dwell timer running while there is no usable area.
-            let range =
-                unobscured.isEmpty
-                ? NSRange(location: NSNotFound, length: 0) : tableView.rows(in: unobscured)
-            let hasVisibleRows =
-                range.location != NSNotFound && range.length > 0 && range.location < rows.count
+            let range = visibleRows(in: unobscured)
             var visibleMessageIDs: [MessageID] = []
             var visibleReactionMessageIDs: [MessageID] = []
-            if hasVisibleRows, !unobscured.isEmpty {
-                for index in range.location..<min(NSMaxRange(range), rows.count) {
-                    guard let id = rows[index].messageID,
-                        unobscured.intersects(tableView.rect(ofRow: index))
-                    else { continue }
-                    visibleMessageIDs.append(id)
-                    if let region = preparedRows[rows[index].id]?.layout.reactionRegion(
-                        in: tableView.rect(ofRow: index))
-                    {
-                        let intersection = region.intersection(unobscured)
-                        if intersection.width > 0 && intersection.height > 0 {
-                            visibleReactionMessageIDs.append(id)
-                        }
+            for index in range {
+                let frame = tableView.rect(ofRow: index)
+                guard let id = rows[index].messageID, unobscured.intersects(frame) else { continue }
+                visibleMessageIDs.append(id)
+                if let region = preparedRows[rows[index].id]?.layout.reactionRegion(in: frame) {
+                    let intersection = region.intersection(unobscured)
+                    if intersection.width > 0 && intersection.height > 0 {
+                        visibleReactionMessageIDs.append(id)
                     }
                 }
             }
             settledPosition = capturePosition()
+            let maxTop = max(0, tableView.bounds.maxY - unobscured.height)
+            let top = min(maxTop, max(0, unobscured.minY))
             let viewport = TimelineViewport(
-                firstVisibleIndex: hasVisibleRows ? range.location : nil,
-                lastVisibleIndex: hasVisibleRows ? min(NSMaxRange(range), rows.count) - 1 : nil,
-                distanceToTop: max(0, unobscured.minY),
-                distanceToBottom: max(0, tableView.bounds.maxY - unobscured.maxY),
+                firstVisibleIndex: range.first,
+                lastVisibleIndex: range.last,
+                distanceToTop: top,
+                distanceToBottom: maxTop - top,
                 height: unobscured.height,
                 visibleMessageIDs: visibleMessageIDs,
-                visibleReactionMessageIDs: visibleReactionMessageIDs)
+                visibleReactionMessageIDs: visibleReactionMessageIDs, userScrollDelta: userScrollDelta)
             let revision = installedRevision
             let geometry = installedGeometry
             let environment = layoutEnvironment

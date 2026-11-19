@@ -8,6 +8,83 @@ import XCTest
 final class ConversationTimelineModelTests: XCTestCase {
     private var cancellables: Set<AnyCancellable> = []
 
+    func testRangeKeepsDirectionOnSmallReversalAndUsesFreshVisibleMessages() async throws {
+        let messages = try (100...109).map { id in
+            try TimelineTestFixtures.message(
+                id: UInt64(id), at: id - 100, type: id == 108 ? .system : .text)
+        }
+        let (model, _, _) = try makeModel(pages: [
+            .success(try TimelineTestFixtures.page(messages))
+        ])
+        defer { model.close() }
+        await model.open()
+
+        func report(
+            _ top: CGFloat, _ ids: ClosedRange<UInt64>, reason: TimelineViewportChangeReason
+        ) {
+            reportVisible(
+                ids.map(MessageID.init), to: model, reason: reason,
+                distanceToBottom: 700 - top, distanceToTop: top)
+        }
+
+        report(250, 103...106, reason: .layout)
+        let selection = [messages[4].id: messages[4], messages[6].id: messages[6]]
+        model.updateSelectionRange(active: true, ids: selection.keys, busy: false)
+        XCTAssertNil(model.selectionRange.offer)
+
+        report(360, 103...107, reason: .user)
+        XCTAssertEqual(model.selectionRange.offer?.direction, .newer)
+        XCTAssertEqual(model.selectionRange.offer?.count, 1)
+        report(340, 103...107, reason: .user)
+        XCTAssertEqual(model.selectionRange.offer?.direction, .newer)
+        report(295, 102...107, reason: .layout)
+        XCTAssertEqual(model.selectionRange.offer?.direction, .newer)
+        report(295, 102...107, reason: .user)
+        XCTAssertEqual(model.selectionRange.offer?.direction, .older)
+        XCTAssertEqual(model.selectionRange.offer?.count, 2)
+
+        let older = model.selectionRangeMessages(
+            toward: .older, visibleIDs: (101...105).map(MessageID.init))
+        XCTAssertEqual(older?.map(\.id), (101...103).map(MessageID.init))
+        XCTAssertNil(model.selectionRange.offer)
+
+        report(500, 107...109, reason: .user)
+        let newer = model.selectionRangeMessages(
+            toward: .newer, visibleIDs: [MessageID(108), MessageID(109)])
+        XCTAssertEqual(newer?.map(\.id), [MessageID(107), MessageID(109)])
+    }
+
+    func testRangeRejectsWholeExtensionWhenViewportGrowsPastLimitBeforeTap() async throws {
+        let (model, _, _) = try makeModel(pages: [.success(try livePage(ids: 1...101))])
+        defer { model.close() }
+        await model.open()
+
+        reportVisible(
+            [MessageID(98), MessageID(99)], to: model, distanceToBottom: 500, distanceToTop: 200)
+        let selection = Dictionary(
+            uniqueKeysWithValues: remoteMessages(model).prefix(99).map { ($0.id, $0) })
+        model.updateSelectionRange(active: true, ids: selection.keys, busy: false)
+        reportVisible(
+            [MessageID(100)], to: model, reason: .user, distanceToBottom: 400,
+            distanceToTop: 300)
+        XCTAssertEqual(model.selectionRange.offer?.exceedsLimit, false)
+
+        XCTAssertNil(
+            model.selectionRangeMessages(
+                toward: .newer, visibleIDs: [MessageID(100), MessageID(101)]))
+        XCTAssertEqual(model.selectionRange.offer?.exceedsLimit, true)
+        XCTAssertEqual(model.selectionRange.offer?.remaining, 1)
+
+        reportVisible(
+            [MessageID(100)], to: model, reason: .user, distanceToBottom: 420,
+            distanceToTop: 280)
+        XCTAssertEqual(model.selectionRange.offer?.exceedsLimit, false)
+        XCTAssertEqual(
+            model.selectionRangeMessages(toward: .newer, visibleIDs: [MessageID(100)])?.map(\.id),
+            [MessageID(100)])
+        XCTAssertNil(model.selectionRange.offer)
+    }
+
     func testPendingReplyKeepsStableIdentityAlongsideRootAndOtherSenderWithSameClientID()
         async throws
     {
@@ -2684,7 +2761,7 @@ final class ConversationTimelineModelTests: XCTestCase {
     private func reportVisible(
         _ ids: [MessageID], to model: ConversationTimelineModel, revision: Int? = nil,
         reason: TimelineViewportChangeReason = .layout, distanceToBottom: CGFloat = 5_000,
-        reactions: [MessageID] = []
+        distanceToTop: CGFloat = 5_000, reactions: [MessageID] = []
     ) {
         if let request = model.updates.value.pendingScroll {
             model.scrollRequestDidFinish(id: request.id)
@@ -2694,7 +2771,7 @@ final class ConversationTimelineModelTests: XCTestCase {
             ids.last.flatMap { id in model.rows.firstIndex { $0.messageID == id } } ?? model.rows
             .count - 1
         var viewport = TimelineViewport(
-            firstVisibleIndex: first, lastVisibleIndex: last, distanceToTop: 5_000,
+            firstVisibleIndex: first, lastVisibleIndex: last, distanceToTop: distanceToTop,
             distanceToBottom: distanceToBottom, height: 400)
         viewport.visibleMessageIDs = ids
         viewport.visibleReactionMessageIDs = reactions

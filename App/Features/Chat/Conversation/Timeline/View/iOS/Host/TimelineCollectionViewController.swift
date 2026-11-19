@@ -6,7 +6,7 @@
 
     @MainActor
     final class TimelineCollectionViewController: UIViewController, UICollectionViewDataSource,
-        UICollectionViewDelegateFlowLayout
+        UICollectionViewDelegateFlowLayout, TimelineSelectionViewportSource
     {
         private struct Geometry: Equatable {
             let size: CGSize
@@ -149,6 +149,8 @@
         private var needsPlacement = false
         private var animateFollowing = false
         private var userScrolling = false
+        private var selectionDragOffset: CGFloat?
+        private var pendingSelectionDelta: CGFloat = 0
         private var applying = false
         private var draining = false
         private var isTornDown = false
@@ -185,6 +187,7 @@
 
         override func viewDidLoad() {
             super.viewDidLoad()
+            model.selectionViewportSource = self
             applyConversationBackground()
             collectionView.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(collectionView)
@@ -497,6 +500,7 @@
 
         func tearDown() {
             isTornDown = true
+            if model.selectionViewportSource === self { model.selectionViewportSource = nil }
             viewportHandoffGeneration += 1
             pendingViewportContext = nil
             pendingCompletionID = nil
@@ -639,10 +643,20 @@
             activeRequest = nil
             desiredRequest = nil
             stopPhysicalAnimation()
+            selectionDragOffset = actions.isSelectingMessages ? scrollView.contentOffset.y : nil
+            pendingSelectionDelta = 0
             model.userScrollBegan()
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            if userScrolling, actions.isSelectingMessages {
+                let offset = scrollView.contentOffset.y
+                if !applying, let previous = selectionDragOffset {
+                    let delta = clampedOffset(offset) - clampedOffset(previous)
+                    if delta != 0 { pendingSelectionDelta = delta }
+                }
+                selectionDragOffset = offset
+            }
             guard !applying, geometry == currentGeometry else { return }
             let trace = ScrollPerformanceTrace.begin("Timeline.Scroll")
             defer { ScrollPerformanceTrace.end("Timeline.Scroll", trace) }
@@ -1128,16 +1142,26 @@
             applying = false
         }
 
+        private var hasCurrentViewport: Bool {
+            !isTornDown && !applying && !draining && latestSnapshot == nil && scrollAnimation == nil
+                && installedRevision >= 0 && installedRevision == model.updates.value.revision
+                && geometry == currentGeometry && layoutEnvironment == currentEnvironment
+        }
+
+        func visibleMessageIDsForSelection() -> [MessageID]? {
+            guard hasCurrentViewport, view.window != nil, !unobscuredViewport.isEmpty else { return nil }
+            return visibleItems().sorted { $0.indexPath < $1.indexPath }
+                .compactMap { rows[$0.indexPath.item].messageID }
+        }
+
         private func reportViewport(
             reason: TimelineViewportChangeReason,
             visibleItems items: [UICollectionViewLayoutAttributes]? = nil
         ) {
-            guard !isTornDown, !applying, !draining, latestSnapshot == nil, scrollAnimation == nil,
+            guard hasCurrentViewport,
                 reason == .user
                     || (!userScrolling && !collectionView.isDragging
-                        && !collectionView.isDecelerating),
-                installedRevision >= 0, installedRevision == model.updates.value.revision,
-                geometry == currentGeometry, layoutEnvironment == currentEnvironment
+                        && !collectionView.isDecelerating)
             else { return }
             let visibleItems = items ?? visibleItems()
             position = capturePosition(visibleItems: visibleItems)
@@ -1157,17 +1181,18 @@
                     let intersection = region.intersection(unobscured)
                     return intersection.width > 0 && intersection.height > 0 ? id : nil
                 }
-            let top = max(
-                0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top)
             let height = max(
                 0,
                 collectionView.bounds.height - collectionView.adjustedContentInset.top
                     - collectionView.adjustedContentInset.bottom)
+            let maxTop = max(0, collectionView.contentSize.height - height)
+            let top = min(
+                maxTop, max(0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top))
             let viewport = TimelineViewport(
                 firstVisibleIndex: visible.min(),
                 lastVisibleIndex: visible.max(),
                 distanceToTop: top,
-                distanceToBottom: max(0, collectionView.contentSize.height - top - height),
+                distanceToBottom: maxTop - top,
                 height: height,
                 visibleMessageIDs: visibleMessageIDs,
                 visibleReactionMessageIDs: visibleReactionMessageIDs)
@@ -1203,7 +1228,12 @@
                         || (!userScrolling && !collectionView.isDragging
                             && !collectionView.isDecelerating)
                 else { return }
-                model.viewportDidChange(viewport, reason: reportReason, revision: revision)
+                var report = viewport
+                if reportReason == .user, actions.isSelectingMessages {
+                    report.userScrollDelta = pendingSelectionDelta
+                    pendingSelectionDelta = 0
+                }
+                model.viewportDidChange(report, reason: reportReason, revision: revision)
             }
         }
     }

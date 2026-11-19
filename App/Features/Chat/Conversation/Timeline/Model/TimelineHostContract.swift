@@ -41,6 +41,9 @@ struct TimelineViewport: Equatable {
     /// Confirmed messages whose prepared reaction region has positive-area overlap
     /// with the unobscured viewport. Message-body visibility alone does not count.
     var visibleReactionMessageIDs: [MessageID] = []
+    /// Movement measured in a native scroll callback, before any layout compensation.
+    /// Nil when the host cannot measure it directly.
+    var userScrollDelta: CGFloat?
 
     static let empty = TimelineViewport(
         firstVisibleIndex: nil,

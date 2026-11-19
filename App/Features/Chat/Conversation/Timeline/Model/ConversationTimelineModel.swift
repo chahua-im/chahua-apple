@@ -36,10 +36,17 @@ final class ConversationTimelineModel: ObservableObject {
             previous.live.scrollsTowardNewer = newValue.live.scrollsTowardNewer
             if previous != newValue { objectWillChange.send() }
         }
-        didSet { synchronizeViewportPresentation() }
+        didSet {
+            synchronizeViewportPresentation()
+            if oldValue.content != state.content, state.content != .ready {
+                selectionRange.clearDirection()
+            }
+        }
     }
     @Published private(set) var rows: [TimelineRow] = []
     let viewport = TimelineViewportPresentation()
+    let selectionRange = TimelineSelectionRange()
+    weak var selectionViewportSource: (any TimelineSelectionViewportSource)?
     private(set) var bottomVisibleMessageDate: Date? {
         didSet { synchronizeViewportPresentation() }
     }
@@ -90,6 +97,10 @@ final class ConversationTimelineModel: ObservableObject {
     private var pendingScroll: TimelineScrollRequest?
     private var lastEntries: [ConversationTimelineEntry]?
     private var lastViewport = TimelineViewport.empty
+    private var rangeSelection: (anchors: TimelineSelectionRange.Edges, count: Int, busy: Bool)?
+    private var rangeScrollReference: TimelineViewport?
+    private var rangeCandidates:
+        (revision: Int, messages: [MessageResponse], indices: [MessageID: Int])?
     private(set) var viewportRevision: Int? {
         didSet { synchronizeViewportPresentation() }
     }
@@ -1075,11 +1086,142 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
+    func canSelectMessage(_ message: MessageResponse) -> Bool {
+        message.chatId == chatID && !message.isDeleted && message.messageType != .system
+            && !deletedIDs.contains(message.id)
+    }
+
+    func updateSelectionRange(
+        active: Bool, ids: Dictionary<MessageID, MessageResponse>.Keys, busy: Bool
+    ) {
+        guard active else {
+            rangeSelection = nil
+            rangeScrollReference = nil
+            rangeCandidates = nil
+            selectionRange.clearDirection()
+            return
+        }
+        let starting = rangeSelection == nil
+        rangeSelection = (.init(older: ids.min(), newer: ids.max()), ids.count, busy)
+        if starting {
+            selectionRange.clearDirection()
+            if viewportRevision == snapshotRevision {
+                trackSelectionRange(lastViewport, reason: .programmatic)
+            }
+        } else {
+            refreshSelectionRange()
+        }
+    }
+
+    func selectionRangeMessages(
+        toward direction: TimelineSelectionRange.Direction, visibleIDs: [MessageID]
+    ) -> ArraySlice<MessageResponse>? {
+        guard canOfferSelectionRange, direction == selectionRange.direction else { return nil }
+        prepareRangeCandidates()
+        selectionRange.edges = selectionEdges(in: visibleIDs)
+        guard let selection = rangeSelection, let candidates = rangeCandidates,
+            let interval = selectionInterval(
+                toward: direction, edge: selectionRange.edges[direction]),
+            interval.count <= TimelineSelectionRange.limit - selection.count
+        else {
+            refreshSelectionRange()
+            return nil
+        }
+        selectionRange.clearDirection()
+        return candidates.messages[interval]
+    }
+
+    private var canOfferSelectionRange: Bool {
+        rangeSelection?.busy == false && state.content == .ready && pendingScroll == nil
+    }
+
+    private func prepareRangeCandidates() {
+        guard rangeCandidates?.revision != snapshotRevision else { return }
+        var messages: [MessageResponse] = []
+        var indices: [MessageID: Int] = [:]
+        // Rows are in server order. Use the rendered remote rows, not pending
+        // sends or records the timeline has suppressed in favor of a pending row.
+        for case .message(let row) in rows {
+            guard let message = row.entry.remoteMessage, canSelectMessage(message) else { continue }
+            indices[message.id] = messages.count
+            messages.append(message)
+        }
+        rangeCandidates = (snapshotRevision, messages, indices)
+    }
+
+    private func selectionEdges(in visibleIDs: [MessageID]) -> TimelineSelectionRange.Edges {
+        guard let indices = rangeCandidates?.indices else { return .init() }
+        return .init(
+            older: visibleIDs.first { indices[$0] != nil },
+            newer: visibleIDs.last { indices[$0] != nil })
+    }
+
+    private func selectionInterval(
+        toward direction: TimelineSelectionRange.Direction, edge: MessageID?
+    ) -> Range<Int>? {
+        guard let anchor = rangeSelection?.anchors[direction], let edge,
+            let indices = rangeCandidates?.indices,
+            let anchorIndex = indices[anchor], let edgeIndex = indices[edge],
+            window.index(ofServerID: anchor) != nil, window.index(ofServerID: edge) != nil
+        else { return nil }
+        switch direction {
+        case .older: return edgeIndex < anchorIndex ? edgeIndex..<anchorIndex : nil
+        case .newer: return edgeIndex > anchorIndex ? (anchorIndex + 1)..<(edgeIndex + 1) : nil
+        }
+    }
+
+    private func refreshSelectionRange() {
+        guard canOfferSelectionRange,
+            let selection = rangeSelection, let direction = selectionRange.direction,
+            let interval = selectionInterval(
+                toward: direction, edge: selectionRange.edges[direction])
+        else {
+            selectionRange.present(nil)
+            return
+        }
+        selectionRange.present(
+            .init(
+                direction: direction, count: interval.count,
+                remaining: TimelineSelectionRange.limit - selection.count))
+    }
+
+    private func trackSelectionRange(
+        _ viewport: TimelineViewport, reason: TimelineViewportChangeReason
+    ) {
+        guard rangeSelection != nil else { return }
+        prepareRangeCandidates()
+        selectionRange.edges = selectionEdges(in: viewport.visibleMessageIDs)
+        defer { refreshSelectionRange() }
+
+        let extent = viewport.distanceToTop + viewport.distanceToBottom
+        let previous = rangeScrollReference
+        let comparable = previous.map {
+            $0.height == viewport.height
+                && abs(extent - $0.distanceToTop - $0.distanceToBottom) < 0.5
+        } ?? false
+        // A layout read can see the new offset before the user-scroll report.
+        // Do not consume that movement, but do rebase if layout changed the scroll extent.
+        if reason != .layout || !comparable { rangeScrollReference = viewport }
+        guard reason == .user, pendingScroll == nil else { return }
+        let delta = viewport.userScrollDelta
+            ?? (comparable ? viewport.distanceToTop - (previous?.distanceToTop ?? 0) : 0)
+        guard delta != 0 else { return }
+        let newer = delta > 0
+        selectionRange.updateDirection(
+            for: newer ? .newer : .older,
+            previous: previous.map { selectionEdges(in: $0.visibleMessageIDs) } ?? .init(),
+            reachedEdge: (newer ? viewport.distanceToBottom : viewport.distanceToTop) < 1,
+            canExtend: { selectionInterval(toward: $0, edge: $1) != nil })
+    }
+
     func viewportDidChange(
         _ viewport: TimelineViewport, reason: TimelineViewportChangeReason, revision: Int
     ) {
         if revision == snapshotRevision, !viewport.isValid(forRowCount: rows.count) {
             viewportRevision = nil
+            selectionRange.present(nil)
+            rangeScrollReference = nil
+            selectionRange.edges = .init()
             cancelReadCandidate()
             cancelReactionDwell()
         }
@@ -1090,6 +1232,7 @@ final class ConversationTimelineModel: ObservableObject {
         let previousAnchorID = visibleAnchorID
         lastViewport = viewport
         if viewportRevision != revision { viewportRevision = revision }
+        trackSelectionRange(viewport, reason: reason)
         visibleAnchorID = nil
         if let first = viewport.firstVisibleIndex, let last = viewport.lastVisibleIndex {
             for index in first...last where rows[index].messageID != nil {
@@ -1193,6 +1336,7 @@ final class ConversationTimelineModel: ObservableObject {
         case .ready, .repositioning: break
         default: return .failed
         }
+        selectionRange.clearDirection()
         invalidateRequests()
         state.repositionFailure = nil
         state.content = .ready
@@ -1720,6 +1864,10 @@ final class ConversationTimelineModel: ObservableObject {
             lastEntries = entries
             snapshotRevision &+= 1
             viewportRevision = nil
+            if selectionRange.direction != nil {
+                prepareRangeCandidates()
+                refreshSelectionRange()
+            }
             cancelReadCandidate()
             cancelReactionDwell()
         }
@@ -1800,6 +1948,8 @@ final class ConversationTimelineModel: ObservableObject {
                 animateFollowing: false, pendingScroll: pendingScroll))
     }
     private func issueScroll(_ intent: TimelineScrollIntent) {
+        selectionRange.clearDirection()
+        rangeScrollReference = nil
         cancelReadCandidate()
         cancelReactionDwell()
         viewportRevision = nil

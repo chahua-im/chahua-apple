@@ -448,6 +448,74 @@
             XCTAssertEqual(originalBubble.bounds.width, originalWidth, accuracy: 0.5)
         }
 
+        func testRangeExtendsNativeSelectionAcrossOffscreenMessages() async throws {
+            let messages = try (1...32).map { index in
+                try TimelineTestFixtures.message(
+                    id: UInt64(index), at: index, text: "Message \(index)")
+            }
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: true,
+                source: BubbleSource(page: try TimelineTestFixtures.page(messages)),
+                messageStore: ConversationMessageStore())
+            var actions = TimelineBubbleActions()
+            let root = MessageSelectionHost(model: model, actions: .init()) { routed in
+                ConversationTimelineView(
+                    model: model, loadsInitialAutomatically: false, actions: routed
+                )
+                    .onAppear { actions = routed }
+                    .onChange(of: routed.selectedMessageIDs) { _, _ in actions = routed }
+            }
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = UIHostingController(rootView: root)
+            window.makeKeyAndVisible()
+            defer {
+                window.isHidden = true
+                model.close()
+            }
+            await model.loadInitial()
+            window.layoutIfNeeded()
+            let native = try XCTUnwrap(
+                model.selectionViewportSource as? TimelineCollectionViewController)
+            native.viewDidLayoutSubviews()
+            await drainNativeHandoffs()
+
+            let anchor = try XCTUnwrap(messages.last)
+            try XCTUnwrap(actions.toggleMessageSelection)(anchor)
+            await drainNativeHandoffs()
+            window.layoutIfNeeded()
+            native.viewDidLayoutSubviews()
+            await drainNativeHandoffs()
+            let list = try XCTUnwrap(native.view.subviews.first as? UICollectionView)
+            XCTAssertGreaterThan(list.contentOffset.y, -list.adjustedContentInset.top)
+            native.scrollViewWillBeginDragging(list)
+            list.setContentOffset(
+                .init(x: 0, y: max(-list.adjustedContentInset.top, list.contentOffset.y - 500)),
+                animated: false)
+            native.scrollViewDidEndDragging(list, willDecelerate: false)
+            await drainNativeHandoffs()
+            XCTAssertEqual(model.selectionRange.offer?.direction, .older)
+            let visible = try XCTUnwrap(native.visibleMessageIDsForSelection())
+            let edge = try XCTUnwrap(visible.first)
+            XCTAssertFalse(visible.contains(anchor.id))
+            let expected = Set(messages.lazy.map(\.id).filter { $0 >= edge })
+            XCTAssertEqual(model.selectionRange.offer?.count, expected.count - 1)
+
+            window.layoutIfNeeded()
+            let screenshot = XCTAttachment(
+                image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                })
+            screenshot.name = "Floating Select to here capsule"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+
+            try XCTUnwrap(actions.extendMessageSelection)(.older)
+            await drainNativeHandoffs()
+            XCTAssertEqual(actions.selectedMessageIDs, expected)
+            XCTAssertNil(model.selectionRange.offer)
+        }
+
         func testDeletionRemovesNativeRowsAndEmptyDateSeparators() async throws {
             let messages = try [
                 TimelineTestFixtures.message(id: 1, at: 0),

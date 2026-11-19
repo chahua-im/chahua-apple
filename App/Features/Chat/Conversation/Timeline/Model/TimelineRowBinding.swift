@@ -50,6 +50,7 @@ struct TimelineBubbleActions {
     var isSelectingMessages = false
     var selectedMessageIDs: Set<MessageID> = []
     var toggleMessageSelection: ((MessageResponse) -> Void)?
+    var extendMessageSelection: ((TimelineSelectionRange.Direction) -> Void)?
     var endMessageSelection: (() -> Void)?
     var forwardMessage: ((MessageResponse) -> Void)?
     var openForwardedMessages: ((MessageResponse) -> Void)?

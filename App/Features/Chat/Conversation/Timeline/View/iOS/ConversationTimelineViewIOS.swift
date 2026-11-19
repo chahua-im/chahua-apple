@@ -41,6 +41,7 @@
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(ChahuaTheme.conversationBackground(for: colorScheme))
+            .modifier(TimelineSelectionRangeOverlay(range: model.selectionRange, actions: actions))
             .task {
                 if loadsInitialAutomatically { await model.loadInitial(position: initialPosition) }
             }

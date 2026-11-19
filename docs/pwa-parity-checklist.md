@@ -88,6 +88,12 @@ These are recommended batches, not a requirement to finish unrelated work before
 - **Confirmation decision:** Batch recall uses a centered native alert with destructive Delete and Cancel, not a popover/confirmation dialog anchored at the top of the screen. Verify the alert after selecting several messages; Cancel must leave the selection and messages intact.
 - **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above with ready plus pending-audio items; observe request count and whole-batch rejection using an isolated backend/interception.
 
+### Scroll-based message selection · Implemented; device verification pending
+
+- After entering multi-select, scroll toward older or newer messages. A floating **Select to here** button extends from the outermost selected message in that direction to the farthest selectable message visible when pressed. Partly visible rows count; rows fully behind the conversation controls do not.
+- The range must be loaded without gaps. It skips non-selectable messages and preserves the existing selection. If the whole range would exceed 100, the disabled button shows the remaining capacity instead.
+- **Device sign-off:** iOS [ ] · macOS [ ]. Try both directions, a small reversal, an extension across a page boundary, and a range that would exceed the limit.
+
 
 
 ### M5 — DM pin permissions · Implemented; device verification pending

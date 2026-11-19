@@ -30,6 +30,7 @@
                         .frame(height: chatHeaderInset + 24)
                 }
             }
+            .modifier(TimelineSelectionRangeOverlay(range: model.selectionRange, actions: actions))
         }
     }
 
