@@ -7,9 +7,10 @@ import Foundation
 /// A finite UIKit execution grant for the main app's shared outbox dispatcher.
 @MainActor
 final class OutboxBackgroundExecution {
-    typealias Start = @MainActor (
-        _ expire: @escaping @MainActor () -> Void
-    ) -> OutboxBackgroundExecution?
+    typealias Start =
+        @MainActor (
+            _ expire: @escaping @MainActor () -> Void
+        ) -> OutboxBackgroundExecution?
 
     private var end: (() -> Void)?
 

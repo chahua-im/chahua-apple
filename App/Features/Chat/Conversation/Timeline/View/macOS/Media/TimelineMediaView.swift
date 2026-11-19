@@ -330,7 +330,8 @@
                         fileName: attachment.fileName),
                     gallery: gallery, overflow: overflow, asFile: true, displayScale: 1,
                     captionSize: captionSize, mediaContext: nil, canOpen: canOpen)
-                let state = status
+                let state =
+                    status
                     ?? AppLanguage.localized(attachment.isUploaded ? "Ready" : "Waiting to upload")
                 documentSizeLabel.stringValue = state + " · " + attachment.mimeType
                 setAccessibilityValue(state)

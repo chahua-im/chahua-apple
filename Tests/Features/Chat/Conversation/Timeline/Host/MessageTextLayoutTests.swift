@@ -1091,8 +1091,9 @@ final class MessageTextLayoutTests: XCTestCase {
         content.copyEnabled = false
         text.apply(content, resetSelection: false)
         XCTAssertFalse(first.copyButton.isEnabled)
+        let clipboardBeforeDisabledClick = copied()
         press(first)
-        XCTAssertEqual(copied(), "second  \n", "An inactive preview must not copy.")
+        XCTAssertEqual(copied(), clipboardBeforeDisabledClick, "An inactive preview must not copy.")
         content.copyEnabled = true
         text.apply(content, resetSelection: false)
         press(first)

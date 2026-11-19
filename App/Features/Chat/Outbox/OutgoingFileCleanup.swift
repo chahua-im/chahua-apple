@@ -16,7 +16,8 @@ nonisolated enum OutgoingFileCleanup {
                 try OutgoingImageFiles.checkOutbox(outbox, root: account)
                 try manager.removeItem(at: outbox)
             } catch let error as CocoaError
-            where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile
+            {
                 // A previous attempt may already have removed the directory.
             }
         }.value

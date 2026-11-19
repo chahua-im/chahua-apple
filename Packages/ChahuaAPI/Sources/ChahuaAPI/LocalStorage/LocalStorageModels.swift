@@ -111,7 +111,9 @@ public struct OutboxFailure: Codable, Hashable, Sendable {
     public enum Retry: String, Codable, Hashable, Sendable { case automatic, manual }
     public enum Reason: Codable, Hashable, Sendable {
         case unknownOutcome, network, conflict, invalidReceipt, authentication, rejected
-        case attachment, tooLarge(Int64), speakingRestricted(SpeakingMode)
+        case attachment
+        case tooLarge(Int64)
+        case speakingRestricted(SpeakingMode)
     }
 
     public let stage: Stage

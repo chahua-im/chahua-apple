@@ -198,8 +198,8 @@ enum ConversationListItem: Hashable, Identifiable {
         }
         guard let pending, pending.conversationKey == id,
             pending.enqueuedAt > activityDate,
-            (pending.senderID != confirmed?.sender.uid
-                || pending.clientGeneratedID != confirmed?.clientGeneratedId)
+            pending.senderID != confirmed?.sender.uid
+                || pending.clientGeneratedID != confirmed?.clientGeneratedId
         else { return nil }
         return pending
     }

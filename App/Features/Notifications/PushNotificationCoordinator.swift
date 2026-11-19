@@ -63,9 +63,11 @@ final class PushNotificationCoordinator: ObservableObject {
     private var activeScenes: Set<UUID> = []
     private var visibleConversations: [UUID: ConversationKey] = [:]
     private var quickReplySender:
-        (@MainActor @Sendable (
-            Int32, PushNotificationRoute, String, ContinuousClock.Instant
-        ) async throws -> Void)?
+        (
+            @MainActor @Sendable (
+                Int32, PushNotificationRoute, String, ContinuousClock.Instant
+            ) async throws -> Void
+        )?
     private var pendingQuickReplies: [PendingQuickReply] = []
     private var quickReplyTask: (id: UUID, task: Task<Void, Never>)?
     private var quickReplyWaiters: [UUID: QuickReplyWaiter] = [:]
@@ -395,9 +397,10 @@ final class PushNotificationCoordinator: ObservableObject {
     func receiveResponse(_ route: PushNotificationRoute) { pendingNavigation = route }
 
     func setQuickReplySender(
-        _ sender: @escaping @MainActor @Sendable (
-            Int32, PushNotificationRoute, String, ContinuousClock.Instant
-        ) async throws -> Void
+        _ sender:
+            @escaping @MainActor @Sendable (
+                Int32, PushNotificationRoute, String, ContinuousClock.Instant
+            ) async throws -> Void
     ) {
         quickReplySender = sender
         startQuickReplyHandoff()

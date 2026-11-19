@@ -22,11 +22,13 @@ extension OutboxFailure.Reason {
     var displayDetail: String {
         switch self {
         case .unknownOutcome:
-            AppLanguage.localized("Delivery could not be confirmed. The message may already have been sent.")
+            AppLanguage.localized(
+                "Delivery could not be confirmed. The message may already have been sent.")
         case .network:
             AppLanguage.localized("A network or server error interrupted this message.")
         case .conflict:
-            AppLanguage.localized("A message with this ID already exists, but its delivery could not be verified.")
+            AppLanguage.localized(
+                "A message with this ID already exists, but its delivery could not be verified.")
         case .invalidReceipt:
             AppLanguage.localized("The server returned a response that did not match this message.")
         case .authentication:
@@ -37,7 +39,8 @@ extension OutboxFailure.Reason {
             AppLanguage.localized("An attachment could not be prepared or uploaded.")
         case .tooLarge(let bytes):
             AppLanguage.localized(
-                "The attachment exceeds the \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) limit.")
+                "The attachment exceeds the \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) limit."
+            )
         case .speakingRestricted(let mode):
             mode.restrictionExplanation
         }

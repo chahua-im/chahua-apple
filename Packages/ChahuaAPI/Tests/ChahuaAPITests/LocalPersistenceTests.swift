@@ -145,13 +145,15 @@ final class LocalPersistenceTests: XCTestCase {
             let store = try ChahuaLocalStore(directory: directory, userID: 17)
             var slot = try image(directory, id: "photo")
             slot.attachmentID = "uploaded"
-            _ = try await store.setDraftAttachments(key: key, attachments: [slot], compressionEnabled: false)
+            _ = try await store.setDraftAttachments(
+                key: key, attachments: [slot], compressionEnabled: false)
             _ = try await store.enqueueText(
                 chatID: key.chatID, threadID: key.threadID, clientGeneratedID: "attempt",
                 text: "original", enqueuedAt: Date(), clearedDraftRevision: 1,
                 replyToMessage: receipt("reply", key: key).replyPreview,
                 metadata: MessageMetadataInput(linkPreviews: [.init(url: "https://example.com")]))
-            let claimed = try await store.claimNext(chatID: key.chatID, threadID: key.threadID, expectedID: "attempt")
+            let claimed = try await store.claimNext(
+                chatID: key.chatID, threadID: key.threadID, expectedID: "attempt")
             before = try XCTUnwrap(claimed.message)
             XCTAssertEqual(before.state, .sending)
             do {
@@ -166,7 +168,8 @@ final class LocalPersistenceTests: XCTestCase {
         let restored = try await reopened.restore()
         let failed = try XCTUnwrap(restored.first?.outgoing.first)
         XCTAssertEqual(failed.state, .failed)
-        XCTAssertEqual(failed.failure, .init(stage: .create, reason: .unknownOutcome, retry: .automatic))
+        XCTAssertEqual(
+            failed.failure, .init(stage: .create, reason: .unknownOutcome, retry: .automatic))
         XCTAssertFalse(failed.isEditable)
         do {
             _ = try await reopened.editOutgoing(
@@ -174,7 +177,8 @@ final class LocalPersistenceTests: XCTestCase {
                 compressionEnabled: true)
             XCTFail("Recovery must not open an editable interval")
         } catch LocalStorageError.outgoingNotEditable {}
-        let blocked = try await reopened.claimNext(chatID: key.chatID, threadID: key.threadID, expectedID: "attempt")
+        let blocked = try await reopened.claimNext(
+            chatID: key.chatID, threadID: key.threadID, expectedID: "attempt")
         XCTAssertNil(blocked.message)
         let retry = try await reopened.claimNext(
             chatID: key.chatID, threadID: key.threadID, expectedID: "attempt", retryCreate: true)
@@ -189,7 +193,8 @@ final class LocalPersistenceTests: XCTestCase {
         let thread = ConversationKey(chatID: "chat", threadID: "thread")
         let parent = ConversationKey(chatID: "chat")
         let slot = try image(directory, id: "photo")
-        _ = try await store.setDraftAttachments(key: thread, attachments: [slot], compressionEnabled: true)
+        _ = try await store.setDraftAttachments(
+            key: thread, attachments: [slot], compressionEnabled: true)
         _ = try await store.enqueueText(
             chatID: "chat", threadID: "thread", clientGeneratedID: "A", text: "",
             enqueuedAt: Date(), clearedDraftRevision: 1)
@@ -199,7 +204,8 @@ final class LocalPersistenceTests: XCTestCase {
         _ = try await store.enqueueIndependentText(
             chatID: "chat", clientGeneratedID: "C", text: "independent", enqueuedAt: Date())
 
-        let preparing = try await store.claimNext(chatID: "chat", threadID: "thread", expectedID: "A")
+        let preparing = try await store.claimNext(
+            chatID: "chat", threadID: "thread", expectedID: "A")
         XCTAssertNil(preparing.message)
         XCTAssertEqual(preparing.snapshot.outgoing.map(\.clientGeneratedID), ["A", "B"])
         let blocked = try await store.claimNext(chatID: "chat", threadID: "thread", expectedID: "B")
@@ -214,7 +220,8 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(claim.message?.body.attachmentIds, ["upload"])
         let failure = OutboxFailure(stage: .create, reason: .rejected, retry: .manual)
         _ = try await store.fail(key: thread, itemID: "A", failure: failure)
-        let behindFailed = try await store.claimNext(chatID: "chat", threadID: "thread", expectedID: "B")
+        let behindFailed = try await store.claimNext(
+            chatID: "chat", threadID: "thread", expectedID: "B")
         XCTAssertNil(behindFailed.message)
         XCTAssertEqual(behindFailed.snapshot.outgoing.first?.failure, failure)
 
@@ -325,7 +332,8 @@ final class LocalPersistenceTests: XCTestCase {
         let key = ConversationKey(chatID: "chat")
         let a = try image(directory, id: "a")
         let b = try image(directory, id: "b")
-        let attached = try await store.setDraftAttachments(key: key, attachments: [a, b], compressionEnabled: true)
+        let attached = try await store.setDraftAttachments(
+            key: key, attachments: [a, b], compressionEnabled: true)
         let original = attached.draft.attachments
         var uploadedA = a
         uploadedA.attachmentID = "uploaded-a"
@@ -351,7 +359,8 @@ final class LocalPersistenceTests: XCTestCase {
             attachments: row.attachments, compressionEnabled: false)
         XCTAssertEqual(changed.outgoing.first?.isReadyForDispatch, false)
         XCTAssertNotEqual(changed.outgoing.first?.attachments.first?.generation, b.generation)
-        let stale = try await store.checkpointAttachment(key: key, itemID: "item", attachment: uploadedB)
+        let stale = try await store.checkpointAttachment(
+            key: key, itemID: "item", attachment: uploadedB)
         XCTAssertEqual(stale, changed)
     }
 
@@ -361,9 +370,11 @@ final class LocalPersistenceTests: XCTestCase {
         let store = try ChahuaLocalStore(directory: directory, userID: 17)
         let key = ConversationKey(chatID: "chat")
         let slot = try image(directory, id: "photo")
-        _ = try await store.setDraftAttachments(key: key, attachments: [slot], compressionEnabled: true)
+        _ = try await store.setDraftAttachments(
+            key: key, attachments: [slot], compressionEnabled: true)
         let failure = OutboxFailure(stage: .preparation, reason: .tooLarge(8), retry: .manual)
-        _ = try await store.checkpointAttachment(key: key, itemID: nil, attachment: slot, failure: failure)
+        _ = try await store.checkpointAttachment(
+            key: key, itemID: nil, attachment: slot, failure: failure)
         let submitted = try await store.enqueueText(
             chatID: "chat", clientGeneratedID: "item", text: "", enqueuedAt: Date(),
             clearedDraftRevision: 1)
@@ -371,14 +382,16 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(submitted.outgoing.first?.isEditable, true)
         let restore = try await store.restore()
         XCTAssertEqual(restore.first?.outgoing.first?.attachments.first?.failure, .tooLarge(8))
-        let retryCreate = try await store.claimNext(chatID: "chat", expectedID: "item", retryCreate: true)
+        let retryCreate = try await store.claimNext(
+            chatID: "chat", expectedID: "item", retryCreate: true)
         XCTAssertNil(retryCreate.message)
         let retry = try await store.retryPreparation(key: key, itemID: "item")
         XCTAssertEqual(retry.outgoing.first?.state, .pending)
         XCTAssertNil(retry.outgoing.first?.attachments.first?.failure)
         let stillPreparing = try await store.claimNext(chatID: "chat", expectedID: "item")
         XCTAssertNil(stillPreparing.message)
-        _ = try await store.checkpointAttachment(key: key, itemID: "item", attachment: slot, failure: failure)
+        _ = try await store.checkpointAttachment(
+            key: key, itemID: "item", attachment: slot, failure: failure)
         let fixed = try await store.editOutgoing(
             key: key, itemID: "item", text: "without the oversize photo", replyToMessage: nil,
             attachments: [], compressionEnabled: true)
@@ -432,7 +445,8 @@ final class LocalPersistenceTests: XCTestCase {
         let reply = receipt("reply", key: key).replyPreview
         let metadata = MessageMetadataInput(linkPreviews: [.init(url: caption, status: .disabled)])
         _ = try await store.saveDraft(
-            chatID: "chat", text: caption, editRevision: 1, updatedAt: Date(), replyToMessage: reply,
+            chatID: "chat", text: caption, editRevision: 1, updatedAt: Date(),
+            replyToMessage: reply,
             linkPreviews: metadata.linkPreviews)
         var file = try image(directory, id: "file")
         file.preservesOriginal = true
@@ -440,7 +454,8 @@ final class LocalPersistenceTests: XCTestCase {
         file.height = 0
         file.preparedPath = file.sourcePath
         file.attachmentID = "uploaded-file"
-        let attached = try await store.setDraftAttachments(key: key, attachments: [file], compressionEnabled: false)
+        let attached = try await store.setDraftAttachments(
+            key: key, attachments: [file], compressionEnabled: false)
         let independent = try await store.enqueueIndependentText(
             chatID: "chat", clientGeneratedID: "notification", text: "reply", enqueuedAt: Date())
         XCTAssertEqual(independent.draft, attached.draft)
@@ -466,11 +481,13 @@ final class LocalPersistenceTests: XCTestCase {
         let other = try ChahuaLocalStore(
             directory: directory.appendingPathComponent("other-account"), userID: 21)
         let date = Date()
-        _ = try await store.saveDraft(chatID: "chat", text: "a draft", editRevision: 1, updatedAt: date)
+        _ = try await store.saveDraft(
+            chatID: "chat", text: "a draft", editRevision: 1, updatedAt: date)
         _ = try await store.saveDraft(chatID: "chat", text: "", editRevision: 2, updatedAt: date)
         let hasEmptyDraft = try await store.hasWork()
         XCTAssertFalse(hasEmptyDraft)
-        _ = try await store.saveDraft(chatID: "chat", text: "new draft", editRevision: 3, updatedAt: date)
+        _ = try await store.saveDraft(
+            chatID: "chat", text: "new draft", editRevision: 3, updatedAt: date)
         _ = try await store.enqueueIndependentText(
             chatID: "chat", clientGeneratedID: "ours", text: "our send", enqueuedAt: date)
         _ = try await other.enqueueIndependentText(

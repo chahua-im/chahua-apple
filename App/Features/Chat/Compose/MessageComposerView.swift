@@ -693,11 +693,13 @@ struct MessageComposerView: View {
             guard id != nil, let providers = attachmentState.takeDrop() else { return }
             importProviders(providers)
         }
-        .onChange(of: attachments.map(\.id)) { oldIDs, newIDs in
-            if !isEditing, newIDs.contains(where: { !oldIDs.contains($0) }) {
-                voiceRecorder.discard()
-                if !showsAttachmentDialog { presentAttachmentDialog() }
-            }
+        .onChange(of: isEditing ? nil : attachments.map(\.id)) { previous, current in
+            // Returning from an edit reveals the existing draft, not a new import.
+            guard let previous, let current,
+                current.contains(where: { !previous.contains($0) })
+            else { return }
+            voiceRecorder.discard()
+            if !showsAttachmentDialog { presentAttachmentDialog() }
         }
         .onChange(of: replyFocusRequest) { _, _ in
             if isEnabled && allowsCaption && !voiceRecorder.isActive { isInputFocused = true }

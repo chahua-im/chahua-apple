@@ -103,9 +103,11 @@ struct ComposerAttachmentDialog: View {
                     ProgressView("Updating attachments…").controlSize(.small)
                 }
                 if sendFailed {
-                    Text(isEditing
-                        ? "Couldn’t save your changes. Your edit is still here."
-                        : "Couldn’t send. Your caption and attachments are still here. Retry when local storage is available.")
+                    Text(
+                        isEditing
+                            ? "Couldn’t save your changes. Your edit is still here."
+                            : "Couldn’t send. Your caption and attachments are still here. Retry when local storage is available."
+                    )
                     .font(.callout).foregroundStyle(.red)
                     .lineLimit(2)
                 }
@@ -241,8 +243,7 @@ struct ComposerAttachmentDialog: View {
                         }
                     }
                 #endif
-                if attachments.contains(where: { !$0.isFile && $0.mimeType.hasPrefix("image/") })
-                {
+                if attachments.contains(where: { !$0.isFile && $0.mimeType.hasPrefix("image/") }) {
                     Toggle(
                         "Compress images",
                         isOn: Binding(
@@ -250,8 +251,7 @@ struct ComposerAttachmentDialog: View {
                             set: { enabled in changeAttachments { onCompressionChanged(enabled) } }
                         ))
                 }
-                if attachments.contains(where: { $0.isFile || $0.mimeType.hasPrefix("video/") })
-                {
+                if attachments.contains(where: { $0.isFile || $0.mimeType.hasPrefix("video/") }) {
                     Text("Files and videos are sent in original quality.")
                 }
             } label: {

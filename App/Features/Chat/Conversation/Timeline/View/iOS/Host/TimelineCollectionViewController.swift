@@ -1149,7 +1149,9 @@
         }
 
         func visibleMessageIDsForSelection() -> [MessageID]? {
-            guard hasCurrentViewport, view.window != nil, !unobscuredViewport.isEmpty else { return nil }
+            guard hasCurrentViewport, view.window != nil, !unobscuredViewport.isEmpty else {
+                return nil
+            }
             return visibleItems().sorted { $0.indexPath < $1.indexPath }
                 .compactMap { rows[$0.indexPath.item].messageID }
         }
@@ -1187,7 +1189,8 @@
                     - collectionView.adjustedContentInset.bottom)
             let maxTop = max(0, collectionView.contentSize.height - height)
             let top = min(
-                maxTop, max(0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top))
+                maxTop,
+                max(0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top))
             let viewport = TimelineViewport(
                 firstVisibleIndex: visible.min(),
                 lastVisibleIndex: visible.max(),
