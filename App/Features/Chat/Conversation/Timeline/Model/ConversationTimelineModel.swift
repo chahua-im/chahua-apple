@@ -118,6 +118,8 @@ final class ConversationTimelineModel: ObservableObject {
     }
     private var visibleAnchorID: MessageID?
     private var lastInitialPosition: TimelineInitialPosition = .liveEdge
+    // A saved page can position the reader provisionally, but cannot settle an unread seek.
+    private var needsServerUnreadSeek = false
     private var initialTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
     private var initialIgnoresPath = false
@@ -466,14 +468,10 @@ final class ConversationTimelineModel: ObservableObject {
                 } else if !ignoringPath && !canFetchHistory() {
                     installSavedHistory(nil, position: position)
                 }
+                if window.isSaved, case .unread = position { needsServerUnreadSeek = true }
                 guard ignoringPath || canFetchHistory(), historyCache?.accessRevoked(chatID) != true
                 else { return }
                 if window.isSaved {
-                    if savedBounds == nil, case .unread(let after) = position {
-                        state.historyConnection = .refreshing
-                        try await loadUnreadEntry(after: after, generation: requestGeneration, ignoringPath: ignoringPath)
-                        return
-                    }
                     await refreshDisplayedHistory(generation: requestGeneration, ignoringPath: ignoringPath)
                     return
                 }
@@ -720,11 +718,14 @@ final class ConversationTimelineModel: ObservableObject {
     {
         if !hasAuthoritativeReadState, let lastReadID { advanceReadWatermark(to: lastReadID) }
         let query = lastReadID.map { aroundQuery(for: .message($0)) } ?? liveEdgeQuery
+        let acceptsEntry: (ListMessagesResponse) -> Bool = { [self] _ in
+            !window.isSaved || needsServerUnreadSeek
+        }
         var fetchedLatest = lastReadID == nil
         do {
             try await fetchSnapshot(
                 query: query, mode: .replace(latest: lastReadID == nil),
-                generation: requestGeneration, ignoringPath: ignoringPath
+                generation: requestGeneration, ignoringPath: ignoringPath, acceptingResponse: acceptsEntry
             ) {}
         } catch let error as APIError {
             guard lastReadID != nil else { throw error }
@@ -732,7 +733,7 @@ final class ConversationTimelineModel: ObservableObject {
             case .http(status: 404, body: _), .invalidResponse(statusCode: 404):
                 try await fetchSnapshot(
                     query: liveEdgeQuery, mode: .replace(latest: true),
-                    generation: requestGeneration, ignoringPath: ignoringPath
+                    generation: requestGeneration, ignoringPath: ignoringPath, acceptingResponse: acceptsEntry
                 ) {}
                 fetchedLatest = true
             default:
@@ -748,6 +749,7 @@ final class ConversationTimelineModel: ObservableObject {
             ) {}
         }
 
+        unreadBeforeMessageID = nil
         if let lastReadID, window.index(ofServerID: lastReadID) != nil {
             // Cursor presence affects seeking, not whether its read progress is known.
             var cursors: Set<MessageID> = []
@@ -1322,6 +1324,15 @@ final class ConversationTimelineModel: ObservableObject {
         let wasSaved = window.isSaved
         if wasSaved || ignoringPath { state.historyConnection = .refreshing }
         do {
+            if needsServerUnreadSeek, case .unread(let after) = lastInitialPosition {
+                do {
+                    try await loadUnreadEntry(after: after, generation: requestGeneration, ignoringPath: ignoringPath)
+                    needsServerUnreadSeek = false
+                    return
+                } catch is RecoveryAnchorMoved {
+                    // The reader moved on the saved page. Refresh around their viewport below.
+                }
+            }
             if let missing = state.missingOfflineMessage {
                 try await loadMessageEntry(id: missing, generation: requestGeneration, ignoringPath: ignoringPath)
                 return
@@ -1527,7 +1538,18 @@ final class ConversationTimelineModel: ObservableObject {
         await awaitRecovery(task, generation: requestGeneration)
     }
 
+    private func cancelServerUnreadSeek() {
+        guard needsServerUnreadSeek else { return }
+        needsServerUnreadSeek = false
+        if initialTask != nil || recoveryTask != nil { invalidateRequests() }
+    }
+
     func userScrollBegan() {
+        if window.isSaved {
+            needsServerUnreadSeek = false
+        } else {
+            cancelServerUnreadSeek()
+        }
         canReuseLatestWindowAfterPendingChange = false
         if state.live.followsLatest { state.live.followsLatest = false }
         let cancelledRequest = pendingScroll != nil
@@ -1763,6 +1785,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func jumpToLiveEdge(animated: Bool = true) async {
+        cancelServerUnreadSeek()
         if recoveryTask != nil { invalidateRequests() }
         state.repositionFailure = nil
         state.reconciliationFailed = false
@@ -1819,6 +1842,7 @@ final class ConversationTimelineModel: ObservableObject {
         case .ready, .repositioning: break
         default: return .failed
         }
+        cancelServerUnreadSeek()
         selectionRange.clearDirection()
         invalidateRequests()
         state.repositionFailure = nil
@@ -1991,6 +2015,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     func browseSavedEdge(_ side: EdgeSide) {
+        cancelServerUnreadSeek()
         if window.isSaved, state.historyConnection == .refreshing { invalidateRequests() }
         if edge(side) == .failed { setEdge(side, .idle) }
         loadSavedEdge(side, explicitly: true)
@@ -2462,6 +2487,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func clearWindow() {
+        needsServerUnreadSeek = false
         let unreadCount = state.live.unreadCount
         let realtimeStatus = state.realtimeStatus
         window = TimelineWindow()

@@ -1680,6 +1680,58 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertFalse(model.isAtLiveEdge)
     }
 
+    func testUnreadEntryRevealsFirstServerMessageAfterLastCachedReadMessage() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let lastRead = MessageID(10)
+        let epoch = try await local.cacheEpoch()
+        try await local.cacheHistory(
+            ConversationKey(chatID: "chat"), query: .init(max: 50),
+            response: try livePage(ids: 1...10), epoch: epoch)
+
+        let source = ScriptedTimelineSource(pages: [.success(try livePage(ids: 1...13))])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
+            messageStore: source.store, historyCache: cache, canFetchHistory: { true })
+        defer { model.close() }
+        await model.open(position: .unread(after: lastRead))
+
+        XCTAssertEqual(model.state.history, .server)
+        XCTAssertEqual(
+            model.updates.value.pendingScroll?.intent,
+            .reveal(.unreadSeparator, animated: false, highlight: false))
+        let marker = try XCTUnwrap(model.rows.firstIndex { $0.id == .unreadSeparator })
+        XCTAssertEqual(model.rows.dropFirst(marker + 1).first?.messageID, MessageID(11))
+    }
+
+    func testScrollingSavedUnreadChatDuringReconnectKeepsReaderPosition() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let epoch = try await local.cacheEpoch()
+        try await local.cacheHistory(
+            ConversationKey(chatID: "chat"), query: .init(max: 50),
+            response: try livePage(ids: 1...10), epoch: epoch)
+        let page = try livePage(ids: 1...13)
+        let source = ScriptedTimelineSource(pages: [.success(page), .success(page)])
+        var online = false
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
+            messageStore: source.store, historyCache: cache, canFetchHistory: { online })
+        defer { model.close() }
+        await model.open(position: .unread(after: MessageID(10)))
+
+        online = true
+        source.holdNextRequest()
+        let refreshing = Task { await model.resumeNetworkHistory() }
+        await source.waitUntilHeld()
+        model.userScrollBegan()
+        reportVisible([MessageID(4)], to: model, reason: .user)
+        source.release()
+        await refreshing.value
+
+        XCTAssertEqual(source.queries.last?.around, MessageID(4))
+        XCTAssertEqual(model.state.history, .server)
+        XCTAssertNil(model.updates.value.pendingScroll, "Keep the visible row's offset.")
+    }
+
     func testUnreadEntryRevealsFrozenBoundaryAndPreservesOlderPagination() async throws {
         let read = try TimelineTestFixtures.message(id: 2, at: 2)
         let unread = try TimelineTestFixtures.message(id: 3, at: 3)
