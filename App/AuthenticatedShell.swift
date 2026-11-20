@@ -185,6 +185,38 @@ struct AuthenticatedShell: View {
     @State private var threadPath: [ConversationKey] = []
     @State private var threadSubscription: ThreadSubscriptionModel?
 
+    private var isShellVoiceCovered: Bool {
+        #if os(macOS)
+            showsSettings || feature != nil || inspectorProfileUID != nil || isSearchPresented
+        #else
+            showsSettings || feature != nil || inspectorProfileUID != nil
+        #endif
+    }
+
+    private var voiceHeaderRoute: VoicePlaybackHeaderRoute {
+        VoicePlaybackHeaderRoute(currentUserID: me.uid, chatName: voiceSourceChatName) {
+            message, accepted, unavailable in
+            Task {
+                await openVoiceSource(message, onAccepted: accepted, onUnavailable: unavailable)
+            }
+        }
+    }
+
+    private func voiceSourceChatName(_ id: String) -> String? {
+        let state = chatStore.state
+        if let chat = state.chats.first(where: { $0.id == id })
+            ?? state.archivedChats.first(where: { $0.id == id })
+        {
+            return chat.chatDisplayName
+        }
+        if let thread = state.threads.first(where: { $0.chatId == id })
+            ?? state.archivedThreads.first(where: { $0.chatId == id })
+        {
+            return thread.chatName
+        }
+        return chatStore.groupInfoByChatID[id]?.name
+    }
+
     var body: some View {
         bindNavigationActions()
         return GeometryReader { geometry in
@@ -223,6 +255,7 @@ struct AuthenticatedShell: View {
                 }
             #endif
         }
+        .voicePlaybackCovered(isShellVoiceCovered)
         .onPreferenceChange(ForwardThreadActionKey.self) { forwardThreadAction = $0 }
         .onPreferenceChange(ThreadInfoActionKey.self) { threadInfoAction = $0 }
         .environment(\.openUserProfile, navigationActions.openProfile)
@@ -240,10 +273,13 @@ struct AuthenticatedShell: View {
         ) { destination in
             NavigationStack(path: $profilePath) {
                 featureDestination(destination)
+                    .voicePlaybackHeader()
                     .navigationDestination(for: Int32.self) { uid in
                         UserProfileView(
                             uid: uid, currentUserID: me.uid, store: chatStore,
-                            onOpenChat: openChat)
+                            onOpenChat: openChat
+                        )
+                        .voicePlaybackHeader()
                     }
                     .toolbar {
                         if destination.showsDoneButton {
@@ -308,11 +344,6 @@ struct AuthenticatedShell: View {
         .task(id: pendingURL.wrappedValue) {
             guard let url = pendingURL.wrappedValue else { return }
             requestIncomingURL(url)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VoicePlaybackBar { message in
-                Task { await openVoiceSource(message) }
-            }
         }
         .alert(
             "Unable to open",
@@ -425,6 +456,13 @@ struct AuthenticatedShell: View {
                     settings
                 })
         #endif
+        #if os(macOS)
+            .background {
+                MacVoicePlaybackShortcut().frame(width: 0, height: 0)
+            }
+        #endif
+        .modifier(ImageDetailPresentation())
+        .environment(\.voicePlaybackHeaderRoute, voiceHeaderRoute)
     }
 
     private var inspectorContent: some View {
@@ -567,14 +605,18 @@ struct AuthenticatedShell: View {
         private func listNavigation(includesDetail: Bool) -> some View {
             NavigationStack(path: includesDetail ? phonePath : $listPath) {
                 // The active root stays active underneath the pushed archive list.
-                chatList(archived: false)
+                chatList(archived: false, showsVoiceHeader: includesDetail)
                     .navigationDestination(for: NavigationRoute.self) { route in
                         switch route {
                         case .archive:
-                            chatList(archived: true)
+                            chatList(archived: true, showsVoiceHeader: includesDetail)
                                 .background(ConversationSwipeBack(allowsContentSwipeBack: false))
                         case .friendRequests(let route):
-                            friendRequestDestination(route)
+                            if includesDetail {
+                                friendRequestDestination(route).voicePlaybackHeader()
+                            } else {
+                                friendRequestDestination(route)
+                            }
                         case .conversation(let key):
                             Group {
                                 if openedThread?.key == key {
@@ -691,7 +733,8 @@ struct AuthenticatedShell: View {
     #endif
 
     private func chatList(
-        archived: Bool, externalHeader: Bool = false, active: Bool = true
+        archived: Bool, externalHeader: Bool = false, active: Bool = true,
+        showsVoiceHeader: Bool = false
     ) -> some View {
         let scope = scopeBinding(archived: archived)
         let badges = ConversationTabBadges(
@@ -726,7 +769,11 @@ struct AuthenticatedShell: View {
                         isUpdating: isListRefreshing,
                         account: { accountButton },
                         actions: { creationButton })
-                    list
+                    if showsVoiceHeader {
+                        list.voicePlaybackHeader()
+                    } else {
+                        list
+                    }
                 }
             }
         }
@@ -866,9 +913,12 @@ struct AuthenticatedShell: View {
                     title: "Couldn’t open notification",
                     message: "Check your connection and try again.",
                     retryTitle: "Try again",
-                    onRetry: retryNotification)
+                    onRetry: retryNotification
+                )
+                .voicePlaybackHeader(floating: true)
             } else {
                 ChahuaLoadingView(title: "Loading conversation")
+                    .voicePlaybackHeader(floating: true)
             }
         } else if let conversation = selectedConversation {
             detailView(conversation)
@@ -879,6 +929,7 @@ struct AuthenticatedShell: View {
                 systemImage: "bubble.left.and.bubble.right"
             )
             .frame(maxHeight: .infinity)
+            .voicePlaybackHeader(floating: true)
         }
     }
 
@@ -1201,6 +1252,7 @@ struct AuthenticatedShell: View {
             case .search(let chat):
                 if let session = messageSearch, session.chat.id == chat.id {
                     MessageSearchView(model: session.model, onSelect: openSearchResult)
+                        .voicePlaybackHeader()
                 }
             case .source(let chat, let message):
                 ChatDetailPresentation(
@@ -1433,16 +1485,35 @@ struct AuthenticatedShell: View {
         }
     }
 
-    private func openVoiceSource(_ source: MessageResponse) async {
+    private func openVoiceSource(
+        _ source: MessageResponse, onAccepted: @escaping () -> Void, onUnavailable: () -> Void
+    ) async {
+        guard !isSigningOut else { return }
+        let revision = chatStore.sessionRevision
         do {
             let (message, chat) = try await chatStore.resolveMessageLink(
                 chatID: source.chatId, messageID: source.id)
             try Task.checkCancellation()
-            openSourceMessage(message, in: chat)
+            guard !message.isDeleted else {
+                onUnavailable()
+                return
+            }
+            requestNavigation(
+                isCurrent: { chatStore.sessionRevision == revision && !isSigningOut },
+                {
+                    onAccepted()
+                    showsSettings = false
+                    nestedProfileUID = nil
+                    inspectorProfileUID = nil
+                    #if os(macOS)
+                        isSearchPresented = false
+                    #endif
+                    if isBrowsingFriendRequests { listPath.removeAll() }
+                    performOpenMessageTarget(message, in: chat)
+                })
         } catch is CancellationError {
         } catch {
-            navigationError = String(
-                localized: "This message is unavailable or you do not have access.")
+            if chatStore.sessionRevision == revision { onUnavailable() }
         }
     }
 

@@ -40,6 +40,7 @@ private struct SettingsEditorControls: ViewModifier {
     let onFinish: () -> Void
     @Environment(\.settingsUsesSplitLayout) private var usesSplitLayout
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.voicePlaybackHeaderRoute) private var voiceHeaderRoute
     @StateObject private var exitGuard = FormExitGuard()
     @State private var exitOwner = UUID()
 
@@ -62,6 +63,7 @@ private struct SettingsEditorControls: ViewModifier {
                     splitHeader
                     content
                         .disabled(isSaving)
+                        .voicePlaybackHeader()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     #if os(macOS)
                         // The macOS reference keeps commit controls out of the title toolbar.
@@ -70,9 +72,16 @@ private struct SettingsEditorControls: ViewModifier {
                 }
                 .background(colorScheme == .dark ? Color(white: 0.11) : Color.white)
             } else {
-                content.disabled(isSaving)
+                content.disabled(isSaving).voicePlaybackHeader()
             }
         }
+        .environment(
+            \.voicePlaybackHeaderRoute,
+            voiceHeaderRoute?.guarded { action in
+                updateExitGuard()
+                exitGuard.requestExit(action)
+            }
+        )
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(usesSplitLayout ? .hidden : .visible, for: .navigationBar)

@@ -27,6 +27,7 @@ struct ForwardPickerContent: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            VoicePlaybackHeaderRow()
             status
             if let target = model.selectedTarget {
                 preview(target)

@@ -33,6 +33,7 @@ struct ChatDetailAttachmentPresentation: ViewModifier {
                             store: store, chat: chat, threadID: threadID, timeline: model,
                             onOpenMessage: { infoMessageTarget = $0 }
                         )
+                        .voicePlaybackHeader()
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { showsThreadInfo = false }
@@ -58,6 +59,8 @@ struct ChatDetailAttachmentPresentation: ViewModifier {
                                 chat: target, currentUserID: model.currentUserID, store: store)
                         }
                     }
+                    .voicePlaybackCover { showsThreadInfo = false }
+                    .environment(\.chatHeaderInset, 0)
                     .environment(\.openUserProfile, { infoProfileUID = $0 })
                 }
             }
@@ -75,12 +78,14 @@ struct ChatDetailAttachmentPresentation: ViewModifier {
                         .padding()
                         .frame(minWidth: 300, minHeight: 180)
                         .navigationTitle(file.fileName)
+                        .voicePlaybackHeader()
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { presentedFile = nil }
                             }
                         }
                     }
+                    .voicePlaybackCover { presentedFile = nil }
                 }
             }
     }
@@ -97,13 +102,36 @@ extension ChatDetailView {
         @Binding var stickerToView: StickerSelection?
         @Binding var reactionDetailsMessage: ReactionDetailsSelection?
         @Binding var pinToUnpin: PinResponse?
+        let chatID: String
+        let onJumpToPin: (MessageResponse) -> Void
+        let onOpenThread: ((MessageResponse) -> Void)?
+        #if os(iOS)
+            @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+        #endif
 
         func body(content: Content) -> some View {
             content
+                #if os(iOS)
+                    .sheet(
+                        isPresented: Binding(
+                            get: { horizontalSizeClass == .compact && showsPinnedMessages },
+                            set: { if horizontalSizeClass == .compact { showsPinnedMessages = $0 } }
+                        )
+                    ) {
+                        ChatPinnedMessagesSheet(
+                            chatID: chatID, controller: pins, canManage: canManagePins(),
+                            onSelect: onJumpToPin, onOpenThread: onOpenThread,
+                            showsVoiceHeader: true
+                        )
+                        .voicePlaybackCover { showsPinnedMessages = false }
+                    }
+                #endif
                 .sheet(item: $stickerToView) { selection in
                     StickerPackSheet(
                         stickerID: selection.id, library: store.stickers,
-                        currentUserID: currentUserID)
+                        currentUserID: currentUserID
+                    )
+                    .voicePlaybackCover { stickerToView = nil }
                 }
                 .sheet(item: $reactionDetailsMessage) { message in
                     ReactionDetailsView(chatID: message.chatID, messageID: message.id) {
@@ -195,7 +223,10 @@ extension ChatDetailView {
         let onForwardCompleted: () -> Void
         func body(content: Content) -> some View {
             content
-                .sheet(item: $forwardRequest) { request in forwardingPicker(request) }
+                .sheet(item: $forwardRequest) { request in
+                    forwardingPicker(request)
+                        .voicePlaybackCover { forwardRequest = nil }
+                }
                 .navigationDestination(item: $systemMessageTarget) { message in
                     ChatDetailPresentation(
                         chat: chat, currentUserID: currentUserID, store: store,

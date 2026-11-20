@@ -27,6 +27,7 @@
         var body: some View {
             VStack(spacing: 0) {
                 header
+                VoicePlaybackHeaderRow()
                 Divider()
                 if model.isAvailable {
                     ScrollView {

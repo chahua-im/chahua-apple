@@ -150,6 +150,14 @@
                 let bubble = binding.layout.frames[.bubble],
                 bubble.contains(cell.rowView.convert(event.locationInWindow, from: nil))
             else { return event }
+            if !binding.context.isInteractionPreview, binding.presentation.audioURL != nil,
+                let audio = binding.layout.frames[.audio],
+                binding.presentation.voiceMetrics.playbackButtonContains(
+                    cell.rowView.convert(event.locationInWindow, from: nil), in: audio,
+                    layoutDirection: binding.presentation.environment.layoutDirection)
+            {
+                return event
+            }
             if let previous = selectedTextView, !previous.isDescendant(of: cell) {
                 clearSelectedText()
             }

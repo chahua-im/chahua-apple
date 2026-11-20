@@ -1,4 +1,5 @@
 import ChahuaAPI
+import Combine
 import SwiftUI
 import XCTest
 
@@ -121,7 +122,9 @@ import XCTest
                 UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
             let window = UIWindow(windowScene: scene)
             let probe = ChromeProbe()
-            window.rootViewController = UIHostingController(rootView: ChromeHarness(probe: probe))
+            let message = try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0)
+            window.rootViewController = UIHostingController(
+                rootView: ChromeHarness(probe: probe, message: message))
             window.makeKeyAndVisible()
             defer { window.isHidden = true }
 
@@ -159,6 +162,36 @@ import XCTest
             XCTAssertGreaterThanOrEqual(
                 layout.composerInset, height - layout.composer.minY - 0.5,
                 "Composer inset must clear the composer and home indicator")
+
+            probe.showsPlayback = true
+            for _ in 0..<100 {
+                try await Task.sleep(for: .milliseconds(30))
+                if probe.snapshot.playbackBar.height > 0,
+                    abs(probe.snapshot.headerInset - (probe.snapshot.playbackBar.maxY + 8)) < 0.5
+                {
+                    break
+                }
+            }
+            let playing = probe.snapshot
+            XCTAssertEqual(playing.headerInset, playing.playbackBar.maxY + 8, accuracy: 0.5)
+            XCTAssertEqual(playing.voiceReferenceInset, layout.headerInset, accuracy: 0.5)
+            XCTAssertEqual(playing.timeline, layout.timeline)
+            try await Task.sleep(for: .milliseconds(300))  // Capture after the capsule transition.
+            window.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Exclusive voice playback header"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+
+            probe.showsPlayback = false
+            for _ in 0..<100 {
+                try await Task.sleep(for: .milliseconds(30))
+                if abs(probe.snapshot.headerInset - layout.headerInset) < 0.5 { break }
+            }
+            XCTAssertEqual(probe.snapshot.headerInset, layout.headerInset, accuracy: 0.5)
         }
     }
 
@@ -166,24 +199,44 @@ import XCTest
         var timeline = CGRect.zero
         var header = CGRect.zero
         var pinnedBar = CGRect.zero
+        var playbackBar = CGRect.zero
+        var voiceReferenceInset: CGFloat = 0
         var composer = CGRect.zero
         var headerInset: CGFloat = 0
         var composerInset: CGFloat = 0
     }
 
     @MainActor
-    private final class ChromeProbe {
+    private final class ChromeProbe: ObservableObject {
         var snapshot = ChromeSnapshot()
+        @Published var showsPlayback = false
     }
 
     private struct ChromeHarness: View {
-        let probe: ChromeProbe
+        @ObservedObject var probe: ChromeProbe
+        let message: MessageResponse
+        private let playback = VoicePlaybackController()
 
         var body: some View {
             ProbeTimeline(probe: probe)
                 .modifier(
-                    ChatPinnedBarOverlay(isVisible: true) {
-                        Color.gray.frame(height: 50).measured { probe.snapshot.pinnedBar = $0 }
+                    ChatSecondaryHeaderOverlay(
+                        kind: .select(needsPlayback: probe.showsPlayback, hasPins: true),
+                        pinsEligible: true
+                    ) {
+                        if probe.showsPlayback {
+                            VoicePlaybackCapsule(
+                                controller: playback,
+                                route: VoicePlaybackHeaderRoute(
+                                    currentUserID: 2,
+                                    chatName: { _ in "Design reviews and product critique" },
+                                    open: { _, _, _ in }),
+                                message: message
+                            )
+                            .measured { probe.snapshot.playbackBar = $0 }
+                        } else {
+                            Color.gray.frame(height: 50).measured { probe.snapshot.pinnedBar = $0 }
+                        }
                     }
                 )
                 .modifier(
@@ -202,6 +255,7 @@ import XCTest
     private struct ProbeTimeline: View {
         let probe: ChromeProbe
         @Environment(\.chatHeaderInset) private var headerInset
+        @Environment(\.voiceReferenceHeaderInset) private var voiceReferenceInset
         @Environment(\.chatComposerInset) private var composerInset
 
         var body: some View {
@@ -209,6 +263,9 @@ import XCTest
                 .measured { probe.snapshot.timeline = $0 }
                 .onChange(of: headerInset, initial: true) { _, inset in
                     probe.snapshot.headerInset = inset
+                }
+                .onChange(of: voiceReferenceInset, initial: true) { _, inset in
+                    probe.snapshot.voiceReferenceInset = inset ?? 0
                 }
                 .onChange(of: composerInset, initial: true) { _, inset in
                     probe.snapshot.composerInset = inset
@@ -230,6 +287,49 @@ import XCTest
         }
     }
 #endif
+
+#if os(macOS)
+    @MainActor
+    final class ChatChromeLayoutTests: XCTestCase {}
+#endif
+
+extension ChatChromeLayoutTests {
+    func testVoicePlaybackTakesTheOnlySecondaryHeaderSlot() {
+        XCTAssertEqual(
+            ChatSecondaryHeaderKind.select(needsPlayback: true, hasPins: true), .playback)
+        XCTAssertEqual(ChatSecondaryHeaderKind.select(needsPlayback: false, hasPins: true), .pins)
+        XCTAssertEqual(
+            ChatSecondaryHeaderKind.select(needsPlayback: true, hasPins: false), .playback)
+        XCTAssertNil(ChatSecondaryHeaderKind.select(needsPlayback: false, hasPins: false))
+    }
+
+    func testVoiceVisibilityIsIndependentOfInsetClampsForShortTimelines() {
+        let withPins = VoiceTimelineVisibility.referenceViewport(
+            CGRect(x: 0, y: 0, width: 320, height: 200),
+            scrollTop: -70, bottomLimit: -120, headerInset: 70)
+        let withPlayback = VoiceTimelineVisibility.referenceViewport(
+            CGRect(x: 0, y: 0, width: 320, height: 210),
+            scrollTop: -60, bottomLimit: -120, headerInset: 70)
+
+        XCTAssertEqual(withPins, withPlayback)
+    }
+
+    func testHalfOfVoiceControlsIsVisibleIncludingExactAreaBoundary() {
+        let controls = CGRect(x: 40, y: 150, width: 200, height: 80)
+        XCTAssertTrue(
+            VoiceTimelineVisibility.containsHalf(
+                of: controls, in: CGRect(x: 0, y: 190, width: 320, height: 100)))
+        XCTAssertFalse(
+            VoiceTimelineVisibility.containsHalf(
+                of: controls, in: CGRect(x: 0, y: 191, width: 320, height: 100)))
+        XCTAssertTrue(
+            VoiceTimelineVisibility.containsHalf(
+                of: controls, in: CGRect(x: 90, y: 150, width: 200, height: 60)))
+        XCTAssertFalse(
+            VoiceTimelineVisibility.containsHalf(
+                of: controls, in: CGRect(x: 90, y: 150, width: 200, height: 50)))
+    }
+}
 
 @MainActor
 final class ChatGlassGeometryTests: XCTestCase {

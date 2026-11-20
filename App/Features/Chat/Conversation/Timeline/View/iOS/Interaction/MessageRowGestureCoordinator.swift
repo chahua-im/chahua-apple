@@ -147,8 +147,8 @@
                 // Code blocks own horizontal pans and native selection; a reply
                 // swipe must not steal the block's independent scroll gesture.
                 if current is MessageCodeScrollView { return true }
-                if !allowsVoiceContextMenu, let bubble = current as? TimelineBubbleContentView,
-                    bubble.ownsVoiceTouch(touch)
+                if let bubble = current as? TimelineBubbleContentView,
+                    bubble.ownsVoiceTouch(touch, playbackButtonOnly: allowsVoiceContextMenu)
                 {
                     return true
                 }

@@ -60,6 +60,9 @@
 
         private let model: ConversationTimelineModel
         private var rows: [TimelineRow] = []
+        private let voiceReporter = VoiceTimelineReporter()
+        private var voiceReferenceHeaderInset: CGFloat?
+        private var isDisappearing = false
         var actions = TimelineBubbleActions() {
             didSet {
                 guard !actions.hasSameRendering(as: oldValue) else { return }
@@ -303,6 +306,7 @@
         func tearDown() {
             guard !isTornDown else { return }
             isTornDown = true
+            voiceReporter.target = nil
             if model.selectionViewportSource === self { model.selectionViewportSource = nil }
             cancellable = nil
             displayScheduler?.cancel()
@@ -760,6 +764,9 @@
 
         private func capturePosition() -> Position {
             let visible = unobscuredDocumentRect
+            let anchorY =
+                voiceReferenceHeaderInset == nil
+                ? visible.minY : scrollView.documentVisibleRect.minY
             let range = tableView.rows(in: visible)
             if range.location != NSNotFound, range.length > 0 {
                 let upperBound = min(NSMaxRange(range), rows.count)
@@ -771,11 +778,11 @@
                 {
                     return Position(
                         messageID: rows[index].id,
-                        offset: tableView.rect(ofRow: index).minY - visible.minY,
-                        originY: visible.minY)
+                        offset: tableView.rect(ofRow: index).minY - anchorY,
+                        originY: anchorY)
                 }
             }
-            return Position(messageID: nil, offset: 0, originY: visible.minY)
+            return Position(messageID: nil, offset: 0, originY: anchorY)
         }
 
         private func restore(_ position: Position) {
@@ -786,7 +793,8 @@
                 // The anchor may have been deleted or replaced with another history window.
                 y = position.originY
             }
-            setScrollOrigin(constrainedOrigin(y: y - scrollView.contentInsets.top))
+            let inset = voiceReferenceHeaderInset == nil ? scrollView.contentInsets.top : 0
+            setScrollOrigin(constrainedOrigin(y: y - inset))
         }
 
         private var bottomOrigin: NSPoint {
@@ -1131,12 +1139,16 @@
 
         override func viewDidAppear() {
             super.viewDidAppear()
+            isDisappearing = false
+            reportVoiceViewport()
             contextSource.start()
             updateVisibleMedia()
         }
 
         override func viewDidDisappear() {
             super.viewDidDisappear()
+            isDisappearing = true
+            voiceReporter.report(false)
             contextSource.stop()
             tableView.enumerateAvailableRowViews { row, _ in
                 for cell in row.subviews.compactMap({ $0 as? TimelineTableCellView }) {
@@ -1241,10 +1253,48 @@
             return min(max(0, tableView.bounds.maxY - viewport.height), max(0, viewport.minY))
         }
 
+        func configureVoiceViewport(_ target: VoiceTimelineTarget?, headerInset: CGFloat?) {
+            let changed = voiceReporter.target != target
+            guard changed || voiceReferenceHeaderInset != headerInset else { return }
+            voiceReferenceHeaderInset = headerInset
+            voiceReporter.target = target
+            if changed, target != nil, isViewLoaded { refreshVisibleRoots() }
+            reportVoiceViewport()
+        }
+
+        func reportVoiceViewport() {
+            guard voiceReporter.target != nil else { return }
+            guard isViewLoaded, !isDisappearing, !isTornDown, !view.isHiddenOrHasHiddenAncestor,
+                let window = view.window, window.occlusionState.contains(.visible)
+            else {
+                voiceReporter.report(false)
+                return
+            }
+            guard !applying else { return }
+            guard
+                let index = voiceReporter.rowIndex(
+                    in: rows, chatID: model.chatID, revision: installedRevision),
+                let region = preparedRows[rows[index].id]?.layout.voiceRegion(
+                    in: tableView.rect(ofRow: index))
+            else {
+                voiceReporter.report(false)
+                return
+            }
+            var viewport = unobscuredDocumentRect
+            if let inset = voiceReferenceHeaderInset {
+                viewport = VoiceTimelineVisibility.referenceViewport(
+                    viewport, scrollTop: scrollView.documentVisibleRect.minY,
+                    bottomLimit: tableView.bounds.maxY - scrollView.contentView.bounds.height
+                        + scrollView.contentInsets.bottom, headerInset: inset)
+            }
+            voiceReporter.report(VoiceTimelineVisibility.containsHalf(of: region, in: viewport))
+        }
+
         private func reportViewport(
             reason: TimelineViewportChangeReason, userScrollDelta: CGFloat? = nil
         ) {
             updateVisibleMedia()
+            reportVoiceViewport()
             guard hasCurrentViewport, !liveScrolling || reason == .user else { return }
             // Rendering and height preparation retain the full document viewport
             // for the blur. Read, jump, paging and visible-media candidates use

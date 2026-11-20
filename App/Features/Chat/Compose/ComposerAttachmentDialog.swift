@@ -75,6 +75,7 @@ struct ComposerAttachmentDialog: View {
         VStack(spacing: 0) {
             header
                 .fixedSize(horizontal: false, vertical: true)
+            VoicePlaybackHeaderRow(isEnabled: !showsLinkManagement)
             GeometryReader { geometry in
                 Group {
                     if attachments.isEmpty {
@@ -196,7 +197,10 @@ struct ComposerAttachmentDialog: View {
                 linkManagementStoleFocus = false
             }
         ) {
-            if let linkPreviews { DraftLinkPreviewManagement(state: linkPreviews) }
+            if let linkPreviews {
+                DraftLinkPreviewManagement(state: linkPreviews)
+                    .voicePlaybackCover { showsLinkManagement = false }
+            }
         }
         .onDisappear { input.settleNativeInput() }
     }

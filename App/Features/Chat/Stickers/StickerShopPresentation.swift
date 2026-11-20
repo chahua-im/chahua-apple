@@ -14,10 +14,13 @@ private struct StickerShopPresentation: ViewModifier {
     #endif
 
     func body(content: Content) -> some View {
+        let content = content.voicePlaybackCovered(isPresented)
+            .preference(key: VoicePlaybackCoverPreference.self, value: isPresented)
         #if os(iOS)
             if sizeClass == .compact {
                 content.fullScreenCover(isPresented: $isPresented) {
                     StickerShopSheet(library: library)
+                        .voicePlaybackCover { isPresented = false }
                 }
             } else {
                 content.sheet(isPresented: $isPresented) {
@@ -27,6 +30,7 @@ private struct StickerShopPresentation: ViewModifier {
         #else
             content.sheet(isPresented: $isPresented) {
                 StickerShopSheet(library: library)
+                    .voicePlaybackCover { isPresented = false }
                     .frame(width: 980, height: 720)
             }
         #endif
@@ -45,6 +49,7 @@ private struct StickerShopPresentation: ViewModifier {
 
         private var wideSheetContent: some View {
             StickerShopSheet(library: library)
+                .voicePlaybackCover { isPresented = false }
                 .frame(minWidth: 720, idealWidth: 1060, minHeight: 540, idealHeight: 784)
                 .presentationDetents([.large])
         }

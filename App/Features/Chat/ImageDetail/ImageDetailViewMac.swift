@@ -12,6 +12,8 @@
         let gallery: MessageImageGallery
         let mediaContext: AppMediaContext?
         let onDismiss: () -> Void
+        var playbackClearance: CGFloat = 0
+        var onHeaderLayout: ((CGFloat) -> Void)? = nil
 
         func makeNSView(context: Context) -> MessageImageDetailMacView {
             MessageImageDetailMacView(
@@ -20,6 +22,8 @@
 
         func updateNSView(_ nsView: MessageImageDetailMacView, context: Context) {
             nsView.onDismiss = onDismiss
+            nsView.onHeaderLayout = onHeaderLayout
+            nsView.playbackClearance = playbackClearance
         }
 
         static func dismantleNSView(_ nsView: MessageImageDetailMacView, coordinator: ()) {
@@ -30,6 +34,11 @@
     @MainActor
     final class MessageImageDetailMacView: NSView {
         var onDismiss: () -> Void
+        var onHeaderLayout: ((CGFloat) -> Void)?
+        var playbackClearance: CGFloat = 0 {
+            didSet { if playbackClearance != oldValue { needsLayout = true } }
+        }
+        private var reportedHeaderBottom: CGFloat = 0
 
         private enum DragAxis { case undecided, horizontal, vertical, pan }
 
@@ -365,7 +374,12 @@
                 headerTop = max(
                     headerTop, convert(trafficLight.bounds, from: trafficLight).maxY + 12)
             }
-            let mediaTop = headerTop + 60
+            let headerBottom = headerTop + 48
+            if let onHeaderLayout, reportedHeaderBottom != headerBottom {
+                reportedHeaderBottom = headerBottom
+                DispatchQueue.main.async { onHeaderLayout(headerBottom) }
+            }
+            let mediaTop = headerBottom + 12 + playbackClearance
             viewport.frame = CGRect(
                 x: 16, y: mediaTop, width: max(1, bounds.width - 32),
                 height: max(1, bounds.height - mediaTop - 68))

@@ -497,6 +497,124 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertEqual(changes, afterStop)
     }
 
+    func testVoicePlayIntentSurvivesRowReleaseButNotInterruptionOrStop() async throws {
+        let url = try voicePlaybackSample()
+        let session = VoicePlaybackSession.shared
+        defer { session.stop() }
+        let message = try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0)
+        let playback = VoicePlaybackController.controller(for: message, url: url, reusing: nil)
+        let row = ObjectIdentifier(playback)
+        playback.retainRow(row)
+
+        playback.toggle(url: url)
+        XCTAssertTrue(playback.wantsPlayback)
+        playback.releaseRow(row)
+        XCTAssertTrue(session.controller === playback)
+        VoicePlaybackController.stopAll()
+        await playback.load(url: url)
+        XCTAssertFalse(playback.wantsPlayback)
+        XCTAssertFalse(playback.isPlaying)
+        XCTAssertFalse(playback.hasPlayed)
+
+        let savedPosition = playback.duration / 2
+        playback.seek(to: savedPosition)
+        session.dismiss()
+        let replacement = VoicePlaybackController.controller(for: message, url: url, reusing: nil)
+        replacement.retainRow(row)
+        replacement.toggle(url: url)
+        session.dismiss()
+        await replacement.load(url: url)
+        XCTAssertFalse(replacement.isPlaying)
+        XCTAssertEqual(replacement.position, savedPosition, accuracy: 0.001)
+        XCTAssertNil(session.controller)
+    }
+
+    func testVoiceNaturalEndMarksOnlyTheSourceMessagePlayed() async throws {
+        let url = try voicePlaybackSample()
+        let session = VoicePlaybackSession.shared
+        defer { session.stop() }
+        let message = try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0)
+        let other = try TimelineTestFixtures.message(id: 2, senderID: 2, at: 0)
+        let playback = VoicePlaybackController.controller(for: message, url: url, reusing: nil)
+        await playback.load(url: url)
+        XCTAssertGreaterThan(playback.duration, 0)
+        let another = VoicePlaybackController.controller(for: other, url: url, reusing: playback)
+        XCTAssertFalse(another === playback)
+        playback.toggle()
+        XCTAssertTrue(playback.isPlaying, playback.error ?? "")
+        playback.pause()
+        XCTAssertFalse(playback.hasPlayed)
+        XCTAssertTrue(session.controller === playback)
+
+        playback.toggle()
+        for _ in 0..<120 {
+            if session.controller == nil { break }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        XCTAssertNil(session.controller)
+        let recycled = VoicePlaybackController.controller(for: message, url: url, reusing: nil)
+        XCTAssertTrue(recycled.hasPlayed)
+        XCTAssertEqual(recycled.position, 0)
+        XCTAssertFalse(another.hasPlayed)
+        XCTAssertFalse(another.isPlaying)
+    }
+
+    #if os(macOS)
+        func testVoiceSpaceLeavesComposerTypingAndTogglesWithoutAFocusedControl() async throws {
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingController(rootView: Color.clear)
+            window.contentViewController = host
+            let marker = MacVoicePlaybackShortcut.Marker()
+            host.view.addSubview(marker)
+            let editor = NSTextView(frame: CGRect(x: 20, y: 20, width: 260, height: 50))
+            host.view.addSubview(editor)
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                VoicePlaybackSession.shared.stop()
+                window.close()
+            }
+            try await waitUntil { window.isKeyWindow }
+            XCTAssertTrue(window.makeFirstResponder(editor))
+            let message = try TimelineTestFixtures.message(id: 1, senderID: 2, at: 0)
+            let url = URL(fileURLWithPath: "/System/Library/Sounds/Hero.aiff")
+            let playback = VoicePlaybackController.controller(for: message, url: url, reusing: nil)
+            let space = try XCTUnwrap(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, characters: " ",
+                    charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
+
+            await playback.load(url: url)
+            playback.toggle()
+            XCTAssertTrue(playback.isPlaying, playback.error ?? "")
+            playback.pause()
+            NSApp.sendEvent(space)
+            XCTAssertEqual(editor.string, " ")
+            XCTAssertFalse(playback.isPlaying)
+            XCTAssertTrue(window.makeFirstResponder(window))
+            NSApp.postEvent(space, atStart: true)
+            try await waitUntil { playback.isPlaying }
+        }
+    #endif
+
+    private func voicePlaybackSample() throws -> URL {
+        #if os(macOS)
+            let path = "/System/Library/Sounds/Hero.aiff"
+        #else
+            let file = "/System/Library/Audio/UISounds/ReceivedMessage.caf"
+            let path =
+                [ProcessInfo.processInfo.environment["SIMULATOR_ROOT"].map { $0 + file }, file]
+                .compactMap { $0 }.first { FileManager.default.isReadableFile(atPath: $0) } ?? file
+        #endif
+        try XCTSkipUnless(
+            FileManager.default.isReadableFile(atPath: path), "System audio unavailable")
+        return URL(fileURLWithPath: path)
+    }
+
     func testURLPasteWithTitleMetadataStaysText() async throws {
         let h = try await mount(text: "link: ")
         h.state.onImportImages = { _ in XCTFail("A copied URL must not import media.") }

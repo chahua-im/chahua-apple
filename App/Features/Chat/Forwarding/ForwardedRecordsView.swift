@@ -40,6 +40,8 @@ struct ForwardedRecordsView: View {
         profileContent
             .environment(\.chatHeaderInset, 0)
             .environment(\.chatComposerInset, 0)
+            .voicePlaybackHeader()
+            .voicePlaybackCovered(presentedFile != nil)
             .navigationTitle("Forwarded Messages")
             #if os(iOS)
                 .toolbar(.visible, for: .navigationBar)
@@ -66,12 +68,14 @@ struct ForwardedRecordsView: View {
                         )
                         .padding()
                         .frame(minWidth: 300, minHeight: 180)
+                        .voicePlaybackHeader()
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { presentedFile = nil }
                             }
                         }
                     }
+                    .voicePlaybackCover { presentedFile = nil }
                 }
             }
             .task(id: session.revision) {

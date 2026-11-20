@@ -191,8 +191,10 @@ private struct SavedMessageDetailView: View {
                 ForwardedRecordsView(store: store, savedMessageID: item.id)
             } else if let snapshot {
                 capturedTimeline(snapshot)
+                    .voicePlaybackHeader()
             } else {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .voicePlaybackHeader()
             }
         }
         .navigationTitle("Saved Message")
@@ -217,6 +219,7 @@ private struct SavedMessageDetailView: View {
 
     var body: some View {
         profileContent
+            .voicePlaybackCovered(presentedFile != nil)
             .navigationDestination(item: $profileChat) { chat in
                 if let currentUserID = store.currentUserProfile?.uid {
                     ChatDetailPresentation(chat: chat, currentUserID: currentUserID, store: store)
@@ -235,12 +238,14 @@ private struct SavedMessageDetailView: View {
                         )
                         .padding()
                         .frame(minWidth: 300, minHeight: 180)
+                        .voicePlaybackHeader()
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { presentedFile = nil }
                             }
                         }
                     }
+                    .voicePlaybackCover { presentedFile = nil }
                 }
             }
             .toolbar {

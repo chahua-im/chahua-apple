@@ -75,6 +75,7 @@ struct GroupInvitesView: View {
                                 guard authorized, !busy else { return }
                                 target = $0
                             }
+                            .voicePlaybackHeader()
                         }
                     }
                     if type == .membership {
@@ -83,6 +84,7 @@ struct GroupInvitesView: View {
                                 guard authorized, !busy else { return }
                                 requiredGroup = $0
                             }
+                            .voicePlaybackHeader()
                         }
                     }
                     Toggle("Set expiry", isOn: $expires)
@@ -101,6 +103,7 @@ struct GroupInvitesView: View {
                             guard authorized, !busy else { return }
                             destination = $0
                         }
+                        .voicePlaybackHeader()
                     }
                     Text("Sends an invitation card, not a forwarded message.").font(.footnote)
                         .foregroundStyle(.secondary)

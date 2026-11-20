@@ -79,6 +79,7 @@
                     }
                 }
                 .listStyle(.insetGrouped)
+                .voicePlaybackHeader()
                 .coordinateSpace(name: "own-profile-scroll")
                 .onPreferenceChange(OwnProfileHeroBottomKey.self) { bottom in
                     guard let bottom else { return }

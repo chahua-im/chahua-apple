@@ -265,9 +265,16 @@
             playbackObservation = player.publisher(for: \.timeControlStatus)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self, weak player] status in
-                    guard status != .paused, let self, !self.tornDown,
+                    guard let self, !self.tornDown,
                         let player, self.player === player
                     else { return }
+                    if status == .paused {
+                        if player.timeControlStatus == .paused {
+                            ImageDetailVideoAudioSession.release(owner: self.audioSessionOwner)
+                        }
+                        return
+                    }
+                    guard player.timeControlStatus != .paused else { return }
                     guard UIApplication.shared.applicationState == .active,
                         self.presentingFullScreen || (self.visible && self.selected)
                     else {
@@ -387,12 +394,12 @@
     /// Each page retains movie audio until it releases its player. One viewer tearing down
     /// must not deactivate the session while a page in another viewer still owns it.
     @MainActor
-    private enum ImageDetailVideoAudioSession {
+    enum ImageDetailVideoAudioSession {
         private static var owners: Set<UUID> = []
         private static let worker = ImageDetailVideoAudioSessionWorker()
 
         static func activate(owner: UUID) {
-            if owners.isEmpty { VoicePlaybackController.stopAll() }
+            VoicePlaybackController.stopAll()
             owners.insert(owner)
             // Repeat requests after activation failure still retry on the next play attempt.
             worker.setDesiredActive(true)
@@ -401,6 +408,13 @@
         static func release(owner: UUID) {
             guard owners.remove(owner) != nil, owners.isEmpty else { return }
             worker.setDesiredActive(false)
+        }
+
+        static func prepareForVoicePlayback() -> Bool {
+            guard owners.isEmpty else { return false }
+            // Wait for any queued movie release before voice claims the shared audio session.
+            worker.finishPendingRelease()
+            return true
         }
     }
 
@@ -414,6 +428,10 @@
         // Protected by ownershipLock; sessionActive is confined to queue.
         private var desiredActive = false
         private var sessionActive = false
+
+        func finishPendingRelease() {
+            queue.sync {}
+        }
 
         func setDesiredActive(_ active: Bool) {
             ownershipLock.withLock { desiredActive = active }

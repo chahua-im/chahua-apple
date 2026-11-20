@@ -6,6 +6,23 @@ import Foundation
 /// owning the active player's lifetime; recording previews remain local controllers.
 @MainActor
 final class VoicePlaybackSession: ObservableObject {
+    struct Identity: Hashable {
+        let chatID: String
+        let messageID: MessageID
+
+        init(_ message: MessageResponse) {
+            chatID = message.chatId
+            messageID = message.id
+        }
+    }
+
+    struct Progress {
+        let position: TimeInterval
+        let hasPlayed: Bool
+    }
+
+    var progress: [Identity: Progress] = [:]
+
     static let shared = VoicePlaybackSession()
     @Published private(set) var controller: VoicePlaybackController?
     @Published private(set) var speed: Float
@@ -21,9 +38,9 @@ final class VoicePlaybackSession: ObservableObject {
         guard self.controller !== controller else { return }
         let previous = self.controller
         self.controller = controller
-        // A still-mounted row keeps its prepared player and can resume immediately.
-        // If no row owns it, releasing the session reference lets deinit clean it up.
+        // Mounted rows keep prepared audio; offscreen rows keep only elapsed state.
         previous?.pause()
+        previous?.releaseIfUnowned()
         controller.setSpeed(speed)
     }
 
@@ -48,6 +65,7 @@ final class VoicePlaybackSession: ObservableObject {
         let previous = controller
         controller = nil
         previous?.pause()
+        previous?.releaseIfUnowned()
     }
 
     /// Call at sign-out/account invalidation, not when navigating away from a chat.
@@ -55,5 +73,6 @@ final class VoicePlaybackSession: ObservableObject {
         let previous = controller
         controller = nil
         previous?.stop()
+        progress.removeAll()
     }
 }

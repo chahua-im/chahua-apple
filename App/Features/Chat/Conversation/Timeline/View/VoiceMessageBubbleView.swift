@@ -18,6 +18,19 @@ struct VoiceMessageBubbleMetrics {
         targetSize + (isStacked(width: width) ? waveformHeight + 6 : 0) + 6 + statusHeight
     }
 
+    func playbackButtonContains(
+        _ point: CGPoint, in audioFrame: CGRect, layoutDirection: LayoutDirection
+    ) -> Bool {
+        let radius = targetSize / 2
+        let centerX =
+            isStacked(width: audioFrame.width)
+            ? audioFrame.midX
+            : layoutDirection == .rightToLeft ? audioFrame.maxX - radius : audioFrame.minX + radius
+        let dx = point.x - centerX
+        let dy = point.y - audioFrame.minY - radius
+        return dx * dx + dy * dy <= radius * radius
+    }
+
     func displayedMetadataSize(for width: CGFloat) -> CGSize {
         let available = max(0, width)
         let gap = min(8, available / 10)
@@ -44,12 +57,12 @@ struct VoiceMessageBubbleView: View {
     let metrics: VoiceMessageBubbleMetrics
     let localeIdentifier: String
     let layoutDirection: LayoutDirection
-    @State private var retry = 0
+    private let session = VoicePlaybackSession.shared
 
     private struct LoadKey: Hashable {
         let url: URL?
+        let controllerID: ObjectIdentifier
         let active: Bool
-        let retry: Int
     }
 
     private var accent: Color { isOutgoing ? .white : .accentColor }
@@ -74,19 +87,24 @@ struct VoiceMessageBubbleView: View {
                             .frame(height: metrics.targetSize)
                     }
                 }
-                Text(status)
-                    .font(.system(size: metrics.captionSize))
-                    .monospacedDigit()
-                    .foregroundStyle(accent.opacity(0.8))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(
-                        width: metrics.statusWidth(for: geometry.size.width),
-                        height: metrics.statusHeight, alignment: .leading
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .environment(\.layoutDirection, .leftToRight)
-                    .accessibilityHidden(canPlay)
+                HStack(spacing: 4) {
+                    if controller.hasPlayed {
+                        Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
+                    }
+                    Text(status)
+                }
+                .font(.system(size: metrics.captionSize))
+                .monospacedDigit()
+                .foregroundStyle(accent.opacity(0.8))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(
+                    width: metrics.statusWidth(for: geometry.size.width),
+                    height: metrics.statusHeight, alignment: .leading
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.layoutDirection, .leftToRight)
+                .accessibilityHidden(canPlay)
             }
             .frame(
                 width: geometry.size.width, height: metrics.height(for: geometry.size.width),
@@ -97,26 +115,24 @@ struct VoiceMessageBubbleView: View {
         .accessibilityElement(children: .contain)
         .environment(\.locale, Locale(identifier: localeIdentifier))
         .environment(\.layoutDirection, layoutDirection)
-        .task(id: LoadKey(url: url, active: isActive, retry: retry)) {
+        .task(id: LoadKey(url: url, controllerID: ObjectIdentifier(controller), active: isActive)) {
             guard isActive, let url else { return }
             await controller.load(url: url)
         }
     }
 
     private var playbackButton: some View {
-        Button {
-            if controller.error != nil || controller.duration <= 0 {
-                retry += 1
-            } else {
-                controller.toggle()
-            }
+        let foreground: Color = isOutgoing ? VoicePlaybackCapsule.blue : .white
+        return Button {
+            guard let url else { return }
+            controller.toggle(url: url)
         } label: {
             ZStack {
-                Circle().fill(accent.opacity(isOutgoing ? 0.14 : 0.11))
-                if controller.isLoading {
+                Circle().fill(isOutgoing ? .white : VoicePlaybackCapsule.blue)
+                if controller.wantsPlayback {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(accent)
+                        .tint(foreground)
                 } else {
                     Image(
                         systemName: url == nil
@@ -126,17 +142,42 @@ struct VoiceMessageBubbleView: View {
                                 : controller.isPlaying ? "pause.fill" : "play.fill"
                     )
                     .font(.system(size: metrics.bodySize, weight: .semibold))
-                    .foregroundStyle(accent)
+                    .foregroundStyle(foreground)
                 }
             }
             .frame(width: metrics.circleSize, height: metrics.circleSize)
             .frame(width: metrics.targetSize, height: metrics.targetSize)
-            .contentShape(Rectangle())
+            .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!isActive || url == nil || controller.isLoading)
+        .disabled(!isActive || url == nil)
         .accessibilityLabel(playbackLabel)
+        .accessibilityValue(controller.hasPlayed ? Text("Played") : Text(""))
         .accessibilityHint(controller.error ?? "")
+        .contextMenu {
+            if isActive, url != nil {
+                ForEach(VoicePlaybackSession.speeds, id: \.self) { speed in
+                    Button {
+                        session.setSpeed(speed)
+                    } label: {
+                        if session.speed == speed {
+                            Label("\(speed.formatted())×", systemImage: "checkmark")
+                        } else {
+                            Text("\(speed.formatted())×")
+                        }
+                    }
+                }
+            }
+        }
+        .accessibilityActions {
+            if isActive, url != nil {
+                ForEach(VoicePlaybackSession.speeds, id: \.self) { speed in
+                    Button("Set playback speed to \(speed.formatted())×") {
+                        session.setSpeed(speed)
+                    }
+                }
+            }
+        }
     }
 
     private var waveform: some View {
@@ -148,7 +189,7 @@ struct VoiceMessageBubbleView: View {
 
     private var playbackLabel: Text {
         if url == nil { return Text("Audio unavailable") }
-        if controller.isLoading { return Text("Loading audio…") }
+        if controller.wantsPlayback { return Text("Cancel audio loading") }
         if controller.error != nil { return Text("Retry audio playback") }
         return controller.isPlaying ? Text("Pause voice message") : Text("Play voice message")
     }
@@ -160,11 +201,7 @@ struct VoiceMessageBubbleView: View {
             return AppLanguage.localized("Loading audio…")
         }
         if controller.error != nil { return AppLanguage.localized("Unable to play audio") }
-        return "\(Self.time(controller.position)) / \(Self.time(controller.duration))"
-    }
-
-    private static func time(_ time: TimeInterval) -> String {
-        let seconds = time.isFinite ? max(0, Int(time)) : 0
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        return
+            "\(voicePlaybackTime(controller.position)) / \(voicePlaybackTime(controller.duration))"
     }
 }

@@ -118,6 +118,7 @@ struct NotificationSettingsView: View {
                 IOSSettingsNavigationView(settings: self)
             #endif
         }
+        .voicePlaybackCovered(profileUserID != nil)
         .appAppearance()
         .task { await notifications.refreshAuthorization() }
         .sheet(
@@ -135,8 +136,10 @@ struct NotificationSettingsView: View {
                             onOpenChat(chat)
                         }
                     )
+                    .voicePlaybackHeader()
                 }
             }
+            .voicePlaybackCover { profileUserID = nil }
             .modifier(ProfileModalSizing())
         }
         .onChange(of: scenePhase) { _, phase in
@@ -255,6 +258,7 @@ struct NotificationSettingsView: View {
     func page(_ page: SettingsPage, grouped: Bool) -> some View {
         if page == .savedMessages {
             SavedMessagesView(store: chatStore, onOpenSource: onOpenSource)
+                .voicePlaybackHeader()
         } else if page == .language {
             LanguageSettingsView(store: chatStore)
                 .id("\(me.uid)-\(chatStore.sessionRevision)")
@@ -264,7 +268,9 @@ struct NotificationSettingsView: View {
         } else if page == .blockedUsers {
             BlockedUsersView(
                 currentUserID: me.uid, store: chatStore,
-                onOpenProfile: { profileUserID = $0 })
+                onOpenProfile: { profileUserID = $0 }
+            )
+            .voicePlaybackHeader()
         } else if page == .presencePrivacy {
             PresencePrivacySettingsView(store: chatStore, grouped: grouped)
                 .id(ObjectIdentifier(chatStore))
@@ -280,8 +286,10 @@ struct NotificationSettingsView: View {
             }
         } else if page == .reactions {
             ReactionManagementView(library: chatStore.stickers, currentUserID: me.uid)
+                .voicePlaybackHeader()
         } else if page == .stickerPacks {
             StickerPackManagementView(library: chatStore.stickers, currentUserID: me.uid)
+                .voicePlaybackHeader()
         } else if grouped {
             Form {
                 Section {
@@ -296,6 +304,7 @@ struct NotificationSettingsView: View {
             }
             .formStyle(.grouped)
             .navigationTitle(page.title)
+            .voicePlaybackHeader()
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -319,6 +328,7 @@ struct NotificationSettingsView: View {
             }
             .background(ChahuaTheme.conversationBackground(for: colorScheme))
             .navigationTitle(page.title)
+            .voicePlaybackHeader()
         }
     }
 

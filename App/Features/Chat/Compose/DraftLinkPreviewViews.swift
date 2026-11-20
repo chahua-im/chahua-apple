@@ -58,6 +58,7 @@ struct DraftLinkPreviewManagement: View {
                 .padding()
             }
             .navigationTitle("Link previews")
+            .voicePlaybackHeader()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

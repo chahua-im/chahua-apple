@@ -114,9 +114,15 @@ The timeline back-button badge is deliberately approximate and separate from aut
 
 Message events update known previews directly. Membership, archive, and deletion reconciliation use targeted `chatId`/`rootId` list queries rather than reloading unrelated pages. Thread membership events carry absolute subscription/archive status; ordinary reply updates do not invalidate a known subscription.
 
-On iOS, conversation lists extend their scrolling viewport to the bottom edge rather than clipping rows above the home-indicator area. Bottom clearance lives inside the scroll content, allowing the last row to scroll fully above that area and any voice playback bar. The shell passes its bottom safe-area inset through navigation, whose hidden-bar stack otherwise resets the playback clearance; macOS layout and timeline composer insets remain unchanged.
+On iOS, conversation lists extend their scrolling viewport to the bottom edge. List content reserves the home-indicator area so the last row can scroll above it. The voice playback capsule uses top clearance below the current screen header, not a shell-level bottom inset.
 
 Manual verification: read a chat and a thread in the PWA while Apple shows their list rows; confirm counts and the system badge update without switching tabs. Send messages while Apple is backgrounded, return with a healthy connection, and confirm previews/targets remain available without a full-list loading cycle. Repeat after a real disconnect, archive/unarchive and subscribe/unsubscribe from the PWA, then switch accounts while updates are pending; old snapshots must not restore counts or memberships.
+
+## Voice playback
+
+Preparing a voice file reads its duration and waveform without opening audio output. Only Play or Resume claims the audio session. The signed-in session retains one message controller, identified by chat and message ID, and remembers elapsed position until the account changes. Natural completion clears the position, marks the message played locally, and does not start another message.
+
+Each timeline reports whether at least half of the active voice bubble is visible in its own window. Use the controls region for captioned messages. Voice visibility uses the title and eligible pins as its reference so the playback capsule cannot change its own threshold. Actual scroll clearance includes only the winning secondary header: playback, pins, or neither. Ordinary message read tracking still uses partial-row visibility.
 
 ## Image viewer
 

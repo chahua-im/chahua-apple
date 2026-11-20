@@ -41,6 +41,8 @@
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
+        @Environment(\.voiceTimelineTarget) private var voiceTimelineTarget
+        @Environment(\.voiceReferenceHeaderInset) private var voiceReferenceHeaderInset
         @Environment(\.isChatSplitResizing) private var isSplitResizing
         @Environment(\.isWideChatLayout) private var isWideChatLayout
         @AppStorage(MessageTextSizePreference.storageKey)
@@ -89,6 +91,8 @@
                 isSplitResizing: isSplitResizing,
                 isWideChatLayout: isWideChatLayout
             )
+            controller.configureVoiceViewport(
+                voiceTimelineTarget, headerInset: voiceReferenceHeaderInset)
             if loadsInitialAutomatically {
                 controller.loadInitialIfNeeded(position: initialPosition)
             }

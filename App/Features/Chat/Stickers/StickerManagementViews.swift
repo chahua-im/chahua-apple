@@ -332,6 +332,8 @@ struct StickerPackDetailSettingsView: View {
             }
         }
         .navigationTitle(pack?.name ?? "Sticker Pack")
+        .voicePlaybackHeader()
+        .voicePlaybackCovered(selectedFile != nil)
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -344,6 +346,7 @@ struct StickerPackDetailSettingsView: View {
         )
         .sheet(item: $selectedFile) { file in
             StickerUploadSheet(library: library, packID: packID, file: file)
+                .voicePlaybackCover { selectedFile = nil }
         }
         .alert("Rename Pack", isPresented: $showsRename) {
             TextField("Pack name", text: $renamePackName)
@@ -568,6 +571,7 @@ private struct StickerUploadSheet: View {
     let file: StickerImport
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.voicePlaybackHeaderRoute) private var voiceHeaderRoute
     @State private var emoji = ""
     @State private var name = ""
     @State private var isUploading = false
@@ -617,6 +621,7 @@ private struct StickerUploadSheet: View {
                 }
             }
             .navigationTitle("Add Sticker")
+            .voicePlaybackHeader()
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -634,6 +639,12 @@ private struct StickerUploadSheet: View {
                 }
             }
         }
+        .environment(
+            \.voicePlaybackHeaderRoute,
+            voiceHeaderRoute?.guarded { action in
+                if !isUploading { action() }
+            }
+        )
         .interactiveDismissDisabled(isUploading)
         .onDisappear { file.releaseSecurityScope() }
         .alert(

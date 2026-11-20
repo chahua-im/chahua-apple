@@ -38,39 +38,74 @@ extension EnvironmentValues {
 /// and detail together and never survive an account switch.
 struct ImageDetailPresentation: ViewModifier {
     @StateObject private var presenter = ImageDetailPresenter()
-    @Environment(\.mediaContext) private var mediaContext
 
     func body(content: Content) -> some View {
         #if os(iOS)
             content
                 .environment(\.imageDetailPresenter, presenter)
+                .voicePlaybackCovered(presenter.gallery != nil)
                 .fullScreenCover(
                     item: Binding(
                         get: { presenter.gallery }, set: { if $0 == nil { presenter.dismiss() } })
                 ) { gallery in
-                    ImageDetailPlatformView(
-                        gallery: gallery, mediaContext: mediaContext, onDismiss: presenter.dismiss
-                    )
-                    .ignoresSafeArea()
-                    .presentationBackground(.clear)
-                    .interactiveDismissDisabled()
-                    .statusBarHidden()
+                    ImageDetailVoiceSurface(gallery: gallery, onDismiss: presenter.dismiss)
+                        .presentationBackground(.clear)
+                        .interactiveDismissDisabled()
+                        .statusBarHidden()
                 }
         #else
             content
                 .environment(\.imageDetailPresenter, presenter)
+                .voicePlaybackCovered(presenter.gallery != nil)
                 .allowsHitTesting(presenter.gallery == nil)
                 .accessibilityHidden(presenter.gallery != nil)
                 .overlay {
                     if let gallery = presenter.gallery {
-                        ImageDetailPlatformView(
-                            gallery: gallery, mediaContext: mediaContext,
-                            onDismiss: presenter.dismiss
-                        )
-                        .id(gallery.id)
-                        .ignoresSafeArea()
+                        ImageDetailVoiceSurface(gallery: gallery, onDismiss: presenter.dismiss)
+                            .id(gallery.id)
+                            .ignoresSafeArea()
                     }
                 }
         #endif
+    }
+}
+
+private struct ImageDetailVoiceSurface: View {
+    let gallery: MessageImageGallery
+    let onDismiss: () -> Void
+    @Environment(\.mediaContext) private var mediaContext
+    @Environment(\.voicePlaybackHeaderRoute) private var route
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var session = VoicePlaybackSession.shared
+    @State private var headerBottom: CGFloat = 0
+    @State private var barHeight: CGFloat = 0
+
+    var body: some View {
+        let controller = route != nil ? session.controller : nil
+        let showsPlayback = controller != nil && headerBottom > 0
+        ImageDetailPlatformView(
+            gallery: gallery, mediaContext: mediaContext, onDismiss: onDismiss,
+            playbackClearance: showsPlayback
+                ? max(barHeight, VoicePlaybackCapsule.nominalHeight) + 8 : 0,
+            onHeaderLayout: { headerBottom = $0 }
+        )
+        .ignoresSafeArea()
+        .overlay(alignment: .top) {
+            Group {
+                if showsPlayback, let controller {
+                    VoicePlaybackBar(controller: controller)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) {
+                            barHeight = $0
+                        }
+                        .transition(VoicePlaybackMotion.transition)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, headerBottom + 8)
+            .animation(
+                VoicePlaybackMotion.animation(showing: showsPlayback, reduceMotion: reduceMotion),
+                value: showsPlayback)
+        }
+        .voicePlaybackCover(onOpen: onDismiss)
     }
 }

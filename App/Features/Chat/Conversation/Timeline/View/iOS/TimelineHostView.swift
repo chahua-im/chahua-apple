@@ -5,6 +5,8 @@
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.chatHeaderInset) private var chatHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
+        @Environment(\.voiceTimelineTarget) private var voiceTimelineTarget
+        @Environment(\.voiceReferenceHeaderInset) private var voiceReferenceHeaderInset
         @Environment(\.isWideChatLayout) private var isWideChatLayout
         @AppStorage(MessageTextSizePreference.storageKey)
         private var messageTextSize = MessageTextSizePreference.defaultValue
@@ -27,6 +29,8 @@
             controller.isWideChatLayout = isWideChatLayout
             controller.headerInset = chatHeaderInset
             controller.composerInset = chatComposerInset
+            controller.configureVoiceViewport(
+                voiceTimelineTarget, headerInset: voiceReferenceHeaderInset)
             return controller
         }
 
@@ -43,6 +47,8 @@
             controller.isWideChatLayout = isWideChatLayout
             controller.headerInset = chatHeaderInset
             controller.composerInset = chatComposerInset
+            controller.configureVoiceViewport(
+                voiceTimelineTarget, headerInset: voiceReferenceHeaderInset)
         }
 
         static func dismantleUIViewController(

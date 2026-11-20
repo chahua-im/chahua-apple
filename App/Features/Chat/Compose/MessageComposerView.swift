@@ -469,6 +469,10 @@ struct MessageComposerView: View {
                 }
             }
         #endif
+        .preference(
+            key: VoicePlaybackCoverPreference.self,
+            value: showsLinkManagement || showsAttachmentDialog
+        )
         .sheet(
             isPresented: $showsLinkManagement,
             onDismiss: {
@@ -477,6 +481,7 @@ struct MessageComposerView: View {
             }
         ) {
             DraftLinkPreviewManagement(state: linkPreviews)
+                .voicePlaybackCover { showsLinkManagement = false }
         }
         .sheet(
             isPresented: $showsAttachmentDialog,
@@ -540,6 +545,7 @@ struct MessageComposerView: View {
                 onEscapeEdit: { onEscapeEdit?(attachmentCaption) },
                 editExitGuard: editExitGuard, linkPreviews: linkPreviews
             )
+            .voicePlaybackCover { showsAttachmentDialog = false }
         }
         #if os(iOS)
             .fullScreenCover(

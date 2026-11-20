@@ -280,12 +280,12 @@ These are recommended batches, not a requirement to finish unrelated work before
 
 ### B4 — Persistent voice player and shared playback speed · Implemented; device verification pending
 
-- [ ] Move active voice-playback ownership out of the message row and provide the PWA-equivalent persistent playback bar, play/pause, shared speed setting, sender/time, and jump-to-source navigation. Keep one active voice message and retain playback across conversation/list navigation.
+- [x] Keep one user-started voice message active across chat, thread, list, and settings navigation. When the inline player is less than half visible, move controls to the current header; in chat, the capsule replaces the pin bar.
 
 - **PWA evidence:** [voice playback state](../../chahua/pwa/src/app/messages/voice-player/voice-playback.ts) adopts playback when inline players disappear and retains global speed; [voice bar](../../chahua/pwa/src/app/messages/voice-player/voice-bar.html) exposes playback, source, and speed controls.
 - **Original gap:** Row-owned playback could not persist across navigation. **Current implementation:** [session](../App/Features/Chat/VoicePlaybackSession.swift), [bar](../App/Features/Chat/VoicePlaybackBar.swift), [controller](../App/Features/Chat/VoicePlaybackController.swift), and account reset integration.
 - **Acceptance:** Start playback, scroll the row away, visit another chat and the list, and still control the same message. Change speed, play a second message, and jump back to the source; verify single-player behavior, failure, and account teardown. Native lock-screen/background audio is not established as PWA parity and is outside this item.
-- **Re-evaluation / decision:** Implemented a strongly owning `VoicePlaybackSession` and shell-level `VoicePlaybackBar`; rows reconnect to the one active controller. Speed is a persisted device-local preference. The bar includes playback/seek/speed/sender/time/source/close; sign-out/account changes stop playback. No background-audio or lock-screen scope was added.
+- **Re-evaluation / decision:** The capsule includes Play/Pause, Stop, source navigation, and a progress indicator. The inline bubble retains waveform seeking and checked speed choices. Speed is a device-local preference; elapsed position and played state stay in the signed-in session. Background audio and lock-screen controls are out of scope.
 - **Device sign-off:** iOS [ ] · macOS [ ]. Run the acceptance above, including interruption, failed source navigation, token expiry/account teardown, switching A → B → A while both rows remain visible, and closing/reopening the bar without losing prepared row playback.
 
 

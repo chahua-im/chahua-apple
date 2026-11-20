@@ -64,6 +64,9 @@
             notifications.addObserver(
                 self, selector: #selector(windowGeometryChanged(_:)),
                 name: NSWindow.didChangeBackingPropertiesNotification, object: nil)
+            notifications.addObserver(
+                self, selector: #selector(windowGeometryChanged(_:)),
+                name: NSWindow.didChangeOcclusionStateNotification, object: nil)
             refreshSurface()
         }
 
@@ -106,6 +109,10 @@
                 if appearanceChanged { applyAppearance() }
                 requestRefresh()
             }
+        }
+
+        func configureVoiceViewport(_ target: VoiceTimelineTarget?, headerInset: CGFloat?) {
+            tableController.configureVoiceViewport(target, headerInset: headerInset)
         }
 
         func loadInitialIfNeeded(position: TimelineInitialPosition) {
@@ -153,6 +160,7 @@
             let hidesTable = !chromeView.showsTable
             if tableController.view.isHidden != hidesTable {
                 tableController.view.isHidden = hidesTable
+                tableController.reportVoiceViewport()
             }
             interactionController.refresh()
         }
@@ -166,6 +174,7 @@
 
         private func surfaceWindowDidChange() {
             guard isViewLoaded, !isTornDown else { return }
+            tableController.reportVoiceViewport()
             if view.window == nil {
                 interactionController.dismiss()
                 displayScheduler?.cancel()
@@ -178,6 +187,7 @@
             guard isViewLoaded, let window = notification.object as? NSWindow,
                 window === view.window
             else { return }
+            tableController.reportVoiceViewport()
             requestRefresh()
         }
 

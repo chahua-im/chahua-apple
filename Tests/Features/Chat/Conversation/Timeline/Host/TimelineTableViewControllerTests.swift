@@ -322,7 +322,7 @@
                         timelineFrame = $0
                     }
                     .modifier(
-                        ChatPinnedBarOverlay(isVisible: true) {
+                        ChatSecondaryHeaderOverlay(kind: .pins, pinsEligible: true) {
                             ChatPinnedMessageBar(
                                 pin: pin, count: 1, onJump: {}, onShowAll: {}
                             )

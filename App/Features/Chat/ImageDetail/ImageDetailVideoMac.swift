@@ -93,6 +93,7 @@
             if player == nil, downloadTask == nil, state == .idle { load() }
             if autoplayPending, let player, state != .failed {
                 autoplayPending = false
+                VoicePlaybackController.stopAll()
                 player.play()
             }
         }
@@ -126,6 +127,7 @@
             {
                 player.seek(to: .zero)
             }
+            VoicePlaybackController.stopAll()
             player.play()
         }
 
@@ -210,6 +212,16 @@
             playerView.player = player
             playerView.isHidden = false
             progressView.update(.indeterminate)
+            // AVKit can also start the player from its native inline controls.
+            player.publisher(for: \.timeControlStatus)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self, weak player] status in
+                    guard let self, let player, self.player === player,
+                        status != .paused, player.timeControlStatus != .paused
+                    else { return }
+                    VoicePlaybackController.stopAll()
+                }
+                .store(in: &itemSubscriptions)
             item.publisher(for: \.status)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self, weak item] status in

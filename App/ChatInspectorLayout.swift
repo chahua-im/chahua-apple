@@ -30,6 +30,7 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
                 if isPresented && presentsInline {
                     inspector()
                         .environment(\.chatInfoIsModal, false)
+                        .voicePlaybackCovered(true)
                         .frame(width: Self.inspectorWidth)
                         #if os(macOS)
                             .modifier(MacChatInfoSurface())
@@ -42,6 +43,7 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
+            .voicePlaybackCovered(isPresented && !presentsInline)
             .onChange(of: fitsInline, initial: true) { _, value in
                 if presentedInline == nil || !freezesPresentation { presentedInline = value }
             }
@@ -55,6 +57,7 @@ struct ChatInspectorLayout<Detail: View, Inspector: View>: View {
                 )
             ) {
                 inspector()
+                    .environment(\.isVoicePlaybackHeaderCovered, false)
                     .environment(\.chatInfoIsModal, true)
                     .modifier(ChatInfoModalSizing())
                     .interactiveDismissDisabled(freezesPresentation)

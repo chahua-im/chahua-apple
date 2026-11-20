@@ -48,10 +48,12 @@ struct StickerDiscoveryView: View {
                                 "Select a sticker pack", systemImage: "square.stack"
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .voicePlaybackHeader()
                         }
                     }
                 } else {
                     packList(isWide: false)
+                        .voicePlaybackHeader()
                 }
             }
             .navigationTitle(isWide ? LocalizedStringKey("") : "Sticker Shop")
@@ -65,6 +67,7 @@ struct StickerDiscoveryView: View {
                 if !isWide { compactToolbar }
             }
         }
+        .voicePlaybackCovered(showsCreatePack)
         .background(StickerShopStyle.canvas)
         .onChange(of: query) { _, value in
             if value.count > 255 { query = String(value.prefix(255)) }
@@ -95,6 +98,7 @@ struct StickerDiscoveryView: View {
                 showsCreatePack = false
                 createdPackID = pack.id
             }
+            .voicePlaybackCover { showsCreatePack = false }
         }
         .navigationDestination(item: $createdPackID) { packID in
             if let uid = library.accountID {
@@ -446,6 +450,7 @@ private struct StickerDiscoveryCreateSheet: View {
     @ObservedObject var library: StickerLibrary
     let onCreated: (StickerPackSummary) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.voicePlaybackHeaderRoute) private var voiceHeaderRoute
     @State private var name = ""
     @State private var isCreating = false
 
@@ -459,6 +464,7 @@ private struct StickerDiscoveryCreateSheet: View {
                 }
             }
             .navigationTitle("New Sticker Pack")
+            .voicePlaybackHeader()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.disabled(isCreating)
@@ -477,6 +483,12 @@ private struct StickerDiscoveryCreateSheet: View {
                 }
             }
         }
+        .environment(
+            \.voicePlaybackHeaderRoute,
+            voiceHeaderRoute?.guarded { action in
+                if !isCreating { action() }
+            }
+        )
         .interactiveDismissDisabled(isCreating)
         #if os(macOS)
             .frame(width: 400, height: 240)

@@ -121,57 +121,83 @@ struct ChatPinnedMessageBar: View {
     }
 }
 
-/// Floating pins add their measured height to the title's scrollable clearance.
-struct ChatPinnedBarOverlay<Bar: View>: ViewModifier {
-    let isVisible: Bool
+enum ChatSecondaryHeaderKind: Equatable {
+    case pins, playback
+
+    static func select(needsPlayback: Bool, hasPins: Bool) -> Self? {
+        if needsPlayback { return .playback }
+        return hasPins ? .pins : nil
+    }
+
+    var bottomGap: CGFloat { self == .playback ? 8 : 12 }
+}
+
+/// The winner alone contributes to the actual scrollable clearance. Voice handoff
+/// uses the title and pins as a stable reference, independent of its own overlay.
+struct ChatSecondaryHeaderOverlay<Bar: View>: ViewModifier {
+    let kind: ChatSecondaryHeaderKind?
+    var pinsEligible = false
     @ViewBuilder let bar: () -> Bar
     @Environment(\.isWideChatLayout) private var isWideChatLayout
     @Environment(\.chatHeaderInset) private var titleInset
-    @State private var barHeight: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pinsHeight: CGFloat?
+    @State private var playbackHeight: CGFloat?
+
+    private var nominalPinsHeight: CGFloat {
+        #if os(macOS)
+            36
+        #else
+            isWideChatLayout ? 44 : 56
+        #endif
+    }
+
+    private var horizontalInset: CGFloat {
+        #if os(macOS)
+            isWideChatLayout ? 16 : 12
+        #else
+            isWideChatLayout ? 20 : 12
+        #endif
+    }
+
+    private func clearance(for kind: ChatSecondaryHeaderKind?) -> CGFloat {
+        switch kind {
+        case .pins: (pinsHeight ?? nominalPinsHeight) + ChatSecondaryHeaderKind.pins.bottomGap
+        case .playback:
+            (playbackHeight ?? VoicePlaybackCapsule.nominalHeight)
+                + ChatSecondaryHeaderKind.playback.bottomGap
+        case nil: 0
+        }
+    }
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-            // Keep the native clip view full-height; only the scrollable content
-            // clearance grows. The title and pins stay above the timeline backdrop.
-            content
-                .environment(\.chatHeaderInset, titleInset + (isVisible ? barHeight + 12 : 0))
-                .overlay(alignment: .top) {
-                    if isVisible {
+        content
+            .environment(\.chatHeaderInset, titleInset + clearance(for: kind))
+            .environment(
+                \.voiceReferenceHeaderInset, titleInset + clearance(for: pinsEligible ? .pins : nil)
+            )
+            .overlay(alignment: .top) {
+                Group {
+                    if let kind {
                         bar()
                             .fixedSize(horizontal: false, vertical: true)
-                            .background {
-                                GeometryReader { geometry in
-                                    Color.clear
-                                        .onAppear { barHeight = geometry.size.height }
-                                        .onChange(of: geometry.size.height) { _, height in
-                                            barHeight = height
-                                        }
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
+                                guard height > 0 else { return }
+                                if kind == .pins {
+                                    pinsHeight = height
+                                } else {
+                                    playbackHeight = height
                                 }
                             }
-                            .padding(.horizontal, isWideChatLayout ? 16 : 12)
+                            .padding(.horizontal, horizontalInset)
                             .padding(.top, titleInset)
                     }
                 }
-        #else
-            content
-                .environment(\.chatHeaderInset, titleInset + (isVisible ? barHeight + 12 : 0))
-                .overlay(alignment: .top) {
-                    if isVisible {
-                        bar()
-                            .background {
-                                GeometryReader { geometry in
-                                    Color.clear
-                                        .onAppear { barHeight = geometry.size.height }
-                                        .onChange(of: geometry.size.height) { _, height in
-                                            barHeight = height
-                                        }
-                                }
-                            }
-                            .padding(.horizontal, isWideChatLayout ? 20 : 12)
-                            .padding(.top, titleInset)
-                    }
-                }
-        #endif
+                .animation(
+                    VoicePlaybackMotion.animation(
+                        showing: kind == .playback, reduceMotion: reduceMotion),
+                    value: kind == .playback)
+            }
     }
 }
 
@@ -181,6 +207,7 @@ struct ChatPinnedMessagesSheet: View {
     let canManage: Bool
     let onSelect: (MessageResponse) -> Void
     var onOpenThread: ((MessageResponse) -> Void)?
+    var showsVoiceHeader = false
     @Environment(\.dismiss) private var dismiss
     @State private var pinToUnpin: PinResponse?
 
@@ -243,6 +270,7 @@ struct ChatPinnedMessagesSheet: View {
                 }
             }
             .navigationTitle("Pinned Messages")
+            .voicePlaybackHeader(enabled: showsVoiceHeader)
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
             #endif

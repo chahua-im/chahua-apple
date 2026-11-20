@@ -24,6 +24,14 @@ struct ChatDetailView: View {
     @State private var permissionRequestRevision = 0
     @State private var outboxAction: OutboxAction?
     @State private var isTimelineVisible = false
+    @ObservedObject private var voiceSession = VoicePlaybackSession.shared
+    @StateObject private var voiceVisibility = VoiceTimelineVisibility()
+    @State private var hasDescendantVoiceCover = false
+    @Environment(\.voicePlaybackHeaderRoute) private var voiceHeaderRoute
+    @Environment(\.isVoicePlaybackHeaderCovered) private var isVoiceHeaderCovered
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @Environment(\.openUserProfile) private var openUserProfile
@@ -322,7 +330,8 @@ struct ChatDetailView: View {
                     store: store, currentUserID: model.currentUserID, pins: pins,
                     canManagePins: { canManagePins }, showsPinnedMessages: $showsPinnedMessages,
                     stickerToView: $stickerToView, reactionDetailsMessage: $reactionDetailsMessage,
-                    pinToUnpin: $pinToUnpin)
+                    pinToUnpin: $pinToUnpin, chatID: chat.id, onJumpToPin: jumpToPinnedMessage,
+                    onOpenThread: onOpenThread)
             )
             .onChange(of: scenePhase) { _, phase in
                 model.setReadTrackingActive(isTimelineVisible && phase == .active)
@@ -704,16 +713,45 @@ struct ChatDetailView: View {
         }
     }
 
+    private var voiceTimelineTarget: VoiceTimelineTarget? {
+        guard isTimelineVisible, scenePhase == .active, !isVoiceHeaderCovered, !hasVoiceCover,
+            let controller = voiceSession.controller, let identity = controller.identity,
+            identity.chatID == chat.id
+        else { return nil }
+        return VoiceTimelineTarget(
+            identity: identity, controllerID: ObjectIdentifier(controller),
+            visibility: voiceVisibility)
+    }
+
+    private var hasVoiceCover: Bool {
+        #if os(iOS)
+            if horizontalSizeClass == .compact && showsPinnedMessages { return true }
+        #endif
+        return hasDescendantVoiceCover || showsThreadInfo || presentedFile != nil
+            || forwardRequest != nil || stickerToView != nil
+    }
+
     private func conversationBody(actions interactiveActions: TimelineBubbleActions) -> some View {
-        GeometryReader { geometry in
+        let playback =
+            voiceHeaderRoute != nil && !isVoiceHeaderCovered && !hasVoiceCover
+                && isTimelineVisible ? voiceSession.controller : nil
+        let needsPlayback = playback != nil && voiceVisibility.visible != playback?.identity
+        let slot = ChatSecondaryHeaderKind.select(
+            needsPlayback: needsPlayback, hasPins: showsPinBar)
+        return GeometryReader { geometry in
             timelineSurface(actions: interactiveActions)
+                .environment(\.voiceTimelineTarget, voiceTimelineTarget)
                 .modifier(
-                    ChatPinnedBarOverlay(isVisible: showsPinBar) {
+                    ChatSecondaryHeaderOverlay(
+                        kind: slot, pinsEligible: showsPinBar, playbackEligible: playback != nil
+                    ) {
                         ChatDetailPinnedMessageBar(
                             chatID: chat.id, controller: pins, viewport: model.viewport,
                             canManage: canManagePins, showsPinnedMessages: $showsPinnedMessages,
                             onJump: jumpToPinnedMessage, onOpenThread: onOpenThread,
                             onRequestPinChange: requestPinChange)
+                    } playback: {
+                        if let playback { VoicePlaybackBar(controller: playback) }
                     }
                 )
                 .modifier(
@@ -777,6 +815,7 @@ struct ChatDetailView: View {
                         }
                     })
         }
+        .onPreferenceChange(VoicePlaybackCoverPreference.self) { hasDescendantVoiceCover = $0 }
     }
 
     private func messageComposer(maxHeight: CGFloat) -> MessageComposerView {

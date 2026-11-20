@@ -122,6 +122,8 @@ private struct NotificationCategoryView: View {
         }
         .formStyle(.grouped)
         .navigationTitle(LocalizedStringKey(kind == .dm ? "Direct messages" : "Groups"))
+        .voicePlaybackHeader()
+        .voicePlaybackCovered(selectedChat != nil || showsPicker)
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -135,13 +137,18 @@ private struct NotificationCategoryView: View {
         .onReceive(store.notificationPreferenceChanges) { _ in Task { await load() } }
         .refreshable { await load() }
         .sheet(item: $selectedChat) { chat in
-            NavigationStack { NotificationExceptionDetailView(store: store, chat: chat) }
-                .frame(minWidth: 320, minHeight: 420)
+            NavigationStack {
+                NotificationExceptionDetailView(store: store, chat: chat).voicePlaybackHeader()
+            }
+            .voicePlaybackCover { selectedChat = nil }
+            .frame(minWidth: 320, minHeight: 420)
         }
         .sheet(isPresented: $showsPicker) {
             NavigationStack {
                 NotificationExceptionPicker(store: store, kind: kind)
+                    .voicePlaybackHeader()
             }
+            .voicePlaybackCover { showsPicker = false }
             .frame(minWidth: 320, minHeight: 420)
         }
         .confirmationDialog(

@@ -58,6 +58,7 @@ struct PushNotificationSettingsPage<Diagnostics: View>: View {
             }
         }
         .navigationTitle("Push Notifications")
+        .voicePlaybackHeader()
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif

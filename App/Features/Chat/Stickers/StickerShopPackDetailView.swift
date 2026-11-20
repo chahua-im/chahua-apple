@@ -91,15 +91,18 @@ struct StickerShopPackDetailView: View {
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                if isWide {
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        packActions
+                VStack(spacing: 0) {
+                    if isWide {
+                        HStack(spacing: 10) {
+                            Spacer(minLength: 0)
+                            packActions
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.circle)
+                        .padding(.horizontal, 24).padding(.vertical, 12)
+                        .frame(minHeight: 64)
                     }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.circle)
-                    .padding(.horizontal, 24).padding(.vertical, 12)
-                    .frame(minHeight: 64)
+                    VoicePlaybackHeaderRow(isEnabled: selectedSticker == nil)
                 }
             }
             .blur(radius: selectedSticker == nil ? 0 : 12)

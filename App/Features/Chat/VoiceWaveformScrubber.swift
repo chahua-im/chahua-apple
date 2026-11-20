@@ -45,7 +45,9 @@ struct VoiceWaveformScrubber: View {
         }
         .accessibilityElement()
         .accessibilityLabel(Text("Voice message position"))
-        .accessibilityValue(Text("\(time(position)) of \(time(controller.duration))"))
+        .accessibilityValue(
+            Text("\(voicePlaybackTime(position)) of \(voicePlaybackTime(controller.duration))")
+        )
         .accessibilityAction {
             guard canInteract else { return }
             controller.toggle()
@@ -64,11 +66,6 @@ struct VoiceWaveformScrubber: View {
 
     private func seekPosition(x: CGFloat, width: CGFloat) -> TimeInterval {
         min(1, max(0, x / max(1, width))) * controller.duration
-    }
-
-    private func time(_ time: TimeInterval) -> String {
-        let seconds = time.isFinite ? max(0, Int(time)) : 0
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 

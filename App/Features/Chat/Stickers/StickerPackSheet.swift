@@ -106,6 +106,7 @@ struct StickerPackSheet: View {
                 .padding(20)
             }
             .navigationTitle("Stickers")
+            .voicePlaybackHeader()
             #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
             #endif

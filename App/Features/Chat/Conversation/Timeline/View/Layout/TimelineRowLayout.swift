@@ -36,6 +36,13 @@ struct TimelineRowLayout {
         }
         return frame.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
     }
+
+    func voiceRegion(in rowFrame: CGRect) -> CGRect? {
+        guard let audio = frames[.audio] else { return nil }
+        // A tall caption must not keep the playback capsule hidden once the controls are gone.
+        let frame = frames[.text] == nil ? frames[.bubble] ?? audio : audio
+        return frame.offsetBy(dx: rowFrame.minX, dy: rowFrame.minY)
+    }
 }
 
 enum TimelineRowMetrics {

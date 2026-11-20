@@ -21,6 +21,7 @@
         private var mediaView: TimelineMediaView?
         private var voiceView: NSHostingView<VoiceMessageBubbleView>?
         private var voiceController: VoicePlaybackController?
+        private var hasVoiceLease = false
         private var textView: AppKitMessageTextView?
         private var linkPreviewViews: [TimelineLinkPreviewView] = []
         private var linkPreviewFrames: [CGRect] = []
@@ -302,16 +303,6 @@
             for view in linkPreviewViews {
                 view.setVisible(visible && !view.isHidden)
             }
-            if !visible, let controller = voiceController {
-                // Native row visibility is updated inside NSViewRepresentable.updateNSView.
-                // Teardown must publish only after that SwiftUI update completes.
-                DispatchQueue.main.async { [weak self, weak controller] in
-                    guard let self, !self.visible, self.voiceController === controller else {
-                        return
-                    }
-                    controller?.releaseRow()
-                }
-            }
             configureAudio()
         }
 
@@ -492,15 +483,24 @@
                 clearAudio()
                 return
             }
+            let interactive = !binding.context.isInteractionPreview
+            let isActive = visible && interactive
             let controller = VoicePlaybackController.controller(
-                for: binding.presentation.audioURL, reusing: voiceController)
+                for: interactive ? row.entry.presentationMessage : nil,
+                url: binding.presentation.audioURL, reusing: voiceController)
+            if let previous = voiceController, previous !== controller || !isActive {
+                releaseVoiceLease(from: previous)
+            }
+            if isActive, !hasVoiceLease {
+                controller.retainRow(ObjectIdentifier(self))
+                hasVoiceLease = true
+            }
             voiceController = controller
-            controller.setMessage(row.entry.presentationMessage)
             let environment = binding.presentation.environment
             let content = VoiceMessageBubbleView(
                 controller: controller, url: binding.presentation.audioURL,
                 isOutgoing: row.isOutgoing,
-                isActive: visible && !binding.context.isInteractionPreview,
+                isActive: isActive,
                 metrics: binding.presentation.voiceMetrics,
                 localeIdentifier: environment.localeIdentifier,
                 layoutDirection: environment.layoutDirection)
@@ -518,14 +518,23 @@
         }
 
         private func clearAudio() {
-            // Reuse releases only row-owned previews after the hosting update pass.
-            // The authenticated playback session retains the active voice message.
-            if let controller = voiceController {
-                DispatchQueue.main.async { controller.releaseRow() }
-            }
+            if let controller = voiceController { releaseVoiceLease(from: controller) }
             voiceView?.removeFromSuperview()
             voiceView = nil
             voiceController = nil
+        }
+
+        private func releaseVoiceLease(from controller: VoicePlaybackController) {
+            guard hasVoiceLease else { return }
+            hasVoiceLease = false
+            let row = ObjectIdentifier(self)
+            // Native binding may run inside a SwiftUI update.
+            DispatchQueue.main.async { [weak self] in
+                guard self?.voiceController !== controller || self?.hasVoiceLease != true else {
+                    return
+                }
+                controller.releaseRow(row)
+            }
         }
 
         private func makeMetadata() -> TimelineMetadataView {

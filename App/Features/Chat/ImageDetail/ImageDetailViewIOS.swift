@@ -8,6 +8,8 @@
         let gallery: MessageImageGallery
         let mediaContext: AppMediaContext?
         let onDismiss: () -> Void
+        var playbackClearance: CGFloat = 0
+        var onHeaderLayout: ((CGFloat) -> Void)? = nil
 
         func makeUIViewController(context: Context) -> ImageDetailViewControllerIOS {
             ImageDetailViewControllerIOS(
@@ -16,6 +18,8 @@
 
         func updateUIViewController(_ controller: ImageDetailViewControllerIOS, context: Context) {
             controller.onDismiss = onDismiss
+            controller.onHeaderLayout = onHeaderLayout
+            controller.playbackClearance = playbackClearance
         }
 
         static func dismantleUIViewController(
@@ -32,6 +36,11 @@
         private let gallery: MessageImageGallery
         private let mediaContext: AppMediaContext?
         var onDismiss: () -> Void
+        var onHeaderLayout: ((CGFloat) -> Void)?
+        var playbackClearance: CGFloat = 0 {
+            didSet { if playbackClearance != oldValue { viewIfLoaded?.setNeedsLayout() } }
+        }
+        private var reportedHeaderBottom: CGFloat = 0
 
         private let backdrop = UIView()
         private let pager = ImageDetailPagerIOS()
@@ -248,6 +257,11 @@
             titlePill.frame = CGRect(
                 x: (size.width - pillSize.width) / 2, y: headerY, width: pillSize.width,
                 height: pillSize.height)
+            let headerBottom = titlePill.frame.maxY
+            if let onHeaderLayout, reportedHeaderBottom != headerBottom {
+                reportedHeaderBottom = headerBottom
+                DispatchQueue.main.async { onHeaderLayout(headerBottom) }
+            }
             let buttonY = headerY + (pillSize.height - controlSize) / 2
             backButton.frame = CGRect(
                 x: leading, y: buttonY, width: controlSize, height: controlSize)
@@ -257,7 +271,7 @@
 
             let navigationY = size.height - safe.bottom - 56
             let controlInsets = UIEdgeInsets(
-                top: max(0, titlePill.frame.maxY + 8 - safe.top), left: 0,
+                top: max(0, headerBottom + 8 + playbackClearance - safe.top), left: 0,
                 bottom: countLabel.isHidden && previousButton.isHidden ? 0 : 56, right: 0)
             if controlInsets != playerControlInsets {
                 playerControlInsets = controlInsets

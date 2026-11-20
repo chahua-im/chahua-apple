@@ -73,6 +73,7 @@
                         .disabled(mounted)
                         .allowsHitTesting(!mounted)
                         .accessibilityHidden(mounted)
+                        .voicePlaybackCovered(mounted)
                         .environment(\.accountAvatarHidden, inFlight)
                     if mounted {
                         profile()

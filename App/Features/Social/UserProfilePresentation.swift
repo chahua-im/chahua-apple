@@ -23,7 +23,7 @@ struct UserProfilePresentation: ViewModifier {
 
     func body(content: Content) -> some View {
         if Self.usesModal {
-            content.sheet(
+            content.voicePlaybackCovered(uid != nil).sheet(
                 isPresented: Binding(
                     get: { uid != nil }, set: { if !$0 { uid = nil } }
                 )
@@ -36,8 +36,11 @@ struct UserProfilePresentation: ViewModifier {
                             onOpenChat: { chat in
                                 self.uid = nil
                                 onOpenChat(chat)
-                            })
+                            }
+                        )
+                        .voicePlaybackHeader()
                     }
+                    .voicePlaybackCover { self.uid = nil }
                     .id(uid)
                     .modifier(ProfileModalSizing())
                 }
@@ -46,7 +49,9 @@ struct UserProfilePresentation: ViewModifier {
             content.navigationDestination(item: $uid) { uid in
                 UserProfileView(
                     uid: uid, currentUserID: currentUserID, store: store,
-                    onOpenChat: onOpenChat)
+                    onOpenChat: onOpenChat
+                )
+                .voicePlaybackHeader()
             }
         }
     }

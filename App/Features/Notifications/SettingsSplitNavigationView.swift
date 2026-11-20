@@ -155,6 +155,7 @@ struct SettingsSplitNavigationView: View {
                 )
         } else {
             ContentUnavailableView("Select a setting", systemImage: "gearshape")
+                .voicePlaybackHeader()
         }
     }
 

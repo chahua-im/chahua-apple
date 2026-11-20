@@ -128,6 +128,7 @@ struct GroupInfoView: View {
                         FriendPrivacySettingsView(store: store, peerUID: peer.uid)
                             .id(peer.uid)
                             .modifier(GroupInfoDestinationNavigation())
+                            .voicePlaybackHeader()
                     } label: {
                         HStack {
                             Image(systemName: "hand.raised.fill")
@@ -176,8 +177,9 @@ struct GroupInfoView: View {
         }
         .background(pageBackground)
         .safeAreaInset(edge: .top, spacing: 0) {
-            if usesContentHeader {
-                inspectorHeader
+            VStack(spacing: 0) {
+                if usesContentHeader { inspectorHeader }
+                VoicePlaybackHeaderRow()
             }
         }
         .navigationTitle(usesContentHeader ? "" : (isDM ? "Chat Info" : "Group Info"))
@@ -205,6 +207,7 @@ struct GroupInfoView: View {
                     onBack: { showsEditing = false }
                 )
                 .modifier(GroupInfoDestinationNavigation())
+                .voicePlaybackHeader()
             }
         }
         .navigationDestination(isPresented: $showsInvitations) {
@@ -213,6 +216,7 @@ struct GroupInfoView: View {
                 chatID: chat.id, onBack: { showsInvitations = false }
             )
             .modifier(GroupInfoDestinationNavigation())
+            .voicePlaybackHeader()
         }
         .onChange(of: showsEditing) { _, presented in
             if !presented { exitGuard.unregister(owner: editingExitOwner) }

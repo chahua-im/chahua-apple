@@ -30,6 +30,9 @@
 
         private let model: ConversationTimelineModel
         private var rows: [TimelineRow] = []
+        private let voiceReporter = VoiceTimelineReporter()
+        private var voiceReferenceHeaderInset: CGFloat?
+        private var isDisappearing = false
         var actions: TimelineBubbleActions {
             didSet {
                 guard !actions.hasSameRendering(as: oldValue) else { return }
@@ -162,11 +165,11 @@
             )?
         private var pendingCompletionID: Int?
 
-        private let collectionView: UICollectionView = {
+        private let collectionView: TimelineCollectionView = {
             let layout = TimelineFlowLayout()
             layout.minimumLineSpacing = 0
             layout.sectionInset = .zero
-            return UICollectionView(frame: .zero, collectionViewLayout: layout)
+            return TimelineCollectionView(frame: .zero, collectionViewLayout: layout)
         }()
 
         init(model: ConversationTimelineModel, actions: TimelineBubbleActions) {
@@ -198,6 +201,7 @@
                 collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             ])
             collectionView.dataSource = self
+            collectionView.windowDidChange = { [weak self] in self?.reportVoiceViewport() }
             collectionView.delegate = self
             collectionView.keyboardDismissMode = .interactive
             // SwiftUI supplies the header/composer clearance explicitly, including the
@@ -231,6 +235,27 @@
 
         private var availableRowWidth: CGFloat {
             currentGeometry.rowWidth
+        }
+
+        func configureVoiceViewport(_ target: VoiceTimelineTarget?, headerInset: CGFloat?) {
+            let changed = voiceReporter.target != target
+            guard changed || voiceReferenceHeaderInset != headerInset else { return }
+            voiceReferenceHeaderInset = headerInset
+            voiceReporter.target = target
+            if changed, target != nil, isViewLoaded { refreshVisibleRoots() }
+            reportVoiceViewport()
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            isDisappearing = false
+            reportVoiceViewport()
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            isDisappearing = true
+            voiceReporter.report(false)
         }
 
         override func viewDidLayoutSubviews() {
@@ -500,6 +525,7 @@
 
         func tearDown() {
             isTornDown = true
+            voiceReporter.target = nil
             if model.selectionViewportSource === self { model.selectionViewportSource = nil }
             viewportHandoffGeneration += 1
             pendingViewportContext = nil
@@ -960,7 +986,9 @@
         private func capturePosition(
             visibleItems items: [UICollectionViewLayoutAttributes]? = nil
         ) -> Position {
-            let top = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+            let top =
+                collectionView.contentOffset.y
+                + (voiceReferenceHeaderInset == nil ? collectionView.adjustedContentInset.top : 0)
             let message = (items ?? visibleItems()).lazy.filter {
                 if case .message = self.rows[$0.indexPath.item] { return true }
                 return false
@@ -982,7 +1010,9 @@
                 top = frame.minY - position.messageOffset
             }
             // If the message was removed, retain the old document position within the new limits.
-            let y = clampedOffset(top - collectionView.adjustedContentInset.top)
+            let inset =
+                voiceReferenceHeaderInset == nil ? collectionView.adjustedContentInset.top : 0
+            let y = clampedOffset(top - inset)
             collectionView.setContentOffset(
                 .init(x: -collectionView.adjustedContentInset.left, y: y), animated: false)
         }
@@ -1156,10 +1186,40 @@
                 .compactMap { rows[$0.indexPath.item].messageID }
         }
 
+        private func reportVoiceViewport() {
+            guard voiceReporter.target != nil else { return }
+            guard isViewLoaded, !isDisappearing, !isTornDown,
+                collectionView.window?.isHidden == false
+            else {
+                voiceReporter.report(false)
+                return
+            }
+            guard !applying else { return }
+            guard
+                let index = voiceReporter.rowIndex(
+                    in: rows, chatID: model.chatID, revision: installedRevision),
+                let row = collectionView.layoutAttributesForItem(
+                    at: .init(item: index, section: 0)),
+                let region = preparedRows[rows[index].id]?.layout.voiceRegion(in: row.frame)
+            else {
+                voiceReporter.report(false)
+                return
+            }
+            var viewport = unobscuredViewport
+            if let inset = voiceReferenceHeaderInset {
+                viewport = VoiceTimelineVisibility.referenceViewport(
+                    viewport, scrollTop: collectionView.contentOffset.y,
+                    bottomLimit: collectionView.contentSize.height - collectionView.bounds.height
+                        + collectionView.adjustedContentInset.bottom, headerInset: inset)
+            }
+            voiceReporter.report(VoiceTimelineVisibility.containsHalf(of: region, in: viewport))
+        }
+
         private func reportViewport(
             reason: TimelineViewportChangeReason,
             visibleItems items: [UICollectionViewLayoutAttributes]? = nil
         ) {
+            reportVoiceViewport()
             guard hasCurrentViewport,
                 reason == .user
                     || (!userScrolling && !collectionView.isDragging
@@ -1238,6 +1298,17 @@
                 }
                 model.viewportDidChange(report, reason: reportReason, revision: revision)
             }
+        }
+    }
+
+    // UIKit does not notify a representable controller when its view is moved to
+    // another window without a navigation transition.
+    private final class TimelineCollectionView: UICollectionView {
+        var windowDidChange: (() -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            windowDidChange?()
         }
     }
 

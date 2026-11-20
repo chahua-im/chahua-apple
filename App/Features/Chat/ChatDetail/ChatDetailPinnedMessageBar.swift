@@ -12,6 +12,16 @@ struct ChatDetailPinnedMessageBar: View {
     let onJump: (MessageResponse) -> Void
     let onOpenThread: ((MessageResponse) -> Void)?
     let onRequestPinChange: (MessageResponse) -> Void
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    private var popoverPresentation: Binding<Bool> {
+        #if os(iOS)
+            if horizontalSizeClass == .compact { return .constant(false) }
+        #endif
+        return $showsPinnedMessages
+    }
 
     private var pins: [PinResponse] { controller.pinsByChatID[chatID] ?? [] }
 
@@ -32,7 +42,7 @@ struct ChatDetailPinnedMessageBar: View {
                     ? { onRequestPinChange(pin.message) } : nil
             )
             .popover(
-                isPresented: $showsPinnedMessages, attachmentAnchor: .rect(.bounds), arrowEdge: .top
+                isPresented: popoverPresentation, attachmentAnchor: .rect(.bounds), arrowEdge: .top
             ) {
                 ChatPinnedMessagesSheet(
                     chatID: chatID, controller: controller, canManage: canManage,

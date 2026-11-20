@@ -25,6 +25,7 @@
         private var linkPreviewViews: [TimelineLinkPreviewView] = []
         private var voiceView: (UIView & UIContentView)?
         private var voiceController: VoicePlaybackController?
+        private var hasVoiceLease = false
         private var textView: UIKitMessageTextView?
         private var metadataView: TimelineMetadataView?
         private var standaloneView: BubbleStandaloneView?
@@ -282,15 +283,6 @@
             textView?.setVisible(visible && textView?.isHidden == false)
             metadataView?.setVisible(visible && metadataView?.isHidden == false)
             for view in linkPreviewViews where !view.isHidden { view.setVisible(visible) }
-            if !visible, let controller = voiceController {
-                // UIKit hosting configuration may be updated in a SwiftUI view pass.
-                DispatchQueue.main.async { [weak self, weak controller] in
-                    guard let self, !self.visible, self.voiceController === controller else {
-                        return
-                    }
-                    controller?.releaseRow()
-                }
-            }
             configureAudio()
         }
 
@@ -353,11 +345,18 @@
         }
 
         /// The row's swipe/hold recognizer must yield to the shared control's gestures.
-        func ownsVoiceTouch(_ touch: UITouch) -> Bool {
-            guard visible, binding?.context.isInteractionPreview == false,
+        func ownsVoiceTouch(_ touch: UITouch, playbackButtonOnly: Bool) -> Bool {
+            guard visible, let binding, !binding.context.isInteractionPreview,
                 let frame = localFrames[.audio]
             else { return false }
-            return frame.contains(touch.location(in: self))
+            let point = touch.location(in: self)
+            if playbackButtonOnly {
+                return binding.presentation.audioURL != nil
+                    && binding.presentation.voiceMetrics.playbackButtonContains(
+                        point, in: frame,
+                        layoutDirection: binding.presentation.environment.layoutDirection)
+            }
+            return frame.contains(point)
         }
 
         private var isFilled: Bool {
@@ -500,10 +499,19 @@
                 clearAudio()
                 return
             }
+            let interactive = !binding.context.isInteractionPreview
+            let isActive = visible && interactive
             let controller = VoicePlaybackController.controller(
-                for: binding.presentation.audioURL, reusing: voiceController)
+                for: interactive ? row.entry.presentationMessage : nil,
+                url: binding.presentation.audioURL, reusing: voiceController)
+            if let previous = voiceController, previous !== controller || !isActive {
+                releaseVoiceLease(from: previous)
+            }
+            if isActive, !hasVoiceLease {
+                controller.retainRow(ObjectIdentifier(self))
+                hasVoiceLease = true
+            }
             voiceController = controller
-            controller.setMessage(row.entry.presentationMessage)
             let environment = binding.presentation.environment
             // Exception to native timeline sections: the existing UIKit timeline must
             // retain measured row geometry, but playback/seek is one shared SwiftUI
@@ -512,7 +520,7 @@
                 VoiceMessageBubbleView(
                     controller: controller, url: binding.presentation.audioURL,
                     isOutgoing: row.isOutgoing,
-                    isActive: visible && !binding.context.isInteractionPreview,
+                    isActive: isActive,
                     metrics: binding.presentation.voiceMetrics,
                     localeIdentifier: environment.localeIdentifier,
                     layoutDirection: environment.layoutDirection)
@@ -528,12 +536,23 @@
         }
 
         private func clearAudio() {
-            if let controller = voiceController {
-                DispatchQueue.main.async { controller.releaseRow() }
-            }
+            if let controller = voiceController { releaseVoiceLease(from: controller) }
             voiceView?.removeFromSuperview()
             voiceView = nil
             voiceController = nil
+        }
+
+        private func releaseVoiceLease(from controller: VoicePlaybackController) {
+            guard hasVoiceLease else { return }
+            hasVoiceLease = false
+            let row = ObjectIdentifier(self)
+            // Native binding may run inside a SwiftUI update.
+            DispatchQueue.main.async { [weak self] in
+                guard self?.voiceController !== controller || self?.hasVoiceLease != true else {
+                    return
+                }
+                controller.releaseRow(row)
+            }
         }
 
         private func makeMetadata() -> TimelineMetadataView {
