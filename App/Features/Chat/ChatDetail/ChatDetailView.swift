@@ -798,16 +798,25 @@ struct ChatDetailView: View {
             guard !isEditing else { return }
             drafts.setDraftComposing(composing, chatID: chat.id, threadID: threadID)
         }
-        composer.replyToMessage = isEditing
-            ? session?.replyToMessage : drafts.draftReply(chatID: chat.id, threadID: threadID)
+        let reply =
+            isEditing
+            ? session?.replyToMessage
+            : drafts.draftReply(chatID: chat.id, threadID: threadID)
+        composer.replyToMessage = reply
         composer.replyFocusRequest = replyFocusRequest
         composer.onCancelReply = {
-            guard isCurrentSession, composerEditOwner == owner else { return }
-            if let session {
-                guard canUseComposer, !isUpdatingMessage else { return }
-                session.setReplyToMessage(nil)
-            } else if !isEditing {
-                drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID)
+            // Native and SwiftUI callbacks can arrive during a view update.
+            DispatchQueue.main.async {
+                guard isCurrentSession, composerEditOwner == owner, let reply else { return }
+                if let session {
+                    guard canUseComposer, !isUpdatingMessage, session.replyToMessage?.id == reply.id
+                    else { return }
+                    session.setReplyToMessage(nil)
+                } else if !isEditing,
+                    drafts.draftReply(chatID: chat.id, threadID: threadID)?.id == reply.id
+                {
+                    drafts.setDraftReply(nil, chatID: chat.id, threadID: threadID)
+                }
             }
         }
         composer.onOpenReply = { id in Task { await model.jumpToMessage(id) } }
@@ -1158,17 +1167,22 @@ struct ChatDetailView: View {
         }
         if context.canStageDraft {
             actions.replyToMessage = { message in
-                guard currentInteractionContext.canStageDraft, editingMessage == nil,
-                    !isUpdatingMessage, !isEnteringEdit
-                else { return }
-                if let session = pendingEditSession {
-                    guard session.isValid else { return }
-                    session.setReplyToMessage(message.replyPreview)
-                } else {
-                    guard !drafts.committingDrafts.contains(conversationKey) else { return }
-                    drafts.setDraftReply(message.replyPreview, chatID: chat.id, threadID: threadID)
+                let owner = composerEditOwner
+                // Leave the view update before publishing the draft and requesting focus.
+                DispatchQueue.main.async {
+                    guard composerEditOwner == owner, currentInteractionContext.canStageDraft,
+                        editingMessage == nil, !isUpdatingMessage, !isEnteringEdit
+                    else { return }
+                    if let session = pendingEditSession {
+                        guard session.isValid else { return }
+                        session.setReplyToMessage(message.replyPreview)
+                    } else {
+                        guard !drafts.committingDrafts.contains(conversationKey) else { return }
+                        drafts.setDraftReply(
+                            message.replyPreview, chatID: chat.id, threadID: threadID)
+                    }
+                    replyFocusRequest &+= 1
                 }
-                replyFocusRequest &+= 1
             }
         }
         actions.editMessage = startEditing

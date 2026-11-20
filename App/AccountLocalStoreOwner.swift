@@ -37,6 +37,35 @@ final class AccountLocalStoreOwner {
         store = nil
     }
 
+    func reset(uid: Int32, directory: URL) async throws {
+        guard self.uid == uid else { throw CancellationError() }
+        let retiring = store
+        let pending = opening?.task
+        let fence = openingFence
+        generation &+= 1
+        store = nil
+        opening = nil
+
+        // Fence future opens even if authentication changes while deletion is in flight.
+        let reset = Task {
+            await fence?.value
+            let opened = try? await pending?.value
+            try await Task.detached {
+                try (retiring ?? opened)?.close()
+                do {
+                    try FileManager.default.removeItem(at: directory)
+                } catch {
+                    let fileError = error as NSError
+                    guard fileError.domain == NSCocoaErrorDomain,
+                        fileError.code == CocoaError.fileNoSuchFile.rawValue
+                    else { throw error }
+                }
+            }.value
+        }
+        fenceNextOpen(through: Task { _ = await reset.result })
+        try await reset.value
+    }
+
     func open(uid: Int32) async throws -> ChahuaLocalStore {
         guard self.uid == uid else { throw CancellationError() }
         if let store { return store }

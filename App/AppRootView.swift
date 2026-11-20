@@ -25,19 +25,23 @@ struct AppRootView: View {
             case .signedOut(let reason):
                 AuthLoginView(model: model, reason: reason)
             case .authenticated(let me):
-                ConversationDisplayPreferenceScope(preferences: chatStore.displayPreferences) {
-                    AuthenticatedShell(
-                        chatStore: chatStore,
-                        notifications: notifications,
-                        notificationSceneID: sceneID,
-                        me: me,
-                        isSigningOut: model.isSubmitting,
-                        onSignOut: { Task { await model.logout() } },
-                        pendingURL: $pendingURL
-                    )
-                    .modifier(ImageDetailPresentation())
-                    .id(me.uid)
-                    .environment(\.mediaContext, mediaContext())
+                if chatStore.isResettingLocalDatabase {
+                    ChahuaLoadingView(title: "Resetting local database…")
+                } else {
+                    ConversationDisplayPreferenceScope(preferences: chatStore.displayPreferences) {
+                        AuthenticatedShell(
+                            chatStore: chatStore,
+                            notifications: notifications,
+                            notificationSceneID: sceneID,
+                            me: me,
+                            isSigningOut: model.isSubmitting,
+                            onSignOut: { Task { await model.logout() } },
+                            pendingURL: $pendingURL
+                        )
+                        .modifier(ImageDetailPresentation())
+                        .id(chatStore.sessionRevision)
+                        .environment(\.mediaContext, mediaContext())
+                    }
                 }
             case .restorationFailed(let failure):
                 ChahuaRecoverableErrorView(
@@ -63,6 +67,13 @@ struct AppRootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             if let error = model.signOutError { Text(error) }
+        }
+        .alert(
+            "Couldn’t reset the local database", isPresented: $chatStore.localDatabaseResetFailed
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your session is still active. Open Settings → Storage to try again.")
         }
         .alert(
             "Message storage is full",

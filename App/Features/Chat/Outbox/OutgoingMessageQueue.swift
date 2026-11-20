@@ -268,13 +268,7 @@ final class OutgoingMessageQueue: ObservableObject {
         let store = try await storage.open(uid: uid)
         try checkGeneration(current)
         let directory = store.directory
-        let uploads = fileWorkers.values.filter { $0.directory == directory }.map(\.task)
-        for upload in uploads { await upload.value }
-        if fileLeases[directory] != nil {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                fileDrainWaiters[directory, default: []].append(continuation)
-            }
-        }
+        await waitForFileWork(in: directory)
         try await checkpoint(.purge, generation: current)
         try await OutgoingFileCleanup.purge(directory: directory)
         try checkGeneration(current)
@@ -285,6 +279,25 @@ final class OutgoingMessageQueue: ObservableObject {
         pendingAudio.removeAll()
         completions.removeAll()
         events.send(.purged(conversations: keys))
+    }
+
+    func resetLocalDatabase(uid: Int32, directory: URL) async throws {
+        guard signingOut, self.uid == uid else { throw CancellationError() }
+        let current = generation
+        await lifecycle?.value
+        await waitForFileWork(in: directory)
+        try checkGeneration(current)
+        try await storage.reset(uid: uid, directory: directory)
+    }
+
+    private func waitForFileWork(in directory: URL) async {
+        let uploads = fileWorkers.values.filter { $0.directory == directory }.map(\.task)
+        for upload in uploads { await upload.value }
+        if fileLeases[directory] != nil {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                fileDrainWaiters[directory, default: []].append(continuation)
+            }
+        }
     }
 
     func activate(uid: Int32) async {

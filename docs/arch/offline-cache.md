@@ -112,7 +112,11 @@ The server does not supply a read-state revision. A read and an unread operation
 
 ## Size and clearing
 
-The message cache has no size or age limit. Settings → Storage shows logical message payload bytes separately from media. Clear Message History removes downloaded history, not the database, drafts, attachments, outbox or pending reads. Confirmed sign-out purges all account rows; session expiry and account switches keep them. The account directory keeps its storage protection and is excluded from backup, including SQLite journals and local outbox files.
+The message cache has no size or age limit. Settings → Storage shows logical message payload bytes separately from media. Clear Message History removes downloaded history, not the database, drafts, attachments, outbox or pending reads.
+
+Reset Local Database requires confirmation. It stops account-local writes, replaces the active account’s database, and removes its outbox files. It resets this account’s local preferences and app-wide display and playback preferences. It keeps the Keychain session and offline account binding. It does not change server settings, push setup, or the separate media cache. The reset can recover from a database that fails to open.
+
+Confirmed sign-out purges all account rows; session expiry and account switches keep them. The account directory keeps its storage protection and is excluded from backup, including SQLite journals and local outbox files.
 
 ## Source references
 

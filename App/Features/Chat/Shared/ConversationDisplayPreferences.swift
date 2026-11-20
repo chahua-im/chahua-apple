@@ -63,6 +63,16 @@ final class ConversationDisplayPreferences: ObservableObject {
         }
     }
 
+    func reset(uid: Int32) {
+        guard var root = defaults.dictionary(forKey: Self.storageKey),
+            var accounts = root["accounts"] as? [String: [String: Any]],
+            accounts.removeValue(forKey: accountID(uid)) != nil
+        else { return }
+        root["accounts"] = accounts
+        defaults.set(root, forKey: Self.storageKey)
+        if activeUID == uid { values = ConversationDisplayValues() }
+    }
+
     func setShowThreadsInMessages(_ value: Bool, for uid: Int32) {
         set(value, key: "showThreadsInMessages", path: \.showThreadsInMessages, uid: uid)
     }

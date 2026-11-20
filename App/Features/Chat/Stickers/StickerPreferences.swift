@@ -30,6 +30,10 @@ struct StickerPreferences: Codable, Equatable {
         UserDefaults.standard.set(data, forKey: Self.storageKey(for: accountID))
     }
 
+    static func reset(for accountID: Int32, in defaults: UserDefaults) {
+        defaults.removeObject(forKey: storageKey(for: accountID))
+    }
+
     static func normalizedEmojiSequences(_ value: String, maximum: Int) -> [String] {
         value.compactMap { character in
             let scalars = character.unicodeScalars

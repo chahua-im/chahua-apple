@@ -38,6 +38,12 @@ final class VoicePlaybackSession: ObservableObject {
         controller?.setSpeed(speed)
     }
 
+    func resetSpeed(in defaults: UserDefaults) {
+        defaults.removeObject(forKey: Self.speedKey)
+        speed = 1
+        controller?.setSpeed(speed)
+    }
+
     func dismiss() {
         let previous = controller
         controller = nil

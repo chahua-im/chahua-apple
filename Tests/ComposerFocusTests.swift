@@ -308,7 +308,6 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertTrue(didEnqueue, "The ordinary send path must durably create the queued target.")
         let pending = try XCTUnwrap(store.conversationMessages.pending(chatID: "chat").first)
         store.drafts.setDraftText("Ordinary draft", chatID: "chat")
-        store.drafts.setDraftReply(remote.replyPreview, chatID: "chat")
         await store.drafts.flushDraft(chatID: "chat")
         let imageURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
@@ -413,6 +412,9 @@ final class ComposerFocusTests: XCTestCase {
             actions()?.interactionContext.canSendOnline(isThreadReply: false) == true
                 && actions()?.editMessage != nil && editor() != nil
         }
+        let reply = try XCTUnwrap(actions()?.replyToMessage)
+        reply(remote)
+        try await waitUntil { store.drafts.draftReply(chatID: "chat") == remote.replyPreview }
         let editRemote = try XCTUnwrap(actions()?.editMessage)
         editRemote(remote)
         try await waitUntil { text() == "Server original" }

@@ -1,6 +1,7 @@
 import ChahuaAPI
 import Combine
 import Foundation
+import os
 
 @MainActor
 final class AppCompositionRoot {
@@ -14,6 +15,8 @@ final class AppCompositionRoot {
     #if os(iOS)
         let outboxRefresh: OutboxRefreshScheduler?
     #endif
+    private let localStoreDirectory: @Sendable (Int32) throws -> URL
+    private let preferenceDefaults: UserDefaults
     private var chatObservation: AnyCancellable?
     private var pathObservation: AnyCancellable?
     private var lastPathStatus: ConnectivitySnapshot.Status = .unknown
@@ -28,23 +31,12 @@ final class AppCompositionRoot {
             tokenStorage: KeychainTokenStorage(),
             mediaNamespace: apiConfiguration.baseURL.absoluteString,
             productionLifecycle: true,
-            localStoreFactory: { uid in
-                try await Task.detached {
-                    let root = try FileManager.default.url(
-                        for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil,
-                        create: true)
-                    let directory = LocalStorageScope(
-                        apiBaseURL: apiConfiguration.baseURL, userID: uid
-                    ).directory(under: root)
-                    let store = try ChahuaLocalStore(directory: directory, userID: uid)
-                    // Transient SQLite journals inherit the account directory's
-                    // exclusion. This directory also holds device-local outbox files.
-                    var accountURL = directory
-                    var backup = URLResourceValues()
-                    backup.isExcludedFromBackup = true
-                    try accountURL.setResourceValues(backup)
-                    return store
-                }.value
+            localStoreDirectory: { uid in
+                let root = try FileManager.default.url(
+                    for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil,
+                    create: true)
+                return LocalStorageScope(apiBaseURL: apiConfiguration.baseURL, userID: uid)
+                    .directory(under: root)
             }
         )
     }
@@ -58,8 +50,10 @@ final class AppCompositionRoot {
         mediaNamespace: String = "injected",
         preferenceDefaults: UserDefaults = .standard,
         productionLifecycle: Bool = false,
-        localStoreFactory: @escaping @Sendable (Int32) async throws -> ChahuaLocalStore
+        localStoreDirectory: @escaping @Sendable (Int32) throws -> URL
     ) {
+        self.localStoreDirectory = localStoreDirectory
+        self.preferenceDefaults = preferenceDefaults
         let connectivity = ConnectivityMonitor(monitorNetwork: productionLifecycle)
         self.connectivity = connectivity
         let sessionModel = AuthSessionModel(
@@ -72,7 +66,17 @@ final class AppCompositionRoot {
         let invalidToken: @MainActor @Sendable () async -> Void = { [weak sessionModel] in
             await sessionModel?.sessionDidExpire()
         }
-        let localStorage = AccountLocalStoreOwner(factory: localStoreFactory)
+        let localStorage = AccountLocalStoreOwner { uid in
+            try await Task.detached {
+                var directory = try localStoreDirectory(uid)
+                let store = try ChahuaLocalStore(directory: directory, userID: uid)
+                // The directory also holds SQLite journals and device-local outbox files.
+                var backup = URLResourceValues()
+                backup.isExcludedFromBackup = true
+                try directory.setResourceValues(backup)
+                return store
+            }.value
+        }
         self.localStorage = localStorage
         let historyCache = AccountHistoryCache(owner: localStorage)
         #if os(macOS)
@@ -107,6 +111,9 @@ final class AppCompositionRoot {
             provider: realtimeProvider, store: chatStore, onInvalidToken: invalidToken)
         notifications = PushNotificationCoordinator(
             api: apiClient as? any PushSubscriptionProviding, namespace: mediaNamespace)
+        chatStore.onResetLocalDatabase = { [weak self] uid in
+            await self?.resetLocalDatabase(uid: uid)
+        }
         notifications.setQuickReplySender {
             [weak sessionModel, weak outgoingQueue] uid, route, text, deadline in
             guard let sessionModel, let outgoingQueue,
@@ -123,8 +130,11 @@ final class AppCompositionRoot {
                 chatID: route.chatID, threadID: route.threadID, text: text,
                 notificationDeadline: deadline)
         }
-        sessionModel.prepareForSignOut = { [weak notifications, weak chatStore, weak outgoingQueue] in
-            guard let notifications, let chatStore, let outgoingQueue else { throw CancellationError() }
+        sessionModel.prepareForSignOut = {
+            [weak notifications, weak chatStore, weak outgoingQueue] in
+            guard let notifications, let chatStore, let outgoingQueue,
+                !chatStore.isResettingLocalDatabase
+            else { throw CancellationError() }
             chatStore.drafts.fenceForSignOut()
             outgoingQueue.fenceForSignOut()
             await chatStore.historyCache?.fenceForSignOut()
@@ -186,5 +196,76 @@ final class AppCompositionRoot {
             }
         }
         sessionModel.bootstrap()
+    }
+
+    func resetLocalDatabase(uid: Int32) async {
+        guard case .authenticated(let me) = sessionModel.state, me.uid == uid,
+            !sessionModel.isSubmitting, !chatStore.isResettingLocalDatabase,
+            let historyCache = chatStore.historyCache
+        else { return }
+
+        chatStore.isResettingLocalDatabase = true
+        chatStore.localDatabaseResetFailed = false
+        defer { chatStore.isResettingLocalDatabase = false }
+        let queue = chatStore.outgoingQueue
+        // Quiesce the local writers without unregistering or clearing credentials.
+        chatStore.drafts.fenceForSignOut()
+        queue.fenceForSignOut()
+        await historyCache.fenceForSignOut()
+
+        do {
+            let directory = try localStoreDirectory(uid).standardizedFileURL
+            try await queue.resetLocalDatabase(uid: uid, directory: directory)
+        } catch {
+            if case .authenticated(let current) = sessionModel.state, current.uid == uid {
+                await queue.resumeAfterUnregisterFailure()
+                if case .authenticated(let current) = sessionModel.state, current.uid == uid {
+                    chatStore.drafts.resumeAfterUnregisterFailure()
+                    historyCache.resumeAfterSignOutFailure()
+                    chatStore.replayPendingReads()
+                    reportDatabaseResetFailure(error)
+                }
+            }
+            return
+        }
+
+        resetLocalPreferences(uid: uid)
+        guard case .authenticated(let current) = sessionModel.state, current.uid == uid else {
+            return
+        }
+        realtimeCoordinator.restartAfterLocalDatabaseReset(uid: uid)
+        chatStore.displayPreferences.activate(uid: uid)
+        chatStore.currentUserProfile = current
+        await queue.activate(uid: uid)
+        if case .authenticated(let current) = sessionModel.state, current.uid == uid,
+            queue.storageState != .ready
+        {
+            reportDatabaseResetFailure(OutgoingMessageQueue.QueueError.storageUnavailable)
+        }
+    }
+
+    private func resetLocalPreferences(uid: Int32) {
+        // Clear app-wide preferences and this account's overrides. Do not clear the
+        // defaults domain: it also holds service configuration and push registration.
+        for key in [
+            AppLanguage.storageKey,
+            AppAppearance.storageKey,
+            ConversationListPreferences.unreadBadgeColorStorageKey,
+            MessageReactionPreferences.recentStorageKey,
+        ] {
+            preferenceDefaults.removeObject(forKey: key)
+        }
+        MessageTextSizePreference.reset(in: preferenceDefaults)
+        chatStore.displayPreferences.reset(uid: uid)
+        StickerPreferences.reset(for: uid, in: preferenceDefaults)
+        VoicePlaybackSession.shared.resetSpeed(in: preferenceDefaults)
+    }
+
+    private func reportDatabaseResetFailure(_ error: Error) {
+        guard !(error is CancellationError) else { return }
+        let errorType = String(reflecting: type(of: error))
+        Logger(subsystem: "app.chahua.chat", category: "local-storage")
+            .error("Database reset failed: \(errorType, privacy: .public)")
+        chatStore.localDatabaseResetFailed = true
     }
 }

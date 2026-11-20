@@ -2370,6 +2370,113 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertNil(store.savedMessages.errorMessage)
     }
 
+    func testResetLocalDatabaseRebuildsAccountStorageWithoutDroppingOfflineSession() async throws {
+        let uid: Int32 = 7391
+        let otherUID = uid + 1
+        let token = "test-reset-session"
+        let namespace = "DatabaseReset-\(UUID().uuidString)"
+        let profile = try JSONDecoder().decode(
+            MeResponse.self,
+            from: Data(
+                #"{"uid":\#(uid),"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
+        let credentials = InMemorySessionTokenStorage(
+            token: token, binding: .init(baseURL: namespace, token: token, profile: profile))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            namespace, isDirectory: true)
+        let accountDirectory: @Sendable (Int32) -> URL = {
+            directory.appendingPathComponent(String($0), isDirectory: true)
+        }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            defaults.removePersistentDomain(forName: namespace)
+        }
+        let key = ConversationKey(chatID: "chat")
+        let seed = try ChahuaLocalStore(directory: accountDirectory(uid), userID: uid)
+        let otherStore = try ChahuaLocalStore(
+            directory: accountDirectory(otherUID), userID: otherUID)
+        let date = Date(timeIntervalSince1970: 1)
+        _ = try await seed.saveDraft(
+            chatID: key.chatID, text: "Old draft", editRevision: 20, updatedAt: date)
+        _ = try await seed.enqueueIndependentText(
+            chatID: key.chatID, clientGeneratedID: "old-send", text: "Unsent", enqueuedAt: date)
+        _ = try await seed.recordPendingRead(key, base: nil, target: MessageID(1))
+        let message = try TimelineTestFixtures.message(
+            id: 1, chatID: key.chatID, senderID: otherUID, at: 1, text: "Downloaded")
+        let epoch = try await seed.cacheEpoch()
+        try await seed.cacheChange(.create(message, key, adjoining: nil), epoch: epoch)
+        let originalCachedBytes = try await seed.cachedMessageBytes()
+        XCTAssertGreaterThan(originalCachedBytes, 0)
+        try seed.close()
+        _ = try await otherStore.saveDraft(
+            chatID: key.chatID, text: "Other account", editRevision: 1, updatedAt: date)
+        let attachment = accountDirectory(uid).appendingPathComponent("old-attachment")
+        try Data("Attachment".utf8).write(to: attachment)
+
+        let api = FakeChatAPI()
+        let root = AppCompositionRoot(
+            apiClient: api, authenticationClient: api, realtimeProvider: api,
+            credentialLoginClient: PrototypeCredentialLoginClient(), tokenStorage: credentials,
+            mediaNamespace: namespace, preferenceDefaults: defaults,
+            localStoreDirectory: accountDirectory)
+        root.sessionModel.setNetworkOpportunity(false)
+        defer { root.realtimeCoordinator.setSession(uid: nil) }
+        for _ in 0..<100 {
+            if case .authenticated = root.sessionModel.state { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard case .authenticated = root.sessionModel.state else {
+            return XCTFail("The stored test session did not restore")
+        }
+        let queue = root.chatStore.outgoingQueue
+        await queue.activate(uid: uid)
+        let preferences = root.chatStore.displayPreferences
+        preferences.activate(uid: otherUID)
+        preferences.setShowAllAvatars(true, for: otherUID)
+        preferences.activate(uid: uid)
+        preferences.setShowAllAvatars(true, for: uid)
+        defaults.set("dark", forKey: AppAppearance.storageKey)
+        defaults.set("test-client", forKey: "AuthenticationClientID")
+        XCTAssertEqual(root.chatStore.drafts.draftText(chatID: key.chatID), "Old draft")
+        XCTAssertEqual(queue.pendingMessages(chatID: key.chatID).map(\.text), ["Unsent"])
+
+        await root.resetLocalDatabase(uid: uid)
+
+        guard case .authenticated(let current) = root.sessionModel.state else {
+            return XCTFail("Reset signed the account out")
+        }
+        let savedToken = await credentials.loadToken()
+        let binding = await credentials.loadOfflineBinding()
+        XCTAssertEqual(current.uid, uid)
+        XCTAssertEqual(root.sessionModel.sessionValidation, .localOnly)
+        XCTAssertEqual(savedToken, token)
+        XCTAssertTrue(binding?.matches(baseURL: namespace, token: token) == true)
+        XCTAssertFalse(root.chatStore.localDatabaseResetFailed)
+        XCTAssertEqual(queue.storageState, .ready)
+        XCTAssertEqual(root.chatStore.drafts.draftText(chatID: key.chatID), "")
+        XCTAssertTrue(queue.pendingMessages(chatID: key.chatID).isEmpty)
+        let fresh = try XCTUnwrap(root.localStorage.store)
+        let cachedBytes = try await fresh.cachedMessageBytes()
+        let pendingReads = try await fresh.pendingReads()
+        XCTAssertEqual(cachedBytes, 0)
+        XCTAssertTrue(pendingReads.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: attachment.path))
+        XCTAssertEqual(preferences.values, ConversationDisplayValues())
+        XCTAssertNil(defaults.object(forKey: AppAppearance.storageKey))
+        XCTAssertEqual(defaults.string(forKey: "AuthenticationClientID"), "test-client")
+        preferences.activate(uid: otherUID)
+        XCTAssertTrue(preferences.values.showAllAvatars)
+        preferences.activate(uid: uid)
+        let otherDrafts = try await otherStore.load()
+        XCTAssertEqual(otherDrafts.first?.draft.text, "Other account")
+
+        try await queue.saveDraft(
+            chatID: key.chatID, text: "New draft", editRevision: 1, updatedAt: date)
+        let freshDrafts = try await fresh.load()
+        XCTAssertEqual(freshDrafts.first?.draft.text, "New draft")
+    }
+
     func testAuthenticatedSessionCanSaveAndRebindSnapshotsAfterAccountChange() async throws {
         let api = FakeChatAPI()
         let decoder = JSONDecoder()
@@ -2407,9 +2514,8 @@ final class ChatStoreTests: XCTestCase {
             tokenStorage: InMemorySessionTokenStorage(token: "isolated-test-token"),
             mediaNamespace: directory.lastPathComponent,
             preferenceDefaults: preferenceDefaults,
-            localStoreFactory: { uid in
-                try ChahuaLocalStore(
-                    directory: directory.appendingPathComponent(String(uid)), userID: uid)
+            localStoreDirectory: { uid in
+                directory.appendingPathComponent(String(uid), isDirectory: true)
             })
         var authenticatedPreferences: [(Int32, ConversationDisplayValues)] = []
         let preferenceObservation = root.sessionModel.$state.sink { state in

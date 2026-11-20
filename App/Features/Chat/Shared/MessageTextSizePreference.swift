@@ -60,6 +60,11 @@ enum MessageTextSizePreference {
         defaults.removeObject(forKey: legacyKey)
     }
 
+    static func reset(in defaults: UserDefaults) {
+        defaults.removeObject(forKey: scaleStorageKey)
+        defaults.removeObject(forKey: "messageTextSize")
+    }
+
     #if os(macOS)
         static func scaledBodySize(_ value: Int) -> CGFloat {
             scaledSize(

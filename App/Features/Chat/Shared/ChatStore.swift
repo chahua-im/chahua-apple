@@ -206,6 +206,9 @@ final class ChatStore: ObservableObject {
     let outgoingQueue: OutgoingMessageQueue
     let historyCache: AccountHistoryCache?
     @Published var messageStorageFull = false
+    @Published var isResettingLocalDatabase = false
+    @Published var localDatabaseResetFailed = false
+    var onResetLocalDatabase: ((Int32) async -> Void)?
     @Published private(set) var savedSendDecisions: [ConversationKey: Bool] = [:]
     private var sendPermissionVersions: [String: Int] = [:]
     private var sendPermissionPeers: [String: Int32] = [:]

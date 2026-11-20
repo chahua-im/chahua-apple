@@ -29,6 +29,11 @@ public final class ChahuaLocalStore: Sendable {
         try migrateLocalStorage(database)
     }
 
+    /// Retires the database connection before the owner removes its files.
+    public func close() throws {
+        try database.close()
+    }
+
     public func restore() async throws -> [LocalConversationSnapshot] {
         let failure = OutboxFailure(stage: .create, reason: .unknownOutcome, retry: .automatic)
         return try await database.write { db in

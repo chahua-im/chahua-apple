@@ -107,6 +107,17 @@ final class RealtimeCoordinator: ObservableObject {
             if verified { startIfNeeded() } else { stop() }
             return
         }
+        bindSession(uid: uid, verified: verified)
+    }
+
+    func restartAfterLocalDatabaseReset(uid: Int32) {
+        guard self.uid == uid else { return }
+        store.historyCache?.setSession(uid: nil)
+        store.outgoingQueue.requestSession(uid: nil)
+        bindSession(uid: uid, verified: sessionVerified)
+    }
+
+    private func bindSession(uid: Int32?, verified: Bool) {
         stop()
         self.uid = uid
         sessionVerified = verified

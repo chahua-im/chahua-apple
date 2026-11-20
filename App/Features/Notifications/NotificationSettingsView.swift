@@ -448,6 +448,34 @@ struct NotificationSettingsView: View {
             if let mediaContext, let historyCache = chatStore.historyCache {
                 MediaCacheSettingsSection(context: mediaContext, historyCache: historyCache)
                     .id(me.uid)
+                if showsDividers { Divider() }
+            }
+            if let reset = chatStore.onResetLocalDatabase {
+                LocalDatabaseResetButton {
+                    Task { await reset(me.uid) }
+                }
+                .disabled(isSigningOut)
+            }
+        }
+    }
+
+    private struct LocalDatabaseResetButton: View {
+        @State private var confirmsReset = false
+        let action: () -> Void
+
+        var body: some View {
+            Button(role: .destructive) {
+                confirmsReset = true
+            } label: {
+                Text("Reset Local Database").foregroundStyle(.red)
+            }
+            .alert("Reset the local database?", isPresented: $confirmsReset) {
+                Button("Reset Local Database", role: .destructive, action: action)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    "This permanently deletes downloaded messages, drafts, and unsent messages for this account and resets local preferences. You will stay signed in. Messages on the server will not be deleted."
+                )
             }
         }
     }
