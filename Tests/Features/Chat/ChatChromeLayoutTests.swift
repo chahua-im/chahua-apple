@@ -175,6 +175,9 @@ import XCTest
             let playing = probe.snapshot
             XCTAssertEqual(playing.headerInset, playing.playbackBar.maxY + 8, accuracy: 0.5)
             XCTAssertEqual(playing.voiceReferenceInset, layout.headerInset, accuracy: 0.5)
+            XCTAssertEqual(playing.scrollHeaderInset, layout.scrollHeaderInset, accuracy: 0.5)
+            XCTAssertGreaterThanOrEqual(playing.scrollHeaderInset + 0.5, playing.headerInset)
+            XCTAssertGreaterThanOrEqual(layout.scrollHeaderInset + 0.5, layout.headerInset)
             XCTAssertEqual(playing.timeline, layout.timeline)
             try await Task.sleep(for: .milliseconds(300))  // Capture after the capsule transition.
             window.layoutIfNeeded()
@@ -192,6 +195,8 @@ import XCTest
                 if abs(probe.snapshot.headerInset - layout.headerInset) < 0.5 { break }
             }
             XCTAssertEqual(probe.snapshot.headerInset, layout.headerInset, accuracy: 0.5)
+            XCTAssertEqual(
+                probe.snapshot.scrollHeaderInset, layout.scrollHeaderInset, accuracy: 0.5)
         }
     }
 
@@ -203,6 +208,7 @@ import XCTest
         var voiceReferenceInset: CGFloat = 0
         var composer = CGRect.zero
         var headerInset: CGFloat = 0
+        var scrollHeaderInset: CGFloat = 0
         var composerInset: CGFloat = 0
     }
 
@@ -222,21 +228,19 @@ import XCTest
                 .modifier(
                     ChatSecondaryHeaderOverlay(
                         kind: .select(needsPlayback: probe.showsPlayback, hasPins: true),
-                        pinsEligible: true
+                        pinsEligible: true, playbackEligible: true
                     ) {
-                        if probe.showsPlayback {
-                            VoicePlaybackCapsule(
-                                controller: playback,
-                                route: VoicePlaybackHeaderRoute(
-                                    currentUserID: 2,
-                                    chatName: { _ in "Design reviews and product critique" },
-                                    open: { _, _, _ in }),
-                                message: message
-                            )
-                            .measured { probe.snapshot.playbackBar = $0 }
-                        } else {
-                            Color.gray.frame(height: 50).measured { probe.snapshot.pinnedBar = $0 }
-                        }
+                        Color.gray.frame(height: 50).measured { probe.snapshot.pinnedBar = $0 }
+                    } playback: {
+                        VoicePlaybackCapsule(
+                            controller: playback,
+                            route: VoicePlaybackHeaderRoute(
+                                currentUserID: 2,
+                                chatName: { _ in "Design reviews and product critique" },
+                                open: { _, _, _ in }),
+                            message: message
+                        )
+                        .measured { probe.snapshot.playbackBar = $0 }
                     }
                 )
                 .modifier(
@@ -255,6 +259,7 @@ import XCTest
     private struct ProbeTimeline: View {
         let probe: ChromeProbe
         @Environment(\.chatHeaderInset) private var headerInset
+        @Environment(\.chatScrollHeaderInset) private var scrollHeaderInset
         @Environment(\.voiceReferenceHeaderInset) private var voiceReferenceInset
         @Environment(\.chatComposerInset) private var composerInset
 
@@ -263,6 +268,9 @@ import XCTest
                 .measured { probe.snapshot.timeline = $0 }
                 .onChange(of: headerInset, initial: true) { _, inset in
                     probe.snapshot.headerInset = inset
+                }
+                .onChange(of: scrollHeaderInset, initial: true) { _, inset in
+                    probe.snapshot.scrollHeaderInset = inset ?? 0
                 }
                 .onChange(of: voiceReferenceInset, initial: true) { _, inset in
                     probe.snapshot.voiceReferenceInset = inset ?? 0
@@ -314,20 +322,26 @@ extension ChatChromeLayoutTests {
         XCTAssertEqual(withPins, withPlayback)
     }
 
-    func testHalfOfVoiceControlsIsVisibleIncludingExactAreaBoundary() {
-        let controls = CGRect(x: 40, y: 150, width: 200, height: 80)
+    func testVoiceHandoffDoesNotReverseUntilTheOtherThresholdIsCrossed() {
+        let controls = CGRect(x: 40, y: 0, width: 200, height: 100)
+        var wasVisible: Bool?
+        for (height, expected): (CGFloat, Bool) in [
+            (49, false), (50, false), (59, false), (60, true), (50, true),
+            (40, true), (39, false), (50, false), (60, true),
+        ] {
+            let visible = VoiceTimelineVisibility.isInlineVisible(
+                of: controls, in: CGRect(x: 0, y: 0, width: 320, height: height),
+                wasVisible: wasVisible)
+            XCTAssertEqual(
+                visible, expected, "\(height)% visible after \(String(describing: wasVisible))")
+            wasVisible = visible
+        }
         XCTAssertTrue(
-            VoiceTimelineVisibility.containsHalf(
-                of: controls, in: CGRect(x: 0, y: 190, width: 320, height: 100)))
+            VoiceTimelineVisibility.isInlineVisible(
+                of: controls, in: CGRect(x: 40, y: 0, width: 100, height: 100), wasVisible: nil))
         XCTAssertFalse(
-            VoiceTimelineVisibility.containsHalf(
-                of: controls, in: CGRect(x: 0, y: 191, width: 320, height: 100)))
-        XCTAssertTrue(
-            VoiceTimelineVisibility.containsHalf(
-                of: controls, in: CGRect(x: 90, y: 150, width: 200, height: 60)))
-        XCTAssertFalse(
-            VoiceTimelineVisibility.containsHalf(
-                of: controls, in: CGRect(x: 90, y: 150, width: 200, height: 50)))
+            VoiceTimelineVisibility.isInlineVisible(
+                of: controls, in: CGRect(x: 40, y: 0, width: 99, height: 100), wasVisible: nil))
     }
 }
 

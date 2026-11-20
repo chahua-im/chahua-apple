@@ -38,7 +38,6 @@ struct AppRootView: View {
                             onSignOut: { Task { await model.logout() } },
                             pendingURL: $pendingURL
                         )
-                        .modifier(ImageDetailPresentation())
                         .id(chatStore.sessionRevision)
                         .environment(\.mediaContext, mediaContext())
                     }

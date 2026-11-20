@@ -145,6 +145,13 @@
                 view.needsLayout = true
             }
         }
+        var visibleHeaderInset: CGFloat? {
+            didSet {
+                guard visibleHeaderInset != oldValue, isViewLoaded else { return }
+                requestDisplayUpdate()
+            }
+        }
+        private var unobscuredHeaderInset: CGFloat { visibleHeaderInset ?? headerInset }
         var composerInset: CGFloat = 0 {
             didSet {
                 guard composerInset != oldValue, isViewLoaded else { return }
@@ -753,20 +760,22 @@
         }
 
         private var unobscuredDocumentRect: NSRect {
+            documentViewport(topInset: unobscuredHeaderInset)
+        }
+
+        private func documentViewport(topInset: CGFloat) -> NSRect {
             let visible = scrollView.documentVisibleRect
             let insets = scrollView.contentInsets
             return NSRect(
                 x: visible.minX + insets.left,
-                y: visible.minY + insets.top,
+                y: visible.minY + topInset,
                 width: max(0, visible.width - insets.left - insets.right),
-                height: max(0, visible.height - insets.top - insets.bottom))
+                height: max(0, visible.height - topInset - insets.bottom))
         }
 
         private func capturePosition() -> Position {
-            let visible = unobscuredDocumentRect
-            let anchorY =
-                voiceReferenceHeaderInset == nil
-                ? visible.minY : scrollView.documentVisibleRect.minY
+            let visible = documentViewport(topInset: scrollView.contentInsets.top)
+            let anchorY = visible.minY
             let range = tableView.rows(in: visible)
             if range.location != NSNotFound, range.length > 0 {
                 let upperBound = min(NSMaxRange(range), rows.count)
@@ -793,8 +802,7 @@
                 // The anchor may have been deleted or replaced with another history window.
                 y = position.originY
             }
-            let inset = voiceReferenceHeaderInset == nil ? scrollView.contentInsets.top : 0
-            setScrollOrigin(constrainedOrigin(y: y - inset))
+            setScrollOrigin(constrainedOrigin(y: y - scrollView.contentInsets.top))
         }
 
         private var bottomOrigin: NSPoint {
@@ -847,13 +855,13 @@
                 } else if case .reaction = request.intent {
                     let region = preparedRows[id]?.layout.reactionRegion(in: frame) ?? frame
                     target = constrainedOrigin(
-                        y: region.midY - scrollView.contentInsets.top
+                        y: region.midY - unobscuredHeaderInset
                             - unobscuredDocumentRect.height / 2)
                 } else {
                     target = constrainedOrigin(
                         y: id == .unreadSeparator
-                            ? frame.minY - scrollView.contentInsets.top
-                            : frame.midY - scrollView.contentInsets.top
+                            ? frame.minY - unobscuredHeaderInset
+                            : frame.midY - unobscuredHeaderInset
                                 - unobscuredDocumentRect.height / 2)
                 }
                 scroll(to: target, animated: animated, requestID: request.id)
@@ -1287,7 +1295,7 @@
                     bottomLimit: tableView.bounds.maxY - scrollView.contentView.bounds.height
                         + scrollView.contentInsets.bottom, headerInset: inset)
             }
-            voiceReporter.report(VoiceTimelineVisibility.containsHalf(of: region, in: viewport))
+            voiceReporter.report(region: region, in: viewport)
         }
 
         private func reportViewport(

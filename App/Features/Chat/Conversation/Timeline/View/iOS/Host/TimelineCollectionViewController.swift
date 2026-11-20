@@ -71,9 +71,19 @@
             didSet {
                 guard headerInset != oldValue, isViewLoaded else { return }
                 collectionView.contentInset.top = headerInset
-                collectionView.verticalScrollIndicatorInsets.top = headerInset
+                collectionView.verticalScrollIndicatorInsets.top = unobscuredHeaderInset
                 view.setNeedsLayout()
             }
+        }
+        var visibleHeaderInset: CGFloat? {
+            didSet {
+                guard visibleHeaderInset != oldValue, isViewLoaded else { return }
+                collectionView.verticalScrollIndicatorInsets.top = unobscuredHeaderInset
+                requestDisplayUpdate()
+            }
+        }
+        private var unobscuredHeaderInset: CGFloat {
+            visibleHeaderInset ?? collectionView.adjustedContentInset.top
         }
         var composerInset: CGFloat = 0 {
             didSet {
@@ -208,7 +218,7 @@
             // system top inset when drawing under navigation chrome. Do not add it twice.
             collectionView.contentInsetAdjustmentBehavior = .never
             collectionView.contentInset.top = headerInset
-            collectionView.verticalScrollIndicatorInsets.top = headerInset
+            collectionView.verticalScrollIndicatorInsets.top = unobscuredHeaderInset
             collectionView.contentInset.bottom = composerInset
             collectionView.verticalScrollIndicatorInsets.bottom = composerInset
             collectionView.register(
@@ -959,19 +969,24 @@
         }
 
         private var unobscuredViewport: CGRect {
+            documentViewport(topInset: unobscuredHeaderInset)
+        }
+
+        private func documentViewport(topInset: CGFloat) -> CGRect {
             let insets = collectionView.adjustedContentInset
             return CGRect(
                 x: collectionView.contentOffset.x + insets.left,
-                y: collectionView.contentOffset.y + insets.top,
+                y: collectionView.contentOffset.y + topInset,
                 width: availableRowWidth,
-                height: max(0, collectionView.bounds.height - insets.top - insets.bottom)
+                height: max(0, collectionView.bounds.height - topInset - insets.bottom)
             )
         }
 
-        private func visibleItems() -> [UICollectionViewLayoutAttributes] {
+        private func visibleItems(in viewport: CGRect? = nil) -> [UICollectionViewLayoutAttributes]
+        {
             let trace = ScrollPerformanceTrace.begin("Timeline.VisibleGeometry")
             defer { ScrollPerformanceTrace.end("Timeline.VisibleGeometry", trace) }
-            let visible = unobscuredViewport
+            let visible = viewport ?? unobscuredViewport
             // Visible cells can lag an offset change until the next display pass. Layout
             // geometry identifies the reader's message even if its cell is not installed yet.
             return
@@ -986,10 +1001,10 @@
         private func capturePosition(
             visibleItems items: [UICollectionViewLayoutAttributes]? = nil
         ) -> Position {
-            let top =
-                collectionView.contentOffset.y
-                + (voiceReferenceHeaderInset == nil ? collectionView.adjustedContentInset.top : 0)
-            let message = (items ?? visibleItems()).lazy.filter {
+            let viewport = documentViewport(topInset: collectionView.adjustedContentInset.top)
+            let top = viewport.minY
+            let message = (items ?? visibleItems(in: viewport)).lazy.filter {
+                guard $0.frame.intersects(viewport) else { return false }
                 if case .message = self.rows[$0.indexPath.item] { return true }
                 return false
             }.min(by: { $0.indexPath < $1.indexPath })
@@ -1010,9 +1025,7 @@
                 top = frame.minY - position.messageOffset
             }
             // If the message was removed, retain the old document position within the new limits.
-            let inset =
-                voiceReferenceHeaderInset == nil ? collectionView.adjustedContentInset.top : 0
-            let y = clampedOffset(top - inset)
+            let y = clampedOffset(top - collectionView.adjustedContentInset.top)
             collectionView.setContentOffset(
                 .init(x: -collectionView.adjustedContentInset.left, y: y), animated: false)
         }
@@ -1048,17 +1061,18 @@
                     return
                 }
                 let insets = collectionView.adjustedContentInset
-                let height = max(0, collectionView.bounds.height - insets.top - insets.bottom)
+                let topInset = unobscuredHeaderInset
+                let height = unobscuredViewport.height
                 let target: CGFloat
                 if case .readBoundary = request.intent {
                     target = frame.maxY - collectionView.bounds.height + insets.bottom
                 } else if case .reaction = request.intent {
                     let region = preparedRows[id]?.layout.reactionRegion(in: frame) ?? frame
-                    target = region.midY - height / 2 - insets.top
+                    target = region.midY - height / 2 - topInset
                 } else {
                     target =
                         id == .unreadSeparator
-                        ? frame.minY - insets.top : frame.midY - height / 2 - insets.top
+                        ? frame.minY - topInset : frame.midY - height / 2 - topInset
                 }
                 scroll(to: target, animated: animated, requestID: request.id)
             }
@@ -1212,7 +1226,7 @@
                     bottomLimit: collectionView.contentSize.height - collectionView.bounds.height
                         + collectionView.adjustedContentInset.bottom, headerInset: inset)
             }
-            voiceReporter.report(VoiceTimelineVisibility.containsHalf(of: region, in: viewport))
+            voiceReporter.report(region: region, in: viewport)
         }
 
         private func reportViewport(

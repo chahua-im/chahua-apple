@@ -4,6 +4,7 @@
     struct TimelineHostView: UIViewControllerRepresentable {
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.chatHeaderInset) private var chatHeaderInset
+        @Environment(\.chatScrollHeaderInset) private var chatScrollHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
         @Environment(\.voiceTimelineTarget) private var voiceTimelineTarget
         @Environment(\.voiceReferenceHeaderInset) private var voiceReferenceHeaderInset
@@ -27,7 +28,7 @@
             controller.showAllAvatars = showAllAvatars
             controller.showDmDetails = showDmDetails
             controller.isWideChatLayout = isWideChatLayout
-            controller.headerInset = chatHeaderInset
+            configureHeader(controller)
             controller.composerInset = chatComposerInset
             controller.configureVoiceViewport(
                 voiceTimelineTarget, headerInset: voiceReferenceHeaderInset)
@@ -45,10 +46,16 @@
             controller.showAllAvatars = showAllAvatars
             controller.showDmDetails = showDmDetails
             controller.isWideChatLayout = isWideChatLayout
-            controller.headerInset = chatHeaderInset
+            configureHeader(controller)
             controller.composerInset = chatComposerInset
             controller.configureVoiceViewport(
                 voiceTimelineTarget, headerInset: voiceReferenceHeaderInset)
+        }
+
+        private func configureHeader(_ controller: TimelineCollectionViewController) {
+            let scrollInset = chatScrollHeaderInset ?? chatHeaderInset
+            controller.headerInset = scrollInset
+            controller.visibleHeaderInset = scrollInset == chatHeaderInset ? nil : chatHeaderInset
         }
 
         static func dismantleUIViewController(

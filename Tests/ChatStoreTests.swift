@@ -2704,7 +2704,8 @@ final class ChatStoreTests: XCTestCase {
                     appLanguage: AppLanguage.selected.rawValue,
                     showAllAvatars: ConversationTimelinePreferences.defaultShowAllAvatars,
                     showDmDetails: ConversationTimelinePreferences.defaultShowDmDetails,
-                    unreadBadgeColor: .default, headerInset: 0, composerInset: 0,
+                    unreadBadgeColor: .default, headerInset: 0, scrollHeaderInset: 0,
+                    composerInset: 0,
                     isSplitResizing: false, isWideChatLayout: false)
             }
             refreshActions()

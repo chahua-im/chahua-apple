@@ -81,6 +81,7 @@
             showDmDetails: Bool,
             unreadBadgeColor: ConversationUnreadBadgeColor,
             headerInset: CGFloat,
+            scrollHeaderInset: CGFloat,
             composerInset: CGFloat,
             isSplitResizing: Bool,
             isWideChatLayout: Bool
@@ -98,9 +99,9 @@
             tableController.showAllAvatars = showAllAvatars
             tableController.showDmDetails = showDmDetails
             tableController.isWideChatLayout = isWideChatLayout
-            // SwiftUI overlays cannot change AppKit's native scroll limits.
-            // Keep the table full-size and supply scrollable chrome clearance.
-            tableController.headerInset = headerInset
+            tableController.headerInset = scrollHeaderInset
+            tableController.visibleHeaderInset =
+                scrollHeaderInset == headerInset ? nil : headerInset
             tableController.composerInset = composerInset
             interactionController.configure(actions: actions, context: interactionContext)
             tableController.actions = interactionController.routedActions

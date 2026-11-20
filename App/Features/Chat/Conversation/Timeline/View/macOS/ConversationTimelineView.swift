@@ -40,6 +40,7 @@
         @Environment(\.mediaContext) private var mediaContext
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.chatHeaderInset) private var chatHeaderInset
+        @Environment(\.chatScrollHeaderInset) private var chatScrollHeaderInset
         @Environment(\.chatComposerInset) private var chatComposerInset
         @Environment(\.voiceTimelineTarget) private var voiceTimelineTarget
         @Environment(\.voiceReferenceHeaderInset) private var voiceReferenceHeaderInset
@@ -87,6 +88,7 @@
                 showDmDetails: showDmDetails,
                 unreadBadgeColor: unreadBadgeColor,
                 headerInset: chatHeaderInset,
+                scrollHeaderInset: chatScrollHeaderInset ?? chatHeaderInset,
                 composerInset: chatComposerInset,
                 isSplitResizing: isSplitResizing,
                 isWideChatLayout: isWideChatLayout

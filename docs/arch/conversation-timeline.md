@@ -94,6 +94,8 @@ The rendered native smoke attachment shows bubbles behind the title and pin over
 
 Unread activity mirrors the PWA: `@` combines mentions and replies to your messages in groups and group threads; a heart marks unread reactions in any conversation. Chat/thread rows show these symbols beside the unread-message badge, muted or archived rows use subdued badges, and category tabs prioritize `@` using server-wide summaries rather than loaded rows.
 
+The Archived shortcut shares the conversation row layout. Its unread badge sits beside the subtitle; it does not show a conversation timestamp or delivery status.
+
 Both production timelines share `TimelineNavigationControls`: stacked heart/`@` buttons above jump-to-latest, with counts capped visually at `999+`. Each click visits the oldest remaining target. Session targets survive counter clearing; missing/deleted targets are skipped and transient navigation failures remain retryable. Main chats and threads keep independent queues. Entry and reconnects refresh activity; healthy visibility restoration reuses successful snapshots and known-zero counters. Directed realtime changes coalesce follow-up reads without losing changes received during a request.
 
 Mentions/replies clear through the ordinary confirmed message-read cursor, including all targets at or below that cursor rather than only those currently visible. Reactions are independent: querying a snapshot does not acknowledge it. Each accepted `readThrough` becomes the next query's opaque `after` bound, including empty deltas, and remains available after acknowledgement. A delta rearms every returned message. Reconnects clear the incremental boundary and fence obsolete responses before requesting a full snapshot.
@@ -122,7 +124,7 @@ Manual verification: read a chat and a thread in the PWA while Apple shows their
 
 Preparing a voice file reads its duration and waveform without opening audio output. Only Play or Resume claims the audio session. The signed-in session retains one message controller, identified by chat and message ID, and remembers elapsed position until the account changes. Natural completion clears the position, marks the message played locally, and does not start another message.
 
-Each timeline reports whether at least half of the active voice bubble is visible in its own window. Use the controls region for captioned messages. Voice visibility uses the title and eligible pins as its reference so the playback capsule cannot change its own threshold. Actual scroll clearance includes only the winning secondary header: playback, pins, or neither. Ordinary message read tracking still uses partial-row visibility.
+Each timeline measures the active voice controls, excluding any caption, against a viewport that includes the title and eligible pins but ignores the playback capsule. On the first measurement, half the controls must be visible to keep playback inline. After that, the capsule appears below 40% visibility and the bubble takes over again at 60%. The native top scroll limit reserves enough space for either eligible bar and stays fixed during a handoff. Read tracking and message reveals use the clearance of the bar that is visible.
 
 ## Image viewer
 

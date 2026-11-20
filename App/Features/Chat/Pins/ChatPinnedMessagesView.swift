@@ -132,12 +132,14 @@ enum ChatSecondaryHeaderKind: Equatable {
     var bottomGap: CGFloat { self == .playback ? 8 : 12 }
 }
 
-/// The winner alone contributes to the actual scrollable clearance. Voice handoff
-/// uses the title and pins as a stable reference, independent of its own overlay.
-struct ChatSecondaryHeaderOverlay<Bar: View>: ViewModifier {
+/// Only the winning bar obscures rows. Both eligible bars contribute to one
+/// stable scroll limit so switching the winner never changes native scroll geometry.
+struct ChatSecondaryHeaderOverlay<Pins: View, Playback: View>: ViewModifier {
     let kind: ChatSecondaryHeaderKind?
     var pinsEligible = false
-    @ViewBuilder let bar: () -> Bar
+    var playbackEligible = false
+    @ViewBuilder let pins: () -> Pins
+    @ViewBuilder let playback: () -> Playback
     @Environment(\.isWideChatLayout) private var isWideChatLayout
     @Environment(\.chatHeaderInset) private var titleInset
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -171,33 +173,54 @@ struct ChatSecondaryHeaderOverlay<Bar: View>: ViewModifier {
     }
 
     func body(content: Content) -> some View {
+        let visibleInset = titleInset + clearance(for: kind)
+        let pinInset = clearance(for: pinsEligible ? .pins : nil)
+        let scrollInset =
+            playbackEligible
+            ? titleInset + max(pinInset, clearance(for: .playback)) : visibleInset
         content
-            .environment(\.chatHeaderInset, titleInset + clearance(for: kind))
-            .environment(
-                \.voiceReferenceHeaderInset, titleInset + clearance(for: pinsEligible ? .pins : nil)
-            )
+            .environment(\.chatHeaderInset, visibleInset)
+            .environment(\.chatScrollHeaderInset, scrollInset)
+            .environment(\.voiceReferenceHeaderInset, titleInset + pinInset)
             .overlay(alignment: .top) {
-                Group {
-                    if let kind {
-                        bar()
+                ZStack(alignment: .top) {
+                    if pinsEligible {
+                        pins()
+                            .modifier(SecondaryHeaderVisibility(isVisible: kind == .pins))
                             .fixedSize(horizontal: false, vertical: true)
-                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
-                                guard height > 0 else { return }
-                                if kind == .pins {
-                                    pinsHeight = height
-                                } else {
-                                    playbackHeight = height
-                                }
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) {
+                                if $0 > 0 { pinsHeight = $0 }
                             }
-                            .padding(.horizontal, horizontalInset)
-                            .padding(.top, titleInset)
+                    }
+                    if playbackEligible || kind == .playback {
+                        playback()
+                            .modifier(SecondaryHeaderVisibility(isVisible: kind == .playback))
+                            .offset(y: kind == .playback || reduceMotion ? 0 : -10)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) {
+                                if $0 > 0 { playbackHeight = $0 }
+                            }
+                            .animation(
+                                VoicePlaybackMotion.animation(
+                                    showing: kind == .playback, reduceMotion: reduceMotion),
+                                value: kind == .playback
+                            )
+                            .transition(VoicePlaybackMotion.transition)
                     }
                 }
-                .animation(
-                    VoicePlaybackMotion.animation(
-                        showing: kind == .playback, reduceMotion: reduceMotion),
-                    value: kind == .playback)
+                .padding(.horizontal, horizontalInset)
+                .padding(.top, titleInset)
             }
+    }
+}
+
+private struct SecondaryHeaderVisibility: ViewModifier {
+    let isVisible: Bool
+
+    func body(content: Content) -> some View {
+        content.opacity(isVisible ? 1 : 0)
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
     }
 }
 

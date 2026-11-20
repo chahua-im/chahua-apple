@@ -18,7 +18,6 @@ struct ConversationListRow: View, Equatable {
     @Environment(\.locale) private var locale
     @Environment(\.calendar) private var calendar
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .body) private var subtitleHeight: CGFloat = 19
 
     // Row creation and minute ticks must not rebuild Foundation's formatter.
     // View rendering serializes access on the main actor, including locale changes.
@@ -73,12 +72,6 @@ struct ConversationListRow: View, Equatable {
 
     private var previewFontSize: CGFloat { usesDesktopDensity ? 13 : 17 }
 
-    private var titleLayout: AnyLayout {
-        dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-            : AnyLayout(HStackLayout(spacing: ChahuaTheme.Spacing.medium))
-    }
-
     private var threadParentKind: ChatKind? {
         guard case .thread(let thread) = item else { return nil }
         return thread.chatKind
@@ -86,136 +79,90 @@ struct ConversationListRow: View, Equatable {
 
     var body: some View {
         let pendingPreview = item.pendingPreview(pending)
-        HStack(
-            alignment: .center,
-            spacing: usesDesktopDensity ? 10 : (isWideChatLayout ? 8 : ChahuaTheme.Spacing.medium)
-        ) {
+        ConversationListRowContent(isWide: isWideChatLayout, isSelected: isSelected) { diameter in
             ConversationAvatarView(
-                item: item, store: store,
-                diameter: ConversationListMetrics.avatarDiameter(isWide: isWideChatLayout),
-                isSelected: isSelected)
-            VStack(alignment: .leading, spacing: usesDesktopDensity ? 3 : 4) {
-                titleLayout {
-                    Group {
-                        if case .thread(let thread) = item {
-                            MessageSummaryText(
-                                thread.threadRootMessage, fontSize: usesDesktopDensity ? 14 : 17,
-                                color: isSelected ? .white : .primary, weight: .semibold,
-                                fallback: AppLanguage.localized("Message"))
-                        } else {
-                            Text(item.title)
-                                .font(
-                                    usesDesktopDensity
-                                        ? .system(size: 14, weight: .semibold) : .headline
-                                )
-                                .lineLimit(1)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    HStack(spacing: 4) {
-                        ConversationListDeliveryIndicator(
-                            item: item, hasDraft: !draft.isEmpty, pending: pendingPreview,
-                            currentUserID: currentUserID, receipts: store.listReadReceipts)
-                        TimelineView(.periodic(from: .now, by: 60)) { context in
-                            Text(activityLabel(now: context.date))
-                                .font(usesDesktopDensity ? .system(size: 11) : .footnote)
-                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
-                        }
-                    }
-                    .foregroundStyle(
-                        isSelected
-                            ? Color.white.opacity(usesDesktopDensity ? 0.88 : 0.8)
-                            : (usesDesktopDensity ? Color.secondary : Color.primary)
-                    )
-                    .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
-                }
-                HStack(spacing: ChahuaTheme.Spacing.medium) {
-                    Group {
-                        if !draft.isEmpty {
-                            MessageSummaryText(
-                                source: draft, fontSize: previewFontSize, color: subtitleColor,
-                                prefix: AppLanguage.localized("Draft") + ": ")
-                        } else if let pendingPreview {
-                            MessageSummaryText(
-                                pending: pendingPreview, fontSize: previewFontSize,
-                                color: subtitleColor,
-                                prefix: item.isDirectMessage
-                                    ? ""
-                                    : (currentUserName
-                                        ?? AppLanguage.localized("User \(currentUserID)")) + ": ")
-                        } else if let preview = item.previewMessage {
-                            MessageSummaryText(
-                                preview, fontSize: previewFontSize, color: subtitleColor,
-                                prefix: item.previewSenderName(parentKind: threadParentKind)
-                                    .map { $0 + ": " } ?? "",
-                                boldPrefix: true, fallback: AppLanguage.localized("Message"))
-                        } else {
-                            Color.clear
-                        }
-                    }
-                    .modifier(ConversationListSubtitleStyle(isSelected: isSelected))
-                    if item.unreadMentions > 0 {
-                        activityBadge {
-                            Text("@")
-                        }
-                        .accessibilityLabel("Unread mentions and replies")
-                    }
-                    if item.unreadReactions > 0 {
-                        activityBadge {
-                            Image(systemName: "heart.fill")
-                        }
-                        .accessibilityLabel("Unread reactions")
-                    }
-                    if item.unreadCount > 0 {
-                        activityBadge(isSingleCharacter: item.unreadCount < 10) {
-                            Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
-                        }
-                        .accessibilityLabel("\(item.unreadCount) unread messages")
-                    } else if isMuted {
-                        Image(systemName: "bell.slash.fill")
-                            .font(.footnote)
-                            .foregroundStyle(
-                                isSelected ? Color.white.opacity(0.88) : Color.secondary
-                            )
-                            .frame(minWidth: 24)
-                            .accessibilityLabel("Muted")
-                    }
-                }
-                .frame(minHeight: usesDesktopDensity ? 16 : subtitleHeight)
+                item: item, store: store, diameter: diameter, isSelected: isSelected)
+        } title: {
+            if case .thread(let thread) = item {
+                MessageSummaryText(
+                    thread.threadRootMessage, fontSize: usesDesktopDensity ? 14 : 17,
+                    color: isSelected ? .white : .primary, weight: .semibold,
+                    fallback: AppLanguage.localized("Message"))
+            } else {
+                Text(item.title)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        } titleAccessory: {
+            HStack(spacing: 4) {
+                ConversationListDeliveryIndicator(
+                    item: item, hasDraft: !draft.isEmpty, pending: pendingPreview,
+                    currentUserID: currentUserID, receipts: store.listReadReceipts)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(activityLabel(now: context.date))
+                        .font(usesDesktopDensity ? .system(size: 11) : .footnote)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                }
+            }
+            .foregroundStyle(
+                isSelected
+                    ? Color.white.opacity(usesDesktopDensity ? 0.88 : 0.8)
+                    : (usesDesktopDensity ? Color.secondary : Color.primary)
+            )
+            .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
+        } subtitle: {
+            if !draft.isEmpty {
+                MessageSummaryText(
+                    source: draft, fontSize: previewFontSize, color: subtitleColor,
+                    prefix: AppLanguage.localized("Draft") + ": ")
+            } else if let pendingPreview {
+                MessageSummaryText(
+                    pending: pendingPreview, fontSize: previewFontSize,
+                    color: subtitleColor,
+                    prefix: item.isDirectMessage
+                        ? ""
+                        : (currentUserName
+                            ?? AppLanguage.localized("User \(currentUserID)")) + ": ")
+            } else if let preview = item.previewMessage {
+                MessageSummaryText(
+                    preview, fontSize: previewFontSize, color: subtitleColor,
+                    prefix: item.previewSenderName(parentKind: threadParentKind)
+                        .map { $0 + ": " } ?? "",
+                    boldPrefix: true, fallback: AppLanguage.localized("Message"))
+            } else {
+                Color.clear
+            }
+        } subtitleAccessories: {
+            let accent = usesMutedBadges ? nil : badgeColor
+            if item.unreadMentions > 0 {
+                ConversationListActivityBadge(accent: accent) {
+                    Text("@")
+                }
+                .accessibilityLabel("Unread mentions and replies")
+            }
+            if item.unreadReactions > 0 {
+                ConversationListActivityBadge(accent: accent) {
+                    Image(systemName: "heart.fill")
+                }
+                .accessibilityLabel("Unread reactions")
+            }
+            if item.unreadCount > 0 {
+                ConversationListActivityBadge(
+                    isSingleCharacter: item.unreadCount < 10, accent: accent
+                ) {
+                    Text(item.unreadCount > 99 ? "99+" : String(item.unreadCount))
+                }
+                .accessibilityLabel("\(item.unreadCount) unread messages")
+            } else if isMuted {
+                Image(systemName: "bell.slash.fill")
+                    .font(.footnote)
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.88) : Color.secondary)
+                    .frame(minWidth: 24)
+                    .accessibilityLabel("Muted")
+            }
         }
-        .modifier(ConversationListRowLayout())
-        .foregroundStyle(isSelected ? Color.white : Color.primary)
     }
 
     private var subtitleColor: Color {
         isSelected ? Color.white.opacity(0.88) : .secondary
-    }
-
-    private func activityBadge<Content: View>(
-        isSingleCharacter: Bool = true,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        RoundChipLayout(isCircular: isSingleCharacter) {
-            content()
-                .font(
-                    usesDesktopDensity
-                        ? .system(size: 11, weight: .semibold) : .caption.weight(.semibold)
-                )
-                .foregroundStyle(usesMutedBadges ? Color.primary : Color.white)
-                .padding(.horizontal, usesDesktopDensity ? 5 : 8)
-                .padding(.vertical, 2)
-                .frame(minHeight: usesDesktopDensity ? 18 : nil)
-        }
-        .background {
-            if usesMutedBadges {
-                Capsule(style: .circular).fill(.quaternary)
-            } else {
-                Capsule(style: .circular).fill(badgeColor.color)
-            }
-        }
-        .fixedSize()
     }
 
     @MainActor private func activityLabel(now: Date) -> String {
@@ -404,6 +351,97 @@ private struct ConversationListDeliveryIndicator: View {
         {
             MessageDeliveryStatusView(status: status, size: 12)
         }
+    }
+}
+
+/// The visual layout is shared by conversations and the archive shortcut.
+struct ConversationListRowContent<
+    Avatar: View, Title: View, TitleAccessory: View, Subtitle: View, SubtitleAccessories: View
+>: View {
+    private let isWide: Bool
+    private let isSelected: Bool
+    private let avatar: Avatar
+    private let title: Title
+    private let titleAccessory: TitleAccessory
+    private let subtitle: Subtitle
+    private let subtitleAccessories: SubtitleAccessories
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var subtitleHeight: CGFloat = 19
+
+    init(
+        isWide: Bool, isSelected: Bool = false,
+        @ViewBuilder avatar: (CGFloat) -> Avatar,
+        @ViewBuilder title: () -> Title,
+        @ViewBuilder titleAccessory: () -> TitleAccessory,
+        @ViewBuilder subtitle: () -> Subtitle,
+        @ViewBuilder subtitleAccessories: () -> SubtitleAccessories
+    ) {
+        self.isWide = isWide
+        self.isSelected = isSelected
+        self.avatar = avatar(ConversationListMetrics.avatarDiameter(isWide: isWide))
+        self.title = title()
+        self.titleAccessory = titleAccessory()
+        self.subtitle = subtitle()
+        self.subtitleAccessories = subtitleAccessories()
+    }
+
+    private var titleLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: ChahuaTheme.Spacing.medium))
+    }
+
+    var body: some View {
+        let desktop = ConversationListMetrics.usesDesktopDensity(isWide: isWide)
+        HStack(spacing: desktop ? 10 : (isWide ? 8 : ChahuaTheme.Spacing.medium)) {
+            avatar
+            VStack(alignment: .leading, spacing: desktop ? 3 : 4) {
+                titleLayout {
+                    title
+                        .font(desktop ? .system(size: 14, weight: .semibold) : .headline)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    titleAccessory
+                }
+                HStack(spacing: ChahuaTheme.Spacing.medium) {
+                    subtitle
+                        .modifier(ConversationListSubtitleStyle(isSelected: isSelected))
+                    subtitleAccessories
+                }
+                .frame(minHeight: desktop ? 16 : subtitleHeight)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .modifier(ConversationListRowLayout())
+        .foregroundStyle(isSelected ? Color.white : Color.primary)
+    }
+}
+
+struct ConversationListActivityBadge<Content: View>: View {
+    var isSingleCharacter = true
+    // A neutral badge has no accent color.
+    var accent: ConversationUnreadBadgeColor? = nil
+    @ViewBuilder let content: Content
+    @Environment(\.isWideChatLayout) private var isWideChatLayout
+
+    var body: some View {
+        let desktop = ConversationListMetrics.usesDesktopDensity(isWide: isWideChatLayout)
+        RoundChipLayout(isCircular: isSingleCharacter) {
+            content
+                .font(desktop ? .system(size: 11, weight: .semibold) : .caption.weight(.semibold))
+                .foregroundStyle(accent == nil ? Color.primary : Color.white)
+                .padding(.horizontal, desktop ? 5 : 8)
+                .padding(.vertical, 2)
+                .frame(minHeight: desktop ? 18 : nil)
+        }
+        .background {
+            if let accent {
+                Capsule(style: .circular).fill(accent.color)
+            } else {
+                Capsule(style: .circular).fill(.quaternary)
+            }
+        }
+        .fixedSize()
     }
 }
 

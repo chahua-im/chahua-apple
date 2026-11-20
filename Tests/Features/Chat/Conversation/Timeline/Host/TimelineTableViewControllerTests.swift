@@ -331,6 +331,8 @@
                             } action: {
                                 pinFrame = $0
                             }
+                        } playback: {
+                            EmptyView()
                         }
                     )
                     .modifier(
@@ -2094,7 +2096,7 @@
                 table.rect(ofRow: index).minY
                 - scroll.documentVisibleRect.minY - controller.headerInset
             let heights = model.rows.indices.map { table.rect(ofRow: $0).height }
-            for inset: CGFloat in [146, 86, 110, 0] {
+            for inset: CGFloat in [146, 86, 0, 110] {
                 controller.headerInset = inset
                 controller.view.layoutSubtreeIfNeeded()
                 controller.viewDidLayout()
@@ -2106,6 +2108,28 @@
                 XCTAssertEqual(scroll.bounds.height, 400, accuracy: 1)
                 XCTAssertEqual(model.rows.indices.map { table.rect(ofRow: $0).height }, heights)
                 XCTAssertFalse(model.state.live.followsLatest)
+            }
+
+            // Both bars fit within the reserved scroll limit. Changing the winner
+            // must update visibility without moving the native contents.
+            let id = MessageID(40)
+            scroll.contentView.scroll(
+                to: NSPoint(x: 0, y: table.rect(ofRow: index).maxY + 8 - controller.headerInset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            NotificationCenter.default.post(
+                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+            try await waitForDisplay(controller, model: model) {
+                controller.visibleMessageIDsForSelection()?.contains(id) == false
+            }
+            let origin = scroll.documentVisibleRect.origin
+            let lastVisible = controller.visibleMessageIDsForSelection()?.last
+            for inset: CGFloat? in [0, nil] {
+                controller.visibleHeaderInset = inset
+                try await waitForDisplay(controller, model: model) {
+                    controller.visibleMessageIDsForSelection()?.contains(id) == (inset != nil)
+                }
+                XCTAssertEqual(scroll.documentVisibleRect.origin, origin)
+                XCTAssertEqual(controller.visibleMessageIDsForSelection()?.last, lastVisible)
             }
         }
 

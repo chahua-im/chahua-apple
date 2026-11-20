@@ -713,12 +713,8 @@ struct ChatListView: View {
         let badges = ConversationTabBadges(
             summaries: store.state.conversationUnreadSummaries,
             archived: true, showThreadsInMessages: showThreadsInMessages)
-        return HStack(
-            spacing: usesDesktopDensity ? 10 : (isWideChatLayout ? 8 : ChahuaTheme.Spacing.medium)
-        ) {
-            AvatarFrame(
-                diameter: ConversationListMetrics.avatarDiameter(isWide: isWideChatLayout)
-            ) { _ in
+        return ConversationListRowContent(isWide: isWideChatLayout) { diameter in
+            AvatarFrame(diameter: diameter) { _ in
                 (usesDesktopDensity
                     ? Color(red: 142 / 255, green: 142 / 255, blue: 147 / 255)
                     : ChahuaTheme.ChatList.primary)
@@ -729,30 +725,25 @@ struct ChatListView: View {
                     }
             }
             .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: usesDesktopDensity ? 3 : 4) {
-                Text("Archived")
-                    .font(usesDesktopDensity ? .system(size: 14, weight: .semibold) : .headline)
-                #if os(macOS)
-                    Text(archivedEntrySubtitle)
-                        .modifier(ConversationListSubtitleStyle(isSelected: false))
-                #else
-                    Text("View archived chats and threads")
-                        .modifier(ConversationListSubtitleStyle(isSelected: false))
-                #endif
-            }
-            Spacer(minLength: 8)
+        } title: {
+            Text("Archived")
+        } titleAccessory: {
+            // This shortcut represents a folder, not the activity of one conversation.
+            EmptyView()
+        } subtitle: {
+            #if os(macOS)
+                Text(archivedEntrySubtitle)
+            #else
+                Text("View archived chats and threads")
+            #endif
+        } subtitleAccessories: {
             if let label = badges.archiveEntryLabel(for: scope) {
-                RoundChipLayout(isCircular: label.count == 1) {
-                    Text(label)
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
+                ConversationListActivityBadge(isSingleCharacter: label.count == 1) {
+                    Text(label).monospacedDigit()
                 }
-                .background(.quaternary, in: Capsule(style: .circular))
                 .accessibilityLabel(badges.archiveEntryAccessibilityValue(for: scope))
             }
         }
-        .modifier(ConversationListRowLayout())
         .contentShape(Rectangle())
     }
 

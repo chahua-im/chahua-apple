@@ -560,6 +560,57 @@ final class ComposerFocusTests: XCTestCase {
     }
 
     #if os(macOS)
+        func testDraggingVoiceBubbleWaveformCommitsSeekWithoutResuming() async throws {
+            let url = try voicePlaybackSample()
+            let playback = VoicePlaybackController()
+            await playback.load(url: url)
+            XCTAssertGreaterThan(playback.duration, 0)
+            let metrics = VoiceMessageBubbleMetrics(bodySize: 17, captionSize: 12)
+            let width: CGFloat = 280
+            let host = NSHostingView(
+                rootView: VoiceMessageBubbleView(
+                    controller: playback, url: url, isOutgoing: false, isActive: true,
+                    metrics: metrics, localeIdentifier: "en", layoutDirection: .leftToRight))
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: width, height: metrics.height(for: width)),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                playback.stop()
+                window.close()
+            }
+            try await waitUntil { window.isKeyWindow }
+            host.layoutSubtreeIfNeeded()
+
+            let startX = metrics.targetSize + 10
+            func send(_ type: NSEvent.EventType, at fraction: CGFloat) throws {
+                let point = host.convert(
+                    NSPoint(
+                        x: startX + (width - startX) * fraction,
+                        y: host.isFlipped
+                            ? metrics.targetSize / 2
+                            : host.bounds.height - metrics.targetSize / 2),
+                    to: nil)
+                let event = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: type, location: point, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime,
+                        windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 1, clickCount: 1,
+                        pressure: type == .leftMouseUp ? 0 : 1))
+                NSApp.postEvent(event, atStart: false)
+            }
+
+            try send(.leftMouseDown, at: 0.25)
+            try send(.leftMouseDragged, at: 0.50)
+            try send(.leftMouseUp, at: 0.75)
+            let expected = playback.duration * 0.75
+            try await waitUntil { abs(playback.position - expected) < 0.02 }
+            XCTAssertFalse(playback.isPlaying)
+        }
+
         func testVoiceSpaceLeavesComposerTypingAndTogglesWithoutAFocusedControl() async throws {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),

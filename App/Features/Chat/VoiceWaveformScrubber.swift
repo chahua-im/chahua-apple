@@ -6,7 +6,11 @@ struct VoiceWaveformScrubber: View {
     let isEnabled: Bool
     let color: Color
     var height: CGFloat = 32
-    @GestureState private var seekPreview: TimeInterval?
+    #if os(macOS)
+        @State private var seekPreview: TimeInterval?
+    #else
+        @GestureState private var seekPreview: TimeInterval?
+    #endif
 
     private var canInteract: Bool {
         isEnabled && !controller.isLoading && controller.error == nil && controller.duration > 0
@@ -17,31 +21,40 @@ struct VoiceWaveformScrubber: View {
 
     var body: some View {
         GeometryReader { geometry in
-            VoiceWaveformShape(
-                samples: controller.waveform,
-                progress: controller.duration > 0 ? position / controller.duration : 0,
-                accent: color, waveformHeight: height
-            )
-            .contentShape(Rectangle())
-            // A recognized drag excludes the tap, including its release. A touch
-            // below the threshold toggles playback without changing the position.
-            .gesture(
-                DragGesture(minimumDistance: 8)
-                    .updating($seekPreview) { value, preview, _ in
-                        guard canInteract else { return }
-                        preview = seekPosition(x: value.location.x, width: geometry.size.width)
-                    }
-                    .onEnded { value in
-                        guard canInteract else { return }
-                        controller.seek(
-                            to: seekPosition(x: value.location.x, width: geometry.size.width))
-                    }
-                    .exclusively(
-                        before: TapGesture().onEnded {
-                            guard canInteract else { return }
-                            controller.toggle()
-                        })
-            )
+            #if os(macOS)
+                waveform.overlay {
+                    VoiceWaveformPointerSurface(
+                        isEnabled: canInteract,
+                        preview: { seekPreview = $0 * controller.duration },
+                        seek: {
+                            controller.seek(to: $0 * controller.duration)
+                            seekPreview = nil
+                        },
+                        toggle: controller.toggle)
+                }
+            #else
+                waveform.contentShape(Rectangle())
+                    // A recognized drag excludes the tap, including its release.
+                    .gesture(
+                        DragGesture(minimumDistance: 8)
+                            .updating($seekPreview) { value, preview, _ in
+                                guard canInteract else { return }
+                                preview = seekPosition(
+                                    x: value.location.x, width: geometry.size.width)
+                            }
+                            .onEnded { value in
+                                guard canInteract else { return }
+                                controller.seek(
+                                    to: seekPosition(
+                                        x: value.location.x, width: geometry.size.width))
+                            }
+                            .exclusively(
+                                before: TapGesture().onEnded {
+                                    guard canInteract else { return }
+                                    controller.toggle()
+                                })
+                    )
+            #endif
         }
         .accessibilityElement()
         .accessibilityLabel(Text("Voice message position"))
@@ -62,6 +75,13 @@ struct VoiceWaveformScrubber: View {
         }
         .accessibilityHidden(!canInteract)
         .allowsHitTesting(canInteract)
+    }
+
+    private var waveform: some View {
+        VoiceWaveformShape(
+            samples: controller.waveform,
+            progress: controller.duration > 0 ? position / controller.duration : 0,
+            accent: color, waveformHeight: height)
     }
 
     private func seekPosition(x: CGFloat, width: CGFloat) -> TimeInterval {
