@@ -2,7 +2,6 @@ import ChahuaAPI
 import Combine
 import Foundation
 import OSLog
-import Network
 
 enum OutgoingStorageState: Equatable {
     case inactive, loading, ready, failed
@@ -10,7 +9,7 @@ enum OutgoingStorageState: Equatable {
 
 enum OutgoingQueueEvent {
     case snapshot(LocalConversationSnapshot)
-    case delivered(snapshot: LocalConversationSnapshot, message: MessageResponse)
+    case delivered(snapshot: LocalConversationSnapshot, message: MessageResponse, published: Bool)
     case purged(conversations: [ConversationKey])
 }
 
@@ -32,6 +31,7 @@ final class OutgoingMessageQueue: ObservableObject {
 
     enum QueueError: LocalizedError {
         case storageUnavailable, invalidAcknowledgement, invalidForwardSources, unavailableEditTarget
+        case possibleDelivery
 
         var errorDescription: String? {
             switch self {
@@ -39,6 +39,7 @@ final class OutgoingMessageQueue: ObservableObject {
             case .invalidAcknowledgement: AppLanguage.localized("The server returned a different message.")
             case .invalidForwardSources: AppLanguage.localized("These messages can’t be forwarded.")
             case .unavailableEditTarget: AppLanguage.localized("This queued message is no longer editable.")
+            case .possibleDelivery: AppLanguage.localized("The message may already have been delivered.")
             }
         }
     }
@@ -57,22 +58,35 @@ final class OutgoingMessageQueue: ObservableObject {
     private enum Completion {
         case delivery(Receipt)
         case failure(OutboxFailure, retryAfter: Date?)
-        case unsent(priorFailure: OutboxFailure?)
+        case unsent(priorFailure: OutboxFailure?, retry: PreflightRetry? = nil)
+    }
+
+    private struct PreflightRetry {
+        let failure: OutboxFailure
+        let retryAfter: Date?
     }
 
     private struct RetryWindow {
         let interval: Int
-        var due: ContinuousClock.Instant
-        let serverDue: ContinuousClock.Instant?
-        var bypassed: Bool
+        let due: ContinuousClock.Instant
+        let preflight: Bool
     }
 
-    private struct BackgroundReply {
-        let uid: Int32
-        let key: ConversationKey
-        let rowID: String
-        let generation: UInt64
-        let deadline: ContinuousClock.Instant
+    private struct Claim {
+        let priorFailure: OutboxFailure?
+    }
+
+    private struct BackgroundGrant {
+        let id: UUID
+        let execution: OutboxBackgroundExecution
+        let expiresAt: ContinuousClock.Instant?
+        let expirationTimer: Task<Void, Never>?
+    }
+
+    private struct ScheduledRefresh {
+        let id: UUID
+        let completion: CheckedContinuation<Bool, Never>
+        var draining = false
     }
 
     @Published private(set) var storageState: OutgoingStorageState = .inactive
@@ -81,6 +95,9 @@ final class OutgoingMessageQueue: ObservableObject {
     let events = PassthroughSubject<OutgoingQueueEvent, Never>()
 
     var authorizeWrite: (@MainActor (String, String?) async throws -> Void)?
+    var authorizeEnqueue: (@MainActor (ConversationKey) async throws -> Void)?
+    var backgroundWorkDidChange: (() -> Void)?
+    var onDiskFull: (() -> Void)?
 
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "outbox")
     private let apiClient: any ChahuaAPIClient
@@ -89,12 +106,13 @@ final class OutgoingMessageQueue: ObservableObject {
     private let beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)?
     private let uploadFile: UploadFile
     private let startBackgroundExecution: OutboxBackgroundExecution.Start
+    private let runsWhileInactive: Bool
     private let clock = ContinuousClock()
-    private let pathMonitor: NWPathMonitor?
-    private var online: Bool
+    private let retryJitter: @MainActor () -> Double
+    @Published private(set) var online = true
     private var uid: Int32?
     private var generation: UInt64 = 0
-    private var foregroundActive = false
+    private var foregroundActive: Bool
     private var signingOut = false
     private var authenticationFailed = false
     private var lifecycle: Task<Void, Never>?
@@ -117,15 +135,17 @@ final class OutgoingMessageQueue: ObservableObject {
     private var retryTimer: (id: UUID, due: ContinuousClock.Instant, task: Task<Void, Never>)?
     private var recoveryWake: Task<Void, Never>?
     private var handedOff = Set<UUID>()
-    private var backgroundReplies: [ConversationKey: BackgroundReply] = [:]
-    private var backgroundExecutions: [UUID: OutboxBackgroundExecution] = [:]
-    private var backgroundDeadlines: [UUID: Task<Void, Never>] = [:]
+    private var activeClaims: [UUID: Claim] = [:]
+    private var backgroundGrant: BackgroundGrant?
+    private var attemptedGrant = false
+    private var scheduledRefresh: ScheduledRefresh?
 
     init(
         apiClient: any ChahuaAPIClient, storage: AccountLocalStoreOwner,
         onInvalidToken: @escaping @MainActor @Sendable () async -> Void,
         beforeStorageOperation: (@MainActor @Sendable (StorageOperation) async throws -> Void)? = nil,
-        monitorNetwork: Bool = false,
+        runsWhileInactive: Bool = false, initiallyForeground: Bool = true,
+        retryJitter: @escaping @MainActor () -> Double = { 0 },
         startBackgroundExecution: @escaping OutboxBackgroundExecution.Start = OutboxBackgroundExecution.start,
         uploadFile: @escaping UploadFile = { directory, file, allocation, progress in
             try await OutgoingAttachmentUploader(directory: directory)
@@ -138,17 +158,10 @@ final class OutgoingMessageQueue: ObservableObject {
         self.beforeStorageOperation = beforeStorageOperation
         self.uploadFile = uploadFile
         self.startBackgroundExecution = startBackgroundExecution
-        online = !monitorNetwork
-        let monitor = monitorNetwork ? NWPathMonitor() : nil
-        pathMonitor = monitor
-        monitor?.pathUpdateHandler = { [weak self] path in
-            let reachable = path.status == .satisfied
-            Task { @MainActor [weak self] in self?.setNetworkReachable(reachable) }
-        }
-        monitor?.start(queue: DispatchQueue(label: "app.chahua.chat.outbox-network"))
+        self.runsWhileInactive = runsWhileInactive
+        self.retryJitter = retryJitter
+        foregroundActive = initiallyForeground
     }
-
-    deinit { pathMonitor?.cancel() }
 
     func requestSession(uid: Int32?) {
         guard self.uid != uid else { return }
@@ -162,10 +175,15 @@ final class OutgoingMessageQueue: ObservableObject {
         signingOut = false
         restored = false
         self.uid = uid
+        let priorWrites = writes
+        storage.fenceNextOpen(through: Task {
+            await priorWrites?.value
+            await retiringLifecycle?.value
+            await retiringCleanup?.value
+        })
         storage.setSession(uid: uid)
         storageState = uid == nil ? .inactive : .loading
         let current = generation
-        let priorWrites = writes
         lifecycle = Task { [weak self] in
             await priorWrites?.value
             await retiringLifecycle?.value
@@ -173,13 +191,18 @@ final class OutgoingMessageQueue: ObservableObject {
             guard let self, self.generation == current, let uid else { return }
             await self.open(uid: uid, generation: current)
         }
+        backgroundWorkDidChange?()
     }
 
     private func suspendWorkers() {
+        compaction?.cancel()
+        compaction = nil
+        compacting = false
         generation &+= 1
         lifecycle?.cancel()
-        for id in Array(backgroundExecutions.keys) { endBackgroundExecution(id) }
-        backgroundReplies.removeAll()
+        endBackgroundGrant()
+        endScheduledRefresh(success: false)
+        activeClaims.removeAll()
         handedOff.removeAll()
         retryWindows.removeAll()
         retryTimer?.task.cancel()
@@ -221,6 +244,7 @@ final class OutgoingMessageQueue: ObservableObject {
             await retiringCleanup?.value
         }
         storageState = .inactive
+        backgroundWorkDidChange?()
     }
 
     func resumeAfterUnregisterFailure() async {
@@ -232,6 +256,7 @@ final class OutgoingMessageQueue: ObservableObject {
         storageState = .loading
         let current = generation
         lifecycle = Task { [weak self] in await self?.open(uid: uid, generation: current) }
+        backgroundWorkDidChange?()
         await lifecycle?.value
     }
 
@@ -276,15 +301,16 @@ final class OutgoingMessageQueue: ObservableObject {
         guard foregroundActive != active else { return }
         foregroundActive = active
         if active {
-            backgroundReplies.removeAll()
-            for id in Array(backgroundExecutions.keys) { endBackgroundExecution(id) }
+            attemptedGrant = false
+            endBackgroundGrant()
             wakeForRecovery()
         } else {
-            for worker in fileWorkers.values { worker.task.cancel() }
-            for (key, worker) in workers where handedOff.contains(worker.id) {
-                _ = allowBackgroundExecution(key: key, workerID: worker.id, deadline: nil)
+            if !runsWhileInactive {
+                startBackgroundGrantIfNeeded()
+                stopWorkWithoutExecution()
+                cancelSpeculativeAttachments()
             }
-            scheduleRetries()
+            wakeWorkers()
         }
     }
 
@@ -302,32 +328,23 @@ final class OutgoingMessageQueue: ObservableObject {
         if reachable {
             wakeForRecovery()
         } else {
-            // Already handed off creates remain ambiguous until they finish.
+            // Foreground creates can finish, but a finite run cannot wait for another path.
             for worker in fileWorkers.values { worker.task.cancel() }
-            scheduleRetries()
+            endBackgroundGrant()
+            endScheduledRefresh(success: false)
+            stopWorkWithoutExecution()
+            wakeWorkers()
         }
     }
 
     private func wakeForRecovery() {
+        backgroundWorkDidChange?()
         guard recoveryWake == nil else { return }
         let current = generation
         recoveryWake = Task { [weak self] in
             await Task.yield()
             guard let self, self.generation == current else { return }
             self.recoveryWake = nil
-            let now = self.clock.now
-            if self.online && self.foregroundActive {
-                for snapshot in self.snapshots.values {
-                    guard let head = snapshot.outgoing.first, head.failure?.retry == .automatic,
-                        var retry = self.retryWindows[head.clientGeneratedID],
-                        retry.due > now, !retry.bypassed
-                    else { continue }
-                    retry.bypassed = true
-                    retry.due = max(now, retry.serverDue ?? now)
-                    self.retryWindows[head.clientGeneratedID] = retry
-                    self.events.send(.snapshot(snapshot))
-                }
-            }
             self.wakeWorkers()
         }
     }
@@ -337,6 +354,7 @@ final class OutgoingMessageQueue: ObservableObject {
         storageState = .loading
         let current = generation
         lifecycle = Task { [weak self] in await self?.open(uid: uid, generation: current) }
+        backgroundWorkDidChange?()
         await lifecycle?.value
     }
 
@@ -352,8 +370,7 @@ final class OutgoingMessageQueue: ObservableObject {
                     if let head = snapshot.outgoing.first, let failure = head.failure,
                         self.retryWindows[head.clientGeneratedID] == nil
                     {
-                        self.recordRetryWindow(
-                            id: head.clientGeneratedID, failure: failure, retryAfter: nil)
+                        self.recordRetryWindow(id: head.clientGeneratedID, failure: failure)
                     }
                     self.publish(snapshot)
                 }
@@ -404,15 +421,17 @@ final class OutgoingMessageQueue: ObservableObject {
 
     private func storageFailed(_ error: Error, generation current: UInt64) {
         guard current == generation, !(error is CancellationError) else { return }
+        if ChahuaLocalStore.isDiskFull(error) { onDiskFull?() }
         if error is QueueError { return }
         if let error = error as? LocalStorageError {
             switch error {
-            case .corruptRecord, .unsupportedSchema: break
+            case .corruptRecord: break
             default: return
             }
         }
         Self.logger.error("The outbox transaction failed: \(String(reflecting: type(of: error)), privacy: .public)")
         storageState = .failed
+        wakeWorkers()
     }
 
     private func publish(_ snapshot: LocalConversationSnapshot, notify: Bool = true) {
@@ -449,9 +468,8 @@ final class OutgoingMessageQueue: ObservableObject {
             return .sending
         case .failed:
             guard let failure = item.failure else { preconditionFailure("Failed row without failure") }
-            let retry = retryWindows[item.clientGeneratedID].map {
-                Date().addingTimeInterval(max(0, Self.seconds(clock.now.duration(to: $0.due))))
-            }
+            let retry = shouldRetryAutomatically(item)
+                ? retryDue(item, now: clock.now, date: Date()) : nil
             return .failed(failure, nextRetry: retry)
         case .pending:
             if !item.isReadyForDispatch {
@@ -497,11 +515,19 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
+    private func requireEnqueuePermission(_ key: ConversationKey) async throws {
+        let current = generation
+        _ = try requireStore()
+        if let authorizeEnqueue { try await authorizeEnqueue(key) }
+        try checkGeneration(current)
+    }
+
     func enqueueText(
         chatID: String, threadID: String? = nil, text: String, clearedDraftRevision: Int64,
         replyToMessage: MessagePreview? = nil, metadata: MessageMetadataInput? = nil
     ) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
+        try await requireEnqueuePermission(key)
         let id = UUID().uuidString
         let date = Date()
         try await editSnapshot(.enqueue) { store in
@@ -517,6 +543,7 @@ final class OutgoingMessageQueue: ObservableObject {
         chatID: String, threadID: String? = nil, text: String,
         notificationDeadline: ContinuousClock.Instant? = nil
     ) async throws {
+        try await requireEnqueuePermission(.init(chatID: chatID, threadID: threadID))
         let id = UUID().uuidString
         let date = Date()
         let current = generation
@@ -525,12 +552,8 @@ final class OutgoingMessageQueue: ObservableObject {
                 chatID: chatID, threadID: threadID, clientGeneratedID: id, text: text,
                 enqueuedAt: date)
             try self.checkGeneration(current)
-            if !self.foregroundActive, let uid = self.uid, let deadline = notificationDeadline,
-                self.clock.now < deadline, snapshot.outgoing.first?.clientGeneratedID == id
-            {
-                let key = snapshot.conversationKey
-                self.backgroundReplies[key] = .init(
-                    uid: uid, key: key, rowID: id, generation: current, deadline: deadline)
+            if let deadline = notificationDeadline, snapshot.outgoing.first?.clientGeneratedID == id {
+                self.startBackgroundGrantIfNeeded(deadline: deadline, notificationHead: snapshot.outgoing.first)
             }
             return snapshot
         }
@@ -540,6 +563,7 @@ final class OutgoingMessageQueue: ObservableObject {
         chatID: String, threadID: String? = nil, sticker: MessageStickerResponse,
         replyToMessage: MessagePreview? = nil
     ) async throws {
+        try await requireEnqueuePermission(.init(chatID: chatID, threadID: threadID))
         let id = UUID().uuidString
         let date = Date()
         try await editSnapshot(.enqueue) {
@@ -558,6 +582,7 @@ final class OutgoingMessageQueue: ObservableObject {
             try await OutgoingVoiceFiles.importVoice(from: fileURL, directory: store.directory)
         }
         try checkGeneration(current)
+        try await requireEnqueuePermission(.init(chatID: chatID, threadID: threadID))
         let id = UUID().uuidString
         let date = Date()
         try await editSnapshot(.enqueue) {
@@ -594,6 +619,7 @@ final class OutgoingMessageQueue: ObservableObject {
                     && $0.messageType != .system && $0.messageType != .invite
             })
         else { throw QueueError.invalidForwardSources }
+        try await requireEnqueuePermission(.init(chatID: chatID, threadID: threadID))
         let request = LocalForwardRequest(
             sourceChatID: first.chatId,
             sources: sources.map { source in
@@ -614,10 +640,11 @@ final class OutgoingMessageQueue: ObservableObject {
         try await ordered {
             try await self.checkpoint(.retry, generation: current)
             let store = try self.requireStore()
-            guard self.editors[id] == nil, let failure = self.item(key, id)?.failure else { return }
+            guard self.editors[id] == nil, let item = self.item(key, id), let failure = item.failure
+            else { return }
             switch failure.stage {
             case .preparation:
-                guard self.serverAllowsRetry(id: id) else { return }
+                guard self.serverAllowsRetry(item) else { return }
                 let snapshot = try await store.retryPreparation(key: key, itemID: id)
                 try self.checkGeneration(current)
                 self.publish(snapshot)
@@ -628,95 +655,274 @@ final class OutgoingMessageQueue: ObservableObject {
         }
     }
 
-    func removeOutgoing(chatID: String, threadID: String? = nil, itemID: String) async throws {
+    static func requiresRemovalConfirmation(for failure: OutboxFailure?) -> Bool {
+        guard let failure, failure.stage == .create else { return false }
+        switch failure.reason {
+        case .unknownOutcome, .network, .invalidReceipt: return true
+        default: return false
+        }
+    }
+
+    func removeOutgoing(
+        chatID: String, threadID: String? = nil, itemID: String, allowPossibleDelivery: Bool = false
+    ) async throws {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
+        let current = generation
         try await editSnapshot(.remove) { store in
             guard self.editors[itemID] == nil, !self.claimed.contains(itemID),
                 self.completions[itemID] == nil
             else { throw QueueError.unavailableEditTarget }
+            if !allowPossibleDelivery,
+                Self.requiresRemovalConfirmation(for: self.item(key, itemID)?.failure)
+            {
+                throw QueueError.possibleDelivery
+            }
             self.removing.insert(itemID)
             defer { self.removing.remove(itemID) }
             let snapshot = try await store.removeOutgoing(key: key, itemID: itemID)
+            try self.checkGeneration(current)
             self.manualRetries.remove(itemID)
             self.retryWindows[itemID] = nil
-            if self.backgroundReplies[key]?.rowID == itemID { self.backgroundReplies[key] = nil }
             return snapshot
         }
     }
 
-    private func canStart(key: ConversationKey, rowID: String) -> Bool {
-        guard online else { return false }
-        if foregroundActive { return true }
-        guard let reply = backgroundReplies[key], reply.uid == uid, reply.key == key,
-            reply.generation == generation, reply.rowID == rowID, clock.now < reply.deadline
-        else { return false }
-        return true
+    private var dispatchAuthorized = true
+    private var compaction: Task<Void, Never>?
+    private var compacting = false
+
+    func compactHistoryWhenIdle() {
+        guard compaction == nil, let store = storage.store else { return }
+        let current = generation
+        compaction = Task { [weak self] in
+            while let self, self.generation == current, !Task.isCancelled {
+                if self.workers.isEmpty && self.fileWorkers.isEmpty && self.importing.isEmpty
+                    && self.fileLeases[store.directory] == nil
+                {
+                    self.compacting = true
+                    try? await self.ordered { try await store.compactMessageStorage() }
+                    guard self.generation == current else { return }
+                    self.compacting = false
+                    self.compaction = nil
+                    self.wakeWorkers()
+                    return
+                }
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
     }
 
-    private func allowBackgroundExecution(
-        key: ConversationKey, workerID: UUID, deadline: ContinuousClock.Instant?
-    ) -> Bool {
-        if backgroundExecutions[workerID] != nil { return true }
-        let current = generation
-        let expire: @MainActor () -> Void = { [weak self] in
-            self?.expireBackgroundExecution(key: key, workerID: workerID, generation: current)
+    func setDispatchAuthorized(_ authorized: Bool) {
+        guard dispatchAuthorized != authorized else { return }
+        dispatchAuthorized = authorized
+        if authorized { wakeForRecovery() }
+        else { wakeWorkers() }
+    }
+
+    private var allowsExecution: Bool {
+        if foregroundActive || runsWhileInactive || scheduledRefresh?.draining == true { return true }
+        guard let backgroundGrant else { return false }
+        return backgroundGrant.expiresAt.map { clock.now < $0 } ?? true
+    }
+
+    private var canDispatch: Bool {
+        dispatchAuthorized && storageState == .ready && online && !authenticationFailed && !compacting
+    }
+
+    private func isUnsuspended(_ head: LocalOutgoingMessage) -> Bool {
+        editors[head.clientGeneratedID] == nil && !removing.contains(head.clientGeneratedID)
+    }
+
+    private func automaticDue(
+        _ head: LocalOutgoingMessage, now: ContinuousClock.Instant, date: Date
+    ) -> Date? {
+        switch head.state {
+        case .sending:
+            return date
+        case .failed:
+            guard shouldRetryAutomatically(head) else { return nil }
+        case .pending:
+            if !head.isReadyForDispatch {
+                return head.attachments.lazy.filter { !$0.isUploaded && $0.failure == nil }
+                    .map { max(date, $0.retryNotBefore ?? date) }.min()
+            }
         }
-        guard let execution = startBackgroundExecution(expire) else { return false }
-        backgroundExecutions[workerID] = execution
-        if let deadline {
-            backgroundDeadlines[workerID] = Task { [clock] in
+        return retryDue(head, now: now, date: date)
+    }
+
+    /// Scheduling is based on durable FIFO heads, not the current network or
+    /// credential validation state: a later launch may have a usable opportunity.
+    var automaticBackgroundWakeDate: Date? {
+        guard uid != nil, !signingOut, !authenticationFailed else { return nil }
+        let now = clock.now
+        let date = Date()
+        var earliest: Date?
+        for snapshot in snapshots.values {
+            guard let head = snapshot.outgoing.first, isUnsuspended(head),
+                let due = automaticDue(head, now: now, date: date)
+            else { continue }
+            if due == date { return date }
+            earliest = min(earliest ?? due, due)
+        }
+        return earliest
+    }
+
+    func drainScheduledRefresh() async -> Bool {
+        guard scheduledRefresh == nil, !Task.isCancelled else { return false }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { completion in
+                guard !Task.isCancelled else {
+                    completion.resume(returning: false)
+                    return
+                }
+                scheduledRefresh = ScheduledRefresh(id: id, completion: completion)
+                Task { [weak self, lifecycle = self.lifecycle] in
+                    await lifecycle?.value
+                    guard let self, self.scheduledRefresh?.id == id else { return }
+                    if self.storageState == .failed { await self.retryStorage() }
+                    guard self.scheduledRefresh?.id == id else { return }
+                    guard self.storageState == .ready else {
+                        self.endScheduledRefresh(success: self.storageState == .inactive && self.uid == nil)
+                        return
+                    }
+                    self.scheduledRefresh?.draining = true
+                    self.endBackgroundGrant()
+                    if !self.foregroundActive { self.cancelSpeculativeAttachments() }
+                    self.wakeWorkers()
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.scheduledRefresh?.id == id else { return }
+                self.endScheduledRefresh(success: false)
+                self.stopWorkWithoutExecution()
+                self.wakeWorkers()
+            }
+        }
+    }
+
+    private func endScheduledRefresh(success: Bool) {
+        guard let refresh = scheduledRefresh else { return }
+        scheduledRefresh = nil
+        refresh.completion.resume(returning: success)
+    }
+
+    private func startBackgroundGrantIfNeeded(
+        deadline: ContinuousClock.Instant? = nil, notificationHead: LocalOutgoingMessage? = nil
+    ) {
+        let now = clock.now
+        let date = Date()
+        guard !allowsExecution, !attemptedGrant, canDispatch,
+            deadline.map({ $0 > now }) ?? true
+        else { return }
+        if let notificationHead {
+            guard isUnsuspended(notificationHead),
+                automaticDue(notificationHead, now: now, date: date) == date
+            else { return }
+        } else {
+            guard !workers.isEmpty || snapshots.values.contains(where: {
+                guard let head = $0.outgoing.first, isUnsuspended(head) else { return false }
+                return automaticDue(head, now: now, date: date) == date
+            }) else { return }
+        }
+        attemptedGrant = true
+        let id = UUID()
+        let expire: @MainActor () -> Void = { [weak self] in
+            guard let self, self.backgroundGrant?.id == id else { return }
+            self.endBackgroundGrant()
+            self.stopWorkWithoutExecution()
+            self.wakeWorkers()
+        }
+        guard let execution = startBackgroundExecution(expire) else { return }
+        let timer = deadline.map { deadline in
+            Task { [clock] in
                 do { try await clock.sleep(until: deadline) } catch { return }
                 expire()
             }
         }
-        return true
+        backgroundGrant = BackgroundGrant(id: id, execution: execution, expiresAt: deadline, expirationTimer: timer)
     }
 
-    private func endBackgroundExecution(_ workerID: UUID) {
-        backgroundDeadlines.removeValue(forKey: workerID)?.cancel()
-        backgroundExecutions.removeValue(forKey: workerID)?.finish()
+    private func endBackgroundGrant() {
+        guard let grant = backgroundGrant else { return }
+        backgroundGrant = nil
+        grant.expirationTimer?.cancel()
+        grant.execution.finish()
     }
 
-    private func expireBackgroundExecution(
-        key: ConversationKey, workerID: UUID, generation current: UInt64
-    ) {
-        guard current == generation, !foregroundActive,
-            let worker = workers[key], worker.id == workerID
-        else {
-            endBackgroundExecution(workerID)
-            return
+    private func stopWorkWithoutExecution() {
+        guard !allowsExecution else { return }
+        for worker in fileWorkers.values { worker.task.cancel() }
+
+        let stopped = workers
+        workers.removeAll()
+        let current = generation
+        for (key, worker) in stopped {
+            worker.task.cancel()
+            let handedOff = self.handedOff.remove(worker.id) != nil
+            let claim = activeClaims.removeValue(forKey: worker.id)
+            guard let claim, completions[worker.itemID] == nil else { continue }
+            if handedOff {
+                let failure = OutboxFailure(stage: .create, reason: .unknownOutcome, retry: .automatic)
+                completions[worker.itemID] = .failure(failure, retryAfter: nil)
+            } else {
+                completions[worker.itemID] = .unsent(priorFailure: claim.priorFailure)
+            }
+            Task { [weak self] in
+                await self?.finish(key: key, itemID: worker.itemID, generation: current)
+            }
         }
-        if backgroundReplies[key]?.rowID == worker.itemID { backgroundReplies[key] = nil }
-        endBackgroundExecution(workerID)
-        // A claim in progress will observe closed eligibility before any HTTP request.
-        guard handedOff.remove(workerID) != nil else { return }
-        workers[key] = nil
-        worker.task.cancel()
-        guard completions[worker.itemID] == nil else { return }
-        let failure = OutboxFailure(stage: .create, reason: .unknownOutcome, retry: .automatic)
-        completions[worker.itemID] = .failure(failure, retryAfter: nil)
-        Task { [weak self] in
-            await self?.finish(key: key, itemID: worker.itemID, generation: current)
+    }
+
+    private func cancelSpeculativeAttachments() {
+        for (id, worker) in fileWorkers where id.accountGeneration == generation {
+            if !worker.work.isForSubmittedHead(in: snapshots, matching: id) { worker.task.cancel() }
         }
+    }
+
+    private func shouldRetryAutomatically(_ item: LocalOutgoingMessage) -> Bool {
+        guard let failure = item.failure else { return false }
+        if failure.retry == .automatic { return true }
+        // A retryable preflight can release a manual retry claim back to its
+        // prior failure. Only a preflight can leave a deadline on that row.
+        return failure.stage == .create
+            && (retryWindows[item.clientGeneratedID]?.preflight == true || item.retryNotBefore != nil)
     }
 
     private func automaticRetryDue(_ item: LocalOutgoingMessage) -> Bool {
-        guard foregroundActive, item.failure?.retry == .automatic else { return false }
-        return (retryWindows[item.clientGeneratedID]?.due ?? clock.now) <= clock.now
+        guard shouldRetryAutomatically(item) else { return false }
+        let date = Date()
+        return retryDue(item, now: clock.now, date: date) <= date
     }
 
-    private func recordRetryWindow(id: String, failure: OutboxFailure, retryAfter: Date?) {
-        let now = clock.now
-        let previous = retryWindows[id]
-        let interval = previous.map { min(60, $0.interval * 2) } ?? 1
-        let serverDue = retryAfter.map { now.advanced(by: .seconds(max(0, $0.timeIntervalSinceNow))) }
+    private func recordRetryWindow(
+        id: String, failure: OutboxFailure, preflight: Bool = false
+    ) {
         guard failure.retry == .automatic else {
             retryWindows[id] = nil
             return
         }
+        let interval = retryWindows[id].map { min(60, $0.interval * 2) } ?? 1
+        let delay = min(60, Double(interval) * (1 + min(0.2, max(0, retryJitter()))))
         retryWindows[id] = .init(
-            interval: interval, due: max(now.advanced(by: .seconds(interval)), serverDue ?? now),
-            serverDue: serverDue, bypassed: previous?.bypassed ?? false)
+            interval: interval, due: clock.now.advanced(by: .seconds(delay)), preflight: preflight)
+    }
+
+    private func serverRetryDate(_ item: LocalOutgoingMessage) -> Date? {
+        guard item.failure?.stage == .preparation,
+            let attachmentDate = item.attachments.lazy.compactMap(\.retryNotBefore).max()
+        else { return item.retryNotBefore }
+        return max(attachmentDate, item.retryNotBefore ?? attachmentDate)
+    }
+
+    private func retryDue(
+        _ item: LocalOutgoingMessage, now: ContinuousClock.Instant, date: Date
+    ) -> Date {
+        let window = retryWindows[item.clientGeneratedID]
+        let localDue = (item.state == .failed || window?.preflight == true) ? window?.due : nil
+        let localDelay = localDue.map { Self.seconds(now.duration(to: $0)) } ?? 0
+        return max(date.addingTimeInterval(max(0, localDelay)), serverRetryDate(item) ?? date)
     }
 
     private func scheduleRetries() {
@@ -735,18 +941,33 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func nextRetryDeadline() -> ContinuousClock.Instant? {
-        guard storageState == .ready, online, foregroundActive, !authenticationFailed else { return nil }
-        var next: ContinuousClock.Instant?
+        guard canDispatch, foregroundActive || runsWhileInactive else { return nil }
+        var next: Date?
         let now = clock.now
+        let date = Date()
         for (key, snapshot) in snapshots {
-            guard let head = snapshot.outgoing.first, let failure = head.failure,
-                workers[key] == nil, editors[head.clientGeneratedID] == nil,
-                completions[head.clientGeneratedID] == nil, failure.retry == .automatic
-            else { continue }
-            let due = retryWindows[head.clientGeneratedID]?.due ?? now
+            if let head = snapshot.outgoing.first, head.state != .sending, workers[key] == nil,
+                isUnsuspended(head), completions[head.clientGeneratedID] == nil
+            {
+                let due = manualRetries.contains(head.clientGeneratedID)
+                    ? serverRetryDate(head) : automaticDue(head, now: now, date: date)
+                consider(due)
+            }
+            // Foreground preparation can also prefetch non-head submitted slots.
+            // A different slot already eligible for work must not hide this wake.
+            let outgoing = foregroundActive ? snapshot.outgoing[...] : snapshot.outgoing.prefix(1)
+            for item in outgoing where item.state == .pending && isUnsuspended(item) {
+                for slot in item.attachments where !slot.isUploaded && slot.failure == nil {
+                    consider(slot.retryNotBefore)
+                }
+            }
+        }
+        return next.map { now.advanced(by: .seconds($0.timeIntervalSince(date))) }
+
+        func consider(_ due: Date?) {
+            guard let due, due > date else { return }
             next = min(next ?? due, due)
         }
-        return next
     }
 
     private func wakePreparationRetry(_ head: LocalOutgoingMessage) {
@@ -759,7 +980,7 @@ final class OutgoingMessageQueue: ObservableObject {
             do {
                 try await self.ordered {
                     try await self.checkpoint(.retry, generation: current)
-                    guard self.online, self.foregroundActive, !self.authenticationFailed,
+                    guard self.canDispatch, self.allowsExecution, self.workers[key]?.id == workerID,
                         self.editors[id] == nil, let item = self.item(key, id),
                         item.failure?.stage == .preparation, self.automaticRetryDue(item)
                     else { return }
@@ -794,64 +1015,77 @@ final class OutgoingMessageQueue: ObservableObject {
     }
 
     private func wakeWorkers() {
-        guard storageState == .ready, online, !authenticationFailed else {
-            scheduleRetries()
-            return
-        }
-        if foregroundActive {
+        if canDispatch, allowsExecution {
             for key in snapshots.keys { wakeWorker(key) }
             wakeAttachmentWorkers()
-        } else {
-            for key in Array(backgroundReplies.keys) { wakeWorker(key) }
+        }
+        if backgroundGrant != nil || scheduledRefresh?.draining == true {
+            let busy = canDispatch && allowsExecution && (
+                !workers.isEmpty || !completions.isEmpty
+                    || fileWorkers.contains { id, worker in
+                        id.accountGeneration == generation && !worker.task.isCancelled
+                            && worker.work.isForSubmittedHead(in: snapshots, matching: id)
+                    }
+            )
+            if !busy {
+                endBackgroundGrant()
+                if scheduledRefresh?.draining == true {
+                    let now = clock.now
+                    let date = Date()
+                    let deferred = snapshots.values.contains {
+                        $0.outgoing.first.flatMap { automaticDue($0, now: now, date: date) } != nil
+                    }
+                    endScheduledRefresh(success: storageState == .ready && !deferred)
+                }
+                stopWorkWithoutExecution()
+            }
         }
         scheduleRetries()
+        backgroundWorkDidChange?()
     }
 
     private func wakeWorker(_ key: ConversationKey) {
-        guard online, storageState == .ready, !authenticationFailed, workers[key] == nil,
-            let head = snapshots[key]?.outgoing.first, canStart(key: key, rowID: head.clientGeneratedID)
+        guard canDispatch, allowsExecution, workers[key] == nil, let head = snapshots[key]?.outgoing.first
         else { return }
         if head.failure?.stage == .preparation {
-            if editors[head.clientGeneratedID] == nil, automaticRetryDue(head) { wakePreparationRetry(head) }
+            let id = head.clientGeneratedID
+            if editors[id] == nil, !removing.contains(id), completions[id] == nil, automaticRetryDue(head) {
+                wakePreparationRetry(head)
+            }
             return
         }
         guard eligible(head) else { return }
         let workerID = UUID()
         let current = generation
         let id = head.clientGeneratedID
-        if !foregroundActive {
-            guard let reply = backgroundReplies[key],
-                allowBackgroundExecution(key: key, workerID: workerID, deadline: reply.deadline)
-            else {
-                backgroundReplies[key] = nil
-                return
-            }
-        }
         workers[key] = Worker(id: workerID, itemID: id, task: Task { [weak self] in
             guard let self else { return }
             await self.sendHead(key: key, itemID: id, workerID: workerID, generation: current)
             self.handedOff.remove(workerID)
-            self.endBackgroundExecution(workerID)
+            self.activeClaims[workerID] = nil
             guard self.workers[key]?.id == workerID else { return }
             self.workers[key] = nil
-            self.wakeWorker(key)
-            self.scheduleRetries()
+            self.wakeWorkers()
         })
     }
 
-
-    private func serverAllowsRetry(id: String) -> Bool {
-        guard let date = retryWindows[id]?.serverDue else { return true }
-        return date <= clock.now
+    private func serverAllowsRetry(_ item: LocalOutgoingMessage) -> Bool {
+        guard let date = serverRetryDate(item) else { return true }
+        return date <= Date()
     }
     private func eligible(_ head: LocalOutgoingMessage) -> Bool {
         let id = head.clientGeneratedID
         guard head.isReadyForDispatch, editors[id] == nil, !claimed.contains(id),
-            completions[id] == nil
+            !removing.contains(id), completions[id] == nil
         else { return false }
-        if head.state == .pending { return true }
-        guard head.failure?.stage == .create else { return false }
-        return (manualRetries.contains(id) && serverAllowsRetry(id: id)) || automaticRetryDue(head)
+        guard head.state == .pending || head.failure?.stage == .create else { return false }
+        if manualRetries.contains(id) { return serverAllowsRetry(head) }
+        if head.state == .pending, head.retryNotBefore == nil, retryWindows[id]?.preflight != true {
+            return true
+        }
+        let date = Date()
+        return (head.state == .pending || shouldRetryAutomatically(head))
+            && retryDue(head, now: clock.now, date: date) <= date
     }
 
     private func sendHead(key: ConversationKey, itemID id: String, workerID: UUID, generation current: UInt64)
@@ -861,13 +1095,16 @@ final class OutgoingMessageQueue: ObservableObject {
         do {
             let message = try await ordered {
                 try await self.checkpoint(.claim, generation: current)
-                guard self.canStart(key: key, rowID: id), !self.authenticationFailed,
+                guard self.canDispatch, self.allowsExecution,
                     self.workers[key]?.id == workerID, let head = self.snapshots[key]?.outgoing.first,
                     head.clientGeneratedID == id, self.eligible(head)
                 else { return Optional<(LocalOutgoingMessage, OutboxFailure?)>.none }
                 let store = try self.requireStore()
                 self.claimed.insert(id)
                 defer { self.claimed.remove(id) }
+                // Record the prior state before the transaction suspends. Expiration
+                // can then release this exact claim in the same write stream.
+                self.activeClaims[workerID] = Claim(priorFailure: head.failure)
                 let claim = try await store.claimNext(
                     chatID: key.chatID, threadID: key.threadID, expectedID: id,
                     retryCreate: head.failure?.stage == .create)
@@ -876,7 +1113,7 @@ final class OutgoingMessageQueue: ObservableObject {
                 self.publish(claim.snapshot)
                 return claim.message.map { ($0, head.failure) }
             }
-            guard let message else { return }
+            guard let message, workers[key]?.id == workerID else { return }
             claimedHead = message
         } catch {
             storageFailed(error, generation: current)
@@ -887,7 +1124,7 @@ final class OutgoingMessageQueue: ObservableObject {
             try await authorizeWrite?(key.chatID, key.threadID)
             try checkGeneration(current)
             guard workers[key]?.id == workerID else { return }
-            guard canStart(key: key, rowID: id), !authenticationFailed else {
+            guard canDispatch, allowsExecution else {
                 completions[id] = .unsent(priorFailure: claimedHead.priorFailure)
                 await finish(key: key, itemID: id, generation: current)
                 return
@@ -898,22 +1135,23 @@ final class OutgoingMessageQueue: ObservableObject {
             guard workers[key]?.id == workerID else { return }
             guard matches(message, pending) else { throw QueueError.invalidAcknowledgement }
             _ = await acceptAcknowledgement(
-                message, published: pending.forwardRequest != nil || pending.messageType != .audio
-                    || message.attachments.contains { $0.kind == "audio/ogg" })
+                message, published: Self.isPublishedCreateResponse(message, for: pending))
         } catch {
             guard current == generation, workers[key]?.id == workerID, item(key, id) != nil,
                 completions[id] == nil
             else { return }
-            if !handedOff.contains(workerID), !canStart(key: key, rowID: id) {
-                completions[id] = .unsent(priorFailure: claimedHead.priorFailure)
+            let failure = Self.failure(error, stage: .create)
+            if !handedOff.contains(workerID), failure.retry == .automatic {
+                let retry = PreflightRetry(failure: failure, retryAfter: Self.retryAfter(from: error))
+                completions[id] = .unsent(priorFailure: claimedHead.priorFailure, retry: retry)
                 await finish(key: key, itemID: id, generation: current)
                 return
             }
             if let existing = (error as? APIError)?.conflictingExistingMessage, matches(existing, pending) {
-                _ = await acceptAcknowledgement(existing)
+                _ = await acceptAcknowledgement(
+                    existing, published: Self.isPublishedCreateResponse(existing, for: pending))
                 return
             }
-            let failure = Self.failure(error, stage: .create)
             completions[id] = .failure(failure, retryAfter: Self.retryAfter(from: error))
             await finish(key: key, itemID: id, generation: current)
             guard current == generation, failure.reason == .authentication,
@@ -922,6 +1160,11 @@ final class OutgoingMessageQueue: ObservableObject {
             authenticationFailed = true
             await onInvalidToken()
         }
+    }
+
+    private static func isPublishedCreateResponse(_ message: MessageResponse, for item: LocalOutgoingMessage) -> Bool {
+        message.isDeleted || item.forwardRequest != nil || item.messageType != .audio
+            || message.attachments.contains { $0.kind == "audio/ogg" }
     }
 
     private func create(_ pending: LocalOutgoingMessage) async throws -> MessageResponse {
@@ -978,6 +1221,7 @@ final class OutgoingMessageQueue: ObservableObject {
     ) async -> IncomingOutgoingDisposition {
         let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
         let id = message.clientGeneratedId
+        let published = published || message.isDeleted
         guard !signingOut, message.sender.uid == uid, !id.isEmpty else { return .unrelated }
         // Read snapshots inside the ordered barrier if a claim is committing.
         let current = generation
@@ -996,6 +1240,12 @@ final class OutgoingMessageQueue: ObservableObject {
                     let store = self.storage.store
                 else { return .unrelated }
                 let redacted = message.isDeleted ? message.redactedForDeletion() : message
+                // Recovery may still hold a stronger receipt when a late HTTP result arrives.
+                if case .delivery(let previous) = self.completions[id],
+                    previous.message.isDeleted || (previous.published && !message.isDeleted)
+                {
+                    return .suppress
+                }
                 self.completions[id] = .delivery(Receipt(message: redacted, published: published))
                 try await self.commitCompletion(key: key, itemID: id, store: store, generation: current)
                 return .consumed
@@ -1024,7 +1274,7 @@ final class OutgoingMessageQueue: ObservableObject {
         switch completions[id] {
         case .delivery(let receipt):
             try await checkpoint(.acknowledge, generation: current)
-            let snapshot = try await store.settleCreate(receipt.message)
+            let snapshot = try await store.settleCreate(receipt.message, published: receipt.published)
             try checkGeneration(current)
             completions[id] = nil
             guard let snapshot else { return }
@@ -1035,27 +1285,28 @@ final class OutgoingMessageQueue: ObservableObject {
             }
             if let worker = workers[key], worker.itemID == id {
                 handedOff.remove(worker.id)
-                endBackgroundExecution(worker.id)
-                if backgroundReplies[key]?.rowID == id { backgroundReplies[key] = nil }
+                activeClaims[worker.id] = nil
                 workers[key] = nil
                 worker.task.cancel()
             }
             publish(snapshot, notify: false)
-            events.send(.delivered(snapshot: snapshot, message: receipt.message))
+            events.send(.delivered(snapshot: snapshot, message: receipt.message, published: receipt.published))
         case .failure(let failure, let retryAfter):
             try await checkpoint(.fail, generation: current)
-            let snapshot = try await store.fail(key: key, itemID: id, failure: failure)
+            let snapshot = try await store.fail(key: key, itemID: id, failure: failure, retryNotBefore: retryAfter)
             try checkGeneration(current)
             completions[id] = nil
             if failure.reason == .authentication { authenticationFailed = true }
-            recordRetryWindow(id: id, failure: failure, retryAfter: retryAfter)
-            if backgroundReplies[key]?.rowID == id { backgroundReplies[key] = nil }
+            recordRetryWindow(id: id, failure: failure)
             publish(snapshot)
-        case .unsent(let priorFailure):
+        case .unsent(let priorFailure, let retry):
             let snapshot = try await store.releaseUnsentClaim(
-                key: key, itemID: id, priorFailure: priorFailure)
+                key: key, itemID: id, priorFailure: priorFailure, retryNotBefore: retry?.retryAfter)
             try checkGeneration(current)
             completions[id] = nil
+            if let retry {
+                recordRetryWindow(id: id, failure: retry.failure, preflight: true)
+            }
             publish(snapshot)
         case nil:
             return
@@ -1114,6 +1365,7 @@ final class OutgoingMessageQueue: ObservableObject {
             initialText: item.text, initialAttachments: item.attachments, initialMetadata: item.metadata,
             initialReplyToMessage: item.replyToMessage, compressionEnabled: item.compressionEnabled)
         editors[id] = session
+        backgroundWorkDidChange?()
         return session
     }
 
@@ -1181,10 +1433,11 @@ final class OutgoingMessageQueue: ObservableObject {
     func retryEditAttachment(id: String, session: PendingEditSession) {
         guard (try? validate(session)) != nil, !savingEditors.contains(session.id) else { return }
         session.replaceAttachments(session.attachments.map { slot in
-            guard slot.id == id else { return slot }
+            guard slot.id == id, slot.retryNotBefore.map({ $0 <= Date() }) ?? true else { return slot }
             var updated = slot
             updated.generation = UUID().uuidString
             updated.failure = nil
+            updated.retryNotBefore = nil
             return updated
         })
     }
@@ -1265,10 +1518,12 @@ final class OutgoingMessageQueue: ObservableObject {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         try await changeDraft(key) { slots in
             slots.map {
-                guard $0.id == id, $0.failure != nil else { return $0 }
+                guard $0.id == id, $0.failure != nil, $0.retryNotBefore.map({ $0 <= Date() }) ?? true
+                else { return $0 }
                 var slot = $0
                 slot.generation = UUID().uuidString
                 slot.failure = nil
+                slot.retryNotBefore = nil
                 return slot
             }
         }
@@ -1313,6 +1568,7 @@ final class OutgoingMessageQueue: ObservableObject {
             slot.preparedPath = nil
             slot.attachmentID = nil
             slot.failure = nil
+            slot.retryNotBefore = nil
             return slot
         }
     }
@@ -1336,13 +1592,18 @@ final class OutgoingMessageQueue: ObservableObject {
         let slot: LocalOutgoingAttachment
         let compression: Bool
         var needsPreparation: Bool { !slot.isAudio && !slot.isFile && slot.preparedPath == nil }
+
+        func isForSubmittedHead(
+            in snapshots: [ConversationKey: LocalConversationSnapshot], matching id: SlotIdentity
+        ) -> Bool {
+            snapshots[key]?.outgoing.first?.attachments.contains(where: id.matches) == true
+        }
     }
 
     private func wakeAttachmentWorkers() {
-        guard foregroundActive, online, !authenticationFailed, storageState == .ready,
-            let store = storage.store
-        else { return }
+        guard canDispatch, allowsExecution, let store = storage.store else { return }
         let current = generation
+        let date = Date()
         var prepares = 0
         var uploads = 0
         for (id, worker) in fileWorkers where id.accountGeneration == current {
@@ -1350,16 +1611,25 @@ final class OutgoingMessageQueue: ObservableObject {
         }
         guard prepares < 1 || uploads < 2 else { return }
         for (key, snapshot) in snapshots {
-            for item in snapshot.outgoing where item.state == .pending && editors[item.clientGeneratedID] == nil {
-                for slot in item.attachments { start(slot, key: key, compression: item.compressionEnabled) }
-            }
-            for slot in snapshot.draft.attachments {
-                start(slot, key: key, compression: snapshot.draft.compressionEnabled)
+            if foregroundActive {
+                for item in snapshot.outgoing
+                where item.state == .pending && editors[item.clientGeneratedID] == nil {
+                    for slot in item.attachments { start(slot, key: key, compression: item.compressionEnabled) }
+                }
+                for slot in snapshot.draft.attachments {
+                    start(slot, key: key, compression: snapshot.draft.compressionEnabled)
+                }
+            } else if let head = snapshot.outgoing.first, head.state == .pending,
+                editors[head.clientGeneratedID] == nil, !removing.contains(head.clientGeneratedID),
+                completions[head.clientGeneratedID] == nil
+            {
+                for slot in head.attachments { start(slot, key: key, compression: head.compressionEnabled) }
             }
         }
 
         func start(_ slot: LocalOutgoingAttachment, key: ConversationKey, compression: Bool) {
-            guard !slot.isUploaded, slot.failure == nil else { return }
+            guard !slot.isUploaded, slot.failure == nil, slot.retryNotBefore.map({ $0 <= date }) ?? true
+            else { return }
             let id = SlotIdentity(slot, accountGeneration: current)
             guard fileWorkers[id] == nil else { return }
             let work = AttachmentWork(key: key, slot: slot, compression: compression)
@@ -1381,7 +1651,7 @@ final class OutgoingMessageQueue: ObservableObject {
                 {
                     self.updateProgress(nil, slotID: id.id, key: key)
                 }
-                self.wakeAttachmentWorkers()
+                self.wakeWorkers()
                 self.scheduleFileCleanup()
             })
         }
@@ -1390,7 +1660,9 @@ final class OutgoingMessageQueue: ObservableObject {
     private func attachmentOwner(_ key: ConversationKey, _ id: SlotIdentity) -> (itemID: String?, found: Bool) {
         guard let snapshot = snapshots[key] else { return (nil, false) }
         for item in snapshot.outgoing where item.state == .pending || item.failure?.stage == .preparation {
-            if item.attachments.contains(where: id.matches) { return (item.clientGeneratedID, true) }
+            if !removing.contains(item.clientGeneratedID), item.attachments.contains(where: id.matches) {
+                return (item.clientGeneratedID, true)
+            }
         }
         return (nil, snapshot.draft.attachments.contains(where: id.matches))
     }
@@ -1400,7 +1672,9 @@ final class OutgoingMessageQueue: ObservableObject {
     ) async {
         do {
             try checkGeneration(current)
-            guard attachmentOwner(work.key, id).found else { return }
+            guard canDispatch, allowsExecution, attachmentOwner(work.key, id).found,
+                work.slot.retryNotBefore.map({ $0 <= Date() }) ?? true
+            else { return }
             let attachment: LocalOutgoingAttachment
             if work.needsPreparation {
                 attachment = try await OutgoingImageProcessor(directory: store.directory)
@@ -1411,15 +1685,17 @@ final class OutgoingMessageQueue: ObservableObject {
             try await checkpointAttachment(attachment, work: work, failure: nil, generation: current)
         } catch is CancellationError {
         } catch {
-            guard current == generation, !Task.isCancelled, attachmentOwner(work.key, id).found else { return }
+            let retryAfter = Self.retryAfter(from: error)
+            guard current == generation, (!Task.isCancelled || retryAfter != nil),
+                attachmentOwner(work.key, id).found
+            else { return }
             let failure = Self.failure(error, stage: .preparation)
             if failure.reason == .authentication { authenticationFailed = true }
             var slot = work.slot
             slot.failure = failure.reason
+            slot.retryNotBefore = retryAfter
             do {
-                try await checkpointAttachment(
-                    slot, work: work, failure: failure, retryAfter: Self.retryAfter(from: error),
-                    generation: current)
+                try await checkpointAttachment(slot, work: work, failure: failure, generation: current)
             } catch {
                 storageFailed(error, generation: current)
             }
@@ -1456,6 +1732,7 @@ final class OutgoingMessageQueue: ObservableObject {
             }
         }
         slot.attachmentID = allocation.attachmentId
+        slot.retryNotBefore = nil
         return slot
     }
 
@@ -1473,10 +1750,12 @@ final class OutgoingMessageQueue: ObservableObject {
 
     private func checkpointAttachment(
         _ slot: LocalOutgoingAttachment, work: AttachmentWork, failure: OutboxFailure?,
-        retryAfter: Date? = nil,
         generation current: UInt64
     ) async throws {
-        try checkGeneration(current)
+        // A transfer that already succeeded must keep its ID even if its
+        // execution opportunity closed just before this checkpoint.
+        guard current == generation, failure == nil || slot.retryNotBefore != nil || !Task.isCancelled
+        else { throw CancellationError() }
         try await ordered {
             try self.checkGeneration(current)
             let owner = self.attachmentOwner(
@@ -1495,7 +1774,7 @@ final class OutgoingMessageQueue: ObservableObject {
                 let item = snapshot.outgoing.first(where: { $0.clientGeneratedID == id })
             {
                 if let failure {
-                    self.recordRetryWindow(id: id, failure: item.failure ?? failure, retryAfter: retryAfter)
+                    self.recordRetryWindow(id: id, failure: item.failure ?? failure)
                 } else if slot.isUploaded && item.state == .pending {
                     self.retryWindows[id] = nil
                 }

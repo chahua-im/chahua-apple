@@ -282,7 +282,7 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertEqual(h.state.submits, 0)
     }
 
-    func testServerEditToPendingEditDiscardsOrdinaryMediaAndRestoresTextAndReply() async throws {
+    func testServerEditToPendingEditPreservesOrdinaryDraftOffline() async throws {
         let remote = try TimelineTestFixtures.message(id: 1, at: 1, text: "Server original")
         let api = FakeChatAPI(messageResults: [
             "chat": [.success(.init(messages: [remote]))]
@@ -298,6 +298,9 @@ final class ComposerFocusTests: XCTestCase {
             from: Data(
                 #"{"uid":1,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
                     .utf8))
+        // Keep the durable target editable instead of letting the fake create turn it into
+        // an ambiguous failure before the native composer opens.
+        queue.setNetworkReachable(false)
         await queue.activate(uid: 1)
         addTeardownBlock { @MainActor in await queue.deactivate() }
         store.drafts.setDraftText("Queued original", chatID: "chat")
@@ -348,15 +351,18 @@ final class ComposerFocusTests: XCTestCase {
                         $0.presentation.row.messageID == remote.id
                     }?.actions
             }
+            func composerSurface() -> NSView {
+                window.attachedSheet?.contentView ?? host.view
+            }
             func editor() -> NSTextView? {
-                views(host.view).compactMap { $0 as? NSTextView }.first { $0.isEditable }
+                views(composerSurface()).compactMap { $0 as? NSTextView }.first { $0.isEditable }
             }
             func text() -> String? { editor()?.string }
             func capture(_ name: String) throws {
-                host.view.layoutSubtreeIfNeeded()
-                let bitmap = try XCTUnwrap(
-                    host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
-                host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+                let surface = composerSurface()
+                surface.layoutSubtreeIfNeeded()
+                let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                surface.cacheDisplay(in: surface.bounds, to: bitmap)
                 let attachment = XCTAttachment(
                     data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
                     uniformTypeIdentifier: "public.png")
@@ -404,7 +410,8 @@ final class ComposerFocusTests: XCTestCase {
         #endif
 
         try await waitUntil {
-            actions()?.editMessage != nil && actions()?.editPendingMessage != nil && editor() != nil
+            actions()?.interactionContext.canSendOnline(isThreadReply: false) == true
+                && actions()?.editMessage != nil && editor() != nil
         }
         let editRemote = try XCTUnwrap(actions()?.editMessage)
         editRemote(remote)
@@ -415,18 +422,21 @@ final class ComposerFocusTests: XCTestCase {
         XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), remote.replyPreview)
         try capture("Server edit retains ordinary draft media before queued edit entry")
 
-        let editPending = try XCTUnwrap(actions()?.editPendingMessage)
+        store.setNetworkAuthorized(false)
+        try await waitUntil { actions()?.interactionContext.canUseNetworkActions == false }
+        let offlineActions = try XCTUnwrap(actions())
+        XCTAssertFalse(offlineActions.interactionContext.canUseNetworkActions)
+        XCTAssertTrue(offlineActions.canEditPendingMessage(pending))
+        let editPending = try XCTUnwrap(offlineActions.editPendingMessage)
         editPending(pending)
-        try await waitUntil {
-            text() == "Queued original" && queue.draftAttachments(chatID: "chat").isEmpty
-        }
+        try await waitUntil { text() == "Queued original" }
         XCTAssertEqual(text(), "Queued original")
-        XCTAssertTrue(queue.draftAttachments(chatID: "chat").isEmpty)
+        XCTAssertEqual(queue.draftAttachments(chatID: "chat").map(\.id), ordinaryMediaIDs)
         XCTAssertTrue(
             queue.pendingMessages(chatID: "chat").contains {
                 $0.clientGeneratedID == pending.id
             })
-        try capture("Queued edit header after ordinary draft media disposal")
+        try capture("Queued edit header while ordinary draft media stays separate")
 
         #if os(macOS)
             let input = try XCTUnwrap(editor())
@@ -440,16 +450,20 @@ final class ComposerFocusTests: XCTestCase {
                     context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
                     isARepeat: false, keyCode: 53))
             NSApp.sendEvent(escape)
-            try await waitUntil { text() == "Ordinary draft" }
-            XCTAssertEqual(text(), "Ordinary draft")
-            try capture("Native Escape restores ordinary text and reply without discarded media")
         #else
-            // Native iOS Close and hardware Escape are device-verification steps;
-            // hosted XCTest covers actual edit entry, media disposal and draft ownership.
+            let close = try XCTUnwrap(
+                FocusComposerHarness.accessibilityElement(named: "Cancel edit", in: host.view))
+            XCTAssertTrue(close.accessibilityActivate())
         #endif
+        try await waitUntil {
+            text() == "Ordinary draft" && actions()?.canEditPendingMessage(pending) == true
+        }
+        XCTAssertEqual(text(), "Ordinary draft")
+        XCTAssertTrue(actions()?.canEditPendingMessage(pending) == true)
+        try capture("Native edit closure restores ordinary draft")
         XCTAssertEqual(store.drafts.draftText(chatID: "chat"), "Ordinary draft")
         XCTAssertEqual(store.drafts.draftReply(chatID: "chat"), remote.replyPreview)
-        XCTAssertTrue(queue.draftAttachments(chatID: "chat").isEmpty)
+        XCTAssertEqual(queue.draftAttachments(chatID: "chat").map(\.id), ordinaryMediaIDs)
         XCTAssertEqual(
             queue.pendingMessages(chatID: "chat").first {
                 $0.clientGeneratedID == pending.id
@@ -1509,6 +1523,10 @@ private final class FocusComposerHarness {
         }
 
         func accessibilityElement(named label: String) -> NSObject? {
+            Self.accessibilityElement(named: label, in: editorRoot)
+        }
+
+        static func accessibilityElement(named label: String, in root: UIView) -> NSObject? {
             func find(_ element: NSObject) -> NSObject? {
                 if element.accessibilityLabel == label { return element }
                 let count = element.accessibilityElementCount()
@@ -1520,7 +1538,7 @@ private final class FocusComposerHarness {
                 }
                 return nil
             }
-            return find(editorRoot)
+            return find(root)
         }
     #endif
 

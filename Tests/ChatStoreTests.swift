@@ -1657,6 +1657,395 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(store.state.chats.isEmpty)
     }
 
+    func testOnlineAutomaticReadBypassesBlockedCacheTailAndOtherScopeReplay() async throws {
+        let savedKey = ConversationKey(chatID: "saved")
+        let visibleKey = ConversationKey(chatID: "visible")
+        let savedTarget = MessageID(9), visibleTarget = MessageID(15)
+        let api = FakeChatAPI(
+            readResults: [.success(.init(lastReadMessageId: visibleTarget, unreadCount: 0))],
+            suspendStateRequests: true)
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        try await db.recordPendingRead(savedKey, base: nil, target: savedTarget)
+        let replay = try XCTUnwrap(store.replayPendingReads())
+        await api.waitForStateRequest()
+
+        let cacheGate = FakeChatAPI(suspendStateRequests: true)
+        let hold = try XCTUnwrap(cache.accessPendingReads { _ in
+            try await cacheGate.chatReadState(chatID: "cache-gate")
+        })
+        await cacheGate.waitForStateRequest()
+
+        let finished = expectation(description: "Online acknowledgement while cache and replay are blocked")
+        let read = Task {
+            defer { finished.fulfill() }
+            try await store.recordAutomaticRead(visibleKey, target: visibleTarget)
+        }
+        await fulfillment(of: [finished], timeout: 2)
+        let writes = await api.recordedReadRequests()
+        let stateGETs = await api.recordedStateRequests()
+        let messageGETs = await api.recordedReadTargetLookups()
+
+        await cacheGate.resumeStateRequest(with: .init(lastReadMessageId: nil, unreadCount: 0))
+        await api.resumeStateRequest(with: .init(lastReadMessageId: savedTarget, unreadCount: 0))
+        _ = try await hold.value
+        try await read.value
+        await replay.value
+        XCTAssertEqual(writes, ["visible::15"])
+        XCTAssertEqual(stateGETs, ["saved:"])
+        XCTAssertTrue(messageGETs.isEmpty)
+    }
+
+    func testTransientOnlineAutomaticReadPersistsAndVerifiesBeforeReplay() async throws {
+        let key = ConversationKey(chatID: "chat")
+        let base = MessageID(3), target = MessageID(19)
+        let api = FakeChatAPI(
+            readResults: [.failure(APIError.transport(URLError(.networkConnectionLost)))],
+            stateResults: [
+                .success(.init(lastReadMessageId: base, unreadCount: 8)),
+                .success(.init(lastReadMessageId: target, unreadCount: 0)),
+            ])
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        _ = try await store.conversationReadState(chatID: key.chatID, threadID: key.threadID)
+        try await store.recordAutomaticRead(key, target: target)
+
+        let pending = try await db.pendingRead(key)
+        let initialStates = await api.recordedStateRequests()
+        XCTAssertEqual(pending?.base, base)
+        XCTAssertEqual(pending?.target, target)
+        XCTAssertEqual(initialStates, ["chat:"])
+
+        let replay = try XCTUnwrap(store.replayPendingReads())
+        await replay.value
+        let cleared = try await cache.read { try await $0.pendingRead(key) }
+        let writes = await api.recordedReadRequests()
+        let states = await api.recordedStateRequests()
+        XCTAssertNil(cleared)
+        XCTAssertEqual(writes, ["chat::19"], "The verified cursor already covers the uncertain write")
+        XCTAssertEqual(states, ["chat:", "chat:"])
+    }
+
+    func testOfflineVisibleReadsCoalesceAndReplayAfterRefreshingScopedState() async throws {
+        let base = MessageID(3), target = MessageID(19)
+        let key = ConversationKey(chatID: "chat")
+        let readingAPI = FakeChatAPI(stateResults: [.success(.init(lastReadMessageId: base, unreadCount: 8))])
+        let (store, queue, cache, db) = try await makeDurableReadStore(api: readingAPI)
+        _ = try await store.conversationReadState(chatID: key.chatID, threadID: key.threadID)
+        queue.setNetworkReachable(false)
+        try await store.recordAutomaticRead(key, target: MessageID(12))
+        try await store.recordAutomaticRead(key, target: target)
+        try await store.recordAutomaticRead(key, target: MessageID(18))
+        XCTAssertNil(store.replayPendingReads())
+        let offlineRequests = await readingAPI.recordedReadRequests()
+        XCTAssertTrue(offlineRequests.isEmpty)
+        let saved = try await db.pendingRead(key)
+        XCTAssertEqual(saved?.base, base)
+        XCTAssertEqual(saved?.target, target)
+        store.reset()
+
+        let retryAPI = FakeChatAPI(
+            readResults: [.failure(APIError.transport(URLError(.networkConnectionLost)))],
+            stateResults: [
+                .success(.init(lastReadMessageId: base, unreadCount: 8)),
+                .success(.init(lastReadMessageId: target, unreadCount: 0)),
+            ])
+        let message = try TimelineTestFixtures.message(id: target.rawValue, senderID: 2, at: 19)
+        await retryAPI.setNotificationMessage(message)
+        let restored = ChatStore(
+            apiClient: retryAPI, outgoingQueue: testOutgoingQueue(apiClient: retryAPI), historyCache: cache,
+            onInvalidToken: {})
+        defer { restored.reset() }
+        let attempt = try XCTUnwrap(restored.replayPendingReads())
+        _ = restored.replayPendingReads()
+        await attempt.value
+        let retryable = try await db.pendingRead(key)
+        XCTAssertEqual(retryable, saved)
+        let firstStates = await retryAPI.recordedStateRequests()
+        let firstReads = await retryAPI.recordedReadRequests()
+        XCTAssertEqual(firstStates, ["chat:"])
+        XCTAssertEqual(firstReads, ["chat::19"])
+
+        // The first HTTP response was lost, but the fresh primary covers the
+        // target. A reconnect must not send it again or move to a different row.
+        let reconnect = try XCTUnwrap(restored.replayPendingReads())
+        await reconnect.value
+        let cleared = try await cache.read { try await $0.pendingRead(key) }
+        let reads = await retryAPI.recordedReadRequests()
+        XCTAssertNil(cleared)
+        XCTAssertEqual(reads, ["chat::19"])
+    }
+
+    func testDurableReadDiscardsRewoundBaseAndRefetchesAfterMissingTarget() async throws {
+        let key = ConversationKey(chatID: "chat")
+        let base = MessageID(5), target = MessageID(10)
+        let api = FakeChatAPI(stateResults: [
+            .success(.init(lastReadMessageId: nil, unreadCount: 7)),
+            .success(.init(lastReadMessageId: nil, unreadCount: 7)),
+            .success(.init(lastReadMessageId: MessageID(2), unreadCount: 3)),
+        ])
+        await api.setNotificationMessageError(.http(status: 404, body: Data()))
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+
+        try await db.recordPendingRead(key, base: base, target: target)
+        let rewind = try XCTUnwrap(store.replayPendingReads())
+        await rewind.value
+        let stale = try await cache.read { try await $0.pendingRead(key) }
+        XCTAssertNil(stale)
+
+        try await db.recordPendingRead(key, base: nil, target: target)
+        let missingTarget = try XCTUnwrap(store.replayPendingReads())
+        await missingTarget.value
+        let missing = try await cache.read { try await $0.pendingRead(key) }
+        let states = await api.recordedStateRequests()
+        let reads = await api.recordedReadRequests()
+        XCTAssertNil(missing)
+        XCTAssertEqual(states, ["chat:", "chat:", "chat:"])
+        XCTAssertTrue(reads.isEmpty)
+    }
+
+    func testAcceptedMarkUnreadFencesDurableReadWaitingForFreshState() async throws {
+        let key = ConversationKey(chatID: "chat")
+        let message = try TimelineTestFixtures.message(id: 10, senderID: 2, at: 10)
+        let row = ChatListItem(
+            id: key.chatID, unreadCount: 0, lastReadMessageId: message.id,
+            lastMessage: message.replyPreview, archived: false, kind: .dm)
+        let api = FakeChatAPI(
+            chatResults: [.success(.init(chats: [row]))],
+            unreadResults: [.success(.init(lastReadMessageId: nil, unreadCount: 1))],
+            suspendStateRequests: true)
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.loadActiveChats()
+        try await db.recordPendingRead(key, base: nil, target: message.id)
+        let replaying = try XCTUnwrap(store.replayPendingReads())
+        await api.waitForStateRequest()
+
+        await store.performListAction(.markUnread, conversation: key)
+        let saved = try await cache.read { try await $0.pendingRead(key) }
+        XCTAssertNil(saved)
+        await api.resumeStateRequest(with: .init(lastReadMessageId: message.id, unreadCount: 0))
+        await replaying.value
+        XCTAssertNil(store.state.chats.first?.lastReadMessageId)
+        let reads = await api.recordedReadRequests()
+        XCTAssertTrue(reads.isEmpty)
+    }
+
+    func testDurableReadInvalidatesDeletedTargetsAndRevokedChats() async throws {
+        let chat = ConversationKey(chatID: "chat")
+        let thread = ConversationKey(chatID: "chat", threadID: "1")
+        let message = try TimelineTestFixtures.message(id: 10, senderID: 2, at: 10)
+        let api = FakeChatAPI(stateResults: [.failure(APIError.http(status: 403, body: Data()))])
+        let (store, queue, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        queue.setNetworkReachable(false)
+        try await store.recordAutomaticRead(chat, target: message.id)
+        await store.applyRealtimeEvent(.messageDeleted(message.redactedForDeletion()), currentUserID: 1)
+        let deleted = try await cache.read { try await $0.pendingRead(chat) }
+        XCTAssertNil(deleted)
+        try await store.recordAutomaticRead(chat, target: MessageID(11))
+        try await store.recordAutomaticRead(thread, target: MessageID(12))
+
+        store.setForegroundActive(false)
+        queue.setNetworkReachable(true)
+        store.setForegroundActive(true)
+        let replay = try XCTUnwrap(store.replayPendingReads())
+        await replay.value
+        let revoked = try await cache.read { try await $0.pendingReads() }
+        let reads = await api.recordedReadRequests()
+        XCTAssertTrue(revoked.isEmpty)
+        XCTAssertTrue(reads.isEmpty)
+    }
+
+    func testManualConversationRetryOverridesOnlyTheRequestedPathAndRequiresAuthorization() async throws {
+        let api = FakeChatAPI(chatResults: [.success(.init(chats: [chat(id: "fresh")]))])
+        let (store, queue, _, _) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        var validationRetries = 0
+        store.onRetrySessionValidation = { validationRetries += 1 }
+        queue.setNetworkReachable(false)
+        store.setNetworkAuthorized(false)
+        await store.retryConversations(chats: true, threads: false, archived: false)
+        XCTAssertEqual(validationRetries, 1)
+        let unauthorized = await api.recordedChatQueries()
+        XCTAssertTrue(unauthorized.isEmpty)
+
+        store.setNetworkAuthorized(true)
+        await store.loadActiveChats()
+        await store.retryConversations(chats: true, threads: false, archived: false)
+        await store.refreshArchivedChats()
+        let chats = await api.recordedChatQueries()
+        let threads = await api.recordedThreadQueries()
+        XCTAssertFalse(store.canFetchHistory)
+        XCTAssertEqual(chats.map(\.archived), [false])
+        XCTAssertTrue(threads.isEmpty)
+        XCTAssertEqual(store.state.chats.map(\.id), ["fresh"])
+    }
+
+    private func makeDurableReadStore(api: FakeChatAPI) async throws
+        -> (ChatStore, OutgoingMessageQueue, AccountHistoryCache, ChahuaLocalStore)
+    {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "DurableRead-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        let db = try await Task.detached { try ChahuaLocalStore(directory: directory, userID: 1) }.value
+        let owner = AccountLocalStoreOwner { _ in db }
+        let cache = AccountHistoryCache(owner: owner)
+        cache.setSession(uid: 1)
+        owner.setSession(uid: 1)
+        let queue = testOutgoingQueue(apiClient: api)
+        let store = ChatStore(apiClient: api, outgoingQueue: queue, historyCache: cache, onInvalidToken: {})
+        return (store, queue, cache, db)
+    }
+
+    func testFreshEnqueuePermissionIsReusedUntilPathLoss() async throws {
+        let api = FakeChatAPI()
+        let (store, queue, _, _) = try await makeDurableReadStore(api: api)
+        let key = ConversationKey(chatID: "chat")
+        await api.setConversationPageMetadata(group: .init(id: key.chatID, myRole: .admin, kind: .group))
+        try await store.prepareForwardDestination(key)
+
+        // No new permission request can succeed after the fixture changes.
+        await api.setConversationPageMetadata(group: .init(id: "other", myRole: .admin, kind: .group))
+        let authorize = try XCTUnwrap(queue.authorizeWrite)
+        try await authorize(key.chatID, nil)
+
+        queue.setNetworkReachable(false)
+        queue.setNetworkReachable(true)
+        do {
+            try await authorize(key.chatID, nil)
+            XCTFail("A restored path must not reuse the pre-outage permission")
+        } catch APIError.unavailable {}
+    }
+
+    func testOfflineSubmitUsesOnlyTheLastResolvedDestinationDecision() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let db = try ChahuaLocalStore(directory: directory, userID: 1)
+        let key = ConversationKey(chatID: "allowed")
+        let epoch = try await db.cacheEpoch()
+        try await db.cacheSendDecision(true, in: key, epoch: epoch)
+        try await db.cacheSendDecision(false, in: .init(chatID: "denied"), epoch: epoch)
+        let owner = AccountLocalStoreOwner { _ in db }
+        let cache = AccountHistoryCache(owner: owner)
+        let api = FakeChatAPI()
+        let queue = OutgoingMessageQueue(apiClient: api, storage: owner, onInvalidToken: {})
+        let store = ChatStore(apiClient: api, outgoingQueue: queue, historyCache: cache, onInvalidToken: {})
+        cache.setSession(uid: 1)
+        store.setNetworkAuthorized(false)
+        await queue.activate(uid: 1)
+
+        try await queue.enqueueIndependentText(chatID: key.chatID, text: "A")
+        try await queue.enqueueIndependentText(chatID: key.chatID, text: "B")
+        let remove = try XCTUnwrap(queue.snapshots[key]?.outgoing.last)
+        try await queue.removeOutgoing(chatID: key.chatID, itemID: remove.clientGeneratedID)
+        for unavailable in [
+            ConversationKey(chatID: "denied"), .init(chatID: key.chatID, threadID: "20"),
+        ] {
+            do {
+                try await queue.enqueueIndependentText(
+                    chatID: unavailable.chatID, threadID: unavailable.threadID, text: "Never submitted")
+                XCTFail("A different destination must not inherit the saved write decision")
+            } catch SpeakingWriteError.unavailable {}
+        }
+        await store.applyRealtimeEvent(
+            .groupSpeakingModeChanged(.init(chatId: key.chatID, speakingMode: .readOnly)), currentUserID: 1)
+        do {
+            try await queue.enqueueIndependentText(chatID: key.chatID, text: "Never submitted")
+            XCTFail("An invalidated decision must not authorize a new send")
+        } catch SpeakingWriteError.unavailable {}
+        let persisted = try await cache.read { try await $0.cachedScopeContext(key) }
+        let outgoing = try await db.load()
+        XCTAssertNil(persisted?.canSend)
+        XCTAssertEqual(outgoing.flatMap(\.outgoing).map(\.text), ["A"])
+        XCTAssertEqual(outgoing.first?.outgoing.first?.state, .pending)
+        await queue.deactivate()
+    }
+
+    func testOfflineListHydratesBoundedPagesAndKeepsThemThroughFailedRefresh() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "OfflineList-\(UUID().uuidString)", isDirectory: true)
+        let db = try await Task.detached {
+            try ChahuaLocalStore(directory: directory, userID: 1)
+        }.value
+        let epoch = try await db.cacheEpoch()
+        let items: [CachedConversation] = (1...51).map { index in
+            .chat(.init(
+                id: "saved-\(index)", name: "Cached \(index)",
+                lastMessageAt: Date(timeIntervalSince1970: Double(100 - index)),
+                unreadCount: 42, unreadMentions: 12, unreadReactions: 13,
+                lastReadMessageId: MessageID(4), peerLastReadMessageId: MessageID(5),
+                archived: false, kind: .dm))
+        }
+        try await db.cacheList(
+            .activeChats, items: items, seen: Set(items.map(\.key)), epoch: epoch)
+        try await db.cacheList(.archivedChats, items: [], seen: [], epoch: epoch)
+
+        let owner = AccountLocalStoreOwner { _ in db }
+        let cache = AccountHistoryCache(owner: owner)
+        cache.setSession(uid: 1)
+        owner.setSession(uid: 1)
+        let api = FakeChatAPI(suspendChatRequests: true)
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), historyCache: cache,
+            onInvalidToken: {})
+        defer {
+            store.reset()
+            try? FileManager.default.removeItem(at: directory)
+        }
+        store.setNetworkAuthorized(false)
+        await store.loadActiveChats()
+        await store.loadArchivedChats()
+
+        XCTAssertEqual(store.state.chatListLoadPhase, .idle)
+        XCTAssertEqual(store.state.listAvailability[.activeChats], .cached(complete: true))
+        XCTAssertEqual(store.state.listAvailability[.archivedChats], .cached(complete: true))
+        XCTAssertEqual(store.state.chats.map(\.id), (1...50).map { "saved-\($0)" })
+        XCTAssertTrue(store.state.archivedChats.isEmpty)
+        XCTAssertTrue(store.state.savedListHasMore.contains(.activeChats))
+        XCTAssertEqual(store.state.unreadBadgeCount(), 0)
+        XCTAssertNil(store.state.appBadgeCount)
+        XCTAssertTrue(store.listReadReceipts.values.isEmpty)
+        XCTAssertNil(store.state.chats.first?.peerLastReadMessageId)
+        XCTAssertEqual(store.state.chats.first?.lastReadMessageId, MessageID(4))
+        let offlineRequests = await api.recordedChatQueries()
+        XCTAssertTrue(offlineRequests.isEmpty)
+
+        await store.loadMoreSavedConversations(chats: true, threads: false, archived: false)
+        XCTAssertEqual(store.state.chats.last?.id, "saved-51")
+        XCTAssertFalse(store.state.savedListHasMore.contains(.activeChats))
+
+        store.setNetworkAuthorized(true)
+        let refresh = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        await api.resumeChatRequest(with: .success(.init(
+            chats: [.init(id: "saved-1", name: "Fresh metadata", unreadCount: 0,
+                          archived: false, kind: .dm)],
+            nextCursor: "next")))
+        await api.waitForChatRequest()
+        XCTAssertEqual(store.state.chats.first?.name, "Fresh metadata")
+        XCTAssertEqual(store.state.chats.count, 51)
+        await api.resumeChatRequest(with: .failure(APIError.unavailable))
+        await refresh.value
+        XCTAssertEqual(store.state.chatListLoadPhase, .failed)
+        XCTAssertEqual(store.state.chats.count, 51)
+        XCTAssertEqual(store.state.listAvailability[.activeChats], .server(complete: false))
+        let saved = try await cache.read { try await $0.cachedList(.activeChats, limit: 100) }
+        XCTAssertEqual(saved?.items.count, 51)
+        XCTAssertEqual(saved?.complete, true)
+
+        let completeRefresh = Task { await store.refreshActiveChats() }
+        await api.waitForChatRequest()
+        await api.resumeChatRequest(with: .success(.init(chats: [])))
+        await completeRefresh.value
+        XCTAssertTrue(store.state.chats.isEmpty)
+        XCTAssertEqual(store.state.listAvailability[.activeChats], .server(complete: true))
+        let emptied = try await cache.read { try await $0.cachedList(.activeChats) }
+        XCTAssertEqual(emptied?.items.count, 0)
+        XCTAssertEqual(emptied?.complete, true)
+    }
+
     private func chat(id: String) -> ChatListItem {
         ChatListItem(id: id, name: "Chat \(id)", unreadCount: 0, archived: false, kind: .group)
     }
@@ -1714,7 +2103,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.state.archivedChats, [first, second])
         XCTAssertEqual(store.state.archivedThreads, [firstThread, secondThread])
         await store.refreshArchivedConversations()
-        XCTAssertEqual(store.state.archivedChats, [first, second])
+        XCTAssertEqual(store.state.archivedChats, [second, first])
         XCTAssertEqual(store.state.archivedThreads, [firstThread, secondThread])
         XCTAssertEqual(store.state.archivedChatListLoadPhase, .loaded)
         XCTAssertEqual(store.state.archivedThreadListLoadPhase, .loaded)
@@ -1798,7 +2187,7 @@ final class ChatStoreTests: XCTestCase {
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
         await store.loadActiveChats()
         await store.refreshActiveChats()
-        XCTAssertEqual(store.state.chats.map(\.id), ["original"])
+        XCTAssertEqual(store.state.chats.map(\.id), ["partial", "original"])
         XCTAssertTrue(store.state.chatListRefreshFailed)
     }
 
@@ -2013,7 +2402,7 @@ final class ChatStoreTests: XCTestCase {
         preferenceDefaults.set(false, forKey: "chat.list.showThreadsInMessages")
         preferenceDefaults.set(true, forKey: "chat.timeline.showAllAvatars")
         let root = AppCompositionRoot(
-            apiClient: api, realtimeProvider: api,
+            apiClient: api, authenticationClient: api, realtimeProvider: api,
             credentialLoginClient: PrototypeCredentialLoginClient(),
             tokenStorage: InMemorySessionTokenStorage(token: "isolated-test-token"),
             mediaNamespace: directory.lastPathComponent,
@@ -2810,7 +3199,8 @@ final class ChatStoreTests: XCTestCase {
         let h = try await openDraftHarness(api: api)
         let pending = try await restoreInterruptedSend(in: h)
         await h.store.loadActiveChats()
-        try await h.queue.removeOutgoing(chatID: "chat", itemID: pending.clientGeneratedID)
+        try await h.queue.removeOutgoing(
+            chatID: "chat", itemID: pending.clientGeneratedID, allowPossibleDelivery: true)
         XCTAssertTrue(h.store.conversationMessages.pending(chatID: "chat").isEmpty)
         XCTAssertNil(h.store.pendingListPreviews[ConversationKey(chatID: "chat")])
 
@@ -2845,21 +3235,24 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
     }
 
-    func testThreadPaginationDeduplicatesAndFailedRefreshRetainsCompleteSnapshot() async throws {
+    func testThreadPaginationDeduplicatesAndRejectsRepeatedCursorWithoutRemovingRows() async throws {
         let first = try ScopeTestFixtures.thread(id: 1)
         let second = try ScopeTestFixtures.thread(id: 2)
+        let rejected = try ScopeTestFixtures.thread(id: 3)
         let api = FakeChatAPI(threadResults: [
             .success(.init(threads: [first], nextCursor: "next")),
             .success(.init(threads: [first, second])),
             .success(.init(threads: [second], nextCursor: "loop")),
-            .success(.init(threads: [], nextCursor: "loop")),
+            .success(.init(threads: [rejected], nextCursor: "loop")),
         ])
         let store = ChatStore(
             apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
         await store.loadActiveThreads()
         XCTAssertEqual(store.state.threads, [first, second])
         await store.refreshActiveThreads()
-        XCTAssertEqual(store.state.threads, [first, second])
+        // The first refresh page was accepted; the malformed second page neither
+        // contributes a row nor removes the retained tail.
+        XCTAssertEqual(store.state.threads, [second, first])
         XCTAssertEqual(store.state.threadListLoadPhase, .loaded)
         XCTAssertTrue(store.state.threadListRefreshFailed)
     }
@@ -4177,7 +4570,7 @@ private final class DraftStorageProbe {
     }
 }
 
-actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
+actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionProviding {
     private var groupUpdateBodies: [UpdateGroupBody] = []
     private var pendingGroupUpdates: [Int: CheckedContinuation<GroupInfoResponse, Error>] = [:]
     private var groupUpdateObservers: [Int: CheckedContinuation<Void, Never>] = [:]
@@ -4338,6 +4731,27 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
     private var chatSavedResults: [Result<ListSavedMessagesResponse, Error>] = []
     private var saveResult: SavedMessageResponse?
     private var authenticatedProfile: MeResponse?
+    private var holdMe = false
+    private var installedToken: String?
+    private var refreshHandler: RefreshHandler?
+    private var nextRefreshedToken: String?
+
+    func refreshOnNextMe(_ token: String) { nextRefreshedToken = token }
+    private var heldMe: CheckedContinuation<MeResponse, Error>?
+    private var meWaiter: CheckedContinuation<Void, Never>?
+    private(set) var meRequestCount = 0
+
+    func holdNextMeRequest() { holdMe = true }
+
+    func waitForMeRequest() async {
+        guard heldMe == nil else { return }
+        await withCheckedContinuation { meWaiter = $0 }
+    }
+
+    func releaseMeRequest(_ response: MeResponse) {
+        heldMe?.resume(returning: response)
+        heldMe = nil
+    }
     private var authenticationFailure: APIError?
     func setAuthenticationFailure(_ error: APIError?) {
         authenticationFailure = error
@@ -4580,6 +4994,7 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
     private var readRequestObserver: CheckedContinuation<Void, Never>?
     private var stateResults: [Result<ReadStateResponse, Error>]
     private var stateRequests: [String] = []
+    private var readTargetLookups: [MessageID] = []
     private let suspendStateRequests: Bool
     private var pendingStateRequest: CheckedContinuation<ReadStateResponse, Error>?
     private var stateRequestObserver: CheckedContinuation<Void, Never>?
@@ -4713,10 +5128,33 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
         guard let authenticatedProfile else { throw APIError.unavailable }
         return authenticatedProfile
     }
+    func installStoredSession(
+        _ token: String?, onRefresh: RefreshHandler?
+    ) {
+        installedToken = token
+        refreshHandler = onRefresh
+    }
+    func authorizeStoredSession(expectedToken: String) throws {}
     func createDevSession(uid: Int32, clientID: String) async throws -> String {
         throw APIError.unavailable
     }
-    func me() async throws -> MeResponse { throw APIError.unavailable }
+    func me() async throws -> MeResponse {
+        meRequestCount += 1
+        if let nextRefreshedToken, let installedToken, let refreshHandler {
+            self.nextRefreshedToken = nil
+            try await refreshHandler(installedToken, nextRefreshedToken)
+            self.installedToken = nextRefreshedToken
+        }
+        if holdMe {
+            holdMe = false
+            return try await withCheckedThrowingContinuation {
+                heldMe = $0
+                meWaiter?.resume()
+                meWaiter = nil
+            }
+        }
+        return try await authenticate(candidateJWT: "")
+    }
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(
         fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
@@ -4750,12 +5188,15 @@ actor FakeChatAPI: ChahuaAPIClient, RealtimeConnectionProviding {
         throw APIError.unavailable
     }
     func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
+        readTargetLookups.append(messageID)
         if let notificationMessageError { throw notificationMessageError }
         guard let notificationMessage, notificationMessage.chatId == chatID,
             notificationMessage.id == messageID
         else { throw APIError.unavailable }
         return notificationMessage
     }
+
+    func recordedReadTargetLookups() -> [MessageID] { readTargetLookups }
 
     func getReactionDetails(chatID: String, messageID: MessageID) async throws
         -> ReactionDetailResponse

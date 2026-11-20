@@ -13,13 +13,28 @@ struct MessageInteractionContext: Equatable {
     var isReadOnly = false
     var speakingMode: SpeakingMode?
     var hasExistingThread = false
+    var canUseNetworkActions = true
+    var isSendPermissionResolved = true
+    var savedSendDecision: Bool?
 
-    var canSend: Bool {
-        canSend(isThreadReply: isThreadView)
+    var resolvedSendDecision: Bool? {
+        guard !isReadOnly, canUseNetworkActions, isSendPermissionResolved else { return nil }
+        return canSendOnline(isThreadReply: isThreadView)
     }
 
-    func canSend(isThreadReply: Bool) -> Bool {
-        guard canWrite, !isReadOnly else { return false }
+    var canStageDraft: Bool {
+        !isReadOnly && (resolvedSendDecision ?? savedSendDecision) != false
+    }
+
+    var canSend: Bool {
+        !isReadOnly && (resolvedSendDecision ?? savedSendDecision) == true
+    }
+
+    // Published edits cannot use destination evidence saved for local enqueue.
+    func canSendOnline(isThreadReply: Bool) -> Bool {
+        guard !isReadOnly, canUseNetworkActions, canWrite, isSendPermissionResolved else {
+            return false
+        }
         if isDM || isAdmin { return true }
         guard let speakingMode else { return false }
         if !isThreadReply { return speakingMode.allowsMainMessages }
@@ -28,7 +43,7 @@ struct MessageInteractionContext: Equatable {
     }
 
     var canCreateThread: Bool {
-        canWrite && !isReadOnly
+        canUseNetworkActions && canWrite && !isReadOnly
             && (isDM || isAdmin || speakingMode?.allowsThreadCreation == true)
     }
 }
@@ -123,7 +138,8 @@ struct MessageActionPolicy {
     }
 
     var canReact: Bool {
-        !context.isReadOnly && context.canWrite && !isDeleted && !isPending
+        context.canUseNetworkActions && !context.isReadOnly && context.canWrite
+            && !isDeleted && !isPending
             && messageType != .system && messageType != .sticker && messageType != .invite
     }
 
@@ -135,6 +151,12 @@ struct MessageActionPolicy {
         {
             return .hidden
         }
+        if !context.canUseNetworkActions {
+            switch action {
+            case .thread, .pin, .unpin, .edit, .delete, .save, .reactionDetails: return .hidden
+            default: break
+            }
+        }
         if messageType == .invite,
             ![MessageMenuAction.reply, .pin, .unpin, .delete, .select].contains(action)
         {
@@ -143,7 +165,7 @@ struct MessageActionPolicy {
         if isDeleted {
             // Preserve the PWA's history affordances, never a stale redacted body.
             switch action {
-            case .reply: return context.canSend && !isPending ? .enabled : .hidden
+            case .reply: return context.canStageDraft && !isPending ? .enabled : .hidden
             case .copyLink: return !context.isDM && !isPending ? .enabled : .hidden
             case .reactionDetails: return hasReactions && !isPending ? .enabled : .hidden
             default: return .hidden
@@ -159,7 +181,7 @@ struct MessageActionPolicy {
         case .copyLink:
             return context.isDM ? .hidden : .enabled
         case .reply:
-            return context.canSend ? .enabled : .hidden
+            return context.canStageDraft ? .enabled : .hidden
         case .thread:
             return context.canCreateThread && messageType == .text && !context.isThreadView
                 && !hasThreadInfo
@@ -173,7 +195,7 @@ struct MessageActionPolicy {
                 && !context.isThreadView && context.isPinned
                 && !context.isUpdatingPin ? .enabled : .hidden
         case .edit:
-            return context.canSend(isThreadReply: isThreadReply) && isOwn
+            return context.canSendOnline(isThreadReply: isThreadReply) && isOwn
                 && messageType == .text && hasCopyableText
                 && !isForwarded
                 ? .enabled : .hidden

@@ -194,10 +194,87 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
                     ON outgoing_message(chat_id, thread_id) WHERE state='sending';
                 """)
     }
-    try queue.read { db in
-        if try migrator.hasBeenSuperseded(db) { throw LocalStorageError.unsupportedSchema }
+    migrator.registerMigration("v11_conversation_cache", migrate: addConversationCache)
+    migrator.registerMigration("v12_outbox_retry_deadline") { db in
+        try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN retry_not_before REAL")
     }
+    let superseded = try queue.read { db in
+        // SQLite can coerce non-text values to String. A malformed ledger is
+        // an error, not evidence that a newer client migrated this database.
+        if try db.tableExists("grdb_migrations") {
+            let columns = try db.columns(in: "grdb_migrations")
+            guard columns.count == 1, columns.first?.name == "identifier",
+                try db.primaryKey("grdb_migrations").columns == ["identifier"],
+                try Bool.fetchOne(
+                    db, sql: """
+                        SELECT EXISTS(
+                            SELECT 1 FROM grdb_migrations
+                            WHERE typeof(identifier) != 'text' OR length(identifier) = 0
+                        )
+                        """) == false
+            else { throw LocalStorageError.corruptRecord }
+        }
+        return try migrator.hasBeenSuperseded(db)
+    }
+    if superseded { try queue.erase() }
     try migrator.migrate(queue)
+}
+
+private func addConversationCache(_ db: Database) throws {
+    try db.execute(
+        sql: """
+            CREATE TABLE cache_meta (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                epoch INTEGER NOT NULL
+            );
+            INSERT INTO cache_meta VALUES (1, 0);
+            CREATE TABLE cached_list (
+                scope TEXT PRIMARY KEY NOT NULL,
+                complete INTEGER NOT NULL,
+                fetched_at REAL NOT NULL
+            );
+            CREATE TABLE cached_conversation (
+                chat_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+                archived INTEGER NOT NULL, activity REAL NOT NULL, payload BLOB NOT NULL,
+                PRIMARY KEY(chat_id, thread_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX cached_conversation_activity
+                ON cached_conversation(archived, thread_id = '', activity DESC, chat_id, thread_id);
+            CREATE TABLE cached_message (
+                chat_id TEXT NOT NULL, message_id BLOB NOT NULL,
+                payload BLOB NOT NULL, reply_to_id BLOB,
+                PRIMARY KEY(chat_id, message_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX cached_message_reply ON cached_message(chat_id, reply_to_id)
+                WHERE reply_to_id IS NOT NULL;
+            CREATE TABLE cached_member (
+                chat_id TEXT NOT NULL, thread_id TEXT NOT NULL, message_id BLOB NOT NULL,
+                PRIMARY KEY(chat_id, thread_id, message_id),
+                FOREIGN KEY(chat_id, message_id) REFERENCES cached_message(chat_id, message_id) ON DELETE CASCADE
+            ) WITHOUT ROWID;
+            CREATE INDEX cached_member_body ON cached_member(chat_id, message_id);
+            CREATE TABLE cached_segment (
+                chat_id TEXT NOT NULL, thread_id TEXT NOT NULL, lo BLOB NOT NULL, hi BLOB NOT NULL,
+                reaches_oldest INTEGER NOT NULL, was_latest INTEGER NOT NULL,
+                PRIMARY KEY(chat_id, thread_id, lo)
+            ) WITHOUT ROWID;
+            CREATE TABLE cached_scope (
+                chat_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+                policy BLOB, settings BLOB, last_write_decision INTEGER, write_peer_id INTEGER,
+                verified_empty INTEGER NOT NULL DEFAULT 0,
+                access_revoked INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(chat_id, thread_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX cached_scope_write_peer ON cached_scope(write_peer_id) WHERE write_peer_id IS NOT NULL;
+            CREATE TABLE cached_tombstone (
+                chat_id TEXT NOT NULL, message_id BLOB NOT NULL,
+                PRIMARY KEY(chat_id, message_id)
+            ) WITHOUT ROWID;
+            CREATE TABLE pending_read (
+                chat_id TEXT NOT NULL, thread_id TEXT NOT NULL, base_id BLOB, target_id BLOB NOT NULL,
+                PRIMARY KEY(chat_id, thread_id)
+            ) WITHOUT ROWID;
+            """)
 }
 
 private func addLocalReplyContext(_ db: Database) throws {

@@ -72,7 +72,7 @@
                     self.open(row: row, source: source, in: timelineView)
                 } : nil
             if !context.canWrite { result.toggleReaction = nil }
-            if target != nil || !context.canWrite { result.replyToMessage = nil }
+            if target != nil || !context.canStageDraft { result.replyToMessage = nil }
             return result
         }
 

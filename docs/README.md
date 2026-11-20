@@ -16,6 +16,7 @@
 - [Conversation timeline](arch/conversation-timeline.md) — grouping, receipts, delivery indicators, forwarding, unread activity, and image viewing.
 - [Realtime messaging](arch/realtime-messaging.md) — transport lifecycle, event reconciliation, and read progress.
 - [Outbound queue](arch/outbound-queue.md) — account-local drafts, media preparation, conversation FIFO, and authoritative send reconciliation.
+- [Offline cache](arch/offline-cache.md) — planned: session start without network, account message cache, offline sending and background draining, weak-network policy.
 - [Scrolling performance](arch/scrolling-performance.md) — list/timeline optimizations and Instruments trace collection.
 - [Markdown rendering](arch/markdown-rendering.md) — supported syntax, native text layout, and spoiler behavior.
 - [Notifications and sharing](arch/notifications-and-sharing.md) — notification preferences, camera capture, and incoming shares.

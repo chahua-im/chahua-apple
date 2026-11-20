@@ -491,10 +491,13 @@
             for index in lower...upper where pages[index] == nil {
                 let item = gallery.items[index]
                 let page: any ImageDetailPageContentIOS
+                let userInitiated = index == gallery.selectedIndex
                 if item.isVideo {
-                    page = ImageDetailVideoPageIOS(item: item, mediaContext: mediaContext)
+                    page = ImageDetailVideoPageIOS(
+                        item: item, mediaContext: mediaContext, userInitiated: userInitiated)
                 } else {
-                    let imagePage = ImageDetailImagePageIOS(item: item, mediaContext: mediaContext)
+                    let imagePage = ImageDetailImagePageIOS(
+                        item: item, mediaContext: mediaContext, userInitiated: userInitiated)
                     imagePage.onZoomChanged = { [weak self] in self?.updatePageStates() }
                     page = imagePage
                 }
@@ -600,9 +603,9 @@
             updateMoreButtonConfiguration()
             updatePageStates()
 
-            saveTask = Task { [weak self] in
+            saveTask = Task { [weak self, mediaContext] in
                 do {
-                    let saved = try await ImageDetailSave.save(item)
+                    let saved = try await ImageDetailSave.save(item, mediaContext: mediaContext)
                     guard !Task.isCancelled else { return }
                     self?.finishSaving(
                         saved
@@ -981,6 +984,7 @@
     {
         private let item: MessageImageItem
         private let mediaContext: AppMediaContext?
+        private var userInitiated: Bool
         private let loader = ImageDetailImageLoader()
         private let scrollView = ImageDetailZoomScrollViewIOS()
         private let imageCanvas = UIView()
@@ -1011,9 +1015,10 @@
                 && scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
         }
 
-        init(item: MessageImageItem, mediaContext: AppMediaContext?) {
+        init(item: MessageImageItem, mediaContext: AppMediaContext?, userInitiated: Bool) {
             self.item = item
             self.mediaContext = mediaContext
+            self.userInitiated = userInitiated
             super.init(frame: .zero)
             clipsToBounds = true
             scrollView.delegate = self
@@ -1059,10 +1064,10 @@
             retryButton.isHidden = true
             addSubview(retryButton)
             observation = Publishers.CombineLatest3(
-                loader.$image, loader.$isLoading, loader.$failed
+                loader.$image, loader.$isLoading, loader.$failure
             )
-            .sink { [weak self] image, loading, failed in
-                self?.render(image: image, loading: loading, failed: failed)
+            .sink { [weak self] image, loading, failure in
+                self?.render(image: image, loading: loading, failure: failure)
             }
         }
 
@@ -1087,7 +1092,7 @@
             }
             if visible, !requested {
                 requested = true
-                loader.load(item, mediaContext: mediaContext)
+                loader.load(item, mediaContext: mediaContext, userInitiated: userInitiated)
             } else if !visible, loading {
                 requested = false
                 loader.cancel()
@@ -1134,10 +1139,17 @@
                 x: bounds.midX - 60, y: bounds.midY + 8, width: 120, height: 48)
         }
 
-        private func render(image: UIImage?, loading: Bool, failed: Bool) {
+        private func render(
+            image: UIImage?, loading: Bool, failure: ImageDetailImageLoader.Failure?
+        ) {
             guard !tornDown else { return }
             self.loading = loading
-            self.failed = failed
+            failed = failure != nil
+            errorLabel.text = AppLanguage.localized(
+                failure == .notDownloaded ? "Media not downloaded" : "Unable to load image")
+            retryButton.configuration?.title = AppLanguage.localized(
+                failure == .notDownloaded ? "Download" : "Retry")
+            setNeedsLayout()
             if let image, installedImage !== image {
                 installedImage = image
                 stillImage.image = image.images?.first ?? image
@@ -1233,7 +1245,8 @@
         @objc private func retry() {
             guard mayInteract?() == true, !loading else { return }
             requested = true
-            loader.load(item, mediaContext: mediaContext)
+            userInitiated = true
+            loader.load(item, mediaContext: mediaContext, userInitiated: true)
         }
 
         @objc private func doubleTapped(_ gesture: UITapGestureRecognizer) {

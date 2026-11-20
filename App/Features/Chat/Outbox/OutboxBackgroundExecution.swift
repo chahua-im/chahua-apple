@@ -4,9 +4,7 @@ import Foundation
     import UIKit
 #endif
 
-/// SwiftUI scene activity stops queue draining but grants no suspension time.
-/// iOS provides a finite native task only for an authorized notification reply
-/// or a request that was already handed to the transport.
+/// A finite UIKit execution grant for the main app's shared outbox dispatcher.
 @MainActor
 final class OutboxBackgroundExecution {
     typealias Start = @MainActor (

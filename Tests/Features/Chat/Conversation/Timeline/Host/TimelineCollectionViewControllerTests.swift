@@ -473,20 +473,40 @@
                 window.isHidden = true
                 model.close()
             }
+            // SwiftUI delivers routed actions separately from the native display tick
+            // that lays out the selection gutter. Draining GCD alone waits for neither.
+            func layoutUntil<T>(_ failure: String, _ result: () -> T?) async throws -> T {
+                let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                repeat {
+                    window.layoutIfNeeded()
+                    if let value = result() { return value }
+                    try await Task.sleep(for: .milliseconds(16))
+                } while ContinuousClock.now < deadline
+                return try XCTUnwrap(nil, failure)
+            }
+
             await model.loadInitial()
-            window.layoutIfNeeded()
-            let native = try XCTUnwrap(
-                model.selectionViewportSource as? TimelineCollectionViewController)
-            native.viewDidLayoutSubviews()
-            await drainNativeHandoffs()
+            let native = try await layoutUntil("The initial native viewport did not settle") {
+                () -> TimelineCollectionViewController? in
+                guard
+                    let controller = model.selectionViewportSource as? TimelineCollectionViewController,
+                    model.updates.value.pendingScroll == nil,
+                    actions.toggleMessageSelection != nil,
+                    controller.visibleMessageIDsForSelection()?.isEmpty == false
+                else { return nil }
+                return controller
+            }
 
             let anchor = try XCTUnwrap(messages.last)
             try XCTUnwrap(actions.toggleMessageSelection)(anchor)
-            await drainNativeHandoffs()
-            window.layoutIfNeeded()
-            native.viewDidLayoutSubviews()
-            await drainNativeHandoffs()
-            let list = try XCTUnwrap(native.view.subviews.first as? UICollectionView)
+            let list = try await layoutUntil("The native selection gutter did not settle") {
+                () -> UICollectionView? in
+                guard actions.selectedMessageIDs == [anchor.id], native.actions.isSelectingMessages,
+                    native.visibleMessageIDsForSelection()?.isEmpty == false
+                else { return nil }
+                return native.view.subviews.first as? UICollectionView
+            }
+            XCTAssertTrue(native.visibleMessageIDsForSelection()?.contains(anchor.id) == true)
             XCTAssertGreaterThan(list.contentOffset.y, -list.adjustedContentInset.top)
             native.scrollViewWillBeginDragging(list)
             list.setContentOffset(
@@ -511,8 +531,12 @@
             add(screenshot)
 
             try XCTUnwrap(actions.extendMessageSelection)(.older)
-            await drainNativeHandoffs()
-            XCTAssertEqual(actions.selectedMessageIDs, expected)
+            let selected = try await layoutUntil(
+                "The extended selection did not reach the hosted view"
+            ) {
+                actions.selectedMessageIDs == [anchor.id] ? nil : actions.selectedMessageIDs
+            }
+            XCTAssertEqual(selected, expected)
             XCTAssertNil(model.selectionRange.offer)
         }
 

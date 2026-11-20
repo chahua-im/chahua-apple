@@ -66,6 +66,21 @@ struct RemoteImageView: View {
     }
 
     @ViewBuilder private func animatedContent(_ url: URL) -> some View {
+        if let mediaContext {
+            MediaPolicyView(context: mediaContext) { policy in
+                if policy.allowsNetwork() {
+                    animatedImage(url, context: mediaContext)
+                        .id(ObjectIdentifier(mediaContext))
+                } else {
+                    staticImage(url)
+                }
+            }
+        } else {
+            staticContent(.failure)
+        }
+    }
+
+    private func animatedImage(_ url: URL, context: AppMediaContext) -> some View {
         ZStack {
             CachedImageView(url: url, thumbnailPixelSize: thumbnailPixelSize) { phase in
                 switch phase {
@@ -80,8 +95,9 @@ struct RemoteImageView: View {
                 }
             }
             KFAnimatedImage(url)
-                .targetCache(mediaContext?.cache ?? .default)
-                .downloader(mediaContext?.downloader ?? .default)
+                .targetCache(context.cache)
+                .downloader(context.downloader)
+                .cancelOnDisappear(true)
                 .placeholder { Color.clear }
                 .onFailureView { Color.clear }
                 .configure { view in

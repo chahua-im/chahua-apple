@@ -677,7 +677,7 @@
                     showsBlurredBackdrop: false,
                     thumbnailPixelSize: CGSize(
                         width: thumbnailSize * displayScale, height: thumbnailSize * displayScale),
-                    mediaContext: mediaContext)
+                    mediaContext: mediaContext, isPreview: true)
                 initial.isHidden = pending || imageAvailable
             } else {
                 imageView.clear()

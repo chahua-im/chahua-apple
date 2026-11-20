@@ -107,8 +107,8 @@ struct ForwardPickerContent: View {
 
     @ViewBuilder
     private var status: some View {
-        if let failure = model.failure {
-            Label(failure.localizedDescription, systemImage: "exclamationmark.circle")
+        if let message = model.failure?.localizedDescription ?? model.destinationIssue {
+            Label(message, systemImage: "exclamationmark.circle")
                 .font(.callout)
                 .foregroundStyle(ChahuaTheme.destructive)
                 .fixedSize(horizontal: false, vertical: true)
@@ -146,7 +146,7 @@ struct ForwardPickerContent: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(model.selectionBlocked)
+                    .disabled(model.selectionBlocked || !store.canFetchHistory)
                     .accessibilityIdentifier("forward-destination-saved")
 
                     Text("Recent")
@@ -237,7 +237,7 @@ struct ForwardPickerContent: View {
         if model.moreAvailable {
             Button("Load More", action: model.loadMore)
                 .frame(maxWidth: .infinity, minHeight: 36)
-                .disabled(model.isLoading)
+                .disabled(model.isLoadingSavedPage)
         }
     }
 
@@ -378,7 +378,7 @@ struct ForwardPickerContent: View {
         }
         .buttonStyle(.borderedProminent)
         .keyboardShortcut(.defaultAction)
-        .disabled(model.selectionBlocked)
+        .disabled(model.submitBlocked)
         .accessibilityIdentifier("forward-send")
     }
 

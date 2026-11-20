@@ -45,7 +45,7 @@
                 } : nil
             if isSelectingMessages || !context.canWrite { result.toggleReaction = nil }
             if isSelectingMessages { result.openReactionDetails = nil }
-            if isSelectingMessages || target != nil || !context.canWrite {
+            if isSelectingMessages || target != nil || !context.canStageDraft {
                 result.replyToMessage = nil
             }
             return result

@@ -26,7 +26,11 @@ nonisolated final class VideoFileLease: Sendable {
     let url: URL
     private let cache: VideoFileCache?
 
-    fileprivate init(url: URL, cache: VideoFileCache? = nil) {
+    convenience init(localURL: URL) {
+        self.init(url: localURL, cache: nil)
+    }
+
+    fileprivate init(url: URL, cache: VideoFileCache?) {
         self.url = url
         self.cache = cache
     }
@@ -42,10 +46,7 @@ nonisolated final class VideoFileLease: Sendable {
 /// Account-owned full movies, separate from Kingfisher's poster/image cache. Disk work and
 /// bookkeeping run on this actor, not the UI actor; movie bytes never become a Data value.
 actor VideoFileCache {
-    /// Context-free previews/viewers share a bounded fallback; signed-in composition always
-    /// supplies AppMediaContext's account-namespaced instance instead.
-    nonisolated static let unscoped = VideoFileCache(
-        directory: URL.cachesDirectory.appendingPathComponent("app.chahua.chat.videos.unscoped"))
+    nonisolated enum CacheMiss: Error { case notDownloaded }
 
     private struct File {
         let url: URL
@@ -93,11 +94,11 @@ actor VideoFileCache {
     }
 
     func file(
-        for url: URL,
+        for url: URL, allowsNetwork: Bool,
         progress: @escaping @MainActor @Sendable (VideoDownloadProgress) -> Void
     ) async throws -> VideoFileLease {
         try Task.checkCancellation()
-        if url.isFileURL { return VideoFileLease(url: url) }
+        if url.isFileURL { return VideoFileLease(localURL: url) }
         try prepare()
         let key = Self.key(for: url)
         if let name = entries[key], var file = files[name], !file.discard,
@@ -110,6 +111,7 @@ actor VideoFileCache {
                 [.modificationDate: file.accessed], ofItemAtPath: file.url.path)
             return VideoFileLease(url: file.url, cache: self)
         }
+        guard allowsNetwork else { throw CacheMiss.notDownloaded }
         let consumerID = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in

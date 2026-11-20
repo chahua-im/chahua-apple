@@ -750,6 +750,33 @@ final class RealtimeCoordinatorTests: XCTestCase {
         coordinator.setSession(uid: nil)
     }
 
+    func testRestoredPathInterruptsBackoffButDoesNotReplaceAHealthySocket() async {
+        let clock = RealtimeTestClock()
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(results: [.failure(.unavailable), .success(socket)])
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {},
+            sleep: { try await clock.sleep($0) }, jitter: { 0 })
+        coordinator.setSession(uid: 1)
+        await eventually { await clock.hasSleep(seconds: 1) }
+        coordinator.setNetworkOpportunity(false, restored: false)
+        coordinator.setNetworkOpportunity(true, restored: true)
+        await eventually { await socket.frames == [.appState(.inactive)] }
+        XCTAssertEqual(store.state.realtimeStatus, .connected)
+
+        coordinator.setNetworkOpportunity(false, restored: false)
+        coordinator.setNetworkOpportunity(true, restored: true)
+        await eventually { await clock.hasSleep(seconds: 10) }
+        await clock.advance(seconds: 10)
+        await eventually { await socket.frames.contains(.ping(.inactive)) }
+        let opens = await provider.opens
+        XCTAssertEqual(opens, 2)
+        coordinator.setSession(uid: nil)
+    }
+
     func testSuccessfulOpenImmediatelyClearsWarningAndResetsOpenFailureBudget() async {
         let clock = RealtimeTestClock()
         let socket = RealtimeTestSocket()
@@ -915,9 +942,10 @@ final class RealtimeCoordinatorTests: XCTestCase {
         await session.signIn(candidateJWT: "1")
         let expiry = Task { await session.sessionDidExpire() }
         await eventually { await storage.isDeleting }
-        await session.signIn(candidateJWT: "2")
+        let replacement = Task { await session.signIn(candidateJWT: "2") }
         await storage.releaseDelete()
         await expiry.value
+        await replacement.value
         guard case .authenticated(let me) = session.state else {
             XCTFail("Old expiry signed out replacement account")
             return
@@ -1690,7 +1718,7 @@ private actor RealtimeTestProvider: RealtimeConnectionProviding {
     }
 }
 
-private actor RealtimeTestHTTP: ChahuaAPIClient {
+private actor RealtimeTestHTTP: ChahuaAPIClient, SessionAuthenticating {
     private let holdChats: Bool
     private var chats: CheckedContinuation<Void, Never>?
     private(set) var chatRequestStarted = false
@@ -1799,6 +1827,10 @@ private actor RealtimeTestHTTP: ChahuaAPIClient {
         throw APIError.unavailable
     }
     func me() async throws -> MeResponse { throw APIError.unavailable }
+    func installStoredSession(
+        _ token: String?, onRefresh: RefreshHandler?
+    ) {}
+    func authorizeStoredSession(expectedToken: String) throws {}
     func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
     func requestAttachmentUpload(
         fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
@@ -1908,6 +1940,8 @@ private actor RealtimeExpiryStorage: SessionTokenStorage {
     func loadToken() async throws -> String? { nil }
     func saveToken(_ token: String) async throws {}
     func deleteToken() async throws { await withCheckedContinuation { deletion = $0 } }
+    func loadOfflineBinding() -> OfflineSessionBinding? { nil }
+    func saveOfflineBinding(_ binding: OfflineSessionBinding?) {}
     func releaseDelete() {
         deletion?.resume()
         deletion = nil

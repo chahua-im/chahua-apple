@@ -93,7 +93,7 @@
                     thumbnailPixelSize: CGSize(
                         width: thumbnailSize * environment.displayScale,
                         height: thumbnailSize * environment.displayScale),
-                    mediaContext: mediaContext)
+                    mediaContext: mediaContext, isPreview: true)
             } else {
                 image.clear()
                 image.isHidden = true

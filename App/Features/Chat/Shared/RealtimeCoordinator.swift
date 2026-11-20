@@ -26,6 +26,8 @@ final class RealtimeCoordinator: ObservableObject {
     private var generation = 0
     private var attempt = 0
     private var runner: Task<Void, Never>?
+    private var reconnectDelay: Task<Void, Error>?
+    private var networkOpportunity = true
     private var heartbeat: Task<Void, Never>?
     private var stableConnection: Task<Void, Never>?
     private var pendingSend: Task<Void, Never>?
@@ -95,14 +97,36 @@ final class RealtimeCoordinator: ObservableObject {
         }
     }
 
-    func setSession(uid: Int32?) {
-        guard self.uid != uid else { return }
+    private var sessionVerified = true
+
+    func setSession(uid: Int32?, verified: Bool = true) {
+        if self.uid == uid {
+            guard sessionVerified != verified else { return }
+            sessionVerified = verified
+            store.setNetworkAuthorized(verified)
+            if verified { startIfNeeded() } else { stop() }
+            return
+        }
         stop()
         self.uid = uid
+        sessionVerified = verified
         failures = 0
         store.reset()
+        store.historyCache?.setSession(uid: uid)
+        store.setNetworkAuthorized(verified)
         store.outgoingQueue.requestSession(uid: uid)
         startIfNeeded()
+    }
+
+    func setNetworkOpportunity(_ available: Bool, restored: Bool) {
+        networkOpportunity = available
+        // Interrupt only a sleeping retry. Live sockets and active handshakes
+        // are not replaced on a path hint.
+        if restored || !available { reconnectDelay?.cancel() }
+        if available {
+            startIfNeeded()
+            if connection != nil, needsRecovery { startRecovery(generation: generation) }
+        }
     }
 
     func setSceneActive(id: UUID, active: Bool) {
@@ -119,6 +143,7 @@ final class RealtimeCoordinator: ObservableObject {
         schedulePresenceWatch()
         scheduleConversationWatches(includeUnread: true)
         if isActive {
+            store.replayPendingReads()
             presentationFailures = 0
             shortLivedReconnects = 0
             if uid != nil, connection == nil {
@@ -148,7 +173,7 @@ final class RealtimeCoordinator: ObservableObject {
     func removeScene(id: UUID) { setSceneActive(id: id, active: false) }
 
     private func startIfNeeded() {
-        guard runner == nil, let uid else { return }
+        guard networkOpportunity, sessionVerified, runner == nil, let uid else { return }
         let currentGeneration = generation
         if store.state.realtimeStatus == .idle { store.setRealtimeStatus(.connecting) }
         runner = Task { [weak self] in
@@ -157,7 +182,8 @@ final class RealtimeCoordinator: ObservableObject {
     }
 
     private func run(uid: Int32, generation currentGeneration: Int) async {
-        while generation == currentGeneration && !Task.isCancelled {
+        defer { if generation == currentGeneration { runner = nil } }
+        while networkOpportunity, generation == currentGeneration, !Task.isCancelled {
             attempt += 1
             let currentAttempt = attempt
             let isReconnect = hasConnected
@@ -171,6 +197,7 @@ final class RealtimeCoordinator: ObservableObject {
                     return
                 }
                 connection = socket
+                store.historyCache?.setSocketAttempt(currentAttempt)
                 opened = true
                 hasConnected = true
                 connectionIsStable = false
@@ -210,6 +237,9 @@ final class RealtimeCoordinator: ObservableObject {
                 }
             }
             guard generation == currentGeneration, !Task.isCancelled else { return }
+            store.historyCache?.setSocketAttempt(nil)
+            recovery?.cancel()
+            recovery = nil
             if !activeScenes.isEmpty {
                 if !opened {
                     presentationFailures += 1
@@ -242,11 +272,17 @@ final class RealtimeCoordinator: ObservableObject {
             let disconnected = connection
             connection = nil
             await disconnected?.close()
-            guard generation == currentGeneration, !Task.isCancelled else { return }
+            guard networkOpportunity, generation == currentGeneration, !Task.isCancelled else { return }
             let seconds = min(30.0, pow(2.0, Double(min(failures, 5))))
             failures += 1
             let delay = min(30.0, seconds * (1 + min(0.2, max(0, jitter()))))
-            do { try await sleep(.seconds(delay)) } catch { return }
+            let waiting = Task { [sleep] in try await sleep(.seconds(delay)) }
+            reconnectDelay = waiting
+            do { try await waiting.value } catch {
+                guard waiting.isCancelled else { return }
+            }
+            guard generation == currentGeneration, !Task.isCancelled else { return }
+            reconnectDelay = nil
         }
     }
 
@@ -367,20 +403,24 @@ final class RealtimeCoordinator: ObservableObject {
     }
 
     private func startRecovery(generation currentGeneration: Int) {
-        guard uid != nil, !activeScenes.isEmpty else { return }
-        recovery?.cancel()
+        guard recovery == nil, networkOpportunity, uid != nil, !activeScenes.isEmpty else { return }
         recovery = Task { [weak self] in
             guard let self, !Task.isCancelled, self.generation == currentGeneration,
                 !self.activeScenes.isEmpty
             else { return }
+            defer {
+                if self.generation == currentGeneration, !Task.isCancelled { self.recovery = nil }
+            }
+            self.store.replayPendingReads()
             // Request/profile/block resources are not replayed by the websocket. Refresh
             // mounted social destinations alongside conversation recovery after an outage.
             self.store.socialInvalidations.send(())
             async let chats: Void = self.store.refreshActiveConversations()
-            async let archived: Void = self.store.refreshArchivedConversations()
             async let messages: Void = self.store.reconcileVisibleTimelines()
-            _ = await (chats, archived, messages)
-            guard !Task.isCancelled, self.generation == currentGeneration else { return }
+            _ = await (chats, messages)
+            guard !Task.isCancelled, self.generation == currentGeneration, self.networkOpportunity else { return }
+            await self.store.refreshArchivedConversations()
+            guard !Task.isCancelled, self.generation == currentGeneration, self.networkOpportunity else { return }
             self.needsRecovery = false
         }
     }
@@ -432,8 +472,11 @@ final class RealtimeCoordinator: ObservableObject {
     }
 
     private func stop() {
+        store.historyCache?.setSocketAttempt(nil)
         generation += 1
         runner?.cancel()
+        reconnectDelay?.cancel()
+        reconnectDelay = nil
         heartbeat?.cancel()
         stableConnection?.cancel()
         pendingSend?.cancel()

@@ -10,6 +10,7 @@ struct HTTPRequestSpec: Sendable {
     var allowsTokenRefresh = true
     var headers: [String: String] = [:]
     var capturesRetryAfter = false
+    var interactivePage = false
 
     private static let segmentCharacters = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")

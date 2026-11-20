@@ -8,6 +8,57 @@ import XCTest
 final class MessageActionPolicyTests: XCTestCase {
     private let writable = MessageInteractionContext(canWrite: true, speakingMode: .unrestricted)
 
+    func testOfflineSendEvidenceIsScopedAndDoesNotAuthorizeServerActions() {
+        var context = MessageInteractionContext(
+            canWrite: true, isAdmin: true, isThreadView: true,
+            canSave: true, canUseNetworkActions: false)
+
+        XCTAssertTrue(context.canStageDraft)
+        XCTAssertFalse(context.canSend)
+
+        context.savedSendDecision = false
+        XCTAssertFalse(context.canStageDraft)
+        XCTAssertFalse(context.canSend)
+
+        context.savedSendDecision = true
+        XCTAssertTrue(context.canStageDraft)
+        XCTAssertTrue(context.canSend)
+        XCTAssertNil(context.resolvedSendDecision)
+        XCTAssertFalse(context.canSendOnline(isThreadReply: true))
+        let policy = MessageActionPolicy(
+            messageType: .text, text: "Saved message", isOwn: true, hasReactions: true,
+            isThreadReply: true, context: context)
+        XCTAssertEqual(policy.availability(of: .reply), .enabled)
+        XCTAssertEqual(policy.availability(of: .forward), .enabled)
+        for action in [MessageMenuAction.edit, .delete, .reactionDetails, .save, .pin, .thread] {
+            XCTAssertEqual(policy.availability(of: action), .hidden)
+        }
+        XCTAssertFalse(policy.canReact)
+
+        context.isReadOnly = true
+        XCTAssertFalse(context.canStageDraft)
+        XCTAssertFalse(context.canSend)
+    }
+
+    func testSavedEvidenceBridgesUnresolvedOnlinePermissionButNotResolvedDenial() {
+        var context = MessageInteractionContext(
+            canWrite: true, isThreadView: true, speakingMode: .repliesOnly,
+            isSendPermissionResolved: false)
+        XCTAssertTrue(context.canStageDraft)
+        XCTAssertFalse(context.canSend)
+        context.savedSendDecision = true
+        XCTAssertTrue(context.canStageDraft)
+        XCTAssertTrue(context.canSend)
+        XCTAssertFalse(context.canSendOnline(isThreadReply: true))
+        context.isSendPermissionResolved = true
+        XCTAssertEqual(context.resolvedSendDecision, false)
+        XCTAssertFalse(context.canStageDraft)
+        XCTAssertFalse(context.canSend)
+        context.hasExistingThread = true
+        XCTAssertTrue(context.canStageDraft)
+        XCTAssertTrue(context.canSend)
+    }
+
     func testPendingEditAndRemovalEligibilityRespectsPhaseAndKind() {
         var actions = TimelineBubbleActions()
         actions.editablePendingMessageIDs = ["middle", "file", "audio"]

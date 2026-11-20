@@ -14,7 +14,7 @@
     /// viewer already covers the window and playback must end when the viewer closes.
     @MainActor
     final class ImageDetailMacVideoView: NSView {
-        enum State: Equatable { case idle, loading, ready, failed }
+        enum State: Equatable { case idle, loading, ready, notDownloaded, failed }
 
         var onStateChanged: ((State) -> Void)?
         private(set) var state = State.idle
@@ -22,7 +22,10 @@
 
         private let url: URL?
         private let fallbackSize: CGSize?
-        private let videoCache: VideoFileCache
+        private let videoCache: VideoFileCache?
+        private var loadPolicy: MediaLoadPolicy
+        private var userInitiated: Bool
+        private var policyObservation: AnyCancellable?
         private let progressView = VideoDownloadProgressView()
         private var downloadTask: Task<Void, Never>?
         private var loadID = UUID()
@@ -36,10 +39,14 @@
 
         override var isFlipped: Bool { true }
 
-        init(url: URL?, pixelSize: CGSize?, mediaContext: AppMediaContext?) {
+        init(
+            url: URL?, pixelSize: CGSize?, mediaContext: AppMediaContext?, userInitiated: Bool
+        ) {
             self.url = url
             fallbackSize = pixelSize
-            videoCache = mediaContext?.videoCache ?? .unscoped
+            videoCache = mediaContext?.videoCache
+            loadPolicy = mediaContext?.loadPolicy ?? .cacheOnly
+            self.userInitiated = userInitiated
             super.init(frame: .zero)
             setAccessibilityElement(false)
             playerView.controlsStyle = .inline
@@ -56,6 +63,9 @@
             NotificationCenter.default.addObserver(
                 self, selector: #selector(applicationBecameActive),
                 name: NSApplication.didBecomeActiveNotification, object: nil)
+            policyObservation = mediaContext?.loadPolicyChanges.sink { [weak self] policy in
+                self?.applyLoadPolicy(policy)
+            }
         }
 
         required init?(coder: NSCoder) { nil }
@@ -80,7 +90,7 @@
                 player?.pause()
                 return
             }
-            if player == nil, downloadTask == nil, state != .failed { load() }
+            if player == nil, downloadTask == nil, state == .idle { load() }
             if autoplayPending, let player, state != .failed {
                 autoplayPending = false
                 player.play()
@@ -89,6 +99,7 @@
 
         func retry() {
             guard isActive, applicationIsActive, window != nil else { return }
+            userInitiated = true
             autoplayPending = true
             load()
         }
@@ -122,9 +133,20 @@
         func stop() {
             isActive = false
             autoplayPending = false
+            policyObservation = nil
             cancelDownload()
             releasePlayer()
             update(.idle)
+        }
+
+        private func applyLoadPolicy(_ policy: MediaLoadPolicy) {
+            let before = loadPolicy.allowsNetwork(userInitiated: userInitiated)
+            loadPolicy = policy
+            let after = policy.allowsNetwork(userInitiated: userInitiated)
+            guard before != after, url?.isFileURL == false, player == nil else { return }
+            cancelDownload()
+            if state == .notDownloaded || state == .failed { update(.idle) }
+            applyPlayback()
         }
 
         private func load() {
@@ -136,19 +158,33 @@
                 update(.failed)
                 return
             }
+            guard url.isFileURL || videoCache != nil else {
+                update(.notDownloaded)
+                return
+            }
+            let allowsNetwork = loadPolicy.allowsNetwork(userInitiated: userInitiated)
             update(.loading)
             progressView.update(.indeterminate)
+            if !allowsNetwork && !url.isFileURL { progressView.isHidden = true }
             let id = UUID()
             loadID = id
             let cache = videoCache
             downloadTask = Task { [weak self] in
-                if let previousLease { await cache.invalidate(previousLease) }
+                if let previousLease { await cache?.invalidate(previousLease) }
                 do {
-                    let lease = try await cache.file(for: url) { [weak self] progress in
-                        guard let self, self.loadID == id, self.isActive,
-                            self.applicationIsActive, self.window != nil
-                        else { return }
-                        self.progressView.update(progress)
+                    let lease: VideoFileLease
+                    if url.isFileURL {
+                        lease = VideoFileLease(localURL: url)
+                    } else if let cache {
+                        lease = try await cache.file(for: url, allowsNetwork: allowsNetwork) {
+                            [weak self] progress in
+                            guard let self, self.loadID == id, self.isActive,
+                                self.applicationIsActive, self.window != nil
+                            else { return }
+                            self.progressView.update(progress)
+                        }
+                    } else {
+                        throw VideoFileCache.CacheMiss.notDownloaded
                     }
                     guard !Task.isCancelled, let self, self.loadID == id, self.isActive,
                         self.applicationIsActive, self.window != nil
@@ -162,7 +198,7 @@
                         self.applicationIsActive, self.window != nil
                     else { return }
                     self.downloadTask = nil
-                    self.update(.failed)
+                    self.update(error is VideoFileCache.CacheMiss ? .notDownloaded : .failed)
                 }
             }
         }
@@ -227,9 +263,8 @@
         private func update(_ newState: State) {
             if newState == .failed {
                 player?.pause()
-                if let fileLease {
-                    let cache = videoCache
-                    Task { await cache.invalidate(fileLease) }
+                if let fileLease, let videoCache {
+                    Task { await videoCache.invalidate(fileLease) }
                 }
             }
             progressView.isHidden = newState != .loading

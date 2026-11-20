@@ -1,3 +1,15 @@
+/// Session control stays separate from the feature clients that use a session.
+public protocol SessionAuthenticating: Sendable {
+    typealias RefreshHandler = @Sendable (String, String) async throws -> Void
+    func authenticate(candidateJWT: String) async throws -> MeResponse
+    func createDevSession(uid: Int32, clientID: String) async throws -> String
+    func me() async throws -> MeResponse
+    func installStoredSession(
+        _ token: String?, onRefresh: RefreshHandler?
+    ) async
+    func authorizeStoredSession(expectedToken: String) async throws
+}
+
 /// Typed asynchronous contract for the Chahua HTTP API.
 ///
 /// Feature code should depend on this protocol instead of `ChahuaClient` so it can

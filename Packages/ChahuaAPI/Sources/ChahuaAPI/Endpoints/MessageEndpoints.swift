@@ -130,7 +130,8 @@ extension ChahuaClient {
             HTTPRequestSpec(
                 method: .get,
                 path: ["chats", chatID, "messages"],
-                query: query.queryItems
+                query: query.queryItems,
+                interactivePage: true
             ),
             decoding: ListMessagesResponse.self
         )
@@ -166,7 +167,7 @@ extension ChahuaClient {
     public func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         try await send(
             HTTPRequestSpec(
-                method: .get, path: ["chats", chatID, "messages", messageID.description]),
+                method: .get, path: ["chats", chatID, "messages", messageID.description], capturesRetryAfter: true),
             decoding: MessageResponse.self
         )
     }

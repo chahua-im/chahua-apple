@@ -65,6 +65,20 @@ nonisolated enum SharedSessionCredentials {
         try sharedStore(service: service, account: account).delete()
     }
 
+    static func offlineRecord(service: String) throws -> SessionCredentialKeychainStore {
+        let shared = try sharedKeychainAccessGroup()
+        let suffix = "app.chahua.chat.shared"
+        guard let bundleID = Bundle.main.bundleIdentifier, shared.hasSuffix(suffix) else {
+            throw KeychainTokenStorageError.operationFailed(
+                operation: "resolve private keychain access group", status: errSecParam)
+        }
+        // Constrain both reads and writes to the main app's access group.
+        let privateGroup = String(shared.dropLast(suffix.count)) + bundleID
+        return SessionCredentialKeychainStore(
+            service: service, account: "offline-session-v1",
+            accessGroup: privateGroup, usesDataProtectionKeychain: true)
+    }
+
     private static func sharedStore(
         service: String = defaultService,
         account: String = defaultAccount
@@ -153,13 +167,19 @@ nonisolated enum SharedSessionCredentials {
     }
 }
 
-nonisolated private struct SessionCredentialKeychainStore {
+nonisolated struct SessionCredentialKeychainStore {
     let service: String
     let account: String
     let accessGroup: String?
     let usesDataProtectionKeychain: Bool
 
     func load() throws -> String? {
+        guard let data = try loadData() else { return nil }
+        guard let token = String(data: data, encoding: .utf8) else { throw failure("load", errSecDecode) }
+        return token
+    }
+
+    func loadData() throws -> Data? {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -172,14 +192,15 @@ nonisolated private struct SessionCredentialKeychainStore {
         guard status == errSecSuccess else {
             throw failure("load", status)
         }
-        guard let data = result as? Data, let token = String(data: data, encoding: .utf8) else {
-            throw failure("load", errSecDecode)
-        }
-        return token
+        guard let data = result as? Data else { throw failure("load", errSecDecode) }
+        return data
     }
 
     func save(_ token: String) throws {
-        let data = Data(token.utf8)
+        try saveData(Data(token.utf8))
+    }
+
+    func saveData(_ data: Data) throws {
         let updateStatus = SecItemUpdate(
             baseQuery as CFDictionary,
             [kSecValueData as String: data] as CFDictionary

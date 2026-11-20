@@ -49,6 +49,9 @@ struct ChahuaApp: App {
             updater = MacAppUpdater(productionServicesEnabled: compositionRoot != nil)
         #endif
         pushDelegate.coordinator = compositionRoot?.notifications
+        #if os(iOS)
+            pushDelegate.outboxRefresh = compositionRoot?.outboxRefresh
+        #endif
     }
 
     var body: some Scene {
@@ -103,7 +106,7 @@ struct ChahuaApp: App {
             AppRootView(
                 model: compositionRoot.sessionModel,
                 chatStore: compositionRoot.chatStore,
-                mediaContext: compositionRoot.mediaContext,
+                mediaContext: { compositionRoot.mediaContext },
                 realtimeCoordinator: compositionRoot.realtimeCoordinator,
                 notifications: compositionRoot.notifications
             )

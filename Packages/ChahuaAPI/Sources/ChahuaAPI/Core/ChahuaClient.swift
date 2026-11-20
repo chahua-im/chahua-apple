@@ -6,11 +6,14 @@ import os
 /// A client owns one bearer-token session. Authenticate it once, then share that
 /// instance across callers. Authenticated requests refresh a rejected token once;
 /// callers receiving `APIError.invalidToken` must clear their persisted session.
-public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
+public actor ChahuaClient: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionProviding {
     private static let logger = Logger(subsystem: "app.chahua.chat", category: "http")
     private let configuration: ChahuaConfiguration
     private let session: URLSession
     private var token: String?
+    private var storedToken: String?
+    private var onRefresh: (@Sendable (String, String) async throws -> Void)?
+    private var sessionAuthorized = true
     private var refreshTask: Task<String, any Error>?
     private var sessionGeneration = UUID()
 
@@ -25,6 +28,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     ) {
         self.configuration = configuration
         self.token = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.storedToken = token
         if let session {
             self.session = session
         } else {
@@ -41,7 +45,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         guard !candidate.isEmpty else { throw APIError.invalidToken }
         let me = try await fetchMe(token: candidate)
         try checkSession(generation)
-        installSessionToken(candidate)
+        installSessionToken(candidateJWT)
         return me
     }
 
@@ -71,6 +75,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
     /// An existing refresh is shared, but opening a socket never starts a refresh.
     public func openRealtimeConnection() async throws -> any RealtimeConnection {
         let generation = sessionGeneration
+        guard sessionAuthorized else { throw CancellationError() }
         var connection: URLSessionRealtimeConnection?
         do {
             if let refreshTask { _ = try await refreshTask.value }
@@ -93,6 +98,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
 
     public func previewLinks(chatID: String, urls: [String]) async throws -> [MessageLinkPreview] {
         let generation = sessionGeneration
+        guard sessionAuthorized else { throw CancellationError() }
         if let refreshTask { _ = try await refreshTask.value }
         try checkSession(generation)
         guard let token, !token.isEmpty else { throw APIError.invalidToken }
@@ -130,11 +136,28 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         return request
     }
 
-    private func installSessionToken(_ token: String) {
+    public func installStoredSession(
+        _ token: String?, onRefresh: (@Sendable (String, String) async throws -> Void)?
+    ) {
+        installSessionToken(token)
+        sessionAuthorized = false
+        self.onRefresh = onRefresh
+    }
+
+    public func authorizeStoredSession(expectedToken: String) throws {
+        try Task.checkCancellation()
+        guard storedToken == expectedToken else { throw CancellationError() }
+        sessionAuthorized = true
+    }
+
+    private func installSessionToken(_ token: String?) {
         sessionGeneration = UUID()
         refreshTask?.cancel()
         refreshTask = nil
-        self.token = token
+        storedToken = token
+        self.token = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        onRefresh = nil
+        sessionAuthorized = true
     }
 
     private func checkSession(_ generation: UUID) throws {
@@ -210,13 +233,19 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
 
     private func perform(_ spec: HTTPRequestSpec) async throws -> (Data, Int) {
         let generation = sessionGeneration
+        guard !spec.requiresAuth || sessionAuthorized || spec.path == ["users", "me"] else {
+            throw CancellationError()
+        }
         let initialToken = spec.requiresAuth ? token : nil
         let firstResponse = try await execute(spec, token: initialToken)
         try checkSession(generation)
         let response: (data: Data, status: Int, retryAfter: Date?)
         if firstResponse.status == 401, spec.allowsTokenRefresh, initialToken != nil {
             let refreshed: String
-            do { refreshed = try await refreshedToken() } catch {
+            do {
+                if let token, initialToken != token { refreshed = token }
+                else { refreshed = try await refreshedToken() }
+            } catch {
                 try checkSession(generation)
                 throw error
             }
@@ -307,7 +336,8 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpMethod = spec.method.rawValue
         request.httpBody = spec.body
-        request.timeoutInterval = configuration.requestTimeout
+        request.timeoutInterval = spec.interactivePage
+            ? min(configuration.requestTimeout, 15) : configuration.requestTimeout
         return request
     }
 
@@ -366,7 +396,7 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
 
     private func performRefresh(generation: UUID) async throws -> String {
         try checkSession(generation)
-        guard let token else { throw APIError.invalidToken }
+        guard let token, let storedToken else { throw APIError.invalidToken }
         let spec = HTTPRequestSpec(
             method: .post, path: ["auth", "refresh"], requiresAuth: false, allowsTokenRefresh: false
         )
@@ -380,6 +410,9 @@ public actor ChahuaClient: ChahuaAPIClient, RealtimeConnectionProviding {
             throw APIError.invalidResponse(statusCode: response.status)
         }
         let refreshed = try decodeAuthToken(response.data, status: response.status)
+        try await onRefresh?(storedToken, refreshed)
+        try checkSession(generation)
+        self.storedToken = refreshed
         self.token = refreshed
         return refreshed
     }

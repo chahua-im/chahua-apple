@@ -159,14 +159,14 @@ extension ChahuaClient {
     /// corresponding `ListChatsQuery` fields are non-`nil`.
     public func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         try await send(
-            HTTPRequestSpec(method: .get, path: ["chats"], query: query.queryItems),
+            HTTPRequestSpec(method: .get, path: ["chats"], query: query.queryItems, interactivePage: true),
             decoding: ListChatsResponse.self
         )
     }
 
     public func groupInfo(chatID: String) async throws -> GroupInfoResponse {
         try await send(
-            HTTPRequestSpec(method: .get, path: ["group", chatID]),
+            HTTPRequestSpec(method: .get, path: ["group", chatID], capturesRetryAfter: true),
             decoding: GroupInfoResponse.self
         )
     }
@@ -199,7 +199,7 @@ extension ChahuaClient {
 
     public func friendRelationship(peerUID: Int32) async throws -> FriendRelationshipResponse {
         try await send(
-            HTTPRequestSpec(method: .get, path: ["friends", String(peerUID)]),
+            HTTPRequestSpec(method: .get, path: ["friends", String(peerUID)], capturesRetryAfter: true),
             decoding: FriendRelationshipResponse.self
         )
     }

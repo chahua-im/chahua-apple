@@ -89,13 +89,26 @@ struct ForwardDestinationPicker: View {
             model.stop()
             dismiss()
         }
+        .onChange(of: store.sessionRevision) { _, _ in
+            model.stop()
+            dismiss()
+        }
+        .task(id: store.canFetchHistory) {
+            await model.restoreSelectedDestinationDecision()
+        }
+        .onChange(of: store.outgoingQueue.storageState) { _, state in
+            guard state == .ready, !store.canFetchHistory else { return }
+            model.retryChats()
+            model.retryThreads()
+        }
     }
 }
 
 @MainActor
 final class ForwardDestinationPickerModel: ObservableObject {
     enum Failure: Error, LocalizedError, Equatable {
-        case unavailable, stale, tooMany, topicUnavailable, loadFailed, sendFailed
+        case unavailable, stale, tooMany, topicUnavailable, threadNotDownloaded
+        case loadFailed, sendFailed
         case restricted(SpeakingMode)
 
         var errorDescription: String? {
@@ -112,6 +125,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 AppLanguage.localized("You can forward at most 100 messages at once.")
             case .topicUnavailable:
                 AppLanguage.localized("This thread no longer has messages that can be forwarded.")
+            case .threadNotDownloaded:
+                AppLanguage.localized("This entire thread is not downloaded.")
             case .loadFailed:
                 AppLanguage.localized(
                     "Could not reload the messages. Choose a destination to retry.")
@@ -151,26 +166,19 @@ final class ForwardDestinationPickerModel: ObservableObject {
     @Published private(set) var selectedTarget: ForwardDestination?
     @Published private(set) var isResolving = false
     @Published private(set) var isSubmitting = false
-    @Published private(set) var chatsFailed = false
-    @Published private(set) var threadsFailed = false
     @Published private(set) var chatsLoading = false
     @Published private(set) var threadsLoading = false
-    @Published private var chats: [ChatListItem] = []
-    @Published private var threads: [ThreadListItem] = []
-    @Published private var chatsHaveMore = true
-    @Published private var threadsHaveMore = true
+    @Published private(set) var isLoadingSavedPage = false
 
     private let store: ChatStore
     private let sources: [MessageResponse]
     private let loadSources: (@MainActor () async throws -> [MessageResponse])?
     private let accountID: Int32?
+    private let sessionRevision: Int
     let sourceTitle: String
-    private var chatCursor: String?
-    private var threadCursor: String?
-    private var chatBoundary = Date.distantFuture
-    private var threadBoundary = Date.distantFuture
     private var chatTask: Task<Void, Never>?
     private var threadTask: Task<Void, Never>?
+    private var savedPageTask: Task<Void, Never>?
     private var selectionTask: Task<Void, Never>?
     private var observation: AnyCancellable?
     private var removedIDs = Set<MessageID>()
@@ -187,6 +195,7 @@ final class ForwardDestinationPickerModel: ObservableObject {
         self.sources = sources.sorted { $0.id < $1.id }
         self.loadSources = loadSources
         accountID = store.currentUserProfile?.uid
+        sessionRevision = store.sessionRevision
         let id = sources.first?.chatId
         self.sourceTitle =
             sourceTitle
@@ -200,10 +209,45 @@ final class ForwardDestinationPickerModel: ObservableObject {
     }
     var messageCount: Int { resolvedSources.isEmpty ? sources.count : resolvedSources.count }
 
-    var isLoading: Bool { chatsLoading || threadsLoading }
+    var isLoading: Bool { chatsLoading || threadsLoading || isLoadingSavedPage }
+    var chatsFailed: Bool { store.canFetchHistory && store.state.chatListRefreshFailed }
+    var threadsFailed: Bool { store.canFetchHistory && store.state.threadListRefreshFailed }
     var moreAvailable: Bool {
-        (chatsHaveMore && !chatsFailed) || (threadsHaveMore && !threadsFailed)
+        !store.state.savedListHasMore.isDisjoint(with: [.activeChats, .activeThreads])
     }
+
+    var destinationIssue: String? {
+        guard let selectedTarget else { return nil }
+        switch selectedTarget {
+        case .saved:
+            return store.canFetchHistory
+                ? nil : AppLanguage.localized("Saved Messages requires a connection.")
+        case .conversation(let destination):
+            guard store.historyCache?.accessRevoked(destination.id.chatID) != true else {
+                return AppLanguage.localized("This conversation is no longer available.")
+            }
+            guard !store.canFetchHistory else { return nil }
+            switch store.currentSavedSendDecision(for: destination.id) {
+            case true?: return nil
+            case false?: return AppLanguage.localized("Sending is not allowed in this conversation.")
+            case nil: return AppLanguage.localized("Connect to check whether you can send.")
+            }
+        }
+    }
+
+    var submitBlocked: Bool {
+        guard !selectionBlocked, destinationIssue == nil, let selectedTarget else { return true }
+        if case .conversation = selectedTarget { return store.outgoingQueue.storageState != .ready }
+        return false
+    }
+
+    func restoreSelectedDestinationDecision() async {
+        guard current(generation), !store.canFetchHistory,
+            case .conversation(let destination)? = selectedTarget
+        else { return }
+        _ = await store.savedSendDecision(for: destination.id)
+    }
+
     var selectionBlocked: Bool {
         !isOpen || didPrepare || isResolving || isSubmitting || confirmation != nil
             || failure == .stale || failure == .unavailable
@@ -212,7 +256,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
 
     func targets(matching query: String) -> [ConversationListItem] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (chats.map(ConversationListItem.chat) + threads.map(ConversationListItem.thread))
+        return (store.state.chats.map(ConversationListItem.chat)
+            + store.state.threads.map(ConversationListItem.thread))
             .filter { target in
                 guard !query.isEmpty else { return true }
                 switch target {
@@ -234,7 +279,7 @@ final class ForwardDestinationPickerModel: ObservableObject {
         guard !isOpen, !didPrepare else { return }
         isOpen = true
         generation += 1
-        guard accountID != nil, store.currentUserProfile?.uid == accountID else {
+        guard current(generation) else {
             failure = .unavailable
             return
         }
@@ -253,22 +298,28 @@ final class ForwardDestinationPickerModel: ObservableObject {
         generation += 1
         chatTask?.cancel()
         threadTask?.cancel()
+        savedPageTask?.cancel()
         selectionTask?.cancel()
         chatTask = nil
         threadTask = nil
+        savedPageTask = nil
+        chatsLoading = false
+        threadsLoading = false
+        isLoadingSavedPage = false
         selectionTask = nil
+        isResolving = false
+        isSubmitting = false
         observation = nil
         confirmation = nil
     }
 
     private func current(_ token: Int) -> Bool {
-        isOpen && generation == token && store.currentUserProfile?.uid == accountID
-            && !Task.isCancelled
+        isOpen && generation == token && accountID != nil && store.currentUserProfile?.uid == accountID
+            && store.sessionRevision == sessionRevision && !Task.isCancelled
     }
 
     func retryChats() {
         guard isOpen, !chatsLoading else { return }
-        chatsFailed = false
         chatsLoading = true
         let token = generation
         chatTask = Task { [weak self] in await self?.loadChats(token: token) }
@@ -276,20 +327,23 @@ final class ForwardDestinationPickerModel: ObservableObject {
 
     func retryThreads() {
         guard isOpen, !threadsLoading else { return }
-        threadsFailed = false
         threadsLoading = true
         let token = generation
         threadTask = Task { [weak self] in await self?.loadThreads(token: token) }
     }
 
     func loadMore() {
-        guard !isLoading else { return }
-        let canLoadChats = chatsHaveMore && !chatsFailed
-        let canLoadThreads = threadsHaveMore && !threadsFailed
-        // Advance whichever source has the newer loaded-through boundary, preserving
-        // the mixed recent ordering instead of exhausting one list ahead of the other.
-        if canLoadChats && (!canLoadThreads || chatBoundary >= threadBoundary) { retryChats() }
-        if canLoadThreads && (!canLoadChats || threadBoundary >= chatBoundary) { retryThreads() }
+        guard !isLoadingSavedPage, moreAvailable, current(generation) else { return }
+        isLoadingSavedPage = true
+        let token = generation
+        savedPageTask = Task { [weak self] in
+            guard let self, current(token) else { return }
+            await store.loadMoreSavedConversations(chats: true, threads: true, archived: false)
+            if current(token) {
+                savedPageTask = nil
+                isLoadingSavedPage = false
+            }
+        }
     }
 
     private func loadChats(token: Int) async {
@@ -299,23 +353,9 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 chatTask = nil
             }
         }
-        do {
-            let page = try await store.forwardDestinationChats(
-                query: .init(limit: 30, after: chatCursor, archived: false))
-            guard current(token) else { return }
-            guard page.nextCursor == nil || page.nextCursor != chatCursor else {
-                throw APIError.unexpectedResponse
-            }
-            var known = Set(chats.map(\.id))
-            chats.append(
-                contentsOf: page.chats.filter { !$0.archived && known.insert($0.id).inserted })
-            chatBoundary = page.chats.last?.lastMessageAt ?? .distantPast
-            chatCursor = page.nextCursor
-            chatsHaveMore = page.nextCursor != nil
-        } catch {
-            guard current(token) else { return }
-            chatsFailed = true
-        }
+        guard current(token) else { return }
+        if chatsFailed { await store.refreshActiveChats() }
+        else { await store.loadActiveChats() }
     }
 
     private func loadThreads(token: Int) async {
@@ -325,29 +365,14 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 threadTask = nil
             }
         }
-        do {
-            let page = try await store.forwardDestinationThreads(
-                query: .init(limit: 30, before: threadCursor, archived: false))
-            guard current(token) else { return }
-            guard page.nextCursor == nil || page.nextCursor != threadCursor else {
-                throw APIError.unexpectedResponse
-            }
-            var known = Set(threads.map(\.conversationKey))
-            threads.append(
-                contentsOf: page.threads.filter {
-                    !$0.archived && known.insert($0.conversationKey).inserted
-                })
-            threadBoundary = page.threads.last?.lastReplyAt ?? .distantPast
-            threadCursor = page.nextCursor
-            threadsHaveMore = page.nextCursor != nil
-        } catch {
-            guard current(token) else { return }
-            threadsFailed = true
-        }
+        guard current(token) else { return }
+        if threadsFailed { await store.refreshActiveThreads() }
+        else { await store.loadActiveThreads() }
     }
 
     func choose(_ target: ForwardDestination) {
         guard !selectionBlocked else { return }
+        if case .saved = target, !store.canFetchHistory { return }
         isResolving = true
         let token = generation
         selectionTask = Task { [weak self] in
@@ -360,6 +385,9 @@ final class ForwardDestinationPickerModel: ObservableObject {
             }
             do {
                 let selection = try await self.resolveSources(token: token)
+                if case .conversation(let destination) = target, !self.store.canFetchHistory {
+                    _ = await self.store.savedSendDecision(for: destination.id)
+                }
                 guard self.current(token), self.failure != .stale else { return }
                 try self.validate(selection)
                 self.resolvedSources = selection.sorted { $0.id < $1.id }
@@ -380,7 +408,7 @@ final class ForwardDestinationPickerModel: ObservableObject {
     }
 
     func send(onCompleted: @escaping () -> Void) {
-        guard !selectionBlocked, let target = selectedTarget else { return }
+        guard !submitBlocked, let target = selectedTarget else { return }
         let selection = previewSources
         let pendingAudio = selection.contains(where: isPendingAudio)
         let nestedForward =
@@ -410,8 +438,9 @@ final class ForwardDestinationPickerModel: ObservableObject {
     func cancelConfirmation() { confirmation = nil }
 
     func confirm(_ value: Confirmation, onPrepared: @escaping () -> Void) {
-        guard isOpen, !isSubmitting, !didPrepare, failure != .stale else { return }
+        guard current(generation), !isSubmitting, !didPrepare, failure != .stale else { return }
         confirmation = nil
+        guard !submitBlocked else { return }
         let token = generation
         isSubmitting = true
         selectionTask = Task { [weak self] in
@@ -434,7 +463,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 guard current(token) else { throw CancellationError() }
                 switch error {
                 case .tooMany: throw Failure.tooMany
-                case .unavailable: throw Failure.topicUnavailable
+                case .unavailable:
+                    throw store.canFetchHistory ? Failure.topicUnavailable : Failure.threadNotDownloaded
                 }
             }
         }
@@ -451,6 +481,7 @@ final class ForwardDestinationPickerModel: ObservableObject {
             Set(selection.map(\.id)).count == selection.count,
             selection.allSatisfy({ $0.chatId == chatID })
         else { throw Failure.unavailable }
+        guard store.historyCache?.accessRevoked(chatID) != true else { throw Failure.stale }
         guard !selection.contains(where: { $0.isDeleted || removedIDs.contains($0.id) }) else {
             throw Failure.stale
         }
@@ -475,13 +506,19 @@ final class ForwardDestinationPickerModel: ObservableObject {
             switch target {
             case .saved:
                 for message in selection {
-                    guard current(token) else { throw CancellationError() }
+                    guard current(token), store.canFetchHistory else { throw Failure.sendFailed }
+                    try validate(selection)
                     try await store.savedMessages.save(message)
                 }
             case .conversation(let destination):
-                try await store.requireSpeakingPermission(
-                    chatID: destination.id.chatID, threadID: destination.id.threadID)
+                try await store.prepareForwardDestination(destination.id)
                 guard current(token) else { throw CancellationError() }
+                if loadSources != nil, !store.canFetchHistory {
+                    let saved = try await resolveSources(token: token)
+                    guard Set(saved.map(\.id)) == Set(selection.map(\.id)) else { throw Failure.stale }
+                }
+                guard current(token) else { throw CancellationError() }
+                try validate(selection)
                 try await store.outgoingQueue.enqueueForward(
                     chatID: destination.id.chatID, threadID: destination.id.threadID,
                     sources: selection, allowPlaceholders: allowPlaceholders)

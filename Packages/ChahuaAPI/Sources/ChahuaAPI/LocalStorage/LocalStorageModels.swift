@@ -43,6 +43,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
     public var byteCount: Int64
     public var attachmentID: String?
     public var failure: OutboxFailure.Reason?
+    public var retryNotBefore: Date?
     public var preservesOriginal: Bool?
     public var isFile: Bool { preservesOriginal == true }
     public var isUploaded: Bool { attachmentID != nil }
@@ -54,6 +55,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
         preparedPath: String? = nil, previewPath: String, fileName: String, mimeType: String,
         width: Int, height: Int, byteCount: Int64, attachmentID: String? = nil,
         failure: OutboxFailure.Reason? = nil,
+        retryNotBefore: Date? = nil,
         preservesOriginal: Bool? = nil
     ) {
         self.id = id
@@ -69,6 +71,7 @@ public struct LocalOutgoingAttachment: Codable, Hashable, Sendable, Identifiable
         self.byteCount = byteCount
         self.attachmentID = attachmentID
         self.failure = failure
+        self.retryNotBefore = retryNotBefore
         self.preservesOriginal = preservesOriginal
     }
 }
@@ -142,6 +145,7 @@ public struct LocalOutgoingMessage: Sendable, Equatable {
     public let forwardRequest: LocalForwardRequest?
     public let metadata: MessageMetadataInput?
     public let failure: OutboxFailure?
+    public let retryNotBefore: Date?
 
     public var isEditable: Bool {
         guard forwardRequest == nil, sticker == nil, messageType != .audio else { return false }
@@ -193,7 +197,6 @@ public struct LocalOutgoingClaim: Sendable {
 }
 
 public enum LocalStorageError: Error, Sendable {
-    case unsupportedSchema
     case corruptRecord
     case blankMessage
     case staleDraft

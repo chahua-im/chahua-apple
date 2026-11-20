@@ -25,6 +25,117 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(restored.first?.outgoing.first?.senderID, 17)
     }
 
+    func testV10PreservesWorkAndUnknownMigrationResetsOnlyItsAccount() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let account = directory.appendingPathComponent("17")
+        let other = try ChahuaLocalStore(directory: directory.appendingPathComponent("18"), userID: 18)
+        let date = Date(timeIntervalSince1970: 1)
+        _ = try await other.enqueueIndependentText(
+            chatID: "chat", clientGeneratedID: "other", text: "other", enqueuedAt: date)
+        do {
+            let store = try ChahuaLocalStore(directory: account, userID: 17)
+            _ = try await store.saveDraft(chatID: "chat", text: "draft", editRevision: 1, updatedAt: date)
+            _ = try await store.enqueueIndependentText(
+                chatID: "chat", clientGeneratedID: "pending", text: "pending", enqueuedAt: date)
+        }
+        try editMigrationDatabase(account) { db in
+            for table in [
+                "cached_member", "cached_message", "cached_segment", "cached_scope", "cached_conversation",
+                "cached_list", "cached_tombstone", "pending_read", "cache_meta",
+            ] {
+                try db.drop(table: table)
+            }
+            try db.execute(sql: """
+                ALTER TABLE outgoing_message DROP COLUMN retry_not_before;
+                DELETE FROM grdb_migrations WHERE identifier IN ('v11_conversation_cache', 'v12_outbox_retry_deadline');
+                """)
+        }
+        do {
+            let upgraded = try ChahuaLocalStore(directory: account, userID: 17)
+            let saved = try await upgraded.restore()
+            XCTAssertEqual(saved.first?.draft.text, "draft")
+            XCTAssertEqual(saved.flatMap(\.outgoing).map(\.clientGeneratedID), ["pending"])
+        }
+        try editMigrationDatabase(account) { db in
+            try db.execute(sql: "INSERT INTO grdb_migrations VALUES ('v99_future')")
+        }
+        do {
+            let reset = try ChahuaLocalStore(directory: account, userID: 17)
+            let restored = try await reset.restore()
+            XCTAssertTrue(restored.isEmpty)
+            _ = try await reset.enqueueIndependentText(
+                chatID: "chat", clientGeneratedID: "after-reset", text: "new", enqueuedAt: date)
+        }
+        let reopened = try await ChahuaLocalStore(directory: account, userID: 17).restore()
+        let otherRows = try await other.restore()
+        XCTAssertEqual(reopened.flatMap(\.outgoing).map(\.clientGeneratedID), ["after-reset"])
+        XCTAssertEqual(otherRows.flatMap(\.outgoing).map(\.clientGeneratedID), ["other"])
+    }
+
+    func testMigrationFailureAndMalformedLedgerDoNotEraseWork() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            let store = try ChahuaLocalStore(directory: directory, userID: 17)
+            _ = try await store.enqueueIndependentText(
+                chatID: "chat", clientGeneratedID: "keep", text: "keep", enqueuedAt: Date())
+        }
+        // v12 will fail because its column already exists. The failure must not
+        // be handled as permission to erase any existing outbox data.
+        try editMigrationDatabase(directory) { db in
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v12_outbox_retry_deadline'")
+        }
+        XCTAssertThrowsError(try ChahuaLocalStore(directory: directory, userID: 17)) {
+            XCTAssertTrue($0 is DatabaseError)
+        }
+        try editMigrationDatabase(directory) { db in
+            try db.execute(sql: "INSERT INTO grdb_migrations VALUES ('v12_outbox_retry_deadline'), (X'3132')")
+        }
+        XCTAssertThrowsError(try ChahuaLocalStore(directory: directory, userID: 17)) {
+            guard case LocalStorageError.corruptRecord = $0 else { return XCTFail("Unexpected error: \($0)") }
+        }
+        try editMigrationDatabase(directory) { db in
+            try db.execute(sql: "DELETE FROM grdb_migrations WHERE typeof(identifier) = 'blob'")
+        }
+        let restored = try await ChahuaLocalStore(directory: directory, userID: 17).restore()
+        XCTAssertEqual(restored.flatMap(\.outgoing).map(\.clientGeneratedID), ["keep"])
+    }
+
+    func testRetryAfterFencesRestoredPendingAndFailedCreateClaims() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = Date()
+        let deadline = now.addingTimeInterval(120)
+        let preflight = ConversationKey(chatID: "preflight")
+        let create = ConversationKey(chatID: "create")
+        let failure = OutboxFailure(stage: .create, reason: .network, retry: .automatic)
+        do {
+            let store = try ChahuaLocalStore(directory: directory, userID: 17)
+            for key in [preflight, create] {
+                _ = try await store.enqueueIndependentText(
+                    chatID: key.chatID, clientGeneratedID: key.chatID, text: "same body", enqueuedAt: now)
+                let claim = try await store.claimNext(chatID: key.chatID, expectedID: key.chatID)
+                XCTAssertNotNil(claim.message)
+            }
+            _ = try await store.releaseUnsentClaim(
+                key: preflight, itemID: preflight.chatID, priorFailure: nil, retryNotBefore: deadline)
+            _ = try await store.fail(key: create, itemID: create.chatID, failure: failure, retryNotBefore: deadline)
+        }
+
+        let store = try ChahuaLocalStore(directory: directory, userID: 17)
+        let restored = try await store.restore()
+        for key in [preflight, create] {
+            let item = try XCTUnwrap(restored.first { $0.conversationKey == key }?.outgoing.first)
+            XCTAssertEqual(item.text, "same body")
+            XCTAssertEqual(item.state, key == preflight ? .pending : .failed)
+            XCTAssertEqual(try XCTUnwrap(item.retryNotBefore).timeIntervalSince(deadline), 0, accuracy: 0.001)
+            let blocked = try await store.claimNext(chatID: key.chatID, expectedID: key.chatID, retryCreate: true)
+            XCTAssertNil(blocked.message)
+            XCTAssertEqual(blocked.snapshot.outgoing.first, item)
+        }
+    }
+
     func testInterruptedSendingCanOnlyRetryTheSameCreate() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -114,18 +225,61 @@ final class LocalPersistenceTests: XCTestCase {
             receipt("A", key: ConversationKey(chatID: "other", threadID: "thread")),
             receipt("B", key: thread),
         ] {
-            let mismatch = try await store.settleCreate(wrong)
+            let mismatch = try await store.settleCreate(wrong, published: true)
             XCTAssertNil(mismatch)
         }
         let deletedServerCopy = receipt("A", key: thread, deleted: true)
-        let settled = try await store.settleCreate(deletedServerCopy)
+        let settled = try await store.settleCreate(deletedServerCopy, published: true)
         XCTAssertEqual(settled?.outgoing.map(\.clientGeneratedID), ["B"])
-        let duplicate = try await store.settleCreate(deletedServerCopy)
+        let duplicate = try await store.settleCreate(deletedServerCopy, published: true)
         XCTAssertNil(duplicate)
+        let epoch = try await store.cacheEpoch()
+        try await store.cacheChange(.create(receipt("A", key: thread), thread, adjoining: nil), epoch: epoch)
+        let history = try await store.cachedHistory(thread)
+        XCTAssertTrue(history.messages.isEmpty, "A late server copy must respect the settled deletion")
         let lateFailure = try await store.fail(key: thread, itemID: "A", failure: failure)
         XCTAssertEqual(lateFailure, settled)
         let next = try await store.claimNext(chatID: "chat", threadID: "thread", expectedID: "B")
         XCTAssertEqual(next.message?.clientGeneratedID, "B")
+    }
+
+    func testPublishedSettlementRollsBackCacheAndClaimTogether() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory, userID: 17)
+        let key = ConversationKey(chatID: "chat", threadID: "thread")
+        _ = try await store.enqueueIndependentText(
+            chatID: key.chatID, threadID: key.threadID, clientGeneratedID: "A", text: "local",
+            enqueuedAt: Date())
+        let claim = try await store.claimNext(chatID: key.chatID, threadID: key.threadID, expectedID: "A")
+        let message = receipt("A", key: key)
+        try await store.database.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_settlement BEFORE DELETE ON outgoing_message
+                BEGIN SELECT RAISE(ABORT, 'settlement blocked'); END
+                """)
+        }
+        do {
+            _ = try await store.settleCreate(message, published: true)
+            XCTFail("The queue deletion must fail")
+        } catch is DatabaseError {}
+        let blocked = try await store.load()
+        XCTAssertEqual(blocked, [claim.snapshot])
+        let rolledBack = try await store.cachedHistory(key)
+        XCTAssertTrue(rolledBack.messages.isEmpty)
+        let bytes = try await store.cachedMessageBytes()
+        XCTAssertEqual(bytes, 0)
+
+        try await store.database.write { db in try db.execute(sql: "DROP TRIGGER fail_settlement") }
+        let settled = try await store.settleCreate(message, published: true)
+        XCTAssertEqual(settled?.outgoing, [])
+        let late = try await store.settleCreate(message.replacingMessageText("late"), published: false)
+        XCTAssertNil(late)
+        let reopened = try ChahuaLocalStore(directory: directory, userID: 17)
+        let history = try await reopened.cachedHistory(key)
+        XCTAssertEqual(history.messages, [message])
+        let pending = try await reopened.restore()
+        XCTAssertTrue(pending.isEmpty)
     }
 
     func testDraftSubmitRollsBackRowsAndWatermarkOnStorageFailure() async throws {
@@ -233,6 +387,42 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(fixed.outgoing.first?.isReadyForDispatch, true)
     }
 
+    func testAttachmentRetryAfterSurvivesReopenAndClearsOnReplacement() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = ConversationKey(chatID: "chat")
+        let slot = try image(directory, id: "photo")
+        let deadline = Date().addingTimeInterval(120)
+        let failure = OutboxFailure(stage: .preparation, reason: .network, retry: .automatic)
+        do {
+            let store = try ChahuaLocalStore(directory: directory, userID: 17)
+            _ = try await store.setDraftAttachments(key: key, attachments: [slot], compressionEnabled: true)
+            _ = try await store.enqueueText(
+                chatID: key.chatID, clientGeneratedID: "item", text: "caption", enqueuedAt: Date(),
+                clearedDraftRevision: 1)
+            var throttled = slot
+            throttled.retryNotBefore = deadline
+            _ = try await store.checkpointAttachment(key: key, itemID: "item", attachment: throttled, failure: failure)
+        }
+
+        let store = try ChahuaLocalStore(directory: directory, userID: 17)
+        let restored = try await store.restore()
+        let item = try XCTUnwrap(restored.first?.outgoing.first)
+        XCTAssertEqual(item.failure, failure)
+        XCTAssertEqual(item.attachments.first?.retryNotBefore, deadline)
+        let blocked = try await store.retryPreparation(key: key, itemID: "item")
+        XCTAssertEqual(blocked.outgoing.first, item)
+        let edited = try await store.editOutgoing(
+            key: key, itemID: "item", text: "new caption", replyToMessage: nil,
+            attachments: [slot], compressionEnabled: true)
+        XCTAssertEqual(edited.outgoing.first?.attachments.first?.retryNotBefore, deadline)
+        let replaced = try await store.editOutgoing(
+            key: key, itemID: "item", text: "new caption", replyToMessage: nil,
+            attachments: [slot], compressionEnabled: false)
+        XCTAssertNotEqual(replaced.outgoing.first?.attachments.first?.generation, slot.generation)
+        XCTAssertNil(replaced.outgoing.first?.attachments.first?.retryNotBefore)
+    }
+
     func testFileCaptionFollowsFileAndIndependentSendDoesNotConsumeDraft() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -290,6 +480,177 @@ final class LocalPersistenceTests: XCTestCase {
         let theirWork = try await other.hasWork()
         XCTAssertFalse(ourWork)
         XCTAssertTrue(theirWork)
+    }
+
+    func testReopenRetainsUncappedListsAndIndexedHistory() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let key = ConversationKey(chatID: "history")
+        do {
+            let store = try ChahuaLocalStore(directory: directory, userID: 17)
+            let epoch = try await store.cacheEpoch()
+            var seen = Set<ConversationKey>()
+            for page in (0..<21).reversed() {
+                let lower = UInt64(page * 50 + 1)
+                try await store.cacheHistory(
+                    key, query: ListMessagesQuery(before: page == 20 ? nil : MessageID(lower + 50)),
+                    response: ListMessagesResponse(
+                        messages: (lower..<(lower + 50)).map { historyMessage($0, key: key) },
+                        olderCursor: page == 0 ? nil : MessageID(lower)), epoch: epoch)
+                if page <= 4 {
+                    let items = (0..<50).map { offset -> CachedConversation in
+                        let id = page * 50 + offset
+                        return .chat(ChatListItem(
+                            id: "\(id)", lastMessageAt: Date(timeIntervalSince1970: Double(id)),
+                            unreadCount: 7, peerLastReadMessageId: MessageID(2), archived: false, kind: .dm))
+                    }
+                    seen.formUnion(items.map(\.key))
+                    try await store.cacheList(.activeChats, items: items, seen: page == 0 ? seen : nil, epoch: epoch)
+                }
+            }
+            let unsigned = ConversationKey(chatID: "unsigned")
+            let values: [UInt64] = [9, 10, UInt64(Int64.max), UInt64(Int64.max) + 1, UInt64.max]
+            try await store.cacheHistory(
+                unsigned, query: ListMessagesQuery(),
+                response: ListMessagesResponse(messages: values.reversed().map { historyMessage($0, key: unsigned) }),
+                epoch: epoch)
+            let noWork = try await store.hasWork()
+            XCTAssertFalse(noWork)
+        }
+        let reopened = try ChahuaLocalStore(directory: directory, userID: 17)
+        var page = try await reopened.cachedHistory(key)
+        XCTAssertEqual(page.messages.map(\.id.rawValue), Array(1001...1050))
+        var count = page.messages.count
+        while page.hasOlder, let first = page.messages.first {
+            page = try await reopened.cachedHistory(key, position: .before(first.id))
+            count += page.messages.count
+        }
+        XCTAssertEqual(count, 1050)
+        XCTAssertEqual(page.messages.first?.id, MessageID(1))
+        let unsigned = try await reopened.cachedHistory(ConversationKey(chatID: "unsigned"))
+        XCTAssertEqual(unsigned.messages.map(\.id.rawValue), [9, 10, UInt64(Int64.max), UInt64(Int64.max) + 1, UInt64.max])
+        let firstListPage = try await reopened.cachedList(.activeChats)
+        var list = try XCTUnwrap(firstListPage)
+        var keys = list.items.map(\.key.chatID)
+        while let next = list.next {
+            let nextPage = try await reopened.cachedList(.activeChats, after: next)
+            list = try XCTUnwrap(nextPage)
+            keys += list.items.map(\.key.chatID)
+        }
+        XCTAssertTrue(list.complete)
+        XCTAssertEqual(keys, (0..<250).reversed().map(String.init))
+        if case .chat(let item) = list.items.first {
+            XCTAssertNil(item.peerLastReadMessageId)
+            XCTAssertEqual(item.unreadCount, 0)
+        } else { XCTFail("Expected a cached chat") }
+    }
+
+    func testHistoryGapAndEmptyLatestReplayDoNotInventContinuity() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory, userID: 17)
+        let epoch = try await store.cacheEpoch()
+        let key = ConversationKey(chatID: "chat")
+        try await store.cacheHistory(
+            key, query: ListMessagesQuery(around: MessageID(10)),
+            response: ListMessagesResponse(
+                messages: [historyMessage(10, key: key)], newerCursor: MessageID(10)), epoch: epoch)
+        try await store.cacheHistory(
+            key, query: ListMessagesQuery(),
+            response: ListMessagesResponse(
+                messages: [historyMessage(50, key: key)], olderCursor: MessageID(50)), epoch: epoch)
+        let separate = try await store.cachedHistory(key)
+        XCTAssertEqual(separate.messages.map(\.id), [MessageID(50)])
+        XCTAssertTrue(separate.hasOlderSection)
+        let older = try await store.cachedHistory(key, position: .previousSection(MessageID(50)))
+        XCTAssertEqual(older.messages.map(\.id), [MessageID(10)])
+        try await store.cacheHistory(
+            key, query: ListMessagesQuery(before: MessageID(50)),
+            response: ListMessagesResponse(messages: [historyMessage(30, key: key), historyMessage(10, key: key)]),
+            epoch: epoch)
+        let joined = try await store.cachedHistory(key)
+        XCTAssertEqual(joined.messages.map(\.id.rawValue), [10, 30, 50])
+        XCTAssertFalse(joined.hasOlderSection)
+        try await store.cacheHistory(
+            key, query: ListMessagesQuery(), response: ListMessagesResponse(messages: []),
+            replay: [.create(historyMessage(61, key: key), key)], epoch: epoch)
+        let replayed = try await store.cachedHistory(key)
+        XCTAssertEqual(replayed.messages.map(\.id), [MessageID(61)])
+        XCTAssertEqual(replayed.context?.verifiedEmpty, false)
+    }
+
+    func testDeletionRedactsQuotesAndCannotRestoreLateCachedMembership() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory, userID: 17)
+        let root = ConversationKey(chatID: "chat")
+        let thread = ConversationKey(chatID: "chat", threadID: "20")
+        let deleted = historyMessage(20, key: root)
+        let reply = MessageResponse(
+            id: MessageID(30), chatId: root.chatID, clientGeneratedId: "reply", messageType: .text,
+            sender: deleted.sender, createdAt: deleted.createdAt, message: "quoted it", replyToMessage: deleted.replyPreview)
+        let original = ListMessagesResponse(messages: [deleted, reply])
+        let epoch = try await store.cacheEpoch()
+        try await store.cacheHistory(root, query: .init(), response: original, epoch: epoch)
+        try await store.cacheHistory(thread, query: .init(threadID: "20"),
+            response: ListMessagesResponse(messages: [deleted]), epoch: epoch)
+        _ = try await store.saveDraft(
+            chatID: root.chatID, text: "draft", editRevision: 1, updatedAt: Date(), replyToMessage: deleted.replyPreview)
+        try await store.cacheChange(.delete(chatID: root.chatID, ids: [deleted.id]), epoch: epoch)
+        try await store.cacheHistory(root, query: .init(), response: original, epoch: epoch)
+
+        let saved = try await store.cachedHistory(root)
+        let savedThread = try await store.cachedHistory(thread)
+        let drafts = try await store.load()
+        XCTAssertEqual(saved.messages.map(\.id), [reply.id])
+        XCTAssertEqual(saved.messages.first?.replyToMessage?.isDeleted, true)
+        XCTAssertNil(saved.messages.first?.replyToMessage?.message)
+        XCTAssertEqual(savedThread.messages.first?.isDeleted, true)
+        XCTAssertNil(savedThread.messages.first?.message)
+        XCTAssertEqual(drafts.first?.draft.replyToMessage?.isDeleted, true)
+        XCTAssertNil(drafts.first?.draft.replyToMessage?.message)
+    }
+
+    func testClearHistoryFencesWritesAndLeavesDraftAttachmentAndSubmittedWork() async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try ChahuaLocalStore(directory: directory, userID: 17)
+        let epoch = try await store.cacheEpoch()
+        let key = ConversationKey(chatID: "chat")
+        let attachment = try image(directory, id: "draft-attachment")
+        _ = try await store.setDraftAttachments(key: key, attachments: [attachment], compressionEnabled: true)
+        _ = try await store.saveDraft(chatID: key.chatID, text: "keep draft", editRevision: 1, updatedAt: Date())
+        _ = try await store.enqueueIndependentText(
+            chatID: key.chatID, clientGeneratedID: "keep outgoing", text: "keep", enqueuedAt: Date())
+        let response = ListMessagesResponse(messages: [historyMessage(20, key: key)])
+        try await store.cacheHistory(key, query: ListMessagesQuery(), response: response, epoch: epoch)
+        try await store.recordPendingRead(key, base: MessageID(10), target: MessageID(20))
+        let bytesBefore = try await store.cachedMessageBytes()
+        XCTAssertGreaterThan(bytesBefore, 0)
+
+        try await store.clearMessageHistory()
+        try await store.cacheHistory(key, query: ListMessagesQuery(), response: response, epoch: epoch)
+        let bytesAfter = try await store.cachedMessageBytes()
+        let snapshots = try await store.restore()
+        let reads = try await store.pendingReads()
+        XCTAssertEqual(bytesAfter, 0)
+        XCTAssertEqual(snapshots.first?.draft.text, "keep draft")
+        XCTAssertEqual(snapshots.first?.draft.attachments.map(\.id), [attachment.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: attachment.sourcePath))
+        XCTAssertEqual(snapshots.flatMap(\.outgoing).map(\.clientGeneratedID), ["keep outgoing"])
+        XCTAssertEqual(reads.map(\.target), [MessageID(20)])
+    }
+
+    private func historyMessage(_ id: UInt64, key: ConversationKey) -> MessageResponse {
+        MessageResponse(
+            id: MessageID(id), chatId: key.chatID, clientGeneratedId: "\(id)", messageType: .text,
+            sender: User(uid: 17, gender: 0, name: nil, avatarUrl: nil, userGroup: nil),
+            createdAt: Date(timeIntervalSince1970: 1), message: "message \(id)", replyRootId: key.threadID)
+    }
+
+    private func editMigrationDatabase(_ directory: URL, _ update: (Database) throws -> Void) throws {
+        let database = try DatabaseQueue(path: directory.appendingPathComponent("chat.sqlite").path)
+        try database.write(update)
     }
 
     private func createLegacyStore(_ directory: URL) throws {

@@ -11,8 +11,9 @@ struct TimelineWindow: Equatable {
     private var serverIDByClientKey: [ConversationMessageStableKey: MessageID] = [:]
     private(set) var olderCursor: MessageID?
     private(set) var newerCursor: MessageID?
+    private(set) var isSaved = false
 
-    var isAtLiveEdge: Bool { newerCursor == nil }
+    var isAtLiveEdge: Bool { !isSaved && newerCursor == nil }
     var hasOlder: Bool { olderCursor != nil }
     var count: Int { messages.count }
 
@@ -45,6 +46,24 @@ struct TimelineWindow: Equatable {
         mergeAuthoritative(page.messages.filter(accepting))
         olderCursor = page.olderCursor
         newerCursor = page.newerCursor
+        isSaved = false
+    }
+
+    mutating func replaceSaved(with messages: [MessageResponse]) {
+        self = TimelineWindow()
+        useSavedHistory()
+        mergeAuthoritative(messages)
+    }
+
+    mutating func mergeSaved(_ messages: [MessageResponse]) {
+        useSavedHistory()
+        mergeAuthoritative(messages)
+    }
+
+    private mutating func useSavedHistory() {
+        isSaved = true
+        olderCursor = nil
+        newerCursor = nil
     }
 
     @discardableResult

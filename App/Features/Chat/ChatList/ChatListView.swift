@@ -65,6 +65,8 @@ struct ChatListView: View {
     private struct ActivityID: Equatable {
         let list: LoadID
         let active: Bool
+        let canFetchHistory: Bool
+        let currentUserID: Int32
     }
 
     private struct ConsumerID: Equatable {
@@ -142,9 +144,31 @@ struct ChatListView: View {
             }) || (includesThreads && !store.state.archivedThreads.isEmpty)
             || (scope.includesChats && store.state.archivedChatListLoadPhase == .failed)
             || (includesThreads && store.state.archivedThreadListLoadPhase == .failed)
+            || (scope.includesChats && store.state.savedListHasMore.contains(.archivedChats))
+            || (includesThreads && store.state.savedListHasMore.contains(.archivedThreads))
+    }
+
+    private var hasMoreSavedConversations: Bool {
+        (scope.includesChats
+            && store.state.savedListHasMore.contains(archivedMode ? .archivedChats : .activeChats))
+            || (includesThreads
+                && store.state.savedListHasMore.contains(archivedMode ? .archivedThreads : .activeThreads))
     }
 
     var body: some View {
+        listViewport.task(id: activityID) {
+            if isActive { await loadScope() }
+        }
+    }
+
+    private var activityID: ActivityID {
+        ActivityID(list: LoadID(
+            scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages),
+            active: isActive, canFetchHistory: store.canFetchHistory, currentUserID: currentUserID)
+    }
+
+    @ViewBuilder
+    private var listViewport: some View {
         #if os(iOS)
             GeometryReader { geometry in
                 listContent(bottomInset: bottomSafeArea ?? geometry.safeAreaInsets.bottom)
@@ -188,7 +212,6 @@ struct ChatListView: View {
         }
     }
 
-    @ViewBuilder
     private func conversationList(bottomInset: CGFloat) -> some View {
         let snapshot = listSnapshotCache.snapshot(
             chats: archivedMode ? store.state.archivedChats : store.state.chats,
@@ -201,9 +224,10 @@ struct ChatListView: View {
         let loadStatus = ConversationListLoadStatus(
             state: store.state, scope: scope, archivedMode: archivedMode,
             showThreadsInMessages: showThreadsInMessages,
-            isPullRefreshing: isPullRefreshing, onRetry: { await performManualRefresh() }
+            isPullRefreshing: isPullRefreshing, canFetchHistory: store.canFetchHistory,
+            onRetry: { await performManualRefresh() }
         )
-        ConversationListViewport {
+        let viewport = ConversationListViewport {
             if !isWideChatLayout, !usesPrototypePull,
                 scrollScope.isSearchRevealed && !isSearchPinned
             {
@@ -256,7 +280,7 @@ struct ChatListView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
-            if items.isEmpty && isLoaded {
+            if items.isEmpty && !hasMoreSavedConversations && isLoaded {
                 ChahuaEmptyStateView(
                     title: archivedMode ? "No archived conversations" : "No conversations",
                     message: archivedMode
@@ -267,6 +291,13 @@ struct ChatListView: View {
                 #if os(iOS)
                     .background(ConversationListScrollMarker(scope: scrollScope))
                 #endif
+            }
+            if items.isEmpty && !hasMoreSavedConversations && !isLoaded && !store.canFetchHistory {
+                Text("No conversations downloaded")
+                    .foregroundStyle(ChahuaTheme.secondaryText)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+                    .listRowSeparator(.hidden)
             }
             ForEach(items) { item in
                 ConversationListSwipeRow(
@@ -296,6 +327,19 @@ struct ChatListView: View {
             #if os(iOS)
                 .listSectionSeparator(.hidden, edges: .top)
             #endif
+            if hasMoreSavedConversations {
+                Button("Show more saved conversations") {
+                    Task {
+                        await store.loadMoreSavedConversations(
+                            chats: scope.includesChats, threads: includesThreads, archived: archivedMode)
+                    }
+                }
+                #if os(iOS)
+                    .background(ConversationListScrollMarker(scope: scrollScope))
+                #endif
+                .frame(maxWidth: .infinity)
+                .listRowSeparator(.hidden)
+            }
         }
         #if os(macOS)
             // Preserve sidebar spacing without List's per-cell hosting/sizing.
@@ -406,6 +450,11 @@ struct ChatListView: View {
             .opacity(0)
             .accessibilityHidden(true)
         }
+        return configure(viewport, conversations: snapshot.conversationRefs)
+    }
+
+    private func configure(_ viewport: some View, conversations: [ConversationRef]) -> some View {
+        viewport
         .onAppear { configureListPresentation() }
         .onReceive(
             presentation?.requests.eraseToAnyPublisher()
@@ -451,22 +500,17 @@ struct ChatListView: View {
             scrollScope.detach()
             store.removeConversationStateScope(for: conversationStateConsumer)
         }
-        .task(id: ConsumerID(conversations: snapshot.conversationRefs, active: isActive)) {
-            if isActive {
+        .task(
+            id: ConsumerID(
+                conversations: conversations,
+                active: isActive && store.canFetchHistory)
+        ) {
+            if isActive && store.canFetchHistory {
                 store.setConversationStateScope(
-                    snapshot.conversationRefs, for: conversationStateConsumer)
+                    conversations, for: conversationStateConsumer)
             } else {
                 store.removeConversationStateScope(for: conversationStateConsumer)
             }
-        }
-        .task(
-            id: ActivityID(
-                list: LoadID(
-                    scope: scope, archived: archivedMode,
-                    showThreadsInMessages: showThreadsInMessages),
-                active: isActive)
-        ) {
-            if isActive { await loadScope() }
         }
         .sheet(item: $notificationChat) { chat in
             NavigationStack {
@@ -660,7 +704,9 @@ struct ChatListView: View {
             isPullRefreshing = false
             scrollScope.isRefreshing = false
         }
-        await refreshScope()
+        await store.retryConversations(
+            chats: scope.includesChats, threads: scope.includesThreads(showThreadsInMessages: showThreadsInMessages),
+            archived: archivedMode)
     }
 
     private var archivedEntry: some View {
@@ -763,12 +809,16 @@ struct ChatListView: View {
     }
 
     private var isLoaded: Bool {
-        (!scope.includesChats || chatPhase == .loaded)
-            && (!includesThreads || threadPhase == .loaded)
+        let chatAvailability = store.state.listAvailability[
+            archivedMode ? .archivedChats : .activeChats] ?? .absent
+        let threadAvailability = store.state.listAvailability[
+            archivedMode ? .archivedThreads : .activeThreads] ?? .absent
+        return (!scope.includesChats || chatPhase == .loaded || chatAvailability.isComplete)
+            && (!includesThreads || threadPhase == .loaded || threadAvailability.isComplete)
     }
 
     private func perform(_ action: ConversationListAction, on item: ConversationListItem) {
-        guard store.pendingListAction(for: item.id) == nil else { return }
+        guard store.canFetchHistory, store.pendingListAction(for: item.id) == nil else { return }
         revealedConversationID = nil
         if action == .notificationSettings, case .chat(let chat) = item {
             notificationChat = chat
@@ -823,36 +873,6 @@ struct ChatListView: View {
             _ = await (active, archived)
         }
     }
-
-    private func refreshScope() async {
-        if archivedMode {
-            await refreshArchivedScope()
-        } else {
-            async let active: Void = refreshActiveScope()
-            async let archived: Void = refreshArchivedScope()
-            _ = await (active, archived)
-        }
-    }
-
-    private func refreshActiveScope() async {
-        if scope == .messages && showThreadsInMessages {
-            await store.refreshActiveConversations()
-        } else if scope == .threads {
-            await store.refreshActiveThreads()
-        } else {
-            await store.refreshActiveChats()
-        }
-    }
-
-    private func refreshArchivedScope() async {
-        if scope == .messages && showThreadsInMessages {
-            await store.refreshArchivedConversations()
-        } else if scope == .threads {
-            await store.refreshArchivedThreads()
-        } else {
-            await store.refreshArchivedChats()
-        }
-    }
 }
 
 /// The selected scope has one presentation state even when multiple lists load independently.
@@ -862,6 +882,7 @@ struct ConversationListLoadStatus: View {
     var archivedMode = false
     var showThreadsInMessages = true
     var isPullRefreshing = false
+    var canFetchHistory = true
     let onRetry: () async -> Void
 
     private var chatPhase: ChatListLoadPhase {
@@ -874,6 +895,12 @@ struct ConversationListLoadStatus: View {
 
     private var includesThreads: Bool {
         scope.includesThreads(showThreadsInMessages: showThreadsInMessages)
+    }
+
+    private var hasBaseline: Bool {
+        let chat = state.listAvailability[archivedMode ? .archivedChats : .activeChats] ?? .absent
+        let thread = state.listAvailability[archivedMode ? .archivedThreads : .activeThreads] ?? .absent
+        return (scope.includesChats && chat != .absent) || (includesThreads && thread != .absent)
     }
 
     private var connectionMessage: LocalizedStringKey? {
@@ -907,34 +934,42 @@ struct ConversationListLoadStatus: View {
     }
 
     var isVisible: Bool {
-        !isPullRefreshing && (connectionMessage != nil || isLoading || hasFailure)
+        !isPullRefreshing && (!canFetchHistory || connectionMessage != nil || isLoading || hasFailure)
     }
 
     var body: some View {
-        if let connectionMessage, !hasInitialFailure, !isPullRefreshing {
-            HStack(spacing: ChahuaTheme.Spacing.small) {
-                ProgressView().controlSize(.small)
-                Text(connectionMessage)
-                    .font(.caption)
-                    .foregroundStyle(ChahuaTheme.secondaryText)
-            }
-            .frame(maxWidth: .infinity)
-            .listRowSeparator(.hidden)
-        } else if isLoading && !isPullRefreshing {
-            ProgressView()
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel("Loading conversations")
+        if !isPullRefreshing {
+            if !canFetchHistory {
+                HStack {
+                    Label("Offline", systemImage: "network.slash")
+                        .foregroundStyle(ChahuaTheme.secondaryText)
+                    Spacer()
+                    Button("Retry") { Task { await onRetry() } }
+                }
+                .font(.caption)
                 .listRowSeparator(.hidden)
-        }
-        if hasFailure && (connectionMessage == nil || hasInitialFailure)
-            && !isLoading && !isPullRefreshing
-        {
-            Button {
-                Task { await onRetry() }
-            } label: {
-                Label("Couldn't load conversations. Retry", systemImage: "arrow.clockwise")
+            } else if hasFailure && (connectionMessage == nil || hasInitialFailure) && !isLoading {
+                Button {
+                    Task { await onRetry() }
+                } label: {
+                    Label("Couldn't load conversations. Retry", systemImage: "arrow.clockwise")
+                }
+                .listRowSeparator(.hidden)
+            } else if let message = connectionMessage ?? (isLoading && hasBaseline ? "Refreshing…" : nil) {
+                HStack(spacing: ChahuaTheme.Spacing.small) {
+                    ProgressView().controlSize(.small)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(ChahuaTheme.secondaryText)
+                }
+                .frame(maxWidth: .infinity)
+                .listRowSeparator(.hidden)
+            } else if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel("Loading conversations")
+                    .listRowSeparator(.hidden)
             }
-            .listRowSeparator(.hidden)
         }
     }
 }

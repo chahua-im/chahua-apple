@@ -78,8 +78,16 @@ struct ChatDetailView: View {
     @State private var selectionDeleteTask: Task<Void, Never>?
     @State private var isDeletingSelection = false
     @State private var forwardingThreadRoot: MessageResponse?
+    @State private var hasVerifiedThreadRoot = false
     @State private var forwardingThreadReplyCount: Int64?
     @State private var forwardingRootRevision = 0
+    @State private var threadRootRequestRevision = 0
+
+    private struct ThreadRootRequest: Equatable {
+        let threadID: String?
+        let canFetchHistory: Bool
+        let revision: Int
+    }
 
     private enum OutboxAction {
         case failure(String)
@@ -156,9 +164,12 @@ struct ChatDetailView: View {
                 source: store,
                 messageStore: store.conversationMessages,
                 threadID: threadID,
+                historyCache: store.historyCache,
+                canFetchHistory: { [weak store] in store?.canFetchHistory == true },
+                canRetryHistory: { [weak store] in store?.canRetryHistory() == true },
                 markRead: { messageID in
-                    try await store.markRead(
-                        chatID: chat.id, threadID: threadID, messageID: messageID)
+                    try await store.recordAutomaticRead(
+                        .init(chatID: chat.id, threadID: threadID), target: messageID)
                 },
                 fetchReadReceipt: fetchReadReceipt,
                 fetchUnreadMentions: { scope in
@@ -224,31 +235,43 @@ struct ChatDetailView: View {
                     await model.open(position: openingPosition)
                 }
             }
-            .task(id: threadID) {
-                guard observation.isCurrentSession,
+            .task(id: ThreadRootRequest(
+                threadID: threadID, canFetchHistory: observation.canFetchHistory,
+                revision: threadRootRequestRevision
+            )) {
+                hasVerifiedThreadRoot = false
+                guard isCurrentSession, store.canFetchHistory,
                     let threadID, let rootID = MessageID(threadID)
                 else { return }
                 let revision = forwardingRootRevision
                 let root = try? await store.forwardSourceMessage(
                     chatID: chat.id, messageID: rootID)
-                guard observation.isCurrentSession, !Task.isCancelled,
-                    revision == forwardingRootRevision
+                guard isCurrentSession, store.canFetchHistory, !Task.isCancelled,
+                    revision == forwardingRootRevision, let root,
+                    root.id == rootID, root.chatId == chat.id, root.replyRootId == nil
                 else { return }
                 forwardingThreadRoot = root
-                synchronizeSpeakingPermissions()
+                hasVerifiedThreadRoot = true
+                persistResolvedSendDecision()
             }
-            .task { await loadInteractionPermissions() }
+            .task(id: observation.canFetchHistory) { await loadInteractionPermissions() }
+            .task(id: outgoingQueue.storageState) {
+                guard isCurrentSession else { return }
+                _ = await store.savedSendDecision(for: conversationKey)
+            }
             .onChange(of: observation.permissions) { _, _ in
-                synchronizeSpeakingPermissions()
+                persistResolvedSendDecision()
             }
             .onChange(of: observation.threadReplyCount) { _, count in
                 forwardingThreadReplyCount = count
-                synchronizeSpeakingPermissions()
             }
             .onChange(of: observation.session) { _, _ in
                 invalidateForSessionChange()
             }
-            .task { await savedMessages.ensure(chatID: chat.id) }
+            .task(id: observation.canFetchHistory) {
+                guard store.canFetchHistory else { return }
+                await savedMessages.ensure(chatID: chat.id)
+            }
     }
 
     private var savedAndPermissionSurface: some View {
@@ -269,6 +292,7 @@ struct ChatDetailView: View {
                 if let message = savedMessageToRetry {
                     Button("Retry") {
                         savedMessages.clearError()
+                        guard store.canFetchHistory else { return }
                         Task { await savedMessages.toggle(message) }
                     }
                 }
@@ -284,8 +308,10 @@ struct ChatDetailView: View {
                 guard chat.kind == .dm else { return }
                 invalidateInteractionPermissions()
             }
-            .task {
-                if threadID == nil { await pins.load(chatID: chat.id, force: true) }
+            .task(id: observation.canFetchHistory) {
+                if threadID == nil, store.canFetchHistory {
+                    await pins.load(chatID: chat.id, force: true)
+                }
             }
     }
 
@@ -325,7 +351,7 @@ struct ChatDetailView: View {
                 if target.phase.isFailed {
                     Button("Retry") { retryOutgoing(target.id) }
                 }
-                Button("Remove from Outbox", role: .destructive) { removeOutgoing(target.id) }
+                Button("Remove from Outbox", role: .destructive) { removeOutgoing(target) }
                 Button("Cancel", role: .cancel) {}
             } message: { target in
                 Text(target.detail)
@@ -393,11 +419,16 @@ struct ChatDetailView: View {
             if forwardingThreadReplyCount != update.replyCount {
                 forwardingThreadReplyCount = update.replyCount
             }
-            if !interactionContext.hasExistingThread {
-                interactionContext.hasExistingThread = true
+            if store.canFetchHistory, forwardingThreadRoot?.threadInfo == nil {
+                // The count signals a change, but only the root's threadInfo is
+                // proof for a replies-only destination.
+                hasVerifiedThreadRoot = false
+                threadRootRequestRevision &+= 1
             }
         case .messageUpdated(let message), .messageDeleted(let message):
-            guard message.chatId == chat.id, message.id.description == threadID else { return }
+            guard message.chatId == chat.id, message.id.description == threadID,
+                message.replyRootId == nil
+            else { return }
             // The root can live outside the thread's loaded rows. Keep forwarding
             // content/deletion current without observing every thread-list field.
             let root: MessageResponse
@@ -406,10 +437,11 @@ struct ChatDetailView: View {
             } else {
                 root = message
             }
-            guard forwardingThreadRoot != root else { return }
+            guard forwardingThreadRoot != root || !hasVerifiedThreadRoot else { return }
             forwardingRootRevision &+= 1
             forwardingThreadRoot = root
-            synchronizeSpeakingPermissions()
+            hasVerifiedThreadRoot = true
+            persistResolvedSendDecision()
         default:
             break
         }
@@ -499,6 +531,9 @@ struct ChatDetailView: View {
                 .keyboardShortcut(.cancelAction)
             #endif
             Button {
+                guard isCurrentSession, store.historyCache?.accessRevoked(chat.id) != true else {
+                    return
+                }
                 forwardRequest = ForwardSelection(
                     sources: actions.selectionMessages,
                     onPrepared: { actions.endMessageSelection?() })
@@ -517,7 +552,8 @@ struct ChatDetailView: View {
 
     private func canDeleteSelection(_ messages: [MessageResponse]) -> Bool {
         let context = currentInteractionContext
-        return context.canWrite && !messages.isEmpty && messages.count <= 100
+        return context.canUseNetworkActions && context.canWrite && !messages.isEmpty
+            && messages.count <= 100
             && messages.allSatisfy { $0.chatId == chat.id }
             && messages.allSatisfy {
                 !$0.isDeleted
@@ -541,6 +577,7 @@ struct ChatDetailView: View {
                     while outgoingQueue.forwardPlaceholderReason(for: message, merging: false)
                         == "pendingAudio"
                     {
+                        guard store.canFetchHistory else { return }
                         try await Task.sleep(for: .milliseconds(250))
                     }
                     try Task.checkCancellation()
@@ -586,29 +623,47 @@ struct ChatDetailView: View {
         return message
     }
 
-    private var wholeThreadForwardAction: ForwardThreadAction? {
-        guard let threadID else { return nil }
-        let loadedRoot =
-            model.rows.compactMap { row -> MessageResponse? in
-                guard case .message(let row) = row,
-                    row.entry.remoteMessage?.id.description == threadID
-                else { return nil }
-                return row.entry.remoteMessage
-            }.first ?? forwardingThreadRoot
-        guard
-            let count = forwardingThreadReplyCount.map({ $0 + 1 })
-                ?? observation.threadReplyCount.map({ $0 + 1 })
-                ?? loadedRoot.map({ ($0.threadInfo?.replyCount ?? 0) + 1 }),
-            count <= 100, let root = loadedRoot, !root.isDeleted,
-            !model.knownDeletedMessageIDs.contains(root.id)
+    private var wholeThreadForwardSeed: MessageResponse? {
+        guard isCurrentSession, store.historyCache?.accessRevoked(chat.id) != true,
+            let threadID, let rootID = MessageID(threadID),
+            !model.knownDeletedMessageIDs.contains(rootID), forwardingThreadRoot?.isDeleted != true
         else { return nil }
+        var reply: MessageResponse?
+        for case .message(let row) in model.rows {
+            guard let message = row.entry.remoteMessage, !message.isDeleted,
+                message.messageType != .system, message.messageType != .invite
+            else { continue }
+            if message.id == rootID { return message }
+            if reply == nil, message.replyRootId == threadID { reply = message }
+        }
+        if let root = forwardingThreadRoot, root.messageType != .system, root.messageType != .invite {
+            return root
+        }
+        // A reply can seed the picker when the root isn't in this saved window.
+        // The actual selection is loaded from verified, complete coverage.
+        return store.canFetchHistory ? nil : reply
+    }
+
+    private var wholeThreadForwardAction: ForwardThreadAction? {
+        guard let seed = wholeThreadForwardSeed else { return nil }
+        let replies = forwardingThreadReplyCount ?? observation.threadReplyCount
+            ?? seed.threadInfo?.replyCount ?? 0
+        guard replies < 100 else { return nil }
+        let count = replies + 1
         return ForwardThreadAction(conversation: conversationKey, count: count) {
-            forwardRequest = ForwardSelection(sources: [root], wholeThread: true)
+            guard let seed = wholeThreadForwardSeed else { return }
+            forwardRequest = ForwardSelection(sources: [seed], wholeThread: true)
         }
     }
 
     private func loadWholeThreadForForwarding() async throws -> [MessageResponse] {
-        guard let threadID else { throw ForwardDestinationPicker.SourceError.unavailable }
+        guard isCurrentSession, let threadID, let rootID = MessageID(threadID) else {
+            throw ForwardDestinationPicker.SourceError.unavailable
+        }
+        if !store.canFetchHistory {
+            return try await store.savedCompleteThread(chatID: chat.id, rootID: rootID, limit: 100)
+                .filter { !$0.isDeleted && $0.messageType != .system }
+        }
         let page = try await store.fetchMessages(
             chatID: chat.id, query: .init(max: 100, threadID: threadID))
         guard page.olderCursor == nil else { throw ForwardDestinationPicker.SourceError.tooMany }
@@ -622,7 +677,7 @@ struct ChatDetailView: View {
                     conversationBody(actions: selectedActions)
                 #else
                     MessageInteractionHost(
-                        model: model, context: interactionContext, actions: selectedActions
+                        model: model, context: currentInteractionContext, actions: selectedActions
                     ) { actions in
                         conversationBody(actions: actions)
                     }
@@ -691,9 +746,9 @@ struct ChatDetailView: View {
                                             .regularMaterial, in: RoundedRectangle(cornerRadius: 16)
                                         )
                                 }
-                                if interactionContext.canWrite,
-                                    !canUseComposer,
-                                    let mode = interactionContext.speakingMode
+                                let context = currentInteractionContext
+                                if context.canUseNetworkActions, context.canWrite, !canUseComposer,
+                                    let mode = context.speakingMode
                                 {
                                     Text(mode.restrictionExplanation)
                                         .font(.callout)
@@ -706,6 +761,16 @@ struct ChatDetailView: View {
                                         )
                                         .padding(.horizontal, 12)
                                 } else {
+                                    if !context.canUseNetworkActions, !context.canSend, !isEditing,
+                                        outgoingQueue.storageState == .ready
+                                    {
+                                        Text(context.savedSendDecision == false
+                                            ? AppLanguage.localized("Sending is not allowed in this conversation.")
+                                            : AppLanguage.localized("Connect to check whether you can send."))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 12)
+                                    }
                                     messageComposer(maxHeight: max(36, geometry.size.height / 3))
                                 }
                             }
@@ -808,15 +873,20 @@ struct ChatDetailView: View {
         composer.onSendSticker = sendSticker
         composer.onSendVoice = sendVoice
         composer.onSearchMembers = { query in
-            try await store.searchMembers(chatID: chat.id, query: query)
+            guard store.canFetchHistory else { return [] }
+            return try await store.searchMembers(chatID: chat.id, query: query)
         }
         composer.linkPreviewScope =
             "\(observation.session.accountID.map(String.init) ?? ""):\(observation.session.revision):\(chat.id):\(threadID ?? ""):\(owner?.uuidString ?? "draft")"
         composer.linkPreviewChoices = composerLinkPreviews
         composer.initialLinkPreviews = editingMessage?.metadata?.linkPreviews ?? []
-        composer.onPreviewLinks = { urls in
-            guard isCurrentSession, composerEditOwner == owner else { throw CancellationError() }
-            return try await store.previewLinks(chatID: chat.id, urls: urls)
+        if store.canFetchHistory {
+            composer.onPreviewLinks = { urls in
+                guard isCurrentSession, store.canFetchHistory, composerEditOwner == owner else {
+                    throw CancellationError()
+                }
+                return try await store.previewLinks(chatID: chat.id, urls: urls)
+            }
         }
         composer.onEditDraftChanged = {
             guard isCurrentSession, let owner, composerEditOwner == owner else { return }
@@ -827,7 +897,7 @@ struct ChatDetailView: View {
 
     @ViewBuilder
     private var savedStatusFeedback: some View {
-        if let error = savedMessages.scopeError(chatID: chat.id) {
+        if store.canFetchHistory, let error = savedMessages.scopeError(chatID: chat.id) {
             HStack {
                 Text(error).font(.caption)
                 Spacer(minLength: 8)
@@ -847,7 +917,7 @@ struct ChatDetailView: View {
         #if os(macOS)
             ConversationTimelineView(
                 model: model, loadsInitialAutomatically: false, actions: actions,
-                interactionContext: interactionContext)
+                interactionContext: currentInteractionContext)
         #else
             ConversationTimelineView(
                 model: model, loadsInitialAutomatically: false, actions: actions)
@@ -855,45 +925,60 @@ struct ChatDetailView: View {
     }
 
     private func loadInteractionPermissions() async {
-        guard isCurrentSession else { return }
+        guard isCurrentSession, store.canFetchHistory else { return }
         permissionRequestRevision &+= 1
         let revision = permissionRequestRevision
+        hasLoadedInteractionPermissions = false
+        let network = store.sendPermissionStamp(for: conversationKey).network
         do {
             let info = try await store.groupInfo(chatID: chat.id)
-            let permissions: MessageInteractionContext?
-            if info.kind == .dm {
-                permissions = await reactions.loadPermissions(chatID: chat.id)
-            } else {
-                permissions = MessageInteractionContext(
-                    isDM: false, canWrite: info.myRole != nil, isAdmin: info.myRole == .admin)
+            guard isCurrentSession, store.canFetchHistory, revision == permissionRequestRevision,
+                !Task.isCancelled
+            else { return }
+            let stamp = store.sendPermissionStamp(for: conversationKey)
+            guard network == stamp.network else { return }
+            var permissions = MessageInteractionContext(
+                isDM: info.kind == .dm, canWrite: info.myRole != nil,
+                isAdmin: info.myRole == .admin, isThreadView: threadID != nil)
+            if permissions.isDM, permissions.canWrite {
+                guard let peer = info.peer else { throw APIError.unexpectedResponse }
+                let relationship = try await store.friendRelationship(peerUID: peer.uid)
+                permissions.canWrite = relationship.canDm && relationship.blocking != true
+                    && relationship.blockedBy != true
+                    && (relationship.dmChatId == nil || relationship.dmChatId == chat.id)
             }
-            guard let permissions, revision == permissionRequestRevision,
-                isCurrentSession, !Task.isCancelled
+            guard revision == permissionRequestRevision,
+                isCurrentSession, store.canFetchHistory, !Task.isCancelled,
+                stamp == store.sendPermissionStamp(for: conversationKey)
             else { return }
             interactionContext = permissions
-            interactionContext.isThreadView = threadID != nil
             hasLoadedInteractionPermissions = true
-            synchronizeSpeakingPermissions()
+            persistResolvedSendDecision()
+            // A replies-only thread still needs a fresh root check at dispatch.
+            let context = currentInteractionContext
+            if context.resolvedSendDecision == true,
+                context.isDM || context.isAdmin || !context.isThreadView || context.speakingMode != .repliesOnly
+            {
+                store.rememberVerifiedSendPermission(for: conversationKey, stamp: stamp)
+            }
         } catch {
-            guard revision == permissionRequestRevision, isCurrentSession, !Task.isCancelled else {
+            guard revision == permissionRequestRevision, isCurrentSession, store.canFetchHistory,
+                !Task.isCancelled, !(error is CancellationError)
+            else {
                 return
             }
+            guard await store.savedSendDecision(for: conversationKey) == nil,
+                revision == permissionRequestRevision, isCurrentSession, store.canFetchHistory,
+                !Task.isCancelled
+            else { return }
             reactions.error = AppLanguage.localized(
                 "Couldn’t load message permissions. Please try again.")
         }
     }
 
-    private func synchronizeSpeakingPermissions() {
-        interactionContext.hasExistingThread =
-            interactionContext.hasExistingThread
-            || forwardingThreadRoot?.threadInfo != nil
-            || observation.threadReplyCount != nil
-            || forwardingThreadReplyCount != nil
-        guard chat.kind != .dm else { return }
-        interactionContext.canWrite =
-            observation.isCurrentSession && observation.permissions.role != nil
-        interactionContext.isAdmin = observation.permissions.role == .admin
-        interactionContext.speakingMode = observation.permissions.speakingMode
+    private func persistResolvedSendDecision() {
+        guard let decision = currentInteractionContext.resolvedSendDecision else { return }
+        store.rememberSendDecision(decision, for: conversationKey)
     }
 
     private func invalidateInteractionPermissions() {
@@ -902,7 +987,7 @@ struct ChatDetailView: View {
         interactionContext.canWrite = false
         hasLoadedInteractionPermissions = false
         selectionDeleteTask?.cancel()
-        Task { await loadInteractionPermissions() }
+        if store.canFetchHistory { Task { await loadInteractionPermissions() } }
     }
 
     private var isCurrentSession: Bool {
@@ -915,15 +1000,33 @@ struct ChatDetailView: View {
         // Action closures can outlive a rendered menu/composer. Recheck the live
         // store at invocation, rather than authorizing against that UI snapshot.
         var context = interactionContext
+        context.canUseNetworkActions = store.canFetchHistory
         guard isCurrentSession else {
+            context.canWrite = false
+            context.isReadOnly = true
+            return context
+        }
+        context.savedSendDecision = store.currentSavedSendDecision(for: conversationKey)
+        if !context.canUseNetworkActions || store.historyCache?.accessRevoked(chat.id) == true {
+            context.canUseNetworkActions = false
             context.canWrite = false
             return context
         }
-        if chat.kind != .dm {
-            let info = store.groupInfoByChatID[chat.id]
-            context.canWrite = hasLoadedInteractionPermissions && info?.myRole != nil
+        let hasCurrentInfo = hasLoadedInteractionPermissions
+            && store.hasCurrentGroupWriteInfo(chatID: chat.id)
+        let info = store.groupInfoByChatID[chat.id]
+        if !context.isDM {
+            context.canWrite = hasCurrentInfo && info?.myRole != nil
             context.isAdmin = info?.myRole == .admin
             context.speakingMode = info?.effectiveSpeakingMode
+            context.hasExistingThread = hasVerifiedThreadRoot && forwardingThreadRoot?.threadInfo != nil
+            let requiresRoot = context.isThreadView && context.speakingMode == .repliesOnly
+            context.isSendPermissionResolved = hasCurrentInfo
+                && (!context.canWrite || context.isAdmin
+                    || (context.speakingMode != nil && (!requiresRoot || hasVerifiedThreadRoot)))
+        } else {
+            context.canWrite = hasCurrentInfo && info?.myRole != nil && context.canWrite
+            context.isSendPermissionResolved = hasCurrentInfo
         }
         return context
     }
@@ -936,6 +1039,7 @@ struct ChatDetailView: View {
         selectionDeleteTask?.cancel()
         systemTargetTask?.cancel()
         forwardingThreadRoot = nil
+        hasVerifiedThreadRoot = false
         forwardingThreadReplyCount = nil
         cancelEditing()
         outboxAction = nil
@@ -956,18 +1060,22 @@ struct ChatDetailView: View {
 
     private var bubbleActions: TimelineBubbleActions {
         var actions = TimelineBubbleActions()
-        actions.interactionContext = interactionContext
+        let context = currentInteractionContext
+        actions.interactionContext = context
         actions.openMention = { openUserProfile($0) }
         actions.openSystemMessage = openSystemMessage
         actions.savedMessageIDs = savedMessages.savedIDs(chatID: chat.id)
         actions.pendingSavedMessageIDs = savedMessages.pendingIDs(chatID: chat.id)
-        if savedMessages.hasLoaded(chatID: chat.id) {
+        if context.canUseNetworkActions, savedMessages.hasLoaded(chatID: chat.id) {
             actions.toggleSavedMessage = { message in
                 guard !message.isDeleted,
                     !savedMessages.isMutating(chatID: message.chatId, messageID: message.id)
                 else { return }
                 savedMessageToRetry = message
-                Task { await savedMessages.toggle(message) }
+                Task {
+                    guard isCurrentSession, store.canFetchHistory else { return }
+                    await savedMessages.toggle(message)
+                }
             }
         }
         actions.openAttachment = { attachment in
@@ -975,6 +1083,10 @@ struct ChatDetailView: View {
         }
         actions.isSelectionBusy = isDeletingSelection
         actions.forwardMessage = { message in
+            guard isCurrentSession, !message.isDeleted,
+                store.historyCache?.accessRevoked(chat.id) != true,
+                !model.knownDeletedMessageIDs.contains(message.id)
+            else { return }
             forwardRequest = ForwardSelection(sources: [message])
         }
         actions.openForwardedMessages = { message in
@@ -989,8 +1101,11 @@ struct ChatDetailView: View {
             }
         }
         actions.openSticker = { stickerToView = StickerSelection(id: $0) }
-        actions.openReactionDetails = {
-            reactionDetailsMessage = ReactionDetailsSelection(chatID: $0.chatId, id: $0.id)
+        if context.canUseNetworkActions {
+            actions.openReactionDetails = {
+                guard isCurrentSession, store.canFetchHistory else { return }
+                reactionDetailsMessage = ReactionDetailsSelection(chatID: $0.chatId, id: $0.id)
+            }
         }
         actions.pendingReactionMessageIDs = reactions.pendingMessageIDs
         actions.pinnedMessageIDs = Set(chatPins.map { $0.message.id })
@@ -1041,11 +1156,13 @@ struct ChatDetailView: View {
                 }
             }
         }
-        if interactionContext.canSend {
+        if context.canStageDraft {
             actions.replyToMessage = { message in
-                guard currentInteractionContext.canSend, !isUpdatingMessage, !isEnteringEdit
+                guard currentInteractionContext.canStageDraft, editingMessage == nil,
+                    !isUpdatingMessage, !isEnteringEdit
                 else { return }
                 if let session = pendingEditSession {
+                    guard session.isValid else { return }
                     session.setReplyToMessage(message.replyPreview)
                 } else {
                     guard !drafts.committingDrafts.contains(conversationKey) else { return }
@@ -1055,7 +1172,7 @@ struct ChatDetailView: View {
             }
         }
         actions.editMessage = startEditing
-        if interactionContext.canWrite {
+        if context.canUseNetworkActions, context.canWrite {
             actions.deleteMessage = { message in
                 guard canDeleteMessage(message) else { return }
                 messageToDelete = message
@@ -1063,7 +1180,9 @@ struct ChatDetailView: View {
             actions.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage, !message.isDeleted else { return }
                 Task {
-                    guard currentInteractionContext.canWrite else { return }
+                    guard MessageActionPolicy(row: row, context: currentInteractionContext).canReact,
+                        !model.knownDeletedMessageIDs.contains(message.id)
+                    else { return }
                     await reactions.toggle(
                         message: message, emoji: emoji, currentUserID: model.currentUserID)
                 }
@@ -1091,7 +1210,8 @@ struct ChatDetailView: View {
 
     private var canManagePins: Bool {
         let context = currentInteractionContext
-        return threadID == nil && context.canWrite && (context.isDM || context.isAdmin)
+        return threadID == nil && context.canUseNetworkActions && context.canWrite
+            && (context.isDM || context.isAdmin)
     }
 
     private var showsPinBar: Bool {
@@ -1110,7 +1230,10 @@ struct ChatDetailView: View {
         if let pin = chatPins.first(where: { $0.message.id == message.id }) {
             pinToUnpin = pin
         } else {
-            Task { await pins.pin(message) }
+            Task {
+                guard canManagePins else { return }
+                await pins.pin(message)
+            }
         }
     }
 
@@ -1125,7 +1248,7 @@ struct ChatDetailView: View {
         if let session = pendingEditSession {
             return session.isValid
         }
-        return editingMessage.map(isEditable) ?? currentInteractionContext.canSend
+        return editingMessage.map(isEditable) ?? currentInteractionContext.canStageDraft
     }
 
     private var composerMedia: [LocalOutgoingAttachment] {
@@ -1358,14 +1481,17 @@ struct ChatDetailView: View {
             return !isUpdatingMessage
                 && (isComposerComposing || (!text.isEmpty && hasEditChanges(text)))
         }
-        return outgoingQueue.storageState == .ready
+        return canQueueNewMessage
+    }
+
+    private var canQueueNewMessage: Bool {
+        currentInteractionContext.canSend && !isEditing && !isEnteringEdit
+            && outgoingQueue.storageState == .ready
             && !drafts.committingDrafts.contains(conversationKey)
     }
 
     private func sendSticker(_ sticker: MessageStickerResponse) async -> Bool {
-        guard currentInteractionContext.canSend, !isEditing, !isEnteringEdit,
-            outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
-        else { return false }
+        guard canQueueNewMessage else { return false }
         do {
             let sent = try await drafts.submitSticker(sticker, chatID: chat.id, threadID: threadID)
             if sent { model.revealLatestAfterSend() }
@@ -1377,9 +1503,7 @@ struct ChatDetailView: View {
     }
 
     private func sendVoice(_ fileURL: URL) async -> Bool {
-        guard currentInteractionContext.canSend, !isEditing, !isEnteringEdit,
-            outgoingQueue.storageState == .ready, !drafts.committingDrafts.contains(conversationKey)
-        else { return false }
+        guard canQueueNewMessage else { return false }
         do {
             let sent = try await drafts.submitVoice(
                 fileURL: fileURL, chatID: chat.id, threadID: threadID)
@@ -1419,6 +1543,7 @@ struct ChatDetailView: View {
             }
         }
         guard let message = editingMessage else {
+            guard canQueueNewMessage else { return false }
             let sent = await drafts.submitDraft(
                 chatID: chat.id, threadID: threadID, text: text,
                 metadata: composerMetadata(for: text))
@@ -1426,7 +1551,7 @@ struct ChatDetailView: View {
             if !sent, let error = drafts.submissionError { outboxError = error }
             return sent
         }
-        guard !isUpdatingMessage else { return false }
+        guard isEditable(message), !isUpdatingMessage else { return false }
         isUpdatingMessage = true
         let submittedText = text
         let submittedEditIdentity = serverEditIdentity
@@ -1580,6 +1705,11 @@ struct ChatDetailView: View {
         let id: String
         let phase: OutboxPhase
 
+        var hasPossibleDelivery: Bool {
+            guard case .failed(let failure, _) = phase else { return false }
+            return OutgoingMessageQueue.requiresRemovalConfirmation(for: failure)
+        }
+
         var detail: String {
             guard case .failed(let failure, let nextRetry) = phase else {
                 return AppLanguage.localized("This message will be removed from the local outbox.")
@@ -1589,31 +1719,37 @@ struct ChatDetailView: View {
                 let time = nextRetry.formatted(date: .omitted, time: .standard)
                 detail += "\n" + AppLanguage.localized("Next retry at \(time).")
             }
-            if failure.stage == .create {
-                detail += "\n" + AppLanguage.localized(
-                    "Removing it from the outbox does not delete a message that was already sent.")
+            if hasPossibleDelivery {
+                detail += "\n" + AppLanguage.localized("The message may already have been delivered.")
             }
             return detail
         }
     }
 
     private var outboxActionTarget: OutboxActionTarget? {
-        guard isCurrentSession, let action = outboxAction,
+        guard let action = outboxAction, let target = removableOutgoing(action.id) else { return nil }
+        if case .failure = action, !target.phase.isFailed { return nil }
+        return target
+    }
+
+    private func removableOutgoing(_ id: String) -> OutboxActionTarget? {
+        guard isCurrentSession,
             let item = outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID)
-                .first(where: { $0.clientGeneratedID == action.id }),
-            item.senderID == model.currentUserID, item.state != .sending,
-            pendingEditSession?.clientGeneratedID != action.id,
-            enteringPendingEdit?.clientGeneratedID != action.id
+                .first(where: { $0.clientGeneratedID == id }),
+            item.senderID == model.currentUserID,
+            pendingEditSession?.clientGeneratedID != id,
+            enteringPendingEdit?.clientGeneratedID != id
         else { return nil }
         let phase = outgoingQueue.phase(of: item)
-        if case .failure = action, !phase.isFailed { return nil }
-        return OutboxActionTarget(id: action.id, phase: phase)
+        guard phase != .sending else { return nil }
+        return OutboxActionTarget(id: id, phase: phase)
     }
 
     private var outboxActionTitle: String {
-        outboxActionTarget?.phase.isFailed == true
-            ? AppLanguage.localized("Message needs attention")
-            : AppLanguage.localized("Remove queued message?")
+        if case .failure? = outboxAction, outboxActionTarget?.hasPossibleDelivery != true {
+            return AppLanguage.localized("Message needs attention")
+        }
+        return AppLanguage.localized("Remove from Outbox?")
     }
 
     private func presentOutboxActions(_ action: OutboxAction) {
@@ -1622,13 +1758,19 @@ struct ChatDetailView: View {
         if outboxActionTarget == nil { outboxAction = nil }
     }
 
-    private func removeOutgoing(_ id: String) {
-        guard isCurrentSession else { return }
+    private func removeOutgoing(_ confirmed: OutboxActionTarget) {
         Task {
             do {
-                guard isCurrentSession else { return }
+                guard let target = removableOutgoing(confirmed.id) else { return }
+                if target.hasPossibleDelivery && !confirmed.hasPossibleDelivery {
+                    presentOutboxActions(.remove(target.id))
+                    return
+                }
                 try await outgoingQueue.removeOutgoing(
-                    chatID: chat.id, threadID: threadID, itemID: id)
+                    chatID: chat.id, threadID: threadID, itemID: target.id,
+                    allowPossibleDelivery: confirmed.hasPossibleDelivery)
+            } catch OutgoingMessageQueue.QueueError.possibleDelivery {
+                presentOutboxActions(.remove(confirmed.id))
             } catch {
                 if isCurrentSession { outboxError = error.localizedDescription }
             }
@@ -1636,10 +1778,9 @@ struct ChatDetailView: View {
     }
 
     private func retryOutgoing(_ id: String) {
-        guard isCurrentSession else { return }
         Task {
             do {
-                guard isCurrentSession else { return }
+                guard removableOutgoing(id)?.phase.isFailed == true else { return }
                 try await outgoingQueue.retry(
                     chatID: chat.id, threadID: threadID, clientGeneratedID: id)
             } catch {

@@ -4,6 +4,10 @@
 <dict>
 	<key>APIBaseURL</key>
 	<string>$(API_BASE_URL)</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).outbox-refresh</string>
+	</array>
 	<key>ChahuaAPNSEnvironment</key>
 	<string>$(APNS_ENVIRONMENT)</string>
 	<key>CFBundleDevelopmentRegion</key>
@@ -39,6 +43,10 @@
 	<string>Just Use it</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save images to your Photo Library.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

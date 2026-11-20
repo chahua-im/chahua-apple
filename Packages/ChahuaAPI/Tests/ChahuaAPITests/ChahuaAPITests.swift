@@ -1026,6 +1026,31 @@ final class ChahuaAPITests: XCTestCase {
         }
     }
 
+    func testConversationPagesUseInteractiveTimeoutWithoutShorteningCreate() async throws {
+        let requests = RequestRecorder()
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            if request.httpMethod == "POST" { return (503, "Unavailable") }
+            switch request.url?.path {
+            case "/chats": return (200, #"{"chats":[]}"#)
+            case "/threads": return (200, #"{"threads":[]}"#)
+            default: return (200, #"{"messages":[]}"#)
+            }
+        }
+        let client = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!, requestTimeout: 40),
+            token: "candidate", session: testSession())
+        _ = try await client.listChats(query: .init())
+        _ = try await client.listThreads(query: .init())
+        _ = try await client.listMessages(chatID: "10")
+        do {
+            _ = try await client.sendMessage(
+                chatID: "10", body: .init(messageType: .text, clientGeneratedId: "stable", message: "text"))
+            XCTFail("A create must not retry at the transport layer after HTTP 503")
+        } catch APIError.http(status: 503, body: _) {}
+        XCTAssertEqual(requests.values.map(\.timeoutInterval), [15, 15, 15, 40])
+    }
+
     func testOutboxRequestsCaptureRetryAfterWithoutChangingOtherHTTPErrors() async throws {
         let client = ChahuaClient(
             configuration: .init(baseURL: URL(string: "https://api.example")!),
@@ -1048,6 +1073,9 @@ final class ChahuaAPITests: XCTestCase {
                     body: ForwardMessagesBody(
                         sourceChatId: "30", messageIds: [sourceID], clientGeneratedId: "three"))
             }),
+            (429, { _ = try await client.groupInfo(chatID: "10") }),
+            (503, { _ = try await client.friendRelationship(peerUID: 2) }),
+            (502, { _ = try await client.getMessage(chatID: "10", messageID: sourceID) }),
             (500, { _ = try await client.attachmentConfig() }),
             (429, {
                 _ = try await client.requestAttachmentUpload(

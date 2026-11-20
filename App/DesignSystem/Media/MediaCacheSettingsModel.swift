@@ -1,4 +1,5 @@
 import Combine
+import ChahuaAPI
 import Foundation
 import Kingfisher
 
@@ -16,12 +17,17 @@ final class MediaCacheSettingsModel: ObservableObject {
     @Published private(set) var diskStorageSize: UInt = 0
     @Published private(set) var state: MediaCacheSettingsState = .idle
     @Published private(set) var errorDescription: String?
+    @Published private(set) var messageStorageSize: Int64?
+    @Published private(set) var messageError: String?
+    @Published private(set) var isClearingMessages = false
 
     private var mediaContext: AppMediaContext?
+    private weak var historyCache: AccountHistoryCache?
     private var operationID = 0
 
-    init(mediaContext: AppMediaContext? = nil) {
+    init(mediaContext: AppMediaContext? = nil, historyCache: AccountHistoryCache? = nil) {
         self.mediaContext = mediaContext
+        self.historyCache = historyCache
     }
 
     /// Switches this model to the supplied account's cache.
@@ -54,6 +60,30 @@ final class MediaCacheSettingsModel: ObservableObject {
             state = .idle
         } catch {
             finishFailure(for: id, error: error)
+        }
+    }
+
+    func refreshMessageSize() async {
+        guard let historyCache, historyCache.isAvailable else { return }
+        do {
+            messageStorageSize = try await historyCache.read { try await $0.cachedMessageBytes() }
+        } catch is CancellationError {
+        } catch {
+            messageError = AppLanguage.localized("Couldn’t read message storage.")
+        }
+    }
+
+    func clearMessages() async {
+        guard let historyCache, !isClearingMessages else { return }
+        isClearingMessages = true
+        messageError = nil
+        defer { isClearingMessages = false }
+        do {
+            try await historyCache.clear()
+            messageStorageSize = 0
+        } catch is CancellationError {
+        } catch {
+            messageError = AppLanguage.localized("Couldn’t clear message history.")
         }
     }
 

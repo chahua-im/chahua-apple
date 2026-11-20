@@ -300,7 +300,7 @@ private struct ChatAttachmentMediaTile: View {
         } else {
             CachedImageView(
                 url: URL(string: item.url), thumbnailPixelSize: thumbnailPixelSize,
-                cancelOnDisappear: true, content: thumbnailContent)
+                content: thumbnailContent)
         }
     }
 
@@ -332,36 +332,61 @@ private struct ChatAttachmentVideoThumbnail<Content: View>: View {
     let pixelSize: CGSize
     @ViewBuilder var content: (RemoteImagePhase) -> Content
     @Environment(\.mediaContext) private var mediaContext
-    @State private var provider: VideoPoster?
 
     var body: some View {
-        Group {
-            if let provider {
-                KFImage.dataProvider(provider)
-                    .setProcessor(DownsamplingImageProcessor(size: pixelSize))
-                    .scaleFactor(1)
-                    .targetCache(mediaContext?.cache ?? .default)
-                    .cacheOriginalImage()
-                    .cancelOnDisappear(true)
-                    .placeholder { content(.empty) }
-                    .onFailureView { content(.failure) }
-                    .contentConfigure { image, isLoaded in
-                        if isLoaded { content(.success(image)) }
-                    }
-            } else if url == nil {
-                content(.failure)
-            } else {
-                content(.empty)
+        if let url, let mediaContext {
+            MediaPolicyView(context: mediaContext) { policy in
+                let key = Request(
+                    url: url, context: ObjectIdentifier(mediaContext),
+                    cacheOnly: !policy.allowsNetwork())
+                Poster(
+                    request: key, pixelSize: pixelSize, cache: mediaContext.cache, content: content
+                )
+                .id(key)
             }
+        } else {
+            content(.failure)
         }
-        .task(id: url) {
-            guard let url else { return }
-            provider = VideoPoster(url: url)
-        }
-        .onDisappear {
-            // Cancel queued starts as well as frame generation already in flight.
-            provider?.cancel()
-            provider = nil
+    }
+
+    private struct Request: Hashable {
+        let url: URL
+        let context: ObjectIdentifier
+        let cacheOnly: Bool
+    }
+
+    private struct Poster: View {
+        let request: Request
+        let pixelSize: CGSize
+        let cache: ImageCache
+        let content: (RemoteImagePhase) -> Content
+        @State private var provider: VideoPoster?
+
+        var body: some View {
+            Group {
+                if let provider {
+                    KFImage.dataProvider(provider)
+                        .setProcessor(DownsamplingImageProcessor(size: pixelSize))
+                        .scaleFactor(1)
+                        .targetCache(cache)
+                        .cacheOriginalImage()
+                        .onlyFromCache(request.cacheOnly)
+                        .cancelOnDisappear(true)
+                        .placeholder { content(request.cacheOnly ? .failure : .empty) }
+                        .onFailureView { content(.failure) }
+                        .contentConfigure { image, isLoaded in
+                            if isLoaded { content(.success(image)) }
+                        }
+                } else {
+                    content(request.cacheOnly ? .failure : .empty)
+                }
+            }
+            .task { provider = VideoPoster(url: request.url) }
+            .onDisappear {
+                // Cancel queued starts as well as frame generation already in flight.
+                provider?.cancel()
+                provider = nil
+            }
         }
     }
 }

@@ -47,6 +47,9 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
             }
         }
     }
+    #if os(iOS)
+        weak var outboxRefresh: OutboxRefreshScheduler?
+    #endif
     private var token: Data?
     private var response: PushNotificationRoute?
     private var quickReplyHandoffs: [@MainActor (PushNotificationCoordinator) -> Void] = []
@@ -146,6 +149,14 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
 
 #if os(iOS)
     extension PushAppDelegate: UIApplicationDelegate {
+        func application(
+            _ application: UIApplication,
+            didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+        ) -> Bool {
+            outboxRefresh?.register()
+            return true
+        }
+
         func application(
             _ application: UIApplication,
             didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data

@@ -10,17 +10,29 @@ final class AccountLocalStoreOwner {
     private var uid: Int32?
     private var generation: UInt64 = 0
     private var opening: (id: UUID, task: Task<ChahuaLocalStore, Error>)?
+    private var openingFence: Task<Void, Never>?
     private(set) var store: ChahuaLocalStore?
 
     init(factory: @escaping Factory) {
         self.factory = factory
     }
 
+    func fenceNextOpen(through task: Task<Void, Never>) {
+        let previous = openingFence
+        openingFence = Task {
+            await previous?.value
+            await task.value
+        }
+    }
+
     func setSession(uid: Int32?) {
         guard self.uid != uid else { return }
         self.uid = uid
         generation &+= 1
-        opening?.task.cancel()
+        if let retired = opening?.task {
+            retired.cancel()
+            fenceNextOpen(through: Task { _ = await retired.result })
+        }
         opening = nil
         store = nil
     }
@@ -34,7 +46,12 @@ final class AccountLocalStoreOwner {
             request = opening
         } else {
             let factory = factory
-            request = (UUID(), Task { try await factory(uid) })
+            let fence = openingFence
+            request = (UUID(), Task {
+                await fence?.value
+                try Task.checkCancellation()
+                return try await factory(uid)
+            })
             opening = request
         }
         defer { if opening?.id == request.id { opening = nil } }

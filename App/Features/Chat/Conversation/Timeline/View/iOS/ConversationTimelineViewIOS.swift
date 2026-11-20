@@ -66,9 +66,25 @@
         private var content: some View {
             if !model.rows.isEmpty || model.state.content == .ready || isRepositioning {
                 timelineHost
+                    .overlay {
+                        if model.rows.isEmpty, model.state.content == .ready {
+                            let title: LocalizedStringKey = model.state.history == .notDownloaded
+                                ? "No messages downloaded" : "No messages yet"
+                            Text(title)
+                                .foregroundStyle(ChahuaTheme.secondaryText)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .overlay(alignment: .top) {
                         VStack(spacing: 0) {
                             initialHistoryBanner
+                            historyStatusBanner
+                            if model.state.missingOfflineMessage != nil {
+                                failureBanner("Message not available offline")
+                            } else if let failure = model.state.repositionFailure {
+                                failureBanner(failure == .liveEdge
+                                    ? "Couldn’t load messages." : "That message isn’t available.")
+                            }
                             olderEdgeOverlay
                         }
                         .padding(.top, chatHeaderInset)
@@ -83,39 +99,6 @@
                                 in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.medium))
                         }
                     }
-                    .overlay(alignment: .top) {
-                        if let failure = model.state.repositionFailure {
-                            failureBanner(failure).padding(.top, chatHeaderInset)
-                        }
-                    }
-                    .overlay(alignment: .top) {
-                        if let connectionMessage {
-                            HStack(spacing: ChahuaTheme.Spacing.small) {
-                                ProgressView().controlSize(.small)
-                                Text(connectionMessage)
-                                    .foregroundStyle(ChahuaTheme.secondaryText)
-                                Spacer()
-                            }
-                            .font(.caption).padding(ChahuaTheme.Spacing.small)
-                            .background(
-                                .regularMaterial,
-                                in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)
-                            ).padding()
-                            .padding(.top, chatHeaderInset)
-                        } else if model.state.reconciliationFailed {
-                            HStack {
-                                Text("Couldn’t refresh messages.")
-                                Spacer()
-                                Button("Retry") { Task { await model.reconcileAfterReconnect() } }
-                            }
-                            .font(.caption).padding(ChahuaTheme.Spacing.small)
-                            .background(
-                                .regularMaterial,
-                                in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)
-                            ).padding()
-                            .padding(.top, chatHeaderInset)
-                        }
-                    }
             } else if model.state.content == .initialLoadFailed {
                 VStack(spacing: ChahuaTheme.Spacing.small) {
                     Image(systemName: "exclamationmark.triangle").font(.largeTitle)
@@ -127,6 +110,39 @@
             } else {
                 ProgressView("Loading messages")
             }
+        }
+
+        @ViewBuilder
+        private var historyStatusBanner: some View {
+            if model.state.historyConnection == .offline {
+                statusBanner(model.state.history == .notDownloaded && !model.rows.isEmpty
+                    ? "Offline · No messages downloaded" : "Offline", retry: true)
+            } else if model.state.historyConnection == .refreshing {
+                statusBanner("Reconnecting…", loading: true)
+            } else if model.state.reconciliationFailed {
+                statusBanner("Couldn’t refresh messages.", retry: true)
+            } else if let connectionMessage {
+                statusBanner(connectionMessage, loading: true)
+            } else if model.state.history == .saved || model.state.history == .verifiedEmpty {
+                statusBanner("Saved messages", retry: true)
+            }
+        }
+
+        private func statusBanner(
+            _ title: LocalizedStringKey, loading: Bool = false, retry: Bool = false
+        ) -> some View {
+            HStack(spacing: ChahuaTheme.Spacing.small) {
+                if loading { ProgressView().controlSize(.small) }
+                Text(title).foregroundStyle(ChahuaTheme.secondaryText)
+                Spacer()
+                if retry {
+                    Button("Retry") { Task { await model.retryNetworkHistory() } }
+                }
+            }
+            .font(.caption)
+            .padding(ChahuaTheme.Spacing.small)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small))
+            .padding(.horizontal)
         }
 
         private var connectionMessage: LocalizedStringKey? {
@@ -174,6 +190,15 @@
                 ProgressView().controlSize(.small).padding()
             } else if model.state.older == .failed {
                 Button("Couldn’t load older messages — Retry") { model.retryOlder() }.padding()
+            } else if let saved = model.state.olderSaved {
+                let title: LocalizedStringKey =
+                    saved == .section ? "Older saved section" : "Load older saved messages"
+                Button(title) {
+                    model.browseSavedEdge(.older)
+                }
+                .buttonStyle(.bordered)
+                .background(.regularMaterial, in: Capsule())
+                .padding()
             }
         }
 
@@ -183,16 +208,21 @@
                 ProgressView().controlSize(.small).padding()
             } else if model.state.newer == .failed {
                 Button("Couldn’t load newer messages — Retry") { model.retryNewer() }.padding()
+            } else if let saved = model.state.newerSaved {
+                let title: LocalizedStringKey =
+                    saved == .section ? "Newer saved section" : "Load newer saved messages"
+                Button(title) {
+                    model.browseSavedEdge(.newer)
+                }
+                .buttonStyle(.bordered)
+                .background(.regularMaterial, in: Capsule())
+                .padding()
             }
         }
 
-        private func failureBanner(_ target: ConversationTimelineState.RepositionTarget)
-            -> some View
-        {
+        private func failureBanner(_ title: LocalizedStringKey) -> some View {
             HStack {
-                Text(
-                    target == .liveEdge
-                        ? "Couldn’t load messages." : "That message isn’t available.")
+                Text(title)
                 Spacer()
                 Button("Dismiss") { model.dismissRepositionFailure() }
             }

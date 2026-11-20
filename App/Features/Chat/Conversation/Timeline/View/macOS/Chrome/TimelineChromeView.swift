@@ -28,6 +28,7 @@
         private let initialLoading = TimelineLoadingPanel(
             label: AppLanguage.localized("Loading messages"))
         private let initialFailure = TimelineInitialFailurePanel()
+        private let emptyHistory = timelineChromeLabel(style: .body)
         private let initialBanner = TimelineBannerView(cornerRadius: 0)
         private let olderEdge = TimelineEdgeView(
             title: AppLanguage.localized("Couldn’t load older messages — Retry"))
@@ -35,8 +36,7 @@
             title: AppLanguage.localized("Couldn’t load newer messages — Retry"))
         private let repositionProgress = TimelineLoadingPanel(label: nil, material: true)
         private let repositionFailure = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
-        private let reconciliationFailure = TimelineBannerView(
-            cornerRadius: ChahuaTheme.Radius.small)
+        private let historyStatus = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
         // The native table owns this overlay and its hit region; retained AppKit
         // controls avoid a SwiftUI graph refresh on viewport-only changes.
         private let jumpControl = TimelineNativeNavigationControls()
@@ -47,12 +47,13 @@
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
             for child in [
-                initialLoading, initialFailure, initialBanner, olderEdge, newerEdge,
-                repositionProgress, repositionFailure, reconciliationFailure,
+                initialLoading, initialFailure, emptyHistory, initialBanner, olderEdge, newerEdge,
+                repositionProgress, repositionFailure, historyStatus,
             ] as [NSView] {
                 child.isHidden = true
                 addSubview(child)
             }
+            emptyHistory.alignment = .center
             addSubview(jumpControl)
             jumpControl.onLatest = { [weak self] in self?.perform(.jump) }
             jumpControl.onMention = { [weak self] in self?.perform(.mention) }
@@ -62,7 +63,7 @@
             olderEdge.onRetry = { [weak self] in self?.model?.retryOlder() }
             newerEdge.onRetry = { [weak self] in self?.model?.retryNewer() }
             repositionFailure.onAction = { [weak self] in self?.model?.dismissRepositionFailure() }
-            reconciliationFailure.onAction = { [weak self] in self?.perform(.reconcile) }
+            historyStatus.onAction = { [weak self] in self?.perform(.reconcile) }
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -109,6 +110,10 @@
 
             initialLoading.setLoading(!showsTable && state.content != .initialLoadFailed)
             initialFailure.isHidden = showsTable || state.content != .initialLoadFailed
+            emptyHistory.isHidden = next.hasRows || state.content != .ready
+            emptyHistory.stringValue = state.history == .notDownloaded
+                ? AppLanguage.localized("No messages downloaded")
+                : AppLanguage.localized("No messages yet")
             if showsTable && (state.content == .idle || state.content == .loadingInitial) {
                 initialBanner.configure(
                     text: AppLanguage.localized("Loading messages"), action: nil, loading: true)
@@ -119,10 +124,16 @@
             } else {
                 initialBanner.hide()
             }
-            olderEdge.update(showsTable ? state.older : .idle)
-            newerEdge.update(showsTable ? state.newer : .idle)
+            olderEdge.update(showsTable ? state.older : .idle, savedTitle: showsTable ? savedTitle(
+                state.olderSaved, side: .older) : nil)
+            newerEdge.update(showsTable ? state.newer : .idle, savedTitle: showsTable ? savedTitle(
+                state.newerSaved, side: .newer) : nil)
             repositionProgress.setLoading(showsTable && isRepositioning)
-            if showsTable, let failure = state.repositionFailure {
+            if showsTable, state.missingOfflineMessage != nil {
+                repositionFailure.configure(
+                    text: AppLanguage.localized("Message not available offline"),
+                    action: AppLanguage.localized("Dismiss"), loading: false)
+            } else if showsTable, let failure = state.repositionFailure {
                 repositionFailure.configure(
                     text: failure == .liveEdge
                         ? AppLanguage.localized("Couldn’t load messages.")
@@ -140,15 +151,27 @@
             case .unavailable:
                 connectionMessage = AppLanguage.localized("Can’t connect right now. Retrying…")
             }
-            if showsTable, let connectionMessage {
-                reconciliationFailure.configure(
-                    text: connectionMessage, action: nil, loading: true)
-            } else if showsTable && state.reconciliationFailed {
-                reconciliationFailure.configure(
+            if showsTable, state.historyConnection == .offline {
+                historyStatus.configure(
+                    text: state.history == .notDownloaded && next.hasRows
+                        ? AppLanguage.localized("Offline · No messages downloaded")
+                        : AppLanguage.localized("Offline"),
+                    action: AppLanguage.localized("Retry"), loading: false)
+            } else if showsTable, state.historyConnection == .refreshing {
+                historyStatus.configure(
+                    text: AppLanguage.localized("Reconnecting…"), action: nil, loading: true)
+            } else if showsTable, state.reconciliationFailed {
+                historyStatus.configure(
                     text: AppLanguage.localized("Couldn’t refresh messages."),
                     action: AppLanguage.localized("Retry"), loading: false)
+            } else if showsTable, let connectionMessage {
+                historyStatus.configure(text: connectionMessage, action: nil, loading: true)
+            } else if showsTable, state.history == .saved || state.history == .verifiedEmpty {
+                historyStatus.configure(
+                    text: AppLanguage.localized("Saved messages"),
+                    action: AppLanguage.localized("Retry"), loading: false)
             } else {
-                reconciliationFailure.hide()
+                historyStatus.hide()
             }
             jumpControl.configure(
                 showsLatest: next.showsJumpToLatest,
@@ -157,6 +180,18 @@
                 busy: next.activityJumpInProgress || isRepositioning,
                 badgeColor: next.badgeColor)
             needsLayout = true
+        }
+
+        private func savedTitle(
+            _ edge: ConversationTimelineState.SavedEdge?, side: ConversationTimelineModel.EdgeSide
+        ) -> String? {
+            switch (side, edge) {
+            case (.older, .some(.more)): AppLanguage.localized("Load older saved messages")
+            case (.older, .some(.section)): AppLanguage.localized("Older saved section")
+            case (.newer, .some(.more)): AppLanguage.localized("Load newer saved messages")
+            case (.newer, .some(.section)): AppLanguage.localized("Newer saved section")
+            case (_, nil): nil
+            }
         }
 
         override func layout() {
@@ -173,21 +208,20 @@
                 x: 0, y: contentTop, width: width, height: contentBottom - contentTop)
             initialLoading.frame = contentBounds
             initialFailure.frame = contentBounds
+            emptyHistory.frame = NSRect(x: 0, y: contentBounds.midY - 12, width: width, height: 24)
             var top = contentTop
             if !initialBanner.isHidden {
                 initialBanner.frame = NSRect(x: 0, y: top, width: width, height: 36)
                 top += 36
             }
+            // Status and edge actions remain non-blocking overlays and never change row geometry.
+            for banner in [historyStatus, repositionFailure] where !banner.isHidden {
+                banner.frame = NSRect(x: 16, y: top, width: max(0, width - 32), height: 36)
+                top += 40
+            }
             olderEdge.frame = NSRect(x: 0, y: top, width: width, height: 48)
             newerEdge.frame = NSRect(
                 x: 0, y: max(contentTop, contentBottom - 48), width: width, height: 48)
-            // Failures remain non-blocking overlays; they never change row geometry.
-            // Keep simultaneous failures individually reachable rather than overlapping.
-            var failureTop = contentTop + ChahuaTheme.Spacing.large
-            for banner in [repositionFailure, reconciliationFailure] where !banner.isHidden {
-                banner.frame = NSRect(x: 16, y: failureTop, width: max(0, width - 32), height: 36)
-                failureTop += 44
-            }
             repositionProgress.frame = NSRect(
                 x: max(0, (width - 52) / 2),
                 y: max(contentTop, contentBounds.midY - 26), width: 52, height: 52)
@@ -220,7 +254,7 @@
                 guard !Task.isCancelled else { return }
                 switch operation {
                 case .initial: await model.retryInitial()
-                case .reconcile: await model.reconcileAfterReconnect()
+                case .reconcile: await model.retryNetworkHistory()
                 case .jump: await model.jumpTowardLatest()
                 case .mention: await model.jumpToNextMention()
                 case .reaction: await model.jumpToNextReaction()
@@ -470,10 +504,12 @@
     private final class TimelineEdgeView: NSView {
         var onRetry: (() -> Void)?
         private let progress = NSProgressIndicator()
+        private let retryTitle: String
         private let retry: TimelineChromeButton
         override var isFlipped: Bool { true }
 
         init(title: String) {
+            retryTitle = title
             retry = TimelineChromeButton(title: title)
             super.init(frame: .zero)
             progress.style = .spinning
@@ -488,10 +524,13 @@
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func update(_ edge: ConversationTimelineState.Edge) {
-            isHidden = edge == .idle
+        func update(_ edge: ConversationTimelineState.Edge, savedTitle: String?) {
+            isHidden = edge == .idle && savedTitle == nil
             progress.isHidden = edge != .loading
-            retry.isHidden = edge != .failed
+            retry.isHidden = edge == .loading || (edge == .idle && savedTitle == nil)
+            retry.title = edge == .failed ? retryTitle : (savedTitle ?? "")
+            retry.setAccessibilityLabel(retry.title)
+            needsLayout = true
             if edge == .loading {
                 progress.startAnimation(nil)
             } else {

@@ -26,6 +26,7 @@ final class ConversationMessageStore: ObservableObject {
     private struct JournalEntry {
         let revision: UInt64
         let event: RealtimeServerEvent
+        let persistent: Bool
     }
     private var snapshots: [UUID: Snapshot] = [:]
     private var journals: [String: [JournalEntry]] = [:]
@@ -69,7 +70,7 @@ final class ConversationMessageStore: ObservableObject {
 
     func replacePending(
         chatID: String, threadID: String? = nil, with pending: [PendingOutgoingMessage],
-        acknowledging message: MessageResponse? = nil
+        acknowledging message: MessageResponse? = nil, persistent: Bool = true
     ) {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         let normalized =
@@ -80,13 +81,13 @@ final class ConversationMessageStore: ObservableObject {
             precondition(
                 message.chatId == chatID && message.replyRootId == threadID,
                 "Acknowledgement and pending batch must belong to the same conversation.")
-            apply(.message(message))
+            apply(.message(message), persistent: persistent)
         } else if changed {
             changes.send(.pendingChanged(chatID: chatID))
         }
     }
 
-    func apply(_ event: RealtimeServerEvent) {
+    func apply(_ event: RealtimeServerEvent, persistent: Bool = true) {
         switch event {
         case .message(let message) where message.isDeleted:
             redactPendingReplies([message.id], chatID: message.chatId)
@@ -101,7 +102,7 @@ final class ConversationMessageStore: ObservableObject {
         if let chatID = event.conversationChatID,
             snapshots.values.contains(where: { $0.chatID == chatID })
         {
-            journals[chatID, default: []].append(.init(revision: receiveRevision, event: event))
+            journals[chatID, default: []].append(.init(revision: receiveRevision, event: event, persistent: persistent))
         }
         changes.send(.realtime(event))
     }
@@ -119,6 +120,13 @@ final class ConversationMessageStore: ObservableObject {
         guard let snapshot = snapshots[token] else { return [] }
         return journals[snapshot.chatID, default: []].compactMap {
             $0.revision > snapshot.revision ? $0.event : nil
+        }
+    }
+
+    func cacheEventsDuringSnapshot(_ token: UUID) -> [RealtimeServerEvent] {
+        guard let snapshot = snapshots[token] else { return [] }
+        return journals[snapshot.chatID, default: []].compactMap {
+            $0.revision > snapshot.revision && $0.persistent ? $0.event : nil
         }
     }
 
@@ -164,7 +172,7 @@ final class ConversationMessageStore: ObservableObject {
         return pending
     }
 
-    private func redactPendingReplies(_ messageIDs: Set<MessageID>, chatID: String) {
+    func redactPendingReplies(_ messageIDs: Set<MessageID>, chatID: String) {
         let previousCount = deletedReplyIDs[chatID]?.count ?? 0
         deletedReplyIDs[chatID, default: []].formUnion(messageIDs)
         guard deletedReplyIDs[chatID]?.count != previousCount else { return }

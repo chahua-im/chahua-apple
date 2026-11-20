@@ -59,26 +59,28 @@ nonisolated struct OutgoingAttachmentUploader: Sendable {
         defer { session.invalidateAndCancel() }
         let progress = UploadProgressDelegate(onProgress: onProgress)
         onProgress(0)
+        let response: URLResponse
         do {
-            // Foundation's async upload owns cancellation, including cancellation before task registration.
-            let (_, response) = try await session.upload(
-                for: request, fromFile: source, delegate: progress)
-            try Task.checkCancellation()
-            guard let response = response as? HTTPURLResponse else {
-                throw OutgoingAttachmentUploadError.invalidResponse
-            }
-            guard (200..<300).contains(response.statusCode) else {
-                throw OutgoingAttachmentUploadError.httpStatus(
-                    response.statusCode,
-                    retryAfter: APIError.retryDate(from: response.value(forHTTPHeaderField: "Retry-After")))
-            }
-            onProgress(1)
+            // Foundation owns cancellation before a result has arrived.
+            response = try await session.upload(for: request, fromFile: source, delegate: progress).1
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 throw CancellationError()
             }
             throw error
         }
+        // A received success or retry deadline still belongs to the slot even
+        // if its execution window expired while this task was resuming.
+        guard let response = response as? HTTPURLResponse else {
+            throw OutgoingAttachmentUploadError.invalidResponse
+        }
+        let status = response.statusCode
+        guard (200..<300).contains(status) else {
+            let retryAfter = status == 408 || status == 429 || (500...599).contains(status)
+                ? APIError.retryDate(from: response.value(forHTTPHeaderField: "Retry-After")) : nil
+            throw OutgoingAttachmentUploadError.httpStatus(status, retryAfter: retryAfter)
+        }
+        onProgress(1)
     }
 }
 

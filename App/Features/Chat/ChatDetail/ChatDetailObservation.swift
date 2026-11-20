@@ -24,6 +24,8 @@ final class ChatDetailObservation: ObservableObject {
     @Published private(set) var permissions: Permissions
     @Published private(set) var threadReplyCount: Int64?
     @Published private(set) var session: Session
+    @Published private(set) var canFetchHistory: Bool
+    @Published private(set) var savedSendDecision: Bool?
     private let initialSession: Session
     private var observations = Set<AnyCancellable>()
 
@@ -31,6 +33,9 @@ final class ChatDetailObservation: ObservableObject {
 
     init(store: ChatStore, chatID: String, threadID: String?) {
         permissions = Permissions(store.groupInfoByChatID[chatID])
+        canFetchHistory = store.canFetchHistory
+        let key = ConversationKey(chatID: chatID, threadID: threadID)
+        savedSendDecision = store.currentSavedSendDecision(for: key)
         let threadRootID = threadID.flatMap(MessageID.init)
         threadReplyCount = Self.replyCount(in: store.state, chatID: chatID, rootID: threadRootID)
         let session = Session(
@@ -45,6 +50,18 @@ final class ChatDetailObservation: ObservableObject {
             .removeDuplicates()
             .dropFirst()
             .sink { [weak self] in self?.permissions = $0 }
+            .store(in: &observations)
+
+        store.$canFetchHistory
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] in self?.canFetchHistory = $0 }
+            .store(in: &observations)
+        store.$savedSendDecisions
+            .map { $0[key] }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] in self?.savedSendDecision = $0 }
             .store(in: &observations)
 
         // Main-chat details need no list-state subscription at all. A thread keeps

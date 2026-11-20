@@ -20,6 +20,7 @@ final class ConversationTimelineModel: ObservableObject {
     static let nearbyRowDistance = 30
     static let pinnedToBottomTolerance: CGFloat = 24
     static let edgePrefetchScreens: CGFloat = 2
+    private static let savedRefreshRetryLimit = 3
 
     let chatID: String
     let threadID: String?
@@ -54,12 +55,12 @@ final class ConversationTimelineModel: ObservableObject {
     @Published private(set) var unreadReactionJumpCount = 0
     @Published private(set) var activityJumpInProgress = false
     var isAtLiveEdge: Bool { window.isAtLiveEdge }
-    var jumpUnreadCount: Int64 { state.live.unreadCount }
+    var jumpUnreadCount: Int64 { window.isSaved ? 0 : state.live.unreadCount }
     /// Selection survives pagination, but must discard messages deleted by realtime events.
     var knownDeletedMessageIDs: Set<MessageID> { deletedIDs }
     var showsJumpToLatest: Bool {
         state.content == .ready
-            && (!isAtLiveEdge
+            && ((window.isSaved ? state.newerSaved != nil : !isAtLiveEdge)
                 || (viewportRevision == snapshotRevision && !state.live.isPinnedToBottom))
     }
 
@@ -73,6 +74,15 @@ final class ConversationTimelineModel: ObservableObject {
     )
 
     private let source: any TimelineMessageSource
+    private let historyCache: AccountHistoryCache?
+    private let canFetchHistory: @MainActor () -> Bool
+    private let canRetryHistory: @MainActor () -> Bool
+    private let sleepBeforeSavedRefreshRetry: @MainActor (Duration) async throws -> Void
+    private var key: ConversationKey { .init(chatID: chatID, threadID: threadID) }
+    private var historyCacheRevision: UInt64?
+    // Raw page edges include redacted/hidden messages and are never server cursors.
+    private var savedBounds: ClosedRange<MessageID>?
+    private var savedHidesMembership = false
     private let messageStore: ConversationMessageStore
     private let builder: TimelineRowsBuilder
     private let markRead: (@MainActor (MessageID) async throws -> Void)?
@@ -88,6 +98,8 @@ final class ConversationTimelineModel: ObservableObject {
     private var observation: AnyCancellable?
     private var deferredCreates: [ConversationMessageStableKey: MessageResponse] = [:]
     private var preHistoryAcknowledgementKeys: Set<ConversationMessageStableKey> = []
+    // Project known peer arrivals at the saved tail without extending its disk bounds.
+    private var savedPeerTailKeys: Set<ConversationMessageStableKey> = []
     private var deletedIDs: Set<MessageID> = []
     private var snapshotTokens: Set<UUID> = []
     private var generation = 0
@@ -108,6 +120,12 @@ final class ConversationTimelineModel: ObservableObject {
     private var lastInitialPosition: TimelineInitialPosition = .liveEdge
     private var initialTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
+    private var initialIgnoresPath = false
+    private var recoveryIgnoresPath = false
+    private var recoveryIsAutomatic = false
+    private var savedRefreshRetryTask: Task<Void, Never>?
+    private var savedRefreshRetryAttempt = 0
+    private var savedRefreshRetryDelay: Duration?
     private var olderTask: Task<Void, Never>?
     private var newerTask: Task<Void, Never>?
     private var linkPreviewExpiryTask: Task<Void, Never>?
@@ -125,6 +143,7 @@ final class ConversationTimelineModel: ObservableObject {
     private var readTrackingActive = false
     private var hasSentEntryRead = false
     private var readCandidateID: MessageID?
+    private var recordedReadTarget: MessageID?
     private var readCandidateMature = false
     private var readDwellTask: Task<Void, Never>?
     private var readSendTask: Task<Void, Never>?
@@ -167,6 +186,12 @@ final class ConversationTimelineModel: ObservableObject {
         messageStore: ConversationMessageStore, threadID: String? = nil,
         calendar: Calendar = .autoupdatingCurrent,
         capturedReplyRedactedIDs: Set<MessageID> = [],
+        historyCache: AccountHistoryCache? = nil,
+        canFetchHistory: @escaping @MainActor () -> Bool = { true },
+        canRetryHistory: @escaping @MainActor () -> Bool = { true },
+        sleepBeforeSavedRefreshRetry: @escaping @MainActor (Duration) async throws -> Void = {
+            try await Task.sleep(for: $0)
+        },
         markRead: (@MainActor (MessageID) async throws -> Void)? = nil,
         fetchReadReceipt: (@MainActor (String?) async throws -> MessageID?)? = nil,
         fetchUnreadMentions: (@MainActor (String?) async throws -> UnreadMentionIDsResponse)? = nil,
@@ -182,6 +207,10 @@ final class ConversationTimelineModel: ObservableObject {
         threadRootID = threadID.flatMap(MessageID.init)
         self.currentUserID = currentUserID
         self.source = source
+        self.historyCache = historyCache
+        self.canFetchHistory = canFetchHistory
+        self.canRetryHistory = canRetryHistory
+        self.sleepBeforeSavedRefreshRetry = sleepBeforeSavedRefreshRetry
         self.messageStore = messageStore
         self.markRead = markRead
         self.fetchReadReceipt = fetchReadReceipt
@@ -205,7 +234,19 @@ final class ConversationTimelineModel: ObservableObject {
         publish()
     }
 
+    func historyPathChanged() {
+        if !canFetchHistory() {
+            pauseSavedRefreshRetry()
+            if historyCache != nil, state.content == .ready, state.historyConnection != .refreshing {
+                state.historyConnection = .offline
+            }
+        } else {
+            scheduleSavedRefreshRetry()
+        }
+    }
+
     func setRealtimeStatus(_ status: RealtimeConnectionStatus) {
+        historyPathChanged()
         guard state.realtimeStatus != status else { return }
         state.realtimeStatus = status
         if status == .connected {
@@ -256,7 +297,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func startReadReceiptRefresh() {
-        guard readTrackingActive, receiptTask == nil, receiptDirty != 0,
+        guard canTrackServerActivity, receiptTask == nil, receiptDirty != 0,
             let fetchReadReceipt
         else { return }
         let revision = receiptRevision
@@ -306,16 +347,55 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    /// Unlike fixture-oriented loadInitial, every appearance requests a fresh entry window.
+    /// Start a new request generation without blanking an already usable account window.
     func open(position: TimelineInitialPosition = .liveEdge) async {
         invalidateRequests()
         observeChanges()
+        if let historyCache, historyCacheRevision == historyCache.revision,
+            state.content == .ready, !historyCache.accessRevoked(chatID)
+        {
+            deletedIDs.formUnion(messageStore.deletedMessageIDs(chatID: chatID))
+            publish()
+            if position == lastInitialPosition {
+                await resumeNetworkHistory()
+            } else {
+                lastInitialPosition = position
+                switch position {
+                case .message(let id): await jumpToMessage(id)
+                case .unread(.some(let id)): await jumpToMessage(id, atReadBoundary: true)
+                case .liveEdge, .unread(nil): await jumpToLiveEdge(animated: false)
+                }
+            }
+        } else {
+            clearWindow()
+            await loadInitial(position: position)
+        }
+    }
+
+    func invalidateCachedHistory() {
+        invalidateRequests()
+        cancelReadReceipt(clear: true)
+        resetUnreadActivity()
         clearWindow()
-        await loadInitial(position: position)
+        guard historyCache?.isAvailable == true, !accountWasReset else { return }
+        // No cache-derived rows survive a clear or revocation. Pending rows
+        // still project through the shared message store.
+        historyCacheRevision = historyCache?.revision
+        installSavedHistory(nil, position: .liveEdge)
+    }
+
+    func resumeNetworkHistory() async {
+        await reconcileAfterReconnect()
+    }
+
+    func retryNetworkHistory() async {
+        guard canRetryHistory() else { return }
+        await reconcileAfterReconnect(ignoringPath: true)
     }
 
     func close(acknowledgingActivity: Bool = false) {
-        let shouldAcknowledge = acknowledgingActivity && reactionSessionEntered && !accountWasReset
+        let shouldAcknowledge = acknowledgingActivity && reactionSessionEntered
+            && !accountWasReset && !window.isSaved && canFetchHistory()
         let pendingAck = reactionAckTask
         setReadTrackingActive(false)
         cancelReadReceipt(clear: true)
@@ -338,14 +418,20 @@ final class ConversationTimelineModel: ObservableObject {
                     }
                 }
                 await pendingAck?.value
-                guard !Task.isCancelled, activityRevision == revision else { return }
+                guard !Task.isCancelled, activityRevision == revision,
+                    !accountWasReset, !window.isSaved, canFetchHistory()
+                else { return }
                 _ = try? await acknowledgeReactions(scope, nil)
             }
         }
     }
 
     func loadInitial(position: TimelineInitialPosition = .liveEdge) async {
-        guard state.content == .idle || state.content == .initialLoadFailed else { return }
+        await loadInitial(position: position, ignoringPath: false)
+    }
+
+    private func loadInitial(position: TimelineInitialPosition, ignoringPath: Bool) async {
+        guard !accountWasReset, state.content == .idle || state.content == .initialLoadFailed else { return }
         observeChanges()
         lastInitialPosition = position
         state.content = .loadingInitial
@@ -353,52 +439,255 @@ final class ConversationTimelineModel: ObservableObject {
         let requestGeneration = generation
         let task = Task { [weak self] in
             guard let self else { return }
-            defer { if generation == requestGeneration { initialTask = nil } }
+            defer {
+                if generation == requestGeneration {
+                    initialTask = nil
+                    scheduleSavedRefreshRetry()
+                }
+            }
             do {
+                let origin: CachedHistoryPosition
+                switch position {
+                case .message(let id), .unread(.some(let id)): origin = .around(id)
+                case .liveEdge, .unread(nil): origin = .latest
+                }
+                let preferLatestWhenMissing: Bool
+                if case .unread = position { preferLatestWhenMissing = true }
+                else { preferLatestWhenMissing = false }
+                if historyCache?.isAvailable == true {
+                    let seeded = try await loadSavedPage(
+                        origin, generation: requestGeneration,
+                        preferLatestWhenMissing: preferLatestWhenMissing
+                    ) { page, journal in
+                        self.installSavedHistory(page, position: position, journal: journal)
+                    }
+                    guard generation == requestGeneration else { return }
+                    if !seeded { installSavedHistory(nil, position: position) }
+                } else if !ignoringPath && !canFetchHistory() {
+                    installSavedHistory(nil, position: position)
+                }
+                guard ignoringPath || canFetchHistory(), historyCache?.accessRevoked(chatID) != true
+                else { return }
+                if window.isSaved {
+                    if savedBounds == nil, case .unread(let after) = position {
+                        state.historyConnection = .refreshing
+                        try await loadUnreadEntry(after: after, generation: requestGeneration, ignoringPath: ignoringPath)
+                        return
+                    }
+                    await refreshDisplayedHistory(generation: requestGeneration, ignoringPath: ignoringPath)
+                    return
+                }
                 if case .unread(let after) = position {
-                    try await loadUnreadEntry(after: after, generation: requestGeneration)
+                    try await loadUnreadEntry(after: after, generation: requestGeneration, ignoringPath: ignoringPath)
                     return
                 }
                 if case .message(let id) = position {
-                    try await loadMessageEntry(id: id, generation: requestGeneration)
+                    try await loadMessageEntry(id: id, generation: requestGeneration, ignoringPath: ignoringPath)
                     return
                 }
                 try await fetchSnapshot(
                     query: liveEdgeQuery, mode: .replace(latest: true),
-                    generation: requestGeneration
+                    generation: requestGeneration, ignoringPath: ignoringPath
                 ) {
                     self.state.content = .ready
                     self.state.live.followsLatest = true
                     self.publish(position: .bottom(animated: false), reset: true)
                 }
             } catch is CancellationError {
-                if generation == requestGeneration {
+                if generation == requestGeneration, !window.isSaved {
                     state.content = .idle
                     publish()
                 }
             } catch {
-                if generation == requestGeneration {
-                    state.content = .initialLoadFailed
-                    publish()
+                if generation == requestGeneration, !Task.isCancelled {
+                    if window.isSaved {
+                        historyRefreshFailed(error)
+                    } else {
+                        state.content = .initialLoadFailed
+                        publish()
+                    }
                 }
             }
         }
+        initialIgnoresPath = ignoringPath
         initialTask = task
         await task.value
     }
 
-    func retryInitial() async { await loadInitial(position: lastInitialPosition) }
+    func retryInitial() async {
+        await retryNetworkHistory()
+    }
+
+    /// Disk has the same ordered realtime journal as HTTP. Nothing read under an
+    /// earlier generation, visibility policy or account epoch becomes visible.
+    @discardableResult
+    private func loadSavedPage(
+        _ position: CachedHistoryPosition, generation requestGeneration: Int,
+        preferLatestWhenMissing: Bool = false,
+        commit: (CachedHistoryPage, [RealtimeServerEvent]) -> Void
+    ) async throws -> Bool {
+        guard let historyCache, historyCache.isAvailable,
+            !historyCache.accessRevoked(chatID)
+        else { return false }
+        let cacheRevision = historyCache.revision
+        let conversation = key
+        let limit = Int(Self.pageSize)
+        while true {
+            let token = messageStore.beginSnapshot(chatID: chatID)
+            snapshotTokens.insert(token)
+            defer {
+                messageStore.endSnapshot(token)
+                snapshotTokens.remove(token)
+            }
+            let page: CachedHistoryPage
+            do {
+                let candidate = try await historyCache.read {
+                    try await $0.cachedHistory(conversation, position: position, limit: limit)
+                }
+                if preferLatestWhenMissing, case .around(let target) = position,
+                    !savedPage(candidate, contains: target)
+                {
+                    page = try await historyCache.read {
+                        try await $0.cachedHistory(conversation, position: .latest, limit: limit)
+                    }
+                } else {
+                    page = candidate
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard generation == requestGeneration, historyCache.revision == cacheRevision,
+                    !historyCache.accessRevoked(chatID)
+                else { throw CancellationError() }
+                return false
+            }
+            try Task.checkCancellation()
+            guard generation == requestGeneration, historyCache.revision == cacheRevision,
+                !historyCache.accessRevoked(chatID)
+            else { throw CancellationError() }
+            guard messageStore.membershipSnapshotIsCurrent(token) else { continue }
+            historyCacheRevision = cacheRevision
+            commit(page, messageStore.eventsDuringSnapshot(token))
+            return true
+        }
+    }
+
+    private func installSavedHistory(
+        _ page: CachedHistoryPage?, position: TimelineInitialPosition,
+        journal: [RealtimeServerEvent] = [], alignToStart: Bool = false
+    ) {
+        savedBounds = page.flatMap { savedRange(for: $0) }
+        savedHidesMembership = page.map { savedPolicyHidesMembership($0) } ?? true
+        let messages = page?.messages.filter(acceptsSaved) ?? []
+        let wasSaved = window.isSaved
+        window.replaceSaved(with: messages)
+        savedPeerTailKeys.removeAll()
+        if !wasSaved {
+            cancelReadReceipt(clear: true)
+            resetUnreadActivity()
+        }
+        unreadBeforeMessageID = nil
+        resetViewportForReplacement()
+        state.olderSaved = savedEdge(page, side: .older)
+        state.newerSaved = savedEdge(page, side: .newer)
+        // The disk-read journal uses the new section's position, not the old viewport.
+        switch position {
+        case .message:
+            state.live.followsLatest = false
+        case .unread(let after):
+            state.live.followsLatest = state.newerSaved == nil
+                && savedUnreadBoundary(after: after) == nil
+        case .liveEdge:
+            state.live.followsLatest = !alignToStart && state.newerSaved == nil
+        }
+        for event in journal { reduce(event, replay: true) }
+        state.content = .ready
+        state.history = if savedBounds != nil { .saved }
+            else if page?.context?.verifiedEmpty == true { .verifiedEmpty }
+            else { .notDownloaded }
+        state.historyConnection = canFetchHistory() ? nil : .offline
+        state.reconciliationFailed = false
+        state.repositionFailure = nil
+        state.missingOfflineMessage = nil
+        let scroll: TimelineScrollIntent?
+        switch position {
+        case .message(let id):
+            if let target = rowID(forServerID: id) {
+                scroll = .reveal(target, animated: false, highlight: true)
+            } else {
+                state.missingOfflineMessage = id
+                scroll = .bottom(animated: false)
+            }
+        case .unread(let after):
+            unreadBeforeMessageID = savedUnreadBoundary(after: after)
+            scroll = unreadBeforeMessageID == nil
+                ? .bottom(animated: false)
+                : .reveal(.unreadSeparator, animated: false, highlight: false)
+            state.live.followsLatest = unreadBeforeMessageID == nil && state.newerSaved == nil
+        case .liveEdge:
+            if alignToStart, let first = window.messages.first(where: { rowID(forServerID: $0.id) != nil }) {
+                scroll = rowID(forServerID: first.id).map {
+                    .reveal($0, animated: false, highlight: false)
+                }
+            } else {
+                scroll = .bottom(animated: false)
+            }
+        }
+        publish(position: scroll, reset: true)
+    }
+
+    private func savedUnreadBoundary(after id: MessageID?) -> MessageID? {
+        guard let id, let index = window.index(ofServerID: id),
+            !window.messages[index].isDeleted, !deletedIDs.contains(id)
+        else { return nil }
+        return window.messages.dropFirst(index + 1).first {
+            !$0.isDeleted && !deletedIDs.contains($0.id)
+        }?.id
+    }
+
+    private func savedPolicyHidesMembership(_ page: CachedHistoryPage) -> Bool {
+        page.context?.policy?.canView != true
+            || page.context?.settings?.showMembershipMessages == false
+    }
+
+    private func savedPage(_ page: CachedHistoryPage, contains target: MessageID) -> Bool {
+        guard !page.targetMissing, !deletedIDs.contains(target) else { return false }
+        let hidesMembership = savedPolicyHidesMembership(page)
+        return page.messages.contains {
+            $0.id == target && !$0.isDeleted && acceptsSaved($0, hidingMembership: hidesMembership)
+        }
+    }
+
+    private func savedRange(for page: CachedHistoryPage) -> ClosedRange<MessageID>? {
+        guard let first = page.messages.first?.id, let last = page.messages.last?.id else { return nil }
+        return first...last
+    }
+
+    private func savedEdge(
+        _ page: CachedHistoryPage?, side: EdgeSide
+    ) -> ConversationTimelineState.SavedEdge? {
+        guard let page else { return nil }
+        switch side {
+        case .older: return page.hasOlder ? .more : page.hasOlderSection ? .section : nil
+        case .newer: return page.hasNewer ? .more : page.hasNewerSection ? .section : nil
+        }
+    }
 
     /// Notifications and links can outlive their target. An unavailable anchor is
     /// not an empty conversation: open latest history and retain the missing-target banner.
-    private func loadMessageEntry(id: MessageID, generation requestGeneration: Int) async throws {
+    private func loadMessageEntry(
+        id: MessageID, generation requestGeneration: Int, ignoringPath: Bool
+    ) async throws {
         var needsLatest = false
         do {
             try await fetchSnapshot(
                 query: aroundQuery(for: .message(id)), mode: .replace(latest: false),
-                generation: requestGeneration
+                generation: requestGeneration, ignoringPath: ignoringPath,
+                requiredMessageID: window.isSaved ? id : nil
             ) {}
             needsLatest = window.messages.isEmpty || isActivityTargetDeleted(id)
+        } catch is MessageNotFound {
+            needsLatest = true
         } catch let error as APIError {
             switch error {
             case .http(status: 404, body: _), .invalidResponse(statusCode: 404):
@@ -409,7 +698,8 @@ final class ConversationTimelineModel: ObservableObject {
         }
         if needsLatest {
             try await fetchSnapshot(
-                query: liveEdgeQuery, mode: .replace(latest: true), generation: requestGeneration
+                query: liveEdgeQuery, mode: .replace(latest: true), generation: requestGeneration,
+                ignoringPath: ignoringPath
             ) {}
         }
         state.content = .ready
@@ -424,8 +714,9 @@ final class ConversationTimelineModel: ObservableObject {
 
     private enum UnreadEntryError: Error { case stalledCursor }
 
-    private func loadUnreadEntry(after lastReadID: MessageID?, generation requestGeneration: Int)
-        async throws
+    private func loadUnreadEntry(
+        after lastReadID: MessageID?, generation requestGeneration: Int, ignoringPath: Bool
+    ) async throws
     {
         if !hasAuthoritativeReadState, let lastReadID { advanceReadWatermark(to: lastReadID) }
         let query = lastReadID.map { aroundQuery(for: .message($0)) } ?? liveEdgeQuery
@@ -433,7 +724,7 @@ final class ConversationTimelineModel: ObservableObject {
         do {
             try await fetchSnapshot(
                 query: query, mode: .replace(latest: lastReadID == nil),
-                generation: requestGeneration
+                generation: requestGeneration, ignoringPath: ignoringPath
             ) {}
         } catch let error as APIError {
             guard lastReadID != nil else { throw error }
@@ -441,7 +732,7 @@ final class ConversationTimelineModel: ObservableObject {
             case .http(status: 404, body: _), .invalidResponse(statusCode: 404):
                 try await fetchSnapshot(
                     query: liveEdgeQuery, mode: .replace(latest: true),
-                    generation: requestGeneration
+                    generation: requestGeneration, ignoringPath: ignoringPath
                 ) {}
                 fetchedLatest = true
             default:
@@ -452,7 +743,8 @@ final class ConversationTimelineModel: ObservableObject {
         // of 404. That is not evidence that the conversation itself is empty.
         if !fetchedLatest, window.messages.isEmpty {
             try await fetchSnapshot(
-                query: liveEdgeQuery, mode: .replace(latest: true), generation: requestGeneration
+                query: liveEdgeQuery, mode: .replace(latest: true), generation: requestGeneration,
+                ignoringPath: ignoringPath
             ) {}
         }
 
@@ -464,7 +756,7 @@ final class ConversationTimelineModel: ObservableObject {
                 guard cursors.insert(cursor).inserted else { throw UnreadEntryError.stalledCursor }
                 try await fetchSnapshot(
                     query: .init(after: cursor, max: Self.pageSize, threadID: threadID),
-                    mode: .page(.newer), generation: requestGeneration
+                    mode: .page(.newer), generation: requestGeneration, ignoringPath: ignoringPath
                 ) {}
             }
             if let index = window.index(ofServerID: lastReadID), index + 1 < window.messages.count {
@@ -478,7 +770,7 @@ final class ConversationTimelineModel: ObservableObject {
                 guard cursors.insert(cursor).inserted else { throw UnreadEntryError.stalledCursor }
                 try await fetchSnapshot(
                     query: .init(before: cursor, max: Self.pageSize, threadID: threadID),
-                    mode: .seekOlder, generation: requestGeneration
+                    mode: .seekOlder, generation: requestGeneration, ignoringPath: ignoringPath
                 ) {}
             }
             unreadBeforeMessageID = window.messages.first?.id
@@ -511,26 +803,40 @@ final class ConversationTimelineModel: ObservableObject {
         cancelReadCandidate()
         // Retain the task until completion to serialize callbacks that ignore cancellation.
         readSendTask?.cancel()
+        recordedReadTarget = nil
+        if historyCache != nil { viewportRevision = nil }
         updateReadCandidate()
+    }
+
+    private var canTrackServerActivity: Bool {
+        readTrackingActive && !window.isSaved && !accountWasReset && canFetchHistory()
+    }
+
+    private func startTrackingServerActivity() {
+        guard canTrackServerActivity else { return }
+        reactionSessionEntered = true
+        refreshReadReceipt(changed: false, mask: receiptMask & ~receiptFresh)
+        refreshUnreadActivity(changed: false)
+        completeReactionViewing()
     }
 
     func setReadTrackingActive(_ active: Bool) {
         if !active {
+            pauseSavedRefreshRetry()
             cancelUnreadActivity()
             if activityJumpInProgress { invalidateRequests() }
         }
         guard !active || !accountWasReset else { return }
         guard readTrackingActive != active else { return }
         if active {
-            reactionSessionEntered = true
+            reactionSessionEntered = !window.isSaved && canFetchHistory()
             activityRevision &+= 1
             leaveReactionTask?.cancel()
         }
         readTrackingActive = active
         if active {
-            refreshReadReceipt(changed: false, mask: receiptMask & ~receiptFresh)
-            refreshUnreadActivity(changed: false)
-            completeReactionViewing()
+            startTrackingServerActivity()
+            scheduleSavedRefreshRetry()
         } else {
             cancelReadReceipt(clear: false)
         }
@@ -597,7 +903,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func startMentionRefresh() {
-        guard mentionTask == nil, mentionsDirty, readTrackingActive,
+        guard mentionTask == nil, mentionsDirty, canTrackServerActivity,
             let fetchUnreadMentions
         else { return }
         let revision = activityRevision
@@ -607,13 +913,13 @@ final class ConversationTimelineModel: ObservableObject {
                 mentionTask = nil
                 if revision != activityRevision { startMentionRefresh() }
             }
-            while readTrackingActive, revision == activityRevision, !Task.isCancelled,
+            while canTrackServerActivity, revision == activityRevision, !Task.isCancelled,
                 mentionsDirty
             {
                 mentionsDirty = false
                 do {
                     let response = try await fetchUnreadMentions(threadID)
-                    guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+                    guard canTrackServerActivity, revision == activityRevision, !Task.isCancelled else {
                         return
                     }
                     mentionTargets.formUnion(
@@ -636,7 +942,7 @@ final class ConversationTimelineModel: ObservableObject {
 
     private func startReactionRefresh() {
         guard reactionTask == nil, reactionAckTask == nil, leaveReactionTask == nil,
-            reactionsDirty, readTrackingActive, let fetchUnreadReactions
+            reactionsDirty, canTrackServerActivity, let fetchUnreadReactions
         else { return }
         let revision = activityRevision
         reactionTask = Task { [weak self] in
@@ -649,13 +955,13 @@ final class ConversationTimelineModel: ObservableObject {
                     completeReactionViewing()
                 }
             }
-            while readTrackingActive, revision == activityRevision, !Task.isCancelled,
+            while canTrackServerActivity, revision == activityRevision, !Task.isCancelled,
                 reactionsDirty
             {
                 reactionsDirty = false
                 do {
                     let response = try await fetchUnreadReactions(threadID, reactionReadThrough)
-                    guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+                    guard canTrackServerActivity, revision == activityRevision, !Task.isCancelled else {
                         return
                     }
                     // A delta can contain a newer reaction on an already visited message.
@@ -684,7 +990,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private func completeReactionViewing() {
-        guard readTrackingActive, reactionSessionEntered, !reactionsDirty, !reactionsChanged,
+        guard canTrackServerActivity, reactionSessionEntered, !reactionsDirty, !reactionsChanged,
             reactionTask == nil, reactionAckTask == nil, leaveReactionTask == nil,
             reactionTargets.isEmpty, !visitedReactionTargets.isEmpty,
             let boundary = reactionReadThrough, let acknowledgeReactions
@@ -698,12 +1004,12 @@ final class ConversationTimelineModel: ObservableObject {
                 startReactionRefresh()
                 if revision != activityRevision { completeReactionViewing() }
             }
-            guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+            guard canTrackServerActivity, revision == activityRevision, !Task.isCancelled else {
                 return
             }
             do {
                 let response = try await acknowledgeReactions(threadID, boundary)
-                guard readTrackingActive, revision == activityRevision, !Task.isCancelled else {
+                guard canTrackServerActivity, revision == activityRevision, !Task.isCancelled else {
                     return
                 }
                 visitedReactionTargets.removeAll()
@@ -724,7 +1030,7 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private var visibleReactionTargets: Set<MessageID> {
-        guard readTrackingActive, state.content == .ready, pendingScroll == nil,
+        guard canTrackServerActivity, state.content == .ready, pendingScroll == nil,
             viewportRevision == snapshotRevision, lastViewport.isValid(forRowCount: rows.count)
         else { return [] }
         return reactionTargets.intersection(lastViewport.visibleReactionMessageIDs)
@@ -820,15 +1126,15 @@ final class ConversationTimelineModel: ObservableObject {
     func jumpToNextReaction() async { await jumpToNextActivity(mention: false) }
 
     private func jumpToNextActivity(mention: Bool) async {
-        guard readTrackingActive, !activityJumpInProgress else { return }
+        guard canTrackServerActivity, !activityJumpInProgress else { return }
         activityJumpInProgress = true
         defer { activityJumpInProgress = false }
         let revision = activityRevision
-        while readTrackingActive, revision == activityRevision,
+        while canTrackServerActivity, revision == activityRevision,
             let id = (mention ? mentionTargets : reactionTargets).min()
         {
             let outcome = await jumpToMessage(id, atReactions: !mention)
-            guard readTrackingActive, revision == activityRevision else { return }
+            guard canTrackServerActivity, revision == activityRevision else { return }
             switch outcome {
             case .failed:
                 return
@@ -862,7 +1168,10 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private var visibleReadCandidate: MessageResponse? {
-        guard readTrackingActive, markRead != nil, observation != nil,
+        // A path loss does not demote this server baseline to disk. Persist
+        // ordinary visible reads; receipts and reaction activity still require HTTP.
+        guard readTrackingActive, state.history == .server, !window.isSaved, !accountWasReset,
+            historyCache != nil || canFetchHistory(), markRead != nil, observation != nil,
             state.content == .ready, pendingScroll == nil, viewportRevision == snapshotRevision,
             lastViewport.isValid(forRowCount: rows.count),
             let first = lastViewport.firstVisibleIndex, let last = lastViewport.lastVisibleIndex,
@@ -871,7 +1180,8 @@ final class ConversationTimelineModel: ObservableObject {
         else { return nil }
         for index in (first...last).reversed() {
             guard case .message(let row) = rows[index], let message = row.entry.remoteMessage,
-                message.id == candidateID
+                message.id == candidateID, message.id != recordedReadTarget,
+                !message.isDeleted, !deletedIDs.contains(message.id), source.isPublishedReadTarget(message)
             else { continue }
             return isLaterThanWatermark(message) ? message : nil
         }
@@ -932,8 +1242,12 @@ final class ConversationTimelineModel: ObservableObject {
                 if self?.generation == requestGeneration,
                     self?.readWatermarkRevision == watermarkRevision
                 {
-                    self?.advanceReadWatermark(to: candidate.id)
-                    self?.dismissVisibleActivityTargets()
+                    if self?.historyCache != nil {
+                        self?.recordedReadTarget = candidate.id
+                    } else {
+                        self?.advanceReadWatermark(to: candidate.id)
+                        self?.dismissVisibleActivityTargets()
+                    }
                 }
             } catch {
                 // A later viewport can retry; failures must not spin a write loop.
@@ -947,60 +1261,204 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    func reconcileAfterReconnect() async {
-        guard observation != nil else { return }
+    func reconcileAfterReconnect(ignoringPath: Bool = false) async {
+        await reconcileAfterReconnect(ignoringPath: ignoringPath, automatic: false)
+    }
+
+    private func reconcileAfterReconnect(ignoringPath: Bool, automatic: Bool) async {
+        guard !Task.isCancelled, observation != nil, !accountWasReset else { return }
+        let incomingGeneration = generation
         if let initialTask {
+            let mayNeedRetry = ignoringPath && !initialIgnoresPath
             await initialTask.value
-            return
+            guard mayNeedRetry, !canFetchHistory(), generation == incomingGeneration,
+                !Task.isCancelled else { return }
         }
         if let recoveryTask {
-            await awaitRecovery(recoveryTask, generation: generation)
+            let mayNeedRetry = ignoringPath && !recoveryIgnoresPath
+            // Only the caller that starts a recovery owns its cancellation.
+            await recoveryTask.value
+            guard mayNeedRetry, !canFetchHistory(), generation == incomingGeneration,
+                !Task.isCancelled else { return }
+        }
+        guard ignoringPath || canFetchHistory(), historyCache?.accessRevoked(chatID) != true else {
+            if state.content == .idle, historyCache?.accessRevoked(chatID) != true {
+                await loadInitial(position: lastInitialPosition)
+            } else if state.content == .ready {
+                state.historyConnection = .offline
+            }
             return
         }
         if state.content == .idle || state.content == .initialLoadFailed {
-            await loadInitial()
+            await loadInitial(position: lastInitialPosition, ignoringPath: ignoringPath)
             return
         }
-        if membershipRefreshRequired {
-            await reconcileMembershipVisibility()
+        if membershipRefreshRequired, !window.isSaved {
+            await reconcileMembershipVisibility(ignoringPath: ignoringPath)
             return
         }
         guard state.content == .ready else { return }
-        let followsLatest = window.isAtLiveEdge && state.live.followsLatest
-        let anchor = followsLatest ? nil : visibleRemoteAnchor
-        invalidateRequests()
+        invalidateRequests(keepingSavedRefreshRetryBudget: automatic)
         state.reconciliationFailed = false
         let requestGeneration = generation
         let task = Task { [weak self] in
             guard let self else { return }
-            defer { if generation == requestGeneration { recoveryTask = nil } }
-            do {
-                try await fetchSnapshot(
-                    query: anchor.map { self.aroundQuery(for: .message($0)) } ?? liveEdgeQuery,
-                    mode: .replace(latest: anchor == nil), generation: requestGeneration
-                ) {
-                    self.state.reconciliationFailed = false
-                    if let anchor {
-                        self.state.live.followsLatest = false
-                        let target =
-                            self.rowID(forServerID: anchor)
-                            ?? self.window.messages.first.flatMap { self.rowID(forServerID: $0.id) }
-                        self.publish(
-                            position: target.map { .reveal($0, animated: false, highlight: false) },
-                            reset: true)
-                    } else {
-                        self.state.live.followsLatest = true
-                        self.publish(position: .bottom(animated: false), reset: true)
-                    }
+            defer {
+                if generation == requestGeneration {
+                    recoveryTask = nil
+                    recoveryIsAutomatic = false
+                    scheduleSavedRefreshRetry()
                 }
-            } catch is CancellationError {
-                // Navigation or closure owns the replacement state.
-            } catch {
-                if generation == requestGeneration { state.reconciliationFailed = true }
             }
+            await refreshDisplayedHistory(generation: requestGeneration, ignoringPath: ignoringPath)
         }
+        recoveryIgnoresPath = ignoringPath
+        recoveryIsAutomatic = automatic
         recoveryTask = task
         await awaitRecovery(task, generation: requestGeneration)
+    }
+
+    private func refreshDisplayedHistory(generation requestGeneration: Int, ignoringPath: Bool) async {
+        let wasSaved = window.isSaved
+        if wasSaved || ignoringPath { state.historyConnection = .refreshing }
+        do {
+            if let missing = state.missingOfflineMessage {
+                try await loadMessageEntry(id: missing, generation: requestGeneration, ignoringPath: ignoringPath)
+                return
+            }
+            while true {
+                let requestedAnchor = recoveryAnchor(saved: wasSaved)
+                var acceptedAnchor = requestedAnchor
+                var placement = pendingScroll?.intent
+                let savedUnread = unreadBeforeMessageID
+                do {
+                    try await fetchSnapshot(
+                        query: requestedAnchor.map { aroundQuery(for: .message($0)) } ?? liveEdgeQuery,
+                        mode: .replace(latest: requestedAnchor == nil), generation: requestGeneration,
+                        ignoringPath: ignoringPath,
+                        preservingSavedOnEmpty: wasSaved && requestedAnchor != nil,
+                        acceptingResponse: { page in
+                            guard wasSaved else { return true }
+                            acceptedAnchor = recoveryAnchor(saved: true)
+                            placement = pendingScroll?.intent
+                            guard acceptedAnchor != requestedAnchor else { return true }
+                            // A reader who moves during a fetch keeps their current row.
+                            // If the page cannot preserve it, seek again from the new viewport.
+                            guard let acceptedAnchor else { return false }
+                            return page.messages.contains { $0.id == acceptedAnchor && !$0.isDeleted }
+                        }
+                    ) {
+                        state.reconciliationFailed = false
+                        state.live.followsLatest = acceptedAnchor == nil
+                        if wasSaved {
+                            unreadBeforeMessageID = savedUnread.flatMap {
+                                rowID(forServerID: $0) == nil ? nil : $0
+                            }
+                        }
+                        let position: TimelineScrollIntent?
+                        if let acceptedAnchor {
+                            if wasSaved, rowID(forServerID: acceptedAnchor) != nil {
+                                // Native hosts compensate a surviving stable row's offset.
+                                position = placement
+                            } else {
+                                let target = rowID(forServerID: acceptedAnchor)
+                                    ?? window.messages.first.flatMap { rowID(forServerID: $0.id) }
+                                position = target.map { .reveal($0, animated: false, highlight: false) }
+                            }
+                        } else {
+                            position = .bottom(animated: false)
+                        }
+                        publish(position: position, reset: true)
+                    }
+                    return
+                } catch is RecoveryAnchorMoved {
+                    continue
+                }
+            }
+        } catch {
+            guard generation == requestGeneration else { return }
+            if Task.isCancelled || error is CancellationError {
+                if state.historyConnection == .refreshing {
+                    state.historyConnection = canFetchHistory() ? nil : .offline
+                }
+            } else {
+                historyRefreshFailed(error)
+            }
+        }
+    }
+
+    private func historyRefreshFailed(_ error: any Error) {
+        state.historyConnection = canFetchHistory() ? nil : .offline
+        state.reconciliationFailed = true
+        guard window.isSaved, savedRefreshRetryAttempt < Self.savedRefreshRetryLimit,
+            let error = error as? APIError
+        else { return }
+        switch error {
+        case .transport(let transportError):
+            guard transportError.code != .cancelled else { return }
+        case .unavailable, .retryableHTTP:
+            break
+        case .http(let status, _), .invalidResponse(let status):
+            guard status == 408 || status == 429 || (500...599).contains(status) else { return }
+        default:
+            return
+        }
+        savedRefreshRetryDelay = .seconds(
+            max(savedRefreshBackoff, error.retryAfter?.timeIntervalSinceNow ?? 0))
+    }
+
+    private var savedRefreshBackoff: Double {
+        Double(1 << savedRefreshRetryAttempt)
+    }
+
+    private var canAutomaticallyRetrySavedHistory: Bool {
+        readTrackingActive && observation != nil && !accountWasReset && window.isSaved
+            && state.content == .ready && state.reconciliationFailed && canFetchHistory()
+            && historyCache?.isAvailable == true && historyCache?.revision == historyCacheRevision
+            && historyCache?.accessRevoked(chatID) != true
+    }
+
+    private func scheduleSavedRefreshRetry() {
+        guard canAutomaticallyRetrySavedHistory, savedRefreshRetryTask == nil,
+            initialTask == nil, recoveryTask == nil,
+            let delay = savedRefreshRetryDelay
+        else { return }
+        let requestGeneration = generation
+        savedRefreshRetryTask = Task { [weak self, sleepBeforeSavedRefreshRetry] in
+            do { try await sleepBeforeSavedRefreshRetry(delay) } catch { return }
+            guard let self, !Task.isCancelled, generation == requestGeneration else { return }
+            // Give disk paging priority, then choose the current visible anchor.
+            while state.older == .loading || state.newer == .loading {
+                if state.older == .loading { await olderTask?.value }
+                if state.newer == .loading { await newerTask?.value }
+                guard !Task.isCancelled, generation == requestGeneration else { return }
+            }
+            savedRefreshRetryTask = nil
+            guard canAutomaticallyRetrySavedHistory else { return }
+            savedRefreshRetryDelay = nil
+            savedRefreshRetryAttempt += 1
+            await reconcileAfterReconnect(ignoringPath: false, automatic: true)
+        }
+    }
+
+    private func pauseSavedRefreshRetry() {
+        savedRefreshRetryTask?.cancel()
+        savedRefreshRetryTask = nil
+        if recoveryIsAutomatic, recoveryTask?.isCancelled == false {
+            recoveryTask?.cancel()
+            state.reconciliationFailed = true
+            if savedRefreshRetryAttempt < Self.savedRefreshRetryLimit {
+                savedRefreshRetryDelay = .seconds(savedRefreshBackoff)
+            }
+        }
+    }
+
+    private func recoveryAnchor(saved: Bool) -> MessageID? {
+        if (saved || window.isAtLiveEdge) && state.live.followsLatest { return nil }
+        if saved, pendingScroll != nil, case .message(let id) = lastInitialPosition {
+            return id
+        }
+        return visibleRemoteAnchor
     }
 
     private func awaitRecovery(_ task: Task<Void, Never>, generation requestGeneration: Int) async {
@@ -1017,7 +1475,7 @@ final class ConversationTimelineModel: ObservableObject {
 
     /// Uses the existing recovery task, but merges the loaded interval rather than
     /// replacing it with one page. Visibility changes must not discard paged history.
-    private func reconcileMembershipVisibility() async {
+    private func reconcileMembershipVisibility(ignoringPath: Bool) async {
         let requestGeneration = generation
         let lower = membershipRefreshLowerBound ?? window.messages.first?.id
         let upper =
@@ -1032,7 +1490,7 @@ final class ConversationTimelineModel: ObservableObject {
                 guard let lower else {
                     try await fetchSnapshot(
                         query: liveEdgeQuery, mode: .replace(latest: true),
-                        generation: requestGeneration
+                        generation: requestGeneration, ignoringPath: ignoringPath
                     ) {
                         self.state.content = .ready
                         self.publish()
@@ -1044,7 +1502,7 @@ final class ConversationTimelineModel: ObservableObject {
                 while true {
                     let next = try await fetchSnapshot(
                         query: query, mode: .membershipRange(lower: lower, upper: upper),
-                        generation: requestGeneration
+                        generation: requestGeneration, ignoringPath: ignoringPath
                     ) {
                         self.publish()
                     }
@@ -1064,6 +1522,7 @@ final class ConversationTimelineModel: ObservableObject {
                 if !(error is CancellationError) { state.reconciliationFailed = true }
             }
         }
+        recoveryIgnoresPath = ignoringPath
         recoveryTask = task
         await awaitRecovery(task, generation: requestGeneration)
     }
@@ -1073,7 +1532,12 @@ final class ConversationTimelineModel: ObservableObject {
         if state.live.followsLatest { state.live.followsLatest = false }
         let cancelledRequest = pendingScroll != nil
         pendingScroll = nil
-        if recoveryTask != nil { invalidateRequests() }
+        if (!window.isSaved && recoveryTask != nil)
+            || (window.isSaved && state.historyConnection == .refreshing
+                && state.missingOfflineMessage != nil)
+        {
+            invalidateRequests()
+        }
         if case .repositioning(.liveEdge) = state.content {
             invalidateRequests()
             state.content = .ready
@@ -1143,6 +1607,7 @@ final class ConversationTimelineModel: ObservableObject {
         // sends or records the timeline has suppressed in favor of a pending row.
         for case .message(let row) in rows {
             guard let message = row.entry.remoteMessage, canSelectMessage(message) else { continue }
+            if window.isSaved, savedPeerTailKeys.contains(message.timelineStableKey) { continue }
             indices[message.id] = messages.count
             messages.append(message)
         }
@@ -1281,7 +1746,9 @@ final class ConversationTimelineModel: ObservableObject {
     /// The unread divider is frozen at entry; this navigation uses the live read cursor.
     func jumpTowardLatest() async {
         guard state.content == .ready else { return }
-        if threadID == nil, jumpUnreadCount > 0, let lastReadMessageID, !isAtOrBeyondReadBoundary {
+        if !window.isSaved, threadID == nil, jumpUnreadCount > 0,
+            let lastReadMessageID, !isAtOrBeyondReadBoundary
+        {
             await jumpToMessage(lastReadMessageID, atReadBoundary: true)
         } else {
             await jumpToLiveEdge()
@@ -1299,6 +1766,22 @@ final class ConversationTimelineModel: ObservableObject {
         if recoveryTask != nil { invalidateRequests() }
         state.repositionFailure = nil
         state.reconciliationFailed = false
+        state.missingOfflineMessage = nil
+        if !canFetchHistory() {
+            if window.isSaved, state.newerSaved == nil {
+                state.live.followsLatest = true
+                requestScroll(.bottom(animated: animated))
+                return
+            }
+            invalidateRequests()
+            let requestGeneration = generation
+            _ = try? await loadSavedPage(.latest, generation: requestGeneration) { page, journal in
+                if !page.messages.isEmpty || page.context?.verifiedEmpty == true {
+                    installSavedHistory(page, position: .liveEdge, journal: journal)
+                }
+            }
+            return
+        }
         if canReuseLatestWindow {
             state.live.followsLatest = true
             requestScroll(.bottom(animated: animated))
@@ -1339,9 +1822,11 @@ final class ConversationTimelineModel: ObservableObject {
         selectionRange.clearDirection()
         invalidateRequests()
         state.repositionFailure = nil
+        state.missingOfflineMessage = nil
         state.content = .ready
         if isActivityTargetDeleted(id) {
-            state.repositionFailure = .message(id)
+            if !canFetchHistory() { state.missingOfflineMessage = id }
+            else { state.repositionFailure = .message(id) }
             return .missing
         }
         if let rowID = rowID(forServerID: id) {
@@ -1353,6 +1838,17 @@ final class ConversationTimelineModel: ObservableObject {
                         ? .reaction(rowID, animated: true, highlight: true)
                         : .reveal(rowID, animated: true, highlight: true))
             return .reached
+        }
+        if !canFetchHistory() {
+            let requestGeneration = generation
+            _ = try? await loadSavedPage(.around(id), generation: requestGeneration) { page, journal in
+                guard savedPage(page, contains: id) else { return }
+                installSavedHistory(page, position: .message(id), journal: journal)
+            }
+            guard generation == requestGeneration else { return .failed }
+            if rowID(forServerID: id) != nil { return .reached }
+            state.missingOfflineMessage = id
+            return .missing
         }
         state.content = .repositioning(.message(id))
         let requestGeneration = generation
@@ -1400,14 +1896,17 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    func dismissRepositionFailure() { state.repositionFailure = nil }
+    func dismissRepositionFailure() {
+        state.repositionFailure = nil
+        state.missingOfflineMessage = nil
+    }
 
     // Reveal a locally available tail immediately. History networking must not
     // keep the composer submitting after its durable enqueue has completed.
     func revealLatestAfterSend() {
         let canReuse = canReuseLatestWindow || canReuseLatestWindowAfterPendingChange
         canReuseLatestWindowAfterPendingChange = false
-        if state.content == .ready, canReuse {
+        if state.content == .ready, canReuse || window.isSaved || !canFetchHistory() {
             state.live.followsLatest = true
             publish(position: .bottom(animated: false))
             return
@@ -1425,12 +1924,20 @@ final class ConversationTimelineModel: ObservableObject {
 
     enum EdgeSide { case older, newer }
     func retryOlder() {
-        state.older = .idle
-        loadEdge(.older)
+        if window.isSaved, state.olderSaved != nil {
+            browseSavedEdge(.older)
+        } else if canRetryHistory() {
+            state.older = .idle
+            loadEdge(.older, ignoringPath: true)
+        }
     }
     func retryNewer() {
-        state.newer = .idle
-        loadEdge(.newer)
+        if window.isSaved, state.newerSaved != nil {
+            browseSavedEdge(.newer)
+        } else if canRetryHistory() {
+            state.newer = .idle
+            loadEdge(.newer, ignoringPath: true)
+        }
     }
 
     private var canReuseLatestWindow: Bool {
@@ -1441,14 +1948,18 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private var visibleRemoteAnchor: MessageID? {
-        if let visibleAnchorID, window.index(ofServerID: visibleAnchorID) != nil {
+        if let visibleAnchorID, rowID(forServerID: visibleAnchorID) != nil {
             return visibleAnchorID
         }
-        return window.messages.first?.id
+        return window.messages.first { !$0.isDeleted && !deletedIDs.contains($0.id) }?.id
     }
 
-    private func loadEdge(_ side: EdgeSide) {
+    private func loadEdge(_ side: EdgeSide, ignoringPath: Bool = false) {
         guard state.content == .ready, recoveryTask == nil, edge(side) == .idle else { return }
+        if window.isSaved || (!ignoringPath && !canFetchHistory()) {
+            loadSavedEdge(side, explicitly: false)
+            return
+        }
         let query: ListMessagesQuery
         switch side {
         case .older:
@@ -1464,7 +1975,7 @@ final class ConversationTimelineModel: ObservableObject {
             guard let self else { return }
             do {
                 try await fetchSnapshot(
-                    query: query, mode: .page(side), generation: requestGeneration
+                    query: query, mode: .page(side), generation: requestGeneration, ignoringPath: ignoringPath
                 ) {
                     self.setEdge(side, .idle)
                     self.publish()
@@ -1479,6 +1990,86 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
+    func browseSavedEdge(_ side: EdgeSide) {
+        if window.isSaved, state.historyConnection == .refreshing { invalidateRequests() }
+        if edge(side) == .failed { setEdge(side, .idle) }
+        loadSavedEdge(side, explicitly: true)
+    }
+
+    private func loadSavedEdge(_ side: EdgeSide, explicitly: Bool) {
+        guard state.content == .ready, recoveryTask == nil, initialTask == nil,
+            edge(side) == .idle, historyCache?.isAvailable == true
+        else { return }
+        let bounds = savedBounds ?? window.messages.first.flatMap { first in
+            window.messages.last.map { first.id...$0.id }
+        }
+        guard let bounds else { return }
+        let direction = window.isSaved
+            ? (side == .older ? state.olderSaved : state.newerSaved)
+            : .more
+        let position: CachedHistoryPosition
+        switch (side, direction) {
+        case (.older, .some(.more)): position = .before(bounds.lowerBound)
+        case (.newer, .some(.more)): position = .after(bounds.upperBound)
+        case (.older, .some(.section)) where explicitly: position = .previousSection(bounds.lowerBound)
+        case (.newer, .some(.section)) where explicitly: position = .nextSection(bounds.upperBound)
+        default: return
+        }
+        if direction == .section, state.older == .loading || state.newer == .loading { return }
+        setEdge(side, .loading)
+        let requestGeneration = generation
+        let task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let accepted = try await loadSavedPage(position, generation: requestGeneration) {
+                    page, journal in
+                    if direction == .section, !page.messages.isEmpty {
+                        self.installSavedHistory(
+                            page, position: .liveEdge, journal: journal, alignToStart: side == .newer)
+                    } else {
+                        self.mergeSavedPage(page, journal: journal, side: side, previousBounds: bounds)
+                    }
+                }
+                if generation == requestGeneration { setEdge(side, accepted ? .idle : .failed) }
+            } catch {
+                if generation == requestGeneration { setEdge(side, .idle) }
+            }
+        }
+        if side == .older { olderTask = task } else { newerTask = task }
+    }
+
+    private func mergeSavedPage(
+        _ page: CachedHistoryPage, journal: [RealtimeServerEvent], side: EdgeSide,
+        previousBounds: ClosedRange<MessageID>
+    ) {
+        let wasHidingMembership = window.isSaved && hidesSavedMembership
+        savedHidesMembership = savedPolicyHidesMembership(page)
+        if !window.isSaved {
+            cancelReadReceipt(clear: true)
+            resetUnreadActivity()
+            state.olderSaved = .more
+            state.newerSaved = .more
+        }
+        let existing = savedBounds ?? previousBounds
+        if let incoming = savedRange(for: page) {
+            savedBounds =
+                min(existing.lowerBound, incoming.lowerBound)...max(existing.upperBound, incoming.upperBound)
+        } else {
+            savedBounds = existing
+        }
+        let accepted = page.messages.filter(acceptsSaved)
+        if !wasHidingMembership, hidesSavedMembership {
+            window.removeAll { $0.systemKind?.isMembership == true }
+        }
+        window.mergeSaved(accepted)
+        for event in journal { reduce(event, replay: true) }
+        state.history = .saved
+        state.historyConnection = canFetchHistory() ? nil : .offline
+        if side == .older { state.olderSaved = savedEdge(page, side: side) }
+        else { state.newerSaved = savedEdge(page, side: side) }
+        publish()
+    }
+
     private enum SnapshotMode {
         case replace(latest: Bool)
         case page(EdgeSide)
@@ -1487,76 +2078,139 @@ final class ConversationTimelineModel: ObservableObject {
     }
 
     private struct MessageNotFound: Error {}
+    private struct RecoveryAnchorMoved: Error {}
 
     /// The baseline, ordered replay and caller's publication execute without a suspension.
     @discardableResult
     private func fetchSnapshot(
         query: ListMessagesQuery, mode: SnapshotMode, generation requestGeneration: Int,
-        requiredMessageID: MessageID? = nil, commit: () -> Void
+        ignoringPath: Bool = false,
+        requiredMessageID: MessageID? = nil, preservingSavedOnEmpty: Bool = false,
+        acceptingResponse: (ListMessagesResponse) -> Bool = { _ in true },
+        commit: () -> Void
     ) async throws -> MessageID? {
-        try Task.checkCancellation()
-        guard generation == requestGeneration else { throw CancellationError() }
-        var token = messageStore.beginSnapshot(chatID: chatID)
-        snapshotTokens.insert(token)
-        defer {
-            messageStore.endSnapshot(token)
-            snapshotTokens.remove(token)
-        }
-        var page: ListMessagesResponse
+        let cacheRevision = historyCache?.revision
         while true {
-            page = try await source.fetchMessages(chatID: chatID, query: query)
             try Task.checkCancellation()
-            guard generation == requestGeneration else { throw CancellationError() }
-            guard isGroupChat, threadID == nil,
-                !messageStore.membershipSnapshotIsCurrent(token)
-            else { break }
-            // Metadata can change while this actor is suspended returning from
-            // the source, even after its own response fence has passed.
-            messageStore.endSnapshot(token)
-            snapshotTokens.remove(token)
-            token = messageStore.beginSnapshot(chatID: chatID)
+            guard generation == requestGeneration, ignoringPath || canFetchHistory(), !accountWasReset,
+                historyCache?.accessRevoked(chatID) != true
+            else { throw CancellationError() }
+            let token = messageStore.beginSnapshot(chatID: chatID)
+            let pageToken = historyCache?.startPage(key)
             snapshotTokens.insert(token)
+            defer {
+                messageStore.endSnapshot(token)
+                snapshotTokens.remove(token)
+                if let pageToken { historyCache?.finishPage(pageToken) }
+            }
+            let page = try await source.fetchMessages(chatID: chatID, query: query, ignoringPath: ignoringPath)
+            try Task.checkCancellation()
+            guard generation == requestGeneration, cacheRevision == historyCache?.revision,
+                ignoringPath || canFetchHistory(), historyCache?.accessRevoked(chatID) != true
+            else { throw CancellationError() }
+            // Settings can change while returning from the source, even after its own
+            // response fence has passed. A retry starts its own journal and page serial.
+            if isGroupChat, threadID == nil, !messageStore.membershipSnapshotIsCurrent(token) {
+                continue
+            }
+            guard acceptingResponse(page) else { throw RecoveryAnchorMoved() }
+            if let requiredMessageID,
+                !page.messages.contains(where: {
+                    $0.id == requiredMessageID && acceptsServer($0)
+                })
+            {
+                throw MessageNotFound()
+            }
+            if preservingSavedOnEmpty, !page.messages.contains(where: acceptsServer) {
+                throw MessageNotFound()
+            }
+            let events = messageStore.eventsDuringSnapshot(token)
+            let wasSaved = window.isSaved
+            installServerPage(page, mode: mode)
+            savedPeerTailKeys.removeAll()
+            preHistoryAcknowledgementKeys.removeAll()
+            for event in events { reduce(event, replay: true) }
+            absorbDeferredCreates()
+            historyCacheRevision = cacheRevision
+            state.history = .server
+            state.historyConnection = nil
+            state.missingOfflineMessage = nil
+            if let pageToken {
+                // Preserve HTTP coverage exactly. Journal-only creates must not
+                // stretch its bounds; the writer replays those events in the same transaction.
+                let baseline: ListMessagesResponse
+                if page.messages.allSatisfy(acceptsServer) {
+                    baseline = page
+                } else {
+                    baseline = .init(
+                        messages: page.messages.filter(acceptsServer), olderCursor: page.olderCursor,
+                        newerCursor: page.newerCursor, nextCursor: page.nextCursor,
+                        prevCursor: page.prevCursor, membershipMessagePolicy: page.membershipMessagePolicy,
+                        chatSettings: page.chatSettings)
+                }
+                historyCache?.acceptPage(
+                    pageToken, query: query, response: baseline,
+                    journal: messageStore.cacheEventsDuringSnapshot(token))
+            }
+            commit()
+            if wasSaved { startTrackingServerActivity() }
+            return page.newerCursor
         }
-        if let requiredMessageID,
-            !page.messages.contains(where: { $0.id == requiredMessageID && accepts($0) })
-        {
-            throw MessageNotFound()
-        }
-        let events = messageStore.eventsDuringSnapshot(token)
+    }
+
+    private func installServerPage(_ page: ListMessagesResponse, mode: SnapshotMode) {
         switch mode {
         case .replace(let latest):
-            window.replace(with: page, accepting: accepts)
-            windowRevision &+= 1
-            viewportRevision = nil
-            lastViewport = .empty
-            bottomVisibleMessageDate = nil
-            visibleAnchorID = nil
-            pendingScroll = nil
+            if window.isSaved {
+                membershipRefreshRequired = false
+                membershipRefreshLowerBound = nil
+                membershipRefreshUpperBound = nil
+                membershipRefreshAtLiveEdge = false
+            }
+            window.replace(with: page, accepting: acceptsServer)
+            savedHidesMembership = false
+            savedBounds = nil
+            state.olderSaved = nil
+            state.newerSaved = nil
+            resetViewportForReplacement()
             if latest { reconcileDeferredWithLatest() }
         case .seekOlder:
             // Seeking the oldest page must not retain the entire conversation.
             // An empty terminal page still leaves the previous accessible page usable.
             if page.messages.isEmpty {
-                window.prependOlder(page, accepting: accepts)
+                window.prependOlder(page, accepting: acceptsServer)
             } else {
-                window.replace(with: page, accepting: accepts)
+                window.replace(with: page, accepting: acceptsServer)
             }
-        case .page(.older): window.prependOlder(page, accepting: accepts)
-        case .page(.newer): window.appendNewer(page, accepting: accepts)
+        case .page(.older): window.prependOlder(page, accepting: acceptsServer)
+        case .page(.newer): window.appendNewer(page, accepting: acceptsServer)
         case .membershipRange(let lower, let upper):
             window.mergePreservingCursors(page) { message in
                 message.id >= lower && (upper.map { message.id <= $0 } ?? true)
-                    && self.accepts(message)
+                    && self.acceptsServer(message)
             }
         }
-        preHistoryAcknowledgementKeys.removeAll()
-        for event in events { reduce(event, replay: true) }
-        absorbDeferredCreates()
-        commit()
-        return page.newerCursor
     }
 
     private func accepts(_ message: MessageResponse) -> Bool {
+        window.isSaved ? acceptsSaved(message) : acceptsServer(message)
+    }
+
+    private var hidesSavedMembership: Bool {
+        isGroupChat && (savedHidesMembership || messageStore.hidesMembershipMessages(chatID: chatID))
+    }
+
+    private func acceptsSaved(_ message: MessageResponse) -> Bool {
+        acceptsSaved(message, hidingMembership: savedHidesMembership)
+    }
+
+    private func acceptsSaved(_ message: MessageResponse, hidingMembership: Bool) -> Bool {
+        acceptsServer(message)
+            && !(isGroupChat && message.systemKind?.isMembership == true
+                && (hidingMembership || messageStore.hidesMembershipMessages(chatID: chatID)))
+    }
+
+    private func acceptsServer(_ message: MessageResponse) -> Bool {
         guard message.chatId == chatID else { return false }
         if threadID != nil {
             return message.id == threadRootID || message.replyRootId == threadID
@@ -1575,13 +2229,22 @@ final class ConversationTimelineModel: ObservableObject {
     private func storeDidChange(_ change: ConversationChange) {
         switch change {
         case .reset:
+            accountWasReset = true
             cancelReadReceipt(clear: true)
             invalidateRequests()
             clearWindow()
         case .membershipVisibilityChanged(let changedChatID):
-            guard isGroupChat, threadID == nil,
+            guard isGroupChat,
                 changedChatID == nil || changedChatID == chatID
             else { return }
+            // Root visibility can also redact embedded quotes in a thread.
+            if threadID != nil {
+                if window.isSaved, hidesSavedMembership {
+                    window.removeAll { $0.systemKind?.isMembership == true }
+                }
+                publish()
+                return
+            }
             let lower = window.messages.first?.id
             let upper = window.messages.last?.id
             membershipRefreshAtLiveEdge = membershipRefreshAtLiveEdge || window.isAtLiveEdge
@@ -1592,9 +2255,13 @@ final class ConversationTimelineModel: ObservableObject {
                 membershipRefreshUpperBound = max(membershipRefreshUpperBound ?? upper, upper)
             }
             membershipRefreshRequired = true
+            if window.isSaved, messageStore.hidesMembershipMessages(chatID: chatID) {
+                if state.olderSaved != nil { state.olderSaved = .section }
+                if state.newerSaved != nil { state.newerSaved = .section }
+            }
             let hidden = Set(
                 window.messages.lazy.filter { !self.accepts($0) }.map(\.id))
-            window.removeAll { !self.accepts($0) }
+            if !hidden.isEmpty { window.removeAll { hidden.contains($0.id) } }
             deferredCreates = deferredCreates.filter { self.accepts($0.value) }
             removeActivityTargets(hidden)
             resetUnreadActivity()
@@ -1607,8 +2274,11 @@ final class ConversationTimelineModel: ObservableObject {
                 canReuseLatestWindowAfterPendingChange || canReuseLatestWindow
             publish()
         case .realtime(let event):
-            guard event.conversationChatID == chatID else { return }
-            if isBeforeInitialHistory, case .message(let message) = event, accepts(message),
+            guard event.conversationChatID == chatID, !accountWasReset,
+                historyCache?.accessRevoked(chatID) != true
+            else { return }
+            if (isBeforeInitialHistory || window.isSaved), case .message(let message) = event,
+                accepts(message),
                 lastEntries?.contains(where: {
                     guard case .pending(let pending) = $0 else { return false }
                     return pending.clientGeneratedID == message.clientGeneratedId
@@ -1641,7 +2311,17 @@ final class ConversationTimelineModel: ObservableObject {
             guard accepts(message),
                 replay || message.isDeleted || !deletedIDs.contains(message.id)
             else { return false }
-            if window.index(matching: message) != nil || deferredKey(matching: message) != nil {
+            let inWindow = window.index(matching: message) != nil
+            let deferred = inWindow ? nil : deferredKey(matching: message)
+            // A peer create is socket ingress; only own creates can come from local
+            // settlement. A thread's root is not a new arrival in that thread.
+            let showsSavedPeer = window.isSaved && state.live.followsLatest && state.newerSaved == nil
+                && message.sender.uid != currentUserID && message.replyRootId == threadID
+                && !message.isDeleted && !deletedIDs.contains(message.id) && !inWindow
+                && (savedBounds.map { message.id > $0.upperBound } ?? true)
+            let addedAtSavedTail = showsSavedPeer
+                && savedPeerTailKeys.insert(deferred ?? message.timelineStableKey).inserted
+            if inWindow || deferred != nil {
                 // Publication replaces an acknowledged M4A with canonical Opus
                 // through a create event, not messageUpdated. Merge only that
                 // one-way attachment transition: an unversioned duplicate create
@@ -1658,18 +2338,23 @@ final class ConversationTimelineModel: ObservableObject {
                         return existing.replacingAttachments(message.attachments)
                     }
                 }
+                return addedAtSavedTail
+            }
+            if window.isSaved, !showsSavedPeer,
+                !preHistoryAcknowledgementKeys.contains(message.timelineStableKey)
+            {
                 return false
             }
             let content = deletedIDs.contains(message.id) ? message.redactedForDeletion() : message
             let message = content.redactingReplyPreview(messageIDs: deletedIDs)
             let outcome: TimelineWindow.LiveInsertOutcome
-            if isBeforeInitialHistory && !replay {
+            if window.isSaved || (isBeforeInitialHistory && !replay) {
                 outcome = .deferred
             } else {
                 outcome = window.insertLive(message)
             }
             if outcome == .deferred { deferredCreates[message.timelineStableKey] = message }
-            return outcome == .appended
+            return outcome == .appended || addedAtSavedTail
         case .messageUpdated(let message):
             guard accepts(message) else { return false }
             mutateKnown(message) { existing in
@@ -1732,6 +2417,9 @@ final class ConversationTimelineModel: ObservableObject {
             let updated = mutation(existing)
             deferredCreates.removeValue(forKey: key)
             deferredCreates[updated.timelineStableKey] = updated
+            if updated.timelineStableKey != key, savedPeerTailKeys.remove(key) != nil {
+                savedPeerTailKeys.insert(updated.timelineStableKey)
+            }
         }
     }
 
@@ -1777,11 +2465,14 @@ final class ConversationTimelineModel: ObservableObject {
         let unreadCount = state.live.unreadCount
         let realtimeStatus = state.realtimeStatus
         window = TimelineWindow()
-        windowRevision &+= 1
+        savedBounds = nil
+        savedHidesMembership = false
+        historyCacheRevision = nil
         unreadBeforeMessageID = nil
         hasSentEntryRead = false
         deferredCreates.removeAll()
         preHistoryAcknowledgementKeys.removeAll()
+        savedPeerTailKeys.removeAll()
         canReuseLatestWindowAfterPendingChange = false
         deletedIDs = messageStore.deletedMessageIDs(chatID: chatID)
         membershipRefreshRequired = false
@@ -1790,31 +2481,44 @@ final class ConversationTimelineModel: ObservableObject {
         membershipRefreshAtLiveEdge = false
         state = ConversationTimelineState(realtimeStatus: realtimeStatus)
         state.live.unreadCount = unreadCount
+        resetViewportForReplacement()
+        publish(reset: true)
+    }
+
+    private func resetViewportForReplacement() {
+        windowRevision &+= 1
         pendingScroll = nil
         lastViewport = .empty
         bottomVisibleMessageDate = nil
         visibleAnchorID = nil
         viewportRevision = nil
-        publish(reset: true)
     }
 
-    private func invalidateRequests() {
+    private func invalidateRequests(keepingSavedRefreshRetryBudget: Bool = false) {
         canReuseLatestWindowAfterPendingChange = false
         cancelReadCandidate()
         cancelReactionDwell()
         readSendTask?.cancel()
         viewportRevision = nil
         generation &+= 1
+        savedRefreshRetryTask?.cancel()
+        savedRefreshRetryTask = nil
+        savedRefreshRetryDelay = nil
+        if !keepingSavedRefreshRetryBudget { savedRefreshRetryAttempt = 0 }
         initialTask?.cancel()
         initialTask = nil
         recoveryTask?.cancel()
         recoveryTask = nil
+        recoveryIsAutomatic = false
         olderTask?.cancel()
         newerTask?.cancel()
         olderTask = nil
         newerTask = nil
         state.older = .idle
         state.newer = .idle
+        if state.historyConnection == .refreshing {
+            state.historyConnection = canFetchHistory() ? nil : .offline
+        }
         for token in snapshotTokens { messageStore.endSnapshot(token) }
         snapshotTokens.removeAll()
     }
@@ -1833,19 +2537,26 @@ final class ConversationTimelineModel: ObservableObject {
         return liveEdgeQuery
     }
     private func rowID(forServerID id: MessageID) -> TimelineRowID? {
-        guard !deletedIDs.contains(id), let index = window.index(ofServerID: id),
-            !window.messages[index].isDeleted
-        else { return nil }
-        return .message(window.messages[index].timelineStableKey)
+        guard !deletedIDs.contains(id) else { return nil }
+        if let index = window.index(ofServerID: id), !window.messages[index].isDeleted {
+            return .message(window.messages[index].timelineStableKey)
+        }
+        if window.isSaved, !savedPeerTailKeys.isEmpty,
+            let message = deferredCreates.first(where: {
+                $0.value.id == id && !$0.value.isDeleted && savedPeerTailKeys.contains($0.key)
+            })?.value
+        {
+            return .message(message.timelineStableKey)
+        }
+        return nil
     }
 
     private func publish(
         animateFollowing: Bool = false, position: TimelineScrollIntent? = nil, reset: Bool = false
     ) {
         defer { synchronizeViewportPresentation() }
-        if state.live.pendingLiveCount != deferredCreates.count {
-            state.live.pendingLiveCount = deferredCreates.count
-        }
+        let pendingLiveCount = window.isSaved ? 0 : deferredCreates.count
+        if state.live.pendingLiveCount != pendingLiveCount { state.live.pendingLiveCount = pendingLiveCount }
         let entries = timelineEntries()
         scheduleLinkPreviewExpiry(in: entries)
         let changed = entries != lastEntries || reset
@@ -1912,9 +2623,13 @@ final class ConversationTimelineModel: ObservableObject {
     /// Confirmed messages stay in server order; unsubmitted work follows in FIFO order.
     private func timelineEntries() -> [ConversationTimelineEntry] {
         var confirmed = window.messages
-        if isBeforeInitialHistory {
-            // Acknowledgements that arrived before the first page are shown in place.
-            for (key, message) in deferredCreates where preHistoryAcknowledgementKeys.contains(key)
+        if (isBeforeInitialHistory || window.isSaved),
+            !preHistoryAcknowledgementKeys.isEmpty || !savedPeerTailKeys.isEmpty
+        {
+            // Project settlements and socket arrivals without turning saved rows into a live edge.
+            for (key, message) in deferredCreates where
+                (preHistoryAcknowledgementKeys.contains(key) || savedPeerTailKeys.contains(key))
+                && window.index(matching: message) == nil
             {
                 let index = confirmed.firstIndex { $0.id > message.id } ?? confirmed.count
                 confirmed.insert(message, at: index)
@@ -1925,18 +2640,31 @@ final class ConversationTimelineModel: ObservableObject {
         var entries: [ConversationTimelineEntry] = []
         entries.reserveCapacity(confirmed.count + pending.count)
         let now = Date()
+        let hidesMembership = isGroupChat
+            && ((window.isSaved && savedHidesMembership)
+                || messageStore.hidesMembershipMessages(chatID: chatID))
         for message in confirmed {
             // An ordinary ingress with the exact local identity cannot remove a durable row.
             if !pendingKeys.isEmpty, pendingKeys.contains(message.timelineStableKey) { continue }
-            let content =
-                !message.isDeleted && deletedIDs.contains(message.id)
+            var content = !message.isDeleted && deletedIDs.contains(message.id)
                 ? message.redactedForDeletion() : message
+            if hidesMembership, content.replyToMessage?.systemKind?.isMembership == true {
+                content = content.removingReplyPreview()
+            }
             entries.append(
                 .remote(
                     content.redactingReplyPreview(messageIDs: deletedIDs)
                         .projectingExpiredLinkPreviews(at: now)))
         }
-        for item in pending { entries.append(.pending(item)) }
+        for item in pending {
+            if hidesMembership, item.replyToMessage?.systemKind?.isMembership == true {
+                var redacted = item
+                redacted.replyToMessage = nil
+                entries.append(.pending(redacted))
+            } else {
+                entries.append(.pending(item))
+            }
+        }
         return entries
     }
 

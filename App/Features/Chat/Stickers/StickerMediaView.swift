@@ -1,4 +1,5 @@
 import ChahuaAPI
+import Combine
 import Kingfisher
 import SwiftUI
 import WebKit
@@ -101,6 +102,10 @@ final class StickerMediaSurfaceView: StickerNativeView {
     private var video: StickerVideoPlayback?
     private var media: MessageStickerMediaResponse?
     private var mediaContext: AppMediaContext?
+    private var loadPolicy = MediaLoadPolicy.cacheOnly
+    private var policyObservation: AnyCancellable?
+    private var videoPosterRequested = false
+    private var mediaGeneration: UInt64 = 0
     private var emoji = ""
     private var displayScale: CGFloat = 1
     private var imagePixels = CGSize.zero
@@ -179,10 +184,14 @@ final class StickerMediaSurfaceView: StickerNativeView {
             video?.stop()
             video?.view.removeFromSuperview()
             video = nil
+            policyObservation = nil
+            videoPosterRequested = false
+            mediaGeneration &+= 1
             imagePixels = .zero
             failure = nil
             videoLoading = false
             hasVideoPoster = false
+            loadPolicy = .cacheOnly
             #if os(macOS)
                 toolTip = nil
             #endif
@@ -196,7 +205,9 @@ final class StickerMediaSurfaceView: StickerNativeView {
         self.insetsArtwork = insetsArtwork
         let type = media.contentType.lowercased()
         isVideo = type.hasPrefix("video/")
-        imageView.isHidden = failure != nil || (isVideo && (!hasVideoPoster || !videoLoading))
+        imageView.isHidden =
+            failure != nil
+            || (isVideo && (!hasVideoPoster || (!videoLoading && video?.view.isHidden == false)))
         if changed {
             guard let url = URL(string: media.url),
                 ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil
@@ -205,13 +216,22 @@ final class StickerMediaSurfaceView: StickerNativeView {
                 return
             }
             if isVideo {
-                let cache = mediaContext?.cache ?? .default
+                guard let mediaContext else {
+                    setStatus(AppLanguage.localized("Media not downloaded"))
+                    updateAccessibility()
+                    return
+                }
+                let cache = mediaContext.cache
+                loadPolicy = mediaContext.loadPolicy
+                policyObservation = mediaContext.loadPolicyChanges.sink { [weak self] policy in
+                    self?.applyLoadPolicy(policy)
+                }
                 if let poster = cache.retrieveImageInMemoryCache(forKey: Self.posterKey(url)) {
                     installVideoPoster(poster)
                 }
                 let playback = StickerVideoPlayback(
                     url: url, contentType: type,
-                    dataStore: mediaContext?.stickerVideoDataStore ?? .nonPersistent())
+                    dataStore: mediaContext.stickerVideoDataStore)
                 playback.onStatus = { [weak self] error, loading in
                     guard let self, self.failure == nil else { return }
                     self.videoLoading = loading
@@ -224,10 +244,12 @@ final class StickerMediaSurfaceView: StickerNativeView {
                         self.updateAccessibility()
                     }
                 }
-                if !hasVideoPoster {
-                    playback.onPoster = { image in
-                        cache.store(image, forKey: Self.posterKey(url), toDisk: false)
+                playback.onPoster = { [weak self] image in
+                    guard let self, self.loadPolicy.allowsNetwork(), !self.hasVideoPoster else {
+                        return
                     }
+                    cache.store(image, forKey: Self.posterKey(url))
+                    self.installVideoPoster(image)
                 }
                 video = playback
                 addSubview(playback.view)
@@ -236,7 +258,8 @@ final class StickerMediaSurfaceView: StickerNativeView {
                 addSubview(statusLabel)
                 progress.removeFromSuperview()
                 addSubview(progress)
-                videoLoading = true
+                videoLoading = loadPolicy.allowsNetwork()
+                playback.view.isHidden = !videoLoading
             } else if !type.hasPrefix("image/") {
                 showFailure(
                     AppLanguage.localized("Unsupported sticker media type: \(media.contentType)"))
@@ -259,6 +282,9 @@ final class StickerMediaSurfaceView: StickerNativeView {
         video?.stop()
         video?.view.removeFromSuperview()
         video = nil
+        policyObservation = nil
+        videoPosterRequested = false
+        mediaGeneration &+= 1
         media = nil
         mediaContext = nil
         failure = nil
@@ -378,8 +404,48 @@ final class StickerMediaSurfaceView: StickerNativeView {
                 && NSApp.isActive
         #endif
         imageView.setVisible(visible && !isVideo && failure == nil)
-        video?.setVisible(visible && failure == nil)
+        if isVideo, let video {
+            let allowsNetwork = loadPolicy.allowsNetwork()
+            if visible { restoreVideoPoster() }
+            video.setVisible(visible && failure == nil && allowsNetwork)
+            if failure == nil, !allowsNetwork {
+                setStatus(hasVideoPoster ? nil : AppLanguage.localized("Media not downloaded"))
+            }
+        }
         updateProgress(visible: visible)
+    }
+
+    private func applyLoadPolicy(_ policy: MediaLoadPolicy) {
+        let previouslyAllowed = loadPolicy.allowsNetwork()
+        loadPolicy = policy
+        let allowsNetwork = policy.allowsNetwork()
+        guard previouslyAllowed != allowsNetwork, let video else { return }
+        if !allowsNetwork { video.stop() }
+        video.view.isHidden = !allowsNetwork
+        videoLoading = allowsNetwork
+        failure = nil
+        imageView.isHidden = !hasVideoPoster
+        setStatus(nil)
+        refreshVisibility()
+        updateAccessibility()
+    }
+
+    private func restoreVideoPoster() {
+        guard !hasVideoPoster, !videoPosterRequested, let cache = mediaContext?.cache,
+            let media, let url = URL(string: media.url)
+        else { return }
+        videoPosterRequested = true
+        let generation = mediaGeneration
+        cache.retrieveImage(forKey: Self.posterKey(url), options: .init(nil)) { [weak self] result in
+            Task { @MainActor [weak self] in
+                guard let self, self.mediaGeneration == generation,
+                    let image = try? result.get().image
+                else { return }
+                self.installVideoPoster(image)
+                self.refreshVisibility()
+                self.updateAccessibility()
+            }
+        }
     }
 
     private func layoutMedia() {
@@ -445,7 +511,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
         hasVideoPoster = true
         imageView.configureLocal(
             image: pixels, contentMode: .fit, showsBlurredBackdrop: false, isLoading: false)
-        imageView.isHidden = false
+        imageView.isHidden = failure != nil || (!videoLoading && video?.view.isHidden == false)
     }
 
     private func updateProgress(visible: Bool) {
@@ -470,16 +536,20 @@ final class StickerMediaSurfaceView: StickerNativeView {
         let label =
             emoji.isEmpty
             ? AppLanguage.localized("Sticker") : AppLanguage.localized("Sticker \(emoji)")
+        let unavailable =
+            isVideo && !loadPolicy.allowsNetwork() && !hasVideoPoster
+            ? AppLanguage.localized("Media not downloaded") : nil
         #if os(iOS)
-            accessibilityLabel = label
             accessibilityValue =
                 failure
+                ?? unavailable
                 ?? (videoLoading && !hasVideoPoster
                     ? AppLanguage.localized("Loading sticker") : nil)
         #else
             setAccessibilityLabel(label)
             setAccessibilityValue(
                 failure
+                    ?? unavailable
                     ?? (videoLoading && !hasVideoPoster
                         ? AppLanguage.localized("Loading sticker") : nil))
         #endif

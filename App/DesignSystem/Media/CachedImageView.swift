@@ -4,33 +4,48 @@ import SwiftUI
 struct CachedImageView<Content: View>: View {
     let url: URL?
     var thumbnailPixelSize: CGSize? = nil
-    var cancelOnDisappear = false
     @ViewBuilder var content: (RemoteImagePhase) -> Content
     @Environment(\.mediaContext) private var mediaContext
 
     var body: some View {
-        if let url {
-            if let image = cachedImage(for: url) {
-                content(.success(swiftUIImage(image)))
-            } else {
-                tracedImage(for: url)
-                    .setProcessor(processor)
-                    .scaleFactor(1)
-                    .targetCache(mediaContext?.cache ?? .default)
-                    .downloader(mediaContext?.downloader ?? .default)
-                    .cacheOriginalImage()
-                    .cancelOnDisappear(cancelOnDisappear)
-                    .placeholder { content(.empty) }
-                    .onFailureView { content(.failure) }
-                    .contentConfigure { image, isLoaded in
-                        if isLoaded {
-                            content(.success(image))
-                        }
-                    }
+        if let url, let mediaContext {
+            MediaPolicyView(context: mediaContext) { policy in
+                image(for: url, context: mediaContext, cacheOnly: !policy.allowsNetwork())
             }
         } else {
-            content(.empty)
+            content(url == nil ? .empty : .failure)
         }
+    }
+
+    @ViewBuilder private func image(
+        for url: URL, context: AppMediaContext, cacheOnly: Bool
+    ) -> some View {
+        if let image = cachedImage(for: url, cache: context.cache) {
+            content(.success(swiftUIImage(image)))
+        } else {
+            tracedImage(for: url)
+                .setProcessor(processor)
+                .scaleFactor(1)
+                .targetCache(context.cache)
+                .downloader(context.downloader)
+                .onlyFromCache(cacheOnly)
+                .cacheOriginalImage()
+                .cancelOnDisappear(true)
+                .placeholder { content(cacheOnly ? .failure : .empty) }
+                .onFailureView { content(.failure) }
+                .contentConfigure { image, isLoaded in
+                    if isLoaded {
+                        content(.success(image))
+                    }
+                }
+                .id(ImageRequest(url: url, context: ObjectIdentifier(context), cacheOnly: cacheOnly))
+        }
+    }
+
+    private struct ImageRequest: Hashable {
+        let url: URL
+        let context: ObjectIdentifier
+        let cacheOnly: Bool
     }
 
     private var processor: any ImageProcessor {
@@ -53,10 +68,10 @@ struct CachedImageView<Content: View>: View {
         }
     }
 
-    private func cachedImage(for url: URL) -> KFCrossPlatformImage? {
+    private func cachedImage(for url: URL, cache: ImageCache) -> KFCrossPlatformImage? {
         let trace = ScrollPerformanceTrace.begin("Image.MemoryLookup")
         defer { ScrollPerformanceTrace.end("Image.MemoryLookup", trace) }
-        let image = (mediaContext?.cache ?? .default).retrieveImageInMemoryCache(
+        let image = cache.retrieveImageInMemoryCache(
             forKey: url.absoluteString,
             options: [.processor(processor), .scaleFactor(1)]
         )

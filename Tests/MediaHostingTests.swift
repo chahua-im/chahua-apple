@@ -1,4 +1,5 @@
 import ChahuaAPI
+import Combine
 import CoreGraphics
 import ImageIO
 import Kingfisher
@@ -86,6 +87,96 @@ final class MediaHostingTests: XCTestCase {
         XCTAssertEqual(model.diskStorageSize, 0)
         let otherAccountBytes = try await second.diskStorageSize
         XCTAssertGreaterThan(otherAccountBytes, 0)
+    }
+
+    func testLimitedImageLoadRequiresTapAndOfflinePlaybackUsesOnlyAccountCache() async throws {
+        let data = try makeMediaPNG(red: 255, green: 0, blue: 0)
+        let fixture = MediaImageFixture(data: data)
+        MediaImageURLProtocol.install(fixture)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer {
+            MediaImageURLProtocol.remove(fixture)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let downloader = ImageDownloader(name: UUID().uuidString)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MediaImageURLProtocol.self]
+        downloader.sessionConfiguration = configuration
+        let cache = try ImageCache(name: "first", cacheDirectoryURL: directory)
+        let connectivity = ConnectivityMonitor(monitorNetwork: false)
+        connectivity.update(.init(status: .satisfied, isExpensive: true))
+        let context = AppMediaContext(cache: cache, downloader: downloader, connectivity: connectivity)
+        let item = MessageImageItem(
+            id: "attachment", url: fixture.url, contentType: "image/png",
+            fileName: "attachment.png", width: 16, height: 16)
+        let loader = ImageDetailImageLoader()
+        let unavailable = expectation(description: "Automatic full image fetch was suppressed")
+        let failure = loader.$failure.sink {
+            if $0 == .notDownloaded { unavailable.fulfill() }
+        }
+        loader.load(item, mediaContext: context)
+        await fulfillment(of: [unavailable], timeout: 2)
+        failure.cancel()
+        XCTAssertFalse(loader.isLoading)
+        XCTAssertEqual(fixture.requestCount, 0)
+
+        let opened = expectation(description: "An explicit open fetched the full image")
+        let loaded = loader.$image.sink { if $0 != nil { opened.fulfill() } }
+        loader.load(item, mediaContext: context, userInitiated: true)
+        await fulfillment(of: [opened], timeout: 2)
+        loaded.cancel()
+        XCTAssertEqual(fixture.requestCount, 1)
+
+        try await cache.storeToDisk(data, forKey: fixture.url.absoluteString)
+        XCTAssertTrue(cache.diskStorage.isCached(
+            forKey: fixture.url.absoluteString,
+            referenceDate: Date.now.addingTimeInterval(365 * 24 * 60 * 60)))
+        cache.clearMemoryCache()
+        connectivity.update(.init(status: .unsatisfied))
+        let cachedLoader = ImageDetailImageLoader()
+        let cached = expectation(description: "The downloaded image was opened from disk")
+        let cachedImage = cachedLoader.$image.sink { if $0 != nil { cached.fulfill() } }
+        cachedLoader.load(item, mediaContext: context, userInitiated: true)
+        await fulfillment(of: [cached], timeout: 2)
+        cachedImage.cancel()
+
+        let otherCache = try ImageCache(name: "second", cacheDirectoryURL: directory)
+        let otherContext = AppMediaContext(
+            cache: otherCache, downloader: downloader, connectivity: connectivity)
+        let otherLoader = ImageDetailImageLoader()
+        let isolated = expectation(description: "Another account did not reuse the image")
+        let otherFailure = otherLoader.$failure.sink {
+            if $0 == .notDownloaded { isolated.fulfill() }
+        }
+        otherLoader.load(item, mediaContext: otherContext, userInitiated: true)
+        await fulfillment(of: [isolated], timeout: 2)
+        otherFailure.cancel()
+        XCTAssertFalse(otherLoader.isLoading)
+        XCTAssertNil(otherLoader.image)
+        XCTAssertEqual(fixture.requestCount, 1)
+    }
+
+    func testVideoCacheOnlyMissDoesNotContactTheServer() async throws {
+        let fixture = MediaImageFixture(data: Data())
+        MediaImageURLProtocol.install(fixture)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        defer {
+            MediaImageURLProtocol.remove(fixture)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MediaImageURLProtocol.self]
+        let cache = VideoFileCache(directory: directory, configuration: configuration)
+        do {
+            _ = try await cache.file(for: fixture.url, allowsNetwork: false) { _ in
+                XCTFail("A cache-only lookup must not start progress")
+            }
+            XCTFail("The empty cache must not provide a lease")
+        } catch VideoFileCache.CacheMiss.notDownloaded {
+            XCTAssertEqual(fixture.requestCount, 0)
+        }
     }
 
     func testPreparingGeometryDoesNotAcquireRemoteAvatars() async throws {

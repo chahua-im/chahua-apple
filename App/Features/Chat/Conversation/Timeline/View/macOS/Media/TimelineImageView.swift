@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import Combine
     import CoreImage
     import Kingfisher
 
@@ -16,6 +17,7 @@
             let context: ObjectIdentifier?
             let animates: Bool
             let sourceKind: SourceKind
+            let isPreview: Bool
         }
 
         private let foreground = NSImageView(frame: .zero)
@@ -24,8 +26,11 @@
         private let backdropCover = CALayer()
         private let progress = NSProgressIndicator(frame: .zero)
         private let errorImage = NSImageView(frame: .zero)
+        private var unavailableLabel: NSTextField?
         private var requestKey: RequestKey?
         private var mediaContext: AppMediaContext?
+        private var loadPolicy = MediaLoadPolicy.full
+        private var policyObservation: AnyCancellable?
         private var contentMode: ContentMode = .fit
         private var showsBackdrop = false
         private var requestedVisible = false
@@ -106,7 +111,8 @@
             showsBlurredBackdrop: Bool,
             thumbnailPixelSize: CGSize,
             mediaContext: AppMediaContext?,
-            sourceKind: SourceKind = .image
+            sourceKind: SourceKind = .image,
+            isPreview: Bool = false
         ) {
             let requestedPixels =
                 sourceKind == .videoPoster ? VideoPoster.pixelSize : thumbnailPixelSize
@@ -114,15 +120,17 @@
                 width: max(1, requestedPixels.width), height: max(1, requestedPixels.height))
             let key = RequestKey(
                 url: url, pixels: pixels, context: mediaContext.map(ObjectIdentifier.init),
-                animates: animates && sourceKind == .image, sourceKind: sourceKind)
+                animates: animates && sourceKind == .image, sourceKind: sourceKind,
+                isPreview: isPreview)
             if key != requestKey || isLocal {
                 let sameMedia =
                     !isLocal && url != nil && requestKey?.url == url
                     && requestKey?.context == key.context
                     && requestKey?.sourceKind == sourceKind
+                    && requestKey?.isPreview == isPreview
                 if sameMedia {
                     cancelRequests(preservingImages: true)
-                    requestFinished = animates && requestKey?.animates == true && requestFinished
+                    requestFinished = animates && requestKey?.animates == true && requestFinished && !failed
                     if !animates {
                         animatedForeground?.image = nil
                         animatedForeground?.isHidden = true
@@ -133,8 +141,14 @@
                 }
                 requestKey = key
                 self.mediaContext = mediaContext
+                loadPolicy = mediaContext?.loadPolicy ?? .cacheOnly
+                if !sameMedia {
+                    policyObservation = mediaContext?.loadPolicyChanges.sink { [weak self] policy in
+                        self?.applyLoadPolicy(policy)
+                    }
+                }
                 prepareSource(for: key)
-                failed = failed || url == nil
+                failed = failed || url == nil || mediaContext == nil
                 restoreFromMemory()
             } else {
                 self.mediaContext = mediaContext
@@ -249,8 +263,12 @@
                     for: animatedForeground.image?.size ?? decodedImage?.size ?? .zero)
             }
             progress.frame = CGRect(x: bounds.midX - 8, y: bounds.midY - 8, width: 16, height: 16)
-            errorImage.frame = CGRect(
-                x: bounds.midX - 12, y: bounds.midY - 12, width: 24, height: 24)
+            if requestKey?.sourceKind == .videoPoster {
+                errorImage.frame = CGRect(x: 6, y: 6, width: 16, height: 16)
+            } else {
+                errorImage.frame = CGRect(
+                    x: bounds.midX - 12, y: bounds.midY - 12, width: 24, height: 24)
+            }
             CATransaction.commit()
             refreshVisibility()
         }
@@ -268,12 +286,31 @@
                 width: result.width, height: result.height)
         }
 
-        private func imageOptions(for key: RequestKey) -> KingfisherOptionsInfo {
+        private var allowsNetwork: Bool {
+            loadPolicy.allowsNetwork(isPreview: requestKey?.isPreview == true)
+        }
+
+        private func applyLoadPolicy(_ policy: MediaLoadPolicy) {
+            let previous = allowsNetwork
+            loadPolicy = policy
+            guard previous != allowsNetwork, requestKey?.url != nil else { return }
+            if loading { cancelRequests(preservingImages: true) }
+            if failed {
+                failed = false
+                requestFinished = false
+            }
+            refreshVisibility()
+        }
+
+        private func imageOptions(
+            for key: RequestKey, context: AppMediaContext
+        ) -> KingfisherOptionsInfo {
             var options: KingfisherOptionsInfo = [
-                .scaleFactor(1), .targetCache(mediaContext?.cache ?? .default),
-                .downloader(mediaContext?.downloader ?? .default), .cacheOriginalImage,
+                .scaleFactor(1), .targetCache(context.cache),
+                .downloader(context.downloader), .cacheOriginalImage,
                 .callbackQueue(.mainCurrentOrAsync),
             ]
+            if !allowsNetwork { options.append(.onlyFromCache) }
             if key.animates {
                 let processor = TimelineAnimatedImageProcessor()
                 options += [.processor(processor), .cacheSerializer(processor)]
@@ -298,13 +335,15 @@
         }
 
         private func restoreFromMemory() {
-            guard let key = requestKey, let url = key.url, let source = requestSource else {
+            guard let key = requestKey, let url = key.url, let source = requestSource,
+                let mediaContext
+            else {
                 return
             }
-            let cache = mediaContext?.cache ?? .default
+            let cache = mediaContext.cache
             if !requestFinished,
                 let image = cache.retrieveImageInMemoryCache(
-                    forKey: source.cacheKey, options: imageOptions(for: key)
+                    forKey: source.cacheKey, options: imageOptions(for: key, context: mediaContext)
                 ), installImage(image, animates: key.animates)
             {
                 requestFinished = true
@@ -327,7 +366,7 @@
 
         private func startMissingRequests() {
             guard active, !isLocal, !loading, !failed, !requestFinished,
-                let key = requestKey, key.url != nil
+                let key = requestKey, key.url != nil, let mediaContext
             else { return }
             restoreFromMemory()
             guard !requestFinished else { return }
@@ -341,7 +380,7 @@
             // image supplies both the static frame and lazy animation, so a second
             // representation's failure cannot erase a successfully decoded frame.
             let task = KingfisherManager.shared.retrieveImage(
-                with: source, options: imageOptions(for: key),
+                with: source, options: imageOptions(for: key, context: mediaContext),
                 downloadTaskUpdated: { [weak self] task in
                     Task { @MainActor [weak self] in
                         guard let self, self.generation == current, self.requestKey == key,
@@ -367,7 +406,7 @@
                         case .failure:
                             self.failed = true
                         }
-                        if self.failed && self.decodedCGImage == nil {
+                        if self.failed && self.decodedCGImage == nil && self.allowsNetwork {
                             self.onLoadFailure?(
                                 AppLanguage.localized("Image download or decoding failed."))
                         }
@@ -423,8 +462,8 @@
             foreground.image = firstFrame
             decodedCGImage = pixels
             failed = false
-            if let key = requestKey, key.sourceKind == .image, let url = key.url {
-                (mediaContext?.cache ?? .default).store(
+            if let key = requestKey, key.sourceKind == .image, let url = key.url, let mediaContext {
+                mediaContext.cache.store(
                     firstFrame, forKey: TimelineImageMemory.firstFrameKey(for: url), toDisk: false
                 )
             }
@@ -454,16 +493,42 @@
                 reportedImageAvailability = hasImage
                 onImageAvailabilityChanged?(hasImage)
             }
-            errorImage.isHidden = !showsPlaceholderChrome || !failed || hasImage
+            let showUnavailable = showsPlaceholderChrome && failed && !hasImage
+            let video = requestKey?.sourceKind == .videoPoster
+            let showText =
+                showUnavailable && !isLocal && !allowsNetwork
+                && bounds.width >= 96 && bounds.height >= (video ? 94 : 44)
+            if showText {
+                let label = unavailableLabel ?? makeUnavailableLabel()
+                label.textColor = showsBackdrop ? .white : .secondaryLabelColor
+                label.frame = CGRect(
+                    x: 4, y: bounds.midY + (video ? 23 : -14),
+                    width: bounds.width - 8, height: video ? 24 : 28)
+                label.isHidden = false
+            } else {
+                unavailableLabel?.isHidden = true
+            }
+            errorImage.isHidden = !showUnavailable || showText
             let showProgress =
                 showsPlaceholderChrome && !hasImage && !failed
-                && (requestKey?.url != nil || loading)
+                && (isLocal ? loading : allowsNetwork && requestKey?.url != nil)
             progress.isHidden = !showProgress || !active
             if showProgress && active {
                 progress.startAnimation(nil)
             } else {
                 progress.stopAnimation(nil)
             }
+        }
+
+        private func makeUnavailableLabel() -> NSTextField {
+            let label = NSTextField(wrappingLabelWithString: AppLanguage.localized("Media not downloaded"))
+            label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            label.alignment = .center
+            label.maximumNumberOfLines = 2
+            label.setAccessibilityElement(false)
+            unavailableLabel = label
+            addSubview(label)
+            return label
         }
 
         private func cancelRequests(preservingImages: Bool) {
@@ -484,6 +549,7 @@
 
         private func clearPayload() {
             cancelRequests(preservingImages: false)
+            policyObservation = nil
             cancelBackdrop()
             requestKey = nil
             requestSource = nil

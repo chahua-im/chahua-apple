@@ -1,3 +1,4 @@
+import Combine
 import CryptoKit
 import Foundation
 import ImageIO
@@ -11,23 +12,53 @@ import WebKit
     import UIKit
 #endif
 
+/// A thumbnail generated locally still requires original bytes over the network.
+/// Only a separate, bounded preview URL may be fetched automatically on a limited path.
+nonisolated enum MediaLoadPolicy: Equatable, Sendable {
+    case full, previewsOnly, cacheOnly
+
+    init(_ snapshot: ConnectivitySnapshot) {
+        if !snapshot.canAttempt {
+            self = .cacheOnly
+        } else if snapshot.allowsAutomaticFullMedia {
+            self = .full
+        } else {
+            self = .previewsOnly
+        }
+    }
+
+    func allowsNetwork(isPreview: Bool = false, userInitiated: Bool = false) -> Bool {
+        self == .full || (self == .previewsOnly && (isPreview || userInitiated))
+    }
+}
+
 @MainActor
-final class AppMediaContext {
+final class AppMediaContext: ObservableObject {
     let cache: ImageCache
     let downloader: ImageDownloader
     let videoCache: VideoFileCache
+    private let connectivity: ConnectivityMonitor?
+    @Published private(set) var loadPolicy: MediaLoadPolicy
+    private var networkAuthorized = true
+    private var connectivityObservation: AnyCancellable?
     lazy var stickerVideoDataStore = WKWebsiteDataStore.nonPersistent()
 
-    convenience init(namespace: String) {
+    convenience init(namespace: String, connectivity: ConnectivityMonitor? = nil) {
+        let name = Self.cacheName(namespace: namespace)
         self.init(
-            cache: ImageCache(name: Self.cacheName(namespace: namespace)),
-            downloader: .default
+            cache: ImageCache(name: name),
+            downloader: ImageDownloader(name: name),
+            connectivity: connectivity
         )
     }
 
-    init(cache: ImageCache, downloader: ImageDownloader) {
+    init(
+        cache: ImageCache, downloader: ImageDownloader, connectivity: ConnectivityMonitor? = nil
+    ) {
         self.cache = cache
         self.downloader = downloader
+        self.connectivity = connectivity
+        loadPolicy = connectivity.map { MediaLoadPolicy($0.snapshot) } ?? .full
         // A sibling of Kingfisher's directory retains its exact injected/account namespace
         // without letting Kingfisher's cleanup remove a movie currently owned by AVPlayer.
         videoCache = VideoFileCache(
@@ -36,6 +67,25 @@ final class AppMediaContext {
         cache.memoryStorage.config.totalCostLimit = 64 * 1_024 * 1_024
         cache.memoryStorage.config.countLimit = 256
         cache.diskStorage.config.sizeLimit = 512 * 1_024 * 1_024
+        cache.memoryStorage.config.expiration = .never
+        cache.diskStorage.config.expiration = .never
+        connectivityObservation = connectivity?.$snapshot.dropFirst().sink { [weak self] snapshot in
+            self?.updateLoadPolicy(from: MediaLoadPolicy(snapshot))
+        }
+    }
+
+    func setNetworkAuthorized(_ authorized: Bool) {
+        networkAuthorized = authorized
+        updateLoadPolicy(from: connectivity.map { MediaLoadPolicy($0.snapshot) } ?? .full)
+    }
+
+    var loadPolicyChanges: AnyPublisher<MediaLoadPolicy, Never> {
+        $loadPolicy.dropFirst().eraseToAnyPublisher()
+    }
+
+    private func updateLoadPolicy(from pathPolicy: MediaLoadPolicy) {
+        let policy = networkAuthorized ? pathPolicy : .cacheOnly
+        if loadPolicy != policy { loadPolicy = policy }
     }
 
     func clearMemoryCache() {
@@ -48,6 +98,13 @@ final class AppMediaContext {
             .joined()
         return "app.chahua.chat.images.\(digest)"
     }
+}
+
+struct MediaPolicyView<Content: View>: View {
+    @ObservedObject var context: AppMediaContext
+    @ViewBuilder let content: (MediaLoadPolicy) -> Content
+
+    var body: some View { content(context.loadPolicy) }
 }
 
 /// Uses the account's existing bounded cache, not a second decoded-frame cache.

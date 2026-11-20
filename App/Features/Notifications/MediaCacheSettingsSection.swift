@@ -3,13 +3,37 @@ import SwiftUI
 struct MediaCacheSettingsSection: View {
     @StateObject private var model: MediaCacheSettingsModel
     @State private var confirmsClear = false
+    @State private var confirmsHistoryClear = false
 
-    init(context: AppMediaContext) {
-        _model = StateObject(wrappedValue: MediaCacheSettingsModel(mediaContext: context))
+    init(context: AppMediaContext, historyCache: AccountHistoryCache) {
+        _model = StateObject(wrappedValue: MediaCacheSettingsModel(mediaContext: context, historyCache: historyCache))
     }
 
     var body: some View {
         Group {
+            LabeledContent("Message data") {
+                if let size = model.messageStorageSize {
+                    Text(ByteCountFormatter.string(fromByteCount: size, countStyle: .file))
+                        .monospacedDigit()
+                } else {
+                    Text("—")
+                }
+            }
+            .task { await model.refreshMessageSize() }
+            Button("Clear Message History", role: .destructive) { confirmsHistoryClear = true }
+                .disabled(model.isClearingMessages)
+                .confirmationDialog("Remove downloaded messages?", isPresented: $confirmsHistoryClear) {
+                    Button("Clear Message History", role: .destructive) { Task { await model.clearMessages() } }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Downloaded conversations will be removed from this device. Drafts and unsent messages are kept.")
+                }
+            if model.isClearingMessages {
+                ProgressView("Clearing message history…").controlSize(.small)
+            }
+            if let error = model.messageError {
+                Text(error).font(.footnote).foregroundStyle(.red)
+            }
             LabeledContent("Cached images and media") {
                 if model.isRefreshing {
                     ProgressView().controlSize(.small)

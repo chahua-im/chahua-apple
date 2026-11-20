@@ -15,6 +15,8 @@ enum AuthSessionState {
     case restorationFailed(AuthStartupFailure)
 }
 
+enum SessionValidation: Equatable { case localOnly, verified }
+
 private enum AuthenticationAttemptError: Error {
     case timedOut, invalidCredentials
 }
@@ -25,7 +27,6 @@ final class AuthSessionModel: ObservableObject {
         // Bind/clear dependent stores before authentication invalidates the view tree.
         // A $state sink runs after objectWillChange has already begun that invalidation.
         willSet { willTransitionSession?(newValue) }
-        didSet { stateGeneration &+= 1 }
     }
     @Published private(set) var validationMessage: LocalizedStringKey?
     @Published private(set) var isSubmitting = false
@@ -33,28 +34,36 @@ final class AuthSessionModel: ObservableObject {
     @Published var signOutError: LocalizedStringKey?
     var prepareForSignOut: (() async throws -> Void)?
     var willTransitionSession: ((AuthSessionState) -> Void)?
+    @Published private(set) var sessionValidation: SessionValidation = .localOnly
 
-    private let apiClient: any ChahuaAPIClient
+    private let apiClient: any SessionAuthenticating
     private let credentialLoginClient: any CredentialLoginProviding
-    private let tokenStorage: any SessionTokenStorage
+    private let credentials: SessionCredentialWriter
+    private let baseURL: String
+    private var credentialGeneration = UUID()
+    private var currentToken: String?
+    private var validationRetry: Task<Void, Never>?
+    private var validationFailures = 0
+    private var networkOpportunity = true
     private var bootstrapTask: Task<Void, Never>?
     private var bootstrapID: UUID?
     private var slowTask: Task<Void, Never>?
-    private var stateGeneration = 0
 
     private let logger = Logger(subsystem: "app.chahua.chat", category: "authentication")
 
     init(
-        apiClient: any ChahuaAPIClient,
+        apiClient: any SessionAuthenticating,
         credentialLoginClient: any CredentialLoginProviding,
-        tokenStorage: any SessionTokenStorage
+        tokenStorage: any SessionTokenStorage,
+        baseURL: String = "injected"
     ) {
         self.apiClient = apiClient
         self.credentialLoginClient = credentialLoginClient
-        self.tokenStorage = tokenStorage
+        self.baseURL = baseURL
+        credentials = SessionCredentialWriter(storage: tokenStorage, baseURL: baseURL)
     }
 
-    func bootstrap() {
+    func bootstrap(allowStalePath: Bool = false) {
         guard bootstrapTask == nil, !isSubmitting else { return }
         let id = UUID()
         bootstrapID = id
@@ -67,49 +76,165 @@ final class AuthSessionModel: ObservableObject {
                     stopSlowTimer()
                 }
             }
-            await restore(id: id)
+            await restore(id: id, allowStalePath: allowStalePath)
         }
     }
 
     func retry() {
-        bootstrapTask?.cancel()
-        bootstrapTask = nil
-        bootstrapID = nil
-        bootstrap()
+        validationRetry?.cancel()
+        validationRetry = nil
+        if case .authenticated = state {
+            guard sessionValidation == .localOnly, bootstrapTask == nil else { return }
+        } else {
+            bootstrapTask?.cancel()
+            bootstrapTask = nil
+            bootstrapID = nil
+        }
+        bootstrap(allowStalePath: true)
     }
 
-    private func restore(id: UUID) async {
-        let priorState = state
-        validationMessage = nil
-        state = .bootstrapping
-        startSlowTimer()
+    func retryValidationIfNeeded() {
+        guard networkOpportunity, bootstrapTask == nil, !isSubmitting else { return }
+        switch state {
+        case .authenticated where sessionValidation == .localOnly:
+            validationRetry?.cancel()
+            validationRetry = nil
+            bootstrap()
+        case .restorationFailed:
+            bootstrap()
+        default:
+            break
+        }
+    }
+
+    func setNetworkOpportunity(_ available: Bool) {
+        networkOpportunity = available
+    }
+
+    /// A system refresh joins the same validation as foreground launch. An
+    /// authenticated shell opened from disk is not a dispatch credential.
+    func activateForBackground() async -> Int32? {
+        guard !isSubmitting, !Task.isCancelled else { return nil }
+        if bootstrapTask == nil {
+            if case .bootstrapping = state { bootstrap() }
+            else { retryValidationIfNeeded() }
+        }
+        await bootstrapTask?.value
+        guard !isSubmitting, !Task.isCancelled, sessionValidation == .verified,
+            case .authenticated(let profile) = state
+        else { return nil }
+        return profile.uid
+    }
+
+    private func restore(id: UUID, allowStalePath: Bool) async {
+        let locallyOpen: Bool
+        if case .authenticated = state { locallyOpen = true } else { locallyOpen = false }
+        if !locallyOpen {
+            validationMessage = nil
+            state = .bootstrapping
+            startSlowTimer()
+        }
         do {
-            let profile = try await withAuthenticationDeadline { [apiClient, tokenStorage] in
-                guard let storedToken = try await tokenStorage.loadToken() else {
-                    return Optional<MeResponse>.none
+            if !locallyOpen || currentToken == nil {
+                let (token, binding) = try await credentials.load()
+                try checkBootstrap(id)
+                guard let token else {
+                    state = .signedOut(.initial)
+                    return
                 }
-                return try await apiClient.authenticate(candidateJWT: storedToken)
+                await install(token)
+                try checkBootstrap(id)
+                if let binding, binding.matches(baseURL: baseURL, token: token) {
+                    sessionValidation = .localOnly
+                    state = .authenticated(binding.profile)
+                    stopSlowTimer()
+                }
             }
-            try Task.checkCancellation()
-            guard bootstrapID == id else { return }
-            if let profile {
+            guard networkOpportunity || allowStalePath else {
+                if case .bootstrapping = state { state = .restorationFailed(.network) }
+                return
+            }
+            let profile = try await withAuthenticationDeadline { [apiClient] in try await apiClient.me() }
+            try checkBootstrap(id)
+            guard let token = currentToken else { throw CancellationError() }
+            try await credentials.save(token, profile: profile, replacing: token)
+            try checkBootstrap(id)
+            if case .authenticated(let cached) = state, cached.uid != profile.uid {
+                // Fence the old stores before this token can authorize any
+                // feature request as a different account.
                 state = .authenticated(profile)
-            } else {
-                state = .signedOut(.initial)
             }
+            try await apiClient.authorizeStoredSession(expectedToken: token)
+            try checkBootstrap(id)
+            validationFailures = 0
+            sessionValidation = .verified
+            state = .authenticated(profile)
         } catch is CancellationError {
-            if bootstrapID == id { state = priorState }
         } catch APIError.invalidToken {
             guard bootstrapID == id else { return }
+            isSubmitting = true
+            defer { isSubmitting = false }
             logger.notice("Session restoration rejected an invalid credential")
-            try? await tokenStorage.deleteToken()
-            guard bootstrapID == id else { return }
-            state = .signedOut(.invalidOrRevoked)
+            await invalidate(reason: .invalidOrRevoked)
         } catch {
             guard bootstrapID == id else { return }
             logFailure(operation: "restore", error: error)
-            state = .restorationFailed(startupFailure(error))
+            if case .authenticated = state {
+                validationFailures += 1
+                let seconds = min(60, 1 << min(validationFailures, 6))
+                validationRetry = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+                    self?.retryValidationIfNeeded()
+                }
+            } else {
+                state = .restorationFailed(startupFailure(error))
+            }
         }
+    }
+
+    private func checkBootstrap(_ id: UUID) throws {
+        try Task.checkCancellation()
+        guard bootstrapID == id, !isSubmitting else { throw CancellationError() }
+    }
+
+    private func install(_ token: String) async {
+        let generation = UUID()
+        credentialGeneration = generation
+        currentToken = token
+        await apiClient.installStoredSession(token) { [weak self] old, new in
+            guard let self else { throw CancellationError() }
+            try await self.persistRefresh(from: old, to: new, generation: generation)
+        }
+    }
+
+    private func persistRefresh(from old: String, to new: String, generation: UUID) async throws {
+        guard credentialGeneration == generation, currentToken == old else { throw CancellationError() }
+        try await credentials.refresh(from: old, to: new, retainBinding: sessionValidation == .verified)
+        guard credentialGeneration == generation else { throw CancellationError() }
+        currentToken = new
+    }
+
+    private func finishSignIn(_ token: String, profile: MeResponse) async throws {
+        try await credentials.save(token, profile: profile)
+        await install(token)
+        try await apiClient.authorizeStoredSession(expectedToken: token)
+        sessionValidation = .verified
+        state = .authenticated(profile)
+    }
+
+    private func invalidate(reason: SignedOutReason) async {
+        await lockSession(reason: reason)
+        try? await credentials.delete()
+    }
+
+    private func lockSession(reason: SignedOutReason) async {
+        credentialGeneration = UUID()
+        currentToken = nil
+        validationRetry?.cancel()
+        validationRetry = nil
+        sessionValidation = .localOnly
+        state = .signedOut(reason)
+        await apiClient.installStoredSession(nil, onRefresh: nil)
     }
 
     private func startSlowTimer() {
@@ -184,9 +309,7 @@ final class AuthSessionModel: ObservableObject {
                 return (candidate, me)
             }
             try Task.checkCancellation()
-            try await tokenStorage.saveToken(candidate)
-            try Task.checkCancellation()
-            state = .authenticated(me)
+            try await finishSignIn(candidate, profile: me)
         } catch is CancellationError {
         } catch APIError.invalidToken, AuthenticationAttemptError.invalidCredentials {
             logger.notice("Credential sign-in rejected an invalid credential")
@@ -213,8 +336,11 @@ final class AuthSessionModel: ObservableObject {
         defer { isSubmitting = false }
         do {
             try await prepareForSignOut?()
-            try await tokenStorage.deleteToken()
-            state = .signedOut(.loggedOut)
+            bootstrapTask?.cancel()
+            bootstrapID = nil
+            bootstrapTask = nil
+            try await credentials.delete()
+            await lockSession(reason: .loggedOut)
         } catch {
             logFailure(operation: "logout", error: error)
             signOutError = "Could not sign out. Your session is still active. Try again."
@@ -225,12 +351,12 @@ final class AuthSessionModel: ObservableObject {
         guard case .authenticated = state, !isSubmitting else { return }
         isSubmitting = true
         defer { isSubmitting = false }
-        let expiredGeneration = stateGeneration
+        bootstrapTask?.cancel()
+        bootstrapID = nil
+        bootstrapTask = nil
         logger.notice("Authenticated session expired")
-        try? await tokenStorage.deleteToken()
-        guard stateGeneration == expiredGeneration else { return }
         validationMessage = nil
-        state = .signedOut(.invalidOrRevoked)
+        await invalidate(reason: .invalidOrRevoked)
     }
 
     private func logFailure(operation: String, error: Error) {
@@ -263,8 +389,7 @@ final class AuthSessionModel: ObservableObject {
             defer { isSubmitting = false }
             do {
                 let me = try await apiClient.authenticate(candidateJWT: candidateJWT)
-                try await tokenStorage.saveToken(candidateJWT)
-                state = .authenticated(me)
+                try await finishSignIn(candidateJWT, profile: me)
             } catch {
                 logFailure(operation: "manual JWT sign-in", error: error)
                 validationMessage = "Invalid credentials."
@@ -277,8 +402,7 @@ final class AuthSessionModel: ObservableObject {
             do {
                 let token = try await apiClient.createDevSession(uid: uid, clientID: clientID)
                 let me = try await apiClient.authenticate(candidateJWT: token)
-                try await tokenStorage.saveToken(token)
-                state = .authenticated(me)
+                try await finishSignIn(token, profile: me)
             } catch {
                 logFailure(operation: "development session", error: error)
                 validationMessage = "Authentication could not be completed."

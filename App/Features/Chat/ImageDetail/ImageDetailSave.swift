@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 /// Saves a viewer item's original bytes: to Photos on iOS, through a Save panel on macOS.
 @MainActor
 enum ImageDetailSave {
-    static func save(_ item: MessageImageItem) async throws -> Bool {
+    static func save(_ item: MessageImageItem, mediaContext: AppMediaContext?) async throws -> Bool {
         guard item.isImage || item.isVideo else {
             throw ImageDetailSaveError.unavailable(isVideo: false)
         }
@@ -22,13 +22,13 @@ enum ImageDetailSave {
                 throw ImageDetailSaveError.photoLibraryAccessDenied
             }
             try Task.checkCancellation()
-            let original = try await ImageDetailOriginal.prepare(from: item)
+            let original = try await ImageDetailOriginal.prepare(from: item, mediaContext: mediaContext)
             defer { original.removeTemporaryFile() }
             try await saveToPhotoLibrary(original, isVideo: item.isVideo)
             return true
         #elseif os(macOS)
             try Task.checkCancellation()
-            let original = try await ImageDetailOriginal.prepare(from: item)
+            let original = try await ImageDetailOriginal.prepare(from: item, mediaContext: mediaContext)
             defer { original.removeTemporaryFile() }
             return try await saveWithPanel(original, item: item)
         #else
@@ -135,8 +135,11 @@ enum ImageDetailSave {
 private struct ImageDetailOriginal {
     let url: URL
     private let temporaryDirectory: URL?
+    private let videoLease: VideoFileLease?
 
-    static func prepare(from item: MessageImageItem) async throws -> Self {
+    static func prepare(
+        from item: MessageImageItem, mediaContext: AppMediaContext?
+    ) async throws -> Self {
         guard let source = item.url else {
             throw ImageDetailSaveError.unavailable(isVideo: item.isVideo)
         }
@@ -144,12 +147,23 @@ private struct ImageDetailOriginal {
             guard FileManager.default.isReadableFile(atPath: source.path) else {
                 throw ImageDetailSaveError.unavailable(isVideo: item.isVideo)
             }
-            return Self(url: source, temporaryDirectory: nil)
+            return Self(url: source, temporaryDirectory: nil, videoLease: nil)
         }
 
         guard ["http", "https"].contains(source.scheme?.lowercased() ?? ""), source.host != nil
         else {
             throw ImageDetailSaveError.unavailable(isVideo: item.isVideo)
+        }
+        if item.isVideo, let cache = mediaContext?.videoCache,
+            let lease = try? await cache.file(for: source, allowsNetwork: false, progress: { _ in })
+        {
+            return Self(url: lease.url, temporaryDirectory: nil, videoLease: lease)
+        }
+        try Task.checkCancellation()
+        // Cached image representations may be re-encoded. They can be viewed offline
+        // but are not proof of the original bytes promised by Save.
+        guard mediaContext?.loadPolicy.allowsNetwork(userInitiated: true) == true else {
+            throw ImageDetailSaveError.notDownloaded
         }
 
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -157,7 +171,8 @@ private struct ImageDetailOriginal {
         do {
             try FileManager.default.createDirectory(
                 at: directory, withIntermediateDirectories: true)
-            let (downloaded, response) = try await URLSession.shared.download(from: source)
+            let request = URLRequest(url: source, cachePolicy: .reloadIgnoringLocalCacheData)
+            let (downloaded, response) = try await URLSession.shared.download(for: request)
             defer { try? FileManager.default.removeItem(at: downloaded) }
 
             try Task.checkCancellation()
@@ -169,7 +184,7 @@ private struct ImageDetailOriginal {
             let original = directory.appendingPathComponent("original").appendingPathExtension(
                 suggestedExtension(for: item, source: source))
             try FileManager.default.moveItem(at: downloaded, to: original)
-            return Self(url: original, temporaryDirectory: directory)
+            return Self(url: original, temporaryDirectory: directory, videoLease: nil)
         } catch is CancellationError {
             try? FileManager.default.removeItem(at: directory)
             throw CancellationError()
@@ -184,6 +199,7 @@ private struct ImageDetailOriginal {
     }
 
     func removeTemporaryFile() {
+        defer { withExtendedLifetime(videoLease) {} }
         guard let temporaryDirectory else { return }
         try? FileManager.default.removeItem(at: temporaryDirectory)
     }
@@ -224,6 +240,7 @@ nonisolated private enum ImageDetailFileCopy {
 
 private enum ImageDetailSaveError: LocalizedError {
     case unavailable(isVideo: Bool)
+    case notDownloaded
     case downloadFailed(isVideo: Bool)
     case photoLibraryAccessDenied
     case videoFormatUnsupported
@@ -235,6 +252,8 @@ private enum ImageDetailSaveError: LocalizedError {
             isVideo
                 ? AppLanguage.localized("This video is no longer available.")
                 : AppLanguage.localized("This image is no longer available.")
+        case .notDownloaded:
+            AppLanguage.localized("Media not downloaded")
         case .downloadFailed(let isVideo):
             isVideo
                 ? AppLanguage.localized("The video couldn’t be downloaded. Please try again.")

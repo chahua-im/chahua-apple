@@ -4,7 +4,7 @@ The main app owns this outbox. The Share extension sends directly and is outside
 
 ## Ownership
 
-`AppCompositionRoot` owns one `AccountLocalStoreOwner`, shared by the queue and any account-local readers. The account directory is scoped by API base URL and user ID. Its `chat.sqlite` keeps drafts and submitted work in two tables. Neither is an evictable message cache; this database does not yet store message history.
+`AppCompositionRoot` owns one `AccountLocalStoreOwner`, shared by the queue and account-local readers. Its `chat.sqlite` is scoped by API base URL and user ID. The database holds drafts, submitted work and the [offline cache](offline-cache.md). Only a positively unrecognized applied migration permits a reset during open; ordinary history clear does not delete drafts or submissions. A published send installs its canonical message and removes the outbox row in one transaction.
 
 `draft` stores the current composition by `(chat_id, thread_id)`, including text, reply, link inputs, attachments and compression. `outgoing_message` stores submitted work by client-generated UUID and unique conversation position. An empty SQL thread ID denotes the parent chat. The draft is independent of FIFO; submission moves its current attachment slots and clears the draft in one transaction. File plus caption inserts adjacent file and text entries. Notification replies, forwards, voice and stickers do not consume or reorder a draft.
 
@@ -23,15 +23,15 @@ The lowest position always owns the conversation's next create. It blocks succes
 
 Voice, stickers and forwards are immutable. An editor takes a synchronous lease before presenting editable content, keeping its item out of the create and new upload schedulers. Matching in-flight checkpoints merge without changing the selection. Reorder keeps completed IDs; source and compression changes retire the prior generation. Saving commits before releasing the hold; closing without saving keeps the original. No queued edit is translated to a server PATCH. **Remove from Outbox** discards only local intent, never recalls a message from the server.
 
-The main actor orders edits, claims and snapshot publication. SQLite orders transactions. Draft watermarks, snapshot revisions, editor holds, progress and retries are session memory only; account transitions fence old workers and callbacks.
+The main actor orders edits, claims and snapshot publication. SQLite orders transactions. Draft watermarks, snapshot revisions, editor holds, progress and local backoff attempts live in session memory. Each server retry deadline is stored with its submitted row or attachment slot. Account transitions fence old workers and callbacks.
 
 ## Handoff and recovery
 
 An offline head remains pending if no create was handed off. A claimed request is immutable across retries, including its ID, attachment IDs, reply and link inputs. Process death or background expiration after the claim records or restores a failed create with unknown outcome. Network failures and HTTP 408, 429 and 5xx can retry on bounded exponential backoff, honoring `Retry-After`; validation, permission and unstructured conflicts require user action. Retry claims failed creates directly, without an editable interval. Authentication failure stops sending but does not purge local work.
 
-A matching HTTP success, authenticated publication or structured `clientGeneratedIdConflict` settles the row. Client ID, sender, chat and thread must all match. The committed delete of the local row precedes timeline/list publication, including redacted deleted messages and server copies that differ from the submitted payload. Late responses cannot recreate local work. Accepted unpublished audio frees FIFO and keeps only an in-memory processing bubble until canonical audio publication.
+A matching HTTP success, authenticated publication or structured `clientGeneratedIdConflict` settles the row. Client ID, sender, chat and thread must all match. A published server copy and the removal of the local row commit together before publication in the timeline and list. Late responses cannot recreate local work. Accepted unpublished audio frees FIFO and keeps only an in-memory processing bubble until canonical audio publication.
 
-iOS background execution is limited to requests already in flight or the specific eligible notification reply. Background work never skips a FIFO head or drains unrelated queues. Explicit confirmed sign-out fences local writers and purges that account's drafts, outbox entries and owned files; expired sessions and account switches do not purge them.
+Background delivery uses the same dispatcher and first-in, first-out rules. On macOS eligible heads can run without an active window. On iOS they can run in the foreground, during a finite app grant, or during a scheduled app refresh. The grant can drain eligible heads across conversations, but cannot bypass a blocked head or work on an unsubmitted draft. A refresh request exists only for automatically actionable submitted work. Expiration returns a claim known not to have reached the transport to its previous state; a handed-off create retains its original ID and is treated as uncertain. iOS decides when it grants time. Confirmed sign-out purges that account’s local work; expiration of credentials and account switches do not.
 
 ## Native preparation and durable files
 

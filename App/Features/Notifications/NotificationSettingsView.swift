@@ -445,9 +445,9 @@ struct NotificationSettingsView: View {
                 }
             }
         case .storage:
-            if let mediaContext {
-                MediaCacheSettingsSection(context: mediaContext)
-                    .id(ObjectIdentifier(mediaContext))
+            if let mediaContext, let historyCache = chatStore.historyCache {
+                MediaCacheSettingsSection(context: mediaContext, historyCache: historyCache)
+                    .id(me.uid)
             }
         }
     }

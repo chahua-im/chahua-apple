@@ -4,7 +4,7 @@ import SwiftUI
 struct AppRootView: View {
     @ObservedObject var model: AuthSessionModel
     @ObservedObject var chatStore: ChatStore
-    let mediaContext: AppMediaContext
+    let mediaContext: @MainActor () -> AppMediaContext?
     let realtimeCoordinator: RealtimeCoordinator
     let notifications: PushNotificationCoordinator
     @Environment(\.scenePhase) private var scenePhase
@@ -37,7 +37,7 @@ struct AppRootView: View {
                     )
                     .modifier(ImageDetailPresentation())
                     .id(me.uid)
-                    .environment(\.mediaContext, mediaContext)
+                    .environment(\.mediaContext, mediaContext())
                 }
             case .restorationFailed(let failure):
                 ChahuaRecoverableErrorView(
@@ -64,6 +64,19 @@ struct AppRootView: View {
         } message: {
             if let error = model.signOutError { Text(error) }
         }
+        .alert(
+            "Message storage is full",
+            isPresented: Binding(
+                get: { chatStore.messageStorageFull },
+                set: { if !$0 { chatStore.messageStorageFull = false } })
+        ) {
+            Button("Clear Message History", role: .destructive) {
+                Task { try? await chatStore.historyCache?.clear() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Remove downloaded conversations to make space. Drafts and unsent messages are kept.")
+        }
         .onOpenURL { pendingURL = $0 }
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
             pendingURL = activity.webpageURL
@@ -79,11 +92,12 @@ struct AppRootView: View {
                 reportSceneActivity(phase == .active)
             #endif
             notifications.setSceneActive(id: sceneID, active: phase == .active)
+            if phase == .active { model.retryValidationIfNeeded() }
         }
         .onDisappear {
             #if os(iOS)
                 let id = sceneID
-                DispatchQueue.main.async { [weak realtimeCoordinator] in
+                DispatchQueue.main.async { [weak realtimeCoordinator = self.realtimeCoordinator] in
                     realtimeCoordinator?.removeScene(id: id)
                 }
             #endif

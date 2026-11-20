@@ -172,6 +172,12 @@ public struct MessageResponse: Codable, Hashable, Sendable {
         return copy
     }
 
+    public func removingReplyPreview() -> Self {
+        var copy = self
+        copy.replyToMessage = nil
+        return copy
+    }
+
     public func replacingMessageText(_ text: String) -> Self {
         guard forwardedFrom == nil, messageType != .forwarded, messageType != .placeholder else {
             return self

@@ -309,7 +309,8 @@
             for index in first...last {
                 if pages[index] == nil {
                     let page = MessageImageDetailMacPage(
-                        item: gallery.items[index], mediaContext: mediaContext)
+                        item: gallery.items[index], mediaContext: mediaContext,
+                        userInitiated: index == gallery.selectedIndex)
                     page.onZoomChanged = { [weak self] in self?.updateControls() }
                     page.onRetry = { [weak self] in
                         guard let self else { return }
@@ -512,9 +513,9 @@
         @objc private func saveMedia() {
             guard acceptsInteraction, saveTask == nil else { return }
             let item = gallery.items[selectedIndex]
-            saveTask = Task { [weak self] in
+            saveTask = Task { [weak self, mediaContext] in
                 do {
-                    let saved = try await ImageDetailSave.save(item)
+                    let saved = try await ImageDetailSave.save(item, mediaContext: mediaContext)
                     guard let self, !self.isInvalidated else { return }
                     if saved { self.showSaveToast(AppLanguage.localized("Saved \(item.fileName)")) }
                     self.saveTask = nil
@@ -814,6 +815,7 @@
 
         private let item: MessageImageItem
         private let mediaContext: AppMediaContext?
+        private var userInitiated: Bool
         private let loader = ImageDetailImageLoader()
         private let imageDocument = MessageImageDetailMacDocument()
         private let progress = NSProgressIndicator()
@@ -830,13 +832,15 @@
         var hasImage: Bool { displayedImage != nil }
         override var isFlipped: Bool { true }
 
-        init(item: MessageImageItem, mediaContext: AppMediaContext?) {
+        init(item: MessageImageItem, mediaContext: AppMediaContext?, userInitiated: Bool) {
             self.item = item
             self.mediaContext = mediaContext
+            self.userInitiated = userInitiated
             videoView =
                 item.isVideo
                 ? ImageDetailMacVideoView(
-                    url: item.url, pixelSize: item.pixelSize, mediaContext: mediaContext) : nil
+                    url: item.url, pixelSize: item.pixelSize, mediaContext: mediaContext,
+                    userInitiated: userInitiated) : nil
             super.init(frame: .zero)
             setAccessibilityElement(false)
             wantsLayer = true
@@ -890,12 +894,11 @@
                 return
             }
             subscription = Publishers.CombineLatest3(
-                loader.$image, loader.$isLoading, loader.$failed
+                loader.$image, loader.$isLoading, loader.$failure
             )
             .sink { [weak self] value in
-                self?.render(image: value.0, isLoading: value.1, failed: value.2)
+                self?.render(image: value.0, isLoading: value.1, failure: value.2)
             }
-            loader.load(item, mediaContext: mediaContext)
         }
 
         required init?(coder: NSCoder) { nil }
@@ -911,6 +914,13 @@
         }
 
         func setActive(_ active: Bool, reduceMotion: Bool) {
+            if videoView == nil, active != isActive {
+                if active {
+                    loader.load(item, mediaContext: mediaContext, userInitiated: userInitiated)
+                } else {
+                    loader.cancel()
+                }
+            }
             isActive = active
             self.reduceMotion = reduceMotion
             imageDocument.setAnimating(active && !reduceMotion)
@@ -924,7 +934,8 @@
             if let videoView {
                 videoView.retry()
             } else {
-                loader.load(item, mediaContext: mediaContext)
+                userInitiated = true
+                loader.load(item, mediaContext: mediaContext, userInitiated: true)
             }
         }
 
@@ -933,13 +944,18 @@
             // exclusively for the image loader and must not imply poster/file progress.
             progress.stopAnimation(nil)
             progress.isHidden = true
-            statusLabel.stringValue = AppLanguage.localized("This video can’t be played")
-            statusLabel.isHidden = state != .failed
-            retryButton.isHidden = state != .failed
+            statusLabel.stringValue = AppLanguage.localized(
+                state == .notDownloaded ? "Media not downloaded" : "This video can’t be played")
+            retryButton.title = AppLanguage.localized(state == .notDownloaded ? "Download" : "Retry")
+            let showFailure = state == .failed || state == .notDownloaded
+            statusLabel.isHidden = !showFailure
+            retryButton.isHidden = !showFailure
             onZoomChanged?()
         }
 
-        private func render(image: NSImage?, isLoading: Bool, failed: Bool) {
+        private func render(
+            image: NSImage?, isLoading: Bool, failure: ImageDetailImageLoader.Failure?
+        ) {
             if displayedImage !== image {
                 displayedImage = image
                 imageDocument.setImage(image)
@@ -948,12 +964,12 @@
             }
             if isLoading { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
             progress.isHidden = !isLoading || image != nil
-            statusLabel.stringValue =
-                failed
-                ? AppLanguage.localized("Unable to load image")
-                : AppLanguage.localized("Loading image…")
-            statusLabel.isHidden = image != nil
-            retryButton.isHidden = !failed
+            statusLabel.stringValue = AppLanguage.localized(
+                failure == .notDownloaded ? "Media not downloaded" : "Unable to load image")
+            statusLabel.isHidden = failure == nil || image != nil
+            retryButton.title = AppLanguage.localized(
+                failure == .notDownloaded ? "Download" : "Retry")
+            retryButton.isHidden = failure == nil
             onZoomChanged?()
         }
 

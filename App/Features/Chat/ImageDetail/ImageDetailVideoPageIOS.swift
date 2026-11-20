@@ -20,7 +20,10 @@
         AVPlayerViewControllerDelegate
     {
         private let item: MessageImageItem
-        private let videoCache: VideoFileCache
+        private let videoCache: VideoFileCache?
+        private var loadPolicy: MediaLoadPolicy
+        private var userInitiated: Bool
+        private var policyObservation: AnyCancellable?
         private let playerController = AVPlayerViewController()
         private let errorLabel = UILabel()
         private let retryButton = UIButton(type: .system)
@@ -48,9 +51,11 @@
         var isAtFit: Bool { true }
         var childViewController: UIViewController? { playerController }
 
-        init(item: MessageImageItem, mediaContext: AppMediaContext?) {
+        init(item: MessageImageItem, mediaContext: AppMediaContext?, userInitiated: Bool) {
             self.item = item
-            videoCache = mediaContext?.videoCache ?? .unscoped
+            videoCache = mediaContext?.videoCache
+            loadPolicy = mediaContext?.loadPolicy ?? .cacheOnly
+            self.userInitiated = userInitiated
             super.init(frame: .zero)
             clipsToBounds = true
             playerController.delegate = self
@@ -86,6 +91,9 @@
             retryButton.addTarget(self, action: #selector(retry), for: .touchUpInside)
             retryButton.isHidden = true
             addSubview(retryButton)
+            policyObservation = mediaContext?.loadPolicyChanges.sink { [weak self] policy in
+                self?.applyLoadPolicy(policy)
+            }
         }
 
         required init?(coder: NSCoder) { nil }
@@ -122,6 +130,7 @@
             tornDown = true
             playbackHandoffGeneration += 1
             NotificationCenter.default.removeObserver(self)
+            policyObservation = nil
             cancelDownload()
             statusObservation?.cancel()
             statusObservation = nil
@@ -183,28 +192,51 @@
             }
         }
 
+        private func applyLoadPolicy(_ policy: MediaLoadPolicy) {
+            let before = loadPolicy.allowsNetwork(userInitiated: userInitiated)
+            loadPolicy = policy
+            let after = policy.allowsNetwork(userInitiated: userInitiated)
+            guard before != after, item.url?.isFileURL == false, player == nil else { return }
+            cancelDownload()
+            if failed { setFailed(false) }
+            applyPlayback()
+        }
+
         private func load() {
             guard !tornDown, visible, selected, downloadTask == nil else { return }
             guard let url = item.url else {
                 showFailure()
                 return
             }
+            guard url.isFileURL || videoCache != nil else {
+                showFailure(notDownloaded: true)
+                return
+            }
+            let allowsNetwork = loadPolicy.allowsNetwork(userInitiated: userInitiated)
             let previousLease = fileLease
             releasePlayer()
             setFailed(false)
             progressView.update(.indeterminate)
-            progressView.isHidden = false
+            progressView.isHidden = !allowsNetwork && !url.isFileURL
             let id = UUID()
             loadID = id
             let cache = videoCache
             downloadTask = Task { [weak self] in
-                if let previousLease { await cache.invalidate(previousLease) }
+                if let previousLease { await cache?.invalidate(previousLease) }
                 do {
-                    let lease = try await cache.file(for: url) { [weak self] progress in
-                        guard let self, !self.tornDown, self.loadID == id,
-                            self.visible, self.selected
-                        else { return }
-                        self.progressView.update(progress)
+                    let lease: VideoFileLease
+                    if url.isFileURL {
+                        lease = VideoFileLease(localURL: url)
+                    } else if let cache {
+                        lease = try await cache.file(for: url, allowsNetwork: allowsNetwork) {
+                            [weak self] progress in
+                            guard let self, !self.tornDown, self.loadID == id,
+                                self.visible, self.selected
+                            else { return }
+                            self.progressView.update(progress)
+                        }
+                    } else {
+                        throw VideoFileCache.CacheMiss.notDownloaded
                     }
                     guard !Task.isCancelled, let self, !self.tornDown,
                         self.loadID == id, self.visible, self.selected
@@ -218,7 +250,7 @@
                         self.loadID == id, self.visible, self.selected
                     else { return }
                     self.downloadTask = nil
-                    self.showFailure()
+                    self.showFailure(notDownloaded: error is VideoFileCache.CacheMiss)
                 }
             }
         }
@@ -293,14 +325,18 @@
             player?.pause()
         }
 
-        private func showFailure() {
+        private func showFailure(notDownloaded: Bool = false) {
             guard !tornDown, !failed else { return }
             player?.pause()
             progressView.isHidden = true
-            if let fileLease {
-                let cache = videoCache
-                Task { await cache.invalidate(fileLease) }
+            if let fileLease, let videoCache {
+                Task { await videoCache.invalidate(fileLease) }
             }
+            errorLabel.text = AppLanguage.localized(
+                notDownloaded ? "Media not downloaded" : "This video can’t be played")
+            retryButton.configuration?.title = AppLanguage.localized(
+                notDownloaded ? "Download" : "Retry")
+            setNeedsLayout()
             setFailed(true)
         }
 
@@ -315,6 +351,7 @@
             guard !tornDown, failed, mayInteract?() == true else { return }
             // Discard a failed cached asset before requesting a fresh completed file.
             setFailed(false)
+            userInitiated = true
             autoplayPending = selected
             load()
             applyPlayback()

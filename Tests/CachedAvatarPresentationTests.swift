@@ -79,6 +79,47 @@ final class CachedAvatarPresentationTests: XCTestCase {
         }
         XCTAssertEqual(fixture.requestCount, 1)
     }
+
+    func testTimelineMediaShowsUnavailableUntilFullMediaIsAllowed() async throws {
+        let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
+        let connectivity = ConnectivityMonitor(monitorNetwork: false)
+        connectivity.update(.init(status: .satisfied, isConstrained: true))
+        let context = try makeContext(fixture: fixture, connectivity: connectivity)
+        let (image, host) = try makeTimelineHost(context: context, fixture: fixture, animates: false)
+        defer { host.close() }
+        try await waitUntil("A constrained cache miss did not show the unavailable placeholder") {
+            #if os(macOS)
+                image.subviews.contains {
+                    guard let label = $0 as? NSTextField else { return false }
+                    return !label.isHidden
+                        && label.stringValue == AppLanguage.localized("Media not downloaded")
+                }
+            #else
+                image.subviews.contains {
+                    guard let label = $0 as? UILabel else { return false }
+                    return !label.isHidden
+                        && label.text == AppLanguage.localized("Media not downloaded")
+                }
+            #endif
+        }
+        XCTAssertFalse(hasVisibleSpinner(in: image))
+        XCTAssertEqual(fixture.requestCount, 0)
+
+        context.setNetworkAuthorized(false)
+        connectivity.update(.init(status: .satisfied))
+        XCTAssertEqual(context.loadPolicy, .cacheOnly)
+        context.setNetworkAuthorized(true)
+        try await waitUntil("The visible tile did not refresh on restored media access") {
+            try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
+        XCTAssertEqual(fixture.requestCount, 1)
+
+        connectivity.update(.init(status: .unsatisfied))
+        XCTAssertTrue(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255))
+        XCTAssertFalse(hasVisibleSpinner(in: image))
+        XCTAssertEqual(fixture.requestCount, 1)
+    }
+
     func testHeldAnimationKeepsPixelsAcrossResizeVisibilityAndReuse() async throws {
         let fixture = MediaImageFixture(
             data: try makeMediaGIF(), contentType: "image/gif", suspended: true)
@@ -401,7 +442,9 @@ final class CachedAvatarPresentationTests: XCTestCase {
         return 0
     }
 
-    private func makeContext(fixture: MediaImageFixture) throws -> AppMediaContext {
+    private func makeContext(
+        fixture: MediaImageFixture, connectivity: ConnectivityMonitor? = nil
+    ) throws -> AppMediaContext {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "KingfisherPresentation-\(UUID().uuidString)", isDirectory: true)
@@ -419,7 +462,7 @@ final class CachedAvatarPresentationTests: XCTestCase {
             MediaImageURLProtocol.remove(fixture)
             try? FileManager.default.removeItem(at: directory)
         }
-        return AppMediaContext(cache: cache, downloader: downloader)
+        return AppMediaContext(cache: cache, downloader: downloader, connectivity: connectivity)
     }
 
     private func makeHost(

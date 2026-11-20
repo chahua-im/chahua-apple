@@ -20,7 +20,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let h = try await openHarness(foreground: false)
         var delivered: [MessageResponse] = []
         let observation = h.queue.events.sink {
-            if case .delivered(_, let message) = $0 { delivered.append(message) }
+            if case .delivered(_, let message, _) = $0 { delivered.append(message) }
         }
         defer { observation.cancel() }
         try await h.queue.enqueueIndependentText(chatID: "chat", text: "local")
@@ -177,6 +177,13 @@ final class OutgoingMessageQueueTests: XCTestCase {
                 key: .init(chatID: "source"), itemID: "voice-send", attachment: attachment)
             await h.close()
             let sending = try await openHarness(root: h.root)
+            var receiptPublication: [Bool] = []
+            let observation = sending.queue.events.sink {
+                if case .delivered(_, let message, let published) = $0, message.clientGeneratedId == "voice-send" {
+                    receiptPublication.append(published)
+                }
+            }
+            defer { observation.cancel() }
             try await eventually { await sending.api.requests().count == 1 }
             try await sending.queue.enqueueIndependentText(chatID: "source", text: "after voice")
             let audio = try TimelineTestFixtures.message(
@@ -198,6 +205,10 @@ final class OutgoingMessageQueueTests: XCTestCase {
             try await eventually { await sending.api.requests().count == 2 }
             let successor = await sending.api.requests()[1]
             XCTAssertEqual(successor.body.message, "after voice")
+            XCTAssertEqual(receiptPublication, [publicationFirst])
+            let historyStore = try await sending.openStore(uid: 1)
+            let history = try await historyStore.cachedHistory(.init(chatID: "source"))
+            XCTAssertEqual(history.messages.map(\.id), publicationFirst ? [audio.id] : [])
             if publicationFirst {
                 XCTAssertTrue(sending.queue.acknowledgedPendingAudioMessages.isEmpty)
                 XCTAssertNil(sending.queue.forwardPlaceholderReason(for: audio, merging: false))
@@ -652,19 +663,92 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertTrue(requests.isEmpty)
     }
 
-    func testBackgroundingLetsActiveRequestFinishWithoutDrainingSuccessors() async throws {
+    func testOneBackgroundGrantDrainsFIFOAcrossConversations() async throws {
         let h = try await openHarness()
         _ = try await enqueueABC(h)
-        let first = try await firstRequest(h.api)
-        h.queue.requestForegroundActive(false)
-        await h.api.finish(0, with: .success(try response(first)))
-        try await eventually { h.queue.pendingMessages(chatID: "chat").map(\.text) == ["B", "C"] }
-        let background = await h.api.requests()
-        XCTAssertEqual(background.count, 1)
-        h.queue.requestForegroundActive(true)
+        try await h.queue.enqueueIndependentText(chatID: "other", text: "Independent")
         try await eventually { await h.api.requests().count == 2 }
-        let resumed = await h.api.requests()
-        XCTAssertEqual(resumed.map(\.body.message), ["A", "B"])
+        h.queue.requestForegroundActive(false)
+        XCTAssertEqual(h.background.attempts, 1)
+        let initial = await h.api.requests()
+        XCTAssertEqual(initial.map(\.body.message), ["A", "Independent"])
+        await h.api.finish(0, with: .success(try response(initial[0])))
+        try await eventually { await h.api.requests().count == 3 }
+        let second = await h.api.requests()[2]
+        XCTAssertEqual(second.body.message, "B")
+        await h.api.finish(2, with: .success(try response(second)))
+        try await eventually { await h.api.requests().count == 4 }
+        let third = await h.api.requests()[3]
+        XCTAssertEqual(third.body.message, "C")
+        await h.api.finish(3, with: .success(try response(third)))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").isEmpty }
+        XCTAssertEqual(h.background.ended, 0)
+        await h.api.finish(1, with: .success(try response(initial[1])))
+        try await eventually { h.background.ended == 1 }
+        XCTAssertNil(h.queue.automaticBackgroundWakeDate)
+        XCTAssertEqual(h.background.attempts, 1)
+    }
+
+    func testBackgroundExpirationReleasesUnhandedClaimAndRetriesAmbiguousID() async throws {
+        let h = try await openHarness()
+        let authorization = HeldWriteAuthorization()
+        defer { authorization.finish() }
+        h.queue.authorizeWrite = { chat, _ in
+            if chat == "preflight" { await authorization.wait() }
+        }
+        try await h.queue.enqueueIndependentText(chatID: "preflight", text: "Never handed off")
+        try await h.queue.enqueueIndependentText(chatID: "create", text: "Already handed off")
+        try await h.queue.enqueueIndependentText(chatID: "create", text: "Successor")
+        try await eventually {
+            guard authorization.isWaiting else { return false }
+            return await h.api.requests().count == 1
+        }
+        let original = try await firstRequest(h.api)
+        let unhandedID = try XCTUnwrap(h.queue.pendingMessages(chatID: "preflight").first?.clientGeneratedID)
+        h.queue.requestForegroundActive(false)
+        let expire = try XCTUnwrap(h.background.expirations.first)
+        expire()
+        expire()
+        try await eventually {
+            h.queue.pendingMessages(chatID: "preflight").first?.state == .pending
+                && h.queue.pendingMessages(chatID: "create").first?.failure?.reason == .unknownOutcome
+        }
+        XCTAssertEqual(h.background.ended, 1)
+        h.queue.authorizeWrite = nil
+        authorization.finish()
+        await h.api.finish(0, with: .success(try response(original)))
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "create").map(\.state), [.failed, .pending])
+        h.queue.requestForegroundActive(true)
+        try await eventually { await h.api.requests().count == 3 }
+        let retried = await h.api.requests().dropFirst()
+        XCTAssertEqual(retried.first(where: { $0.chatID == "create" })?.body.clientGeneratedId,
+            original.body.clientGeneratedId)
+        XCTAssertEqual(retried.first(where: { $0.chatID == "preflight" })?.body.clientGeneratedId, unhandedID)
+    }
+
+    func testDeniedGrantLeavesRowsQueuedForForegroundRecovery() async throws {
+        let h = try await openHarness(foreground: false)
+        h.background.granted = false
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "A")
+        h.queue.requestForegroundActive(true)
+        h.queue.requestForegroundActive(false)
+        XCTAssertEqual(h.background.attempts, 1)
+        h.queue.resynchronizePublications()
+        XCTAssertEqual(h.background.attempts, 1)
+        XCTAssertEqual(h.background.ended, 0)
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").first?.state, .pending)
+        XCTAssertNotNil(h.queue.automaticBackgroundWakeDate)
+        let inactive = await h.api.requests()
+        XCTAssertTrue(inactive.isEmpty)
+        h.queue.requestForegroundActive(true)
+        try await eventually { await h.api.requests().count == 1 }
+    }
+
+    func testProcessExecutionDoesNotRequireAnActiveWindowOrNativeGrant() async throws {
+        let h = try await openHarness(foreground: false, runsWhileInactive: true)
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "A")
+        try await eventually { await h.api.requests().count == 1 }
+        XCTAssertEqual(h.background.attempts, 0)
     }
 
     func testAccountHandoffSynchronouslyInvalidatesOldHTTPCompletion() async throws {
@@ -674,7 +758,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let first = try await firstRequest(h.api)
         var receivedOld = false
         let observation = h.queue.events.sink {
-            if case .delivered(_, let message) = $0,
+            if case .delivered(_, let message, _) = $0,
                 message.clientGeneratedId == first.body.clientGeneratedId
             {
                 receivedOld = true
@@ -821,12 +905,14 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let message = try response(first)
         var delivered: [MessageID] = []
         let observation = h.queue.events.sink {
-            if case .delivered(_, let response) = $0 { delivered.append(response.id) }
+            if case .delivered(_, let response, _) = $0 { delivered.append(response.id) }
         }
         h.faults.failures = [.acknowledge]
         await h.api.finish(0, with: .success(message))
         try await eventually { h.queue.storageState == .failed }
         XCTAssertTrue(delivered.isEmpty)
+        let stale = await h.queue.acceptAcknowledgement(message.replacingMessageText("stale"), published: false)
+        XCTAssertEqual(stale, .suppress)
         XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.text), ["A", "B", "C"])
         let paused = await h.api.requests()
         XCTAssertEqual(paused.count, 1)
@@ -848,6 +934,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
             restored.flatMap(\.outgoing).contains {
                 $0.clientGeneratedID == message.clientGeneratedId
             })
+        let history = try await store.cachedHistory(.init(chatID: "chat"))
+        XCTAssertEqual(history.messages, [message])
     }
 
     func testFailedFailureCommitIsRetriedAsFailureNotAsAutomaticNetworkRetry() async throws {
@@ -904,6 +992,8 @@ final class OutgoingMessageQueueTests: XCTestCase {
             reopened.queue.pendingMessages(chatID: "chat").map(\.state),
             [.failed, .pending, .pending])
         await reopened.queue.setForegroundActive(false)
+        XCTAssertNil(reopened.queue.automaticBackgroundWakeDate)
+        XCTAssertEqual(reopened.background.attempts, 0)
         await reopened.queue.setForegroundActive(true)
         let requests = await reopened.api.requests()
         XCTAssertEqual(requests.count, 0)
@@ -1269,6 +1359,50 @@ final class OutgoingMessageQueueTests: XCTestCase {
         }
     }
 
+    func testRemovingPreparingHeadOfflineFencesLateUpload() async throws {
+        let h = try await openHarness(foreground: false)
+        let image = h.root.appendingPathComponent("image.png")
+        try makeMediaPNG(red: 255, green: 0, blue: 0).write(to: image)
+        try await h.queue.importImages(urls: [image], chatID: "chat")
+        try await h.queue.enqueueText(chatID: "chat", text: "remove", clearedDraftRevision: 1)
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "keep")
+        await h.api.enableUploads()
+        await h.queue.setForegroundActive(true)
+        try await eventually { await h.api.uploadCount() == 1 }
+        let head = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        h.queue.setNetworkReachable(false)
+        try await h.queue.removeOutgoing(chatID: "chat", itemID: head.clientGeneratedID)
+        await h.api.finishUpload("remote-0")
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat").map(\.text), ["keep"])
+        h.queue.setNetworkReachable(true)
+        try await eventually { await h.api.requests().count == 1 }
+        let request = try await firstRequest(h.api)
+        XCTAssertEqual(request.body.message, "keep")
+        XCTAssertTrue(request.body.attachmentIds.isEmpty)
+        let mutations = await h.api.serverMutationCalls()
+        XCTAssertEqual(mutations, 0)
+    }
+
+    func testAmbiguousCreateRequiresConfirmationToRemoveOffline() async throws {
+        let h = try await openHarness()
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "possibly delivered")
+        try await eventually { await h.api.requests().count == 1 }
+        h.queue.setNetworkReachable(false)
+        await h.api.finish(0, with: .failure(APIError.transport(URLError(.timedOut))))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").first?.state == .failed }
+        let head = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        do {
+            try await h.queue.removeOutgoing(chatID: "chat", itemID: head.clientGeneratedID)
+            XCTFail("An ambiguous create requires explicit confirmation")
+        } catch OutgoingMessageQueue.QueueError.possibleDelivery {}
+        XCTAssertEqual(h.queue.pendingMessages(chatID: "chat"), [head])
+        try await h.queue.removeOutgoing(
+            chatID: "chat", itemID: head.clientGeneratedID, allowPossibleDelivery: true)
+        XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
+        let mutations = await h.api.serverMutationCalls()
+        XCTAssertEqual(mutations, 0)
+    }
+
     func testOldOrMismatchedConflictKeepsHeadFailedUntilLocalRemoval() async throws {
         for mismatched in [false, true] {
             let h = try await openHarness()
@@ -1330,6 +1464,70 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertEqual(first.body, claimed.body)
     }
 
+    func testPreflightTransportFailureReleasesClaimAndBacksOffWithoutLosingIntent() async throws {
+        let h = try await openHarness()
+        var checks = 0
+        h.queue.authorizeWrite = { chatID, _ in
+            guard chatID == "chat" else { return }
+            checks += 1
+            if checks == 1 { throw APIError.transport(URLError(.timedOut)) }
+        }
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "keep")
+        try await eventually {
+            checks == 1 && h.queue.pendingMessages(chatID: "chat").first?.state == .pending
+        }
+        let pending = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        let unsent = await h.api.requests()
+        XCTAssertTrue(unsent.isEmpty)
+        try await h.queue.enqueueIndependentText(chatID: "other", text: "independent")
+        try await eventually { await h.api.requests().count == 1 }
+        let independent = try await firstRequest(h.api)
+        XCTAssertEqual(independent.chatID, "other")
+        h.queue.setNetworkReachable(false)
+        h.queue.setNetworkReachable(true)
+        try await eventually { await h.api.requests().count == 2 }
+        let requests = await h.api.requests()
+        XCTAssertEqual(checks, 2)
+        XCTAssertEqual(requests[1].body, pending.body)
+    }
+
+    func testOfflineEnqueuePermissionIsSeparateFromAuthoritativePreflight() async throws {
+        let h = try await openHarness()
+        h.queue.setNetworkReachable(false)
+        h.queue.authorizeEnqueue = { _ in throw QueueTestError.rejected }
+        let key = ConversationKey(chatID: "chat", threadID: "thread")
+        try await h.queue.saveDraft(
+            chatID: key.chatID, threadID: key.threadID, text: "draft", editRevision: 1, updatedAt: Date())
+        do {
+            try await h.queue.enqueueText(
+                chatID: key.chatID, threadID: key.threadID, text: "draft", clearedDraftRevision: 2)
+            XCTFail("Denied local submission must not clear the draft")
+        } catch QueueTestError.rejected {}
+        XCTAssertEqual(h.queue.snapshots[key]?.draft.text, "draft")
+        XCTAssertTrue(h.queue.pendingMessages(chatID: key.chatID, threadID: key.threadID).isEmpty)
+        XCTAssertEqual(h.queue.storageState, .ready)
+
+        var checkedDestinations: [ConversationKey] = []
+        h.queue.authorizeEnqueue = { checkedDestinations.append($0) }
+        h.queue.authorizeWrite = { chatID, _ in
+            if chatID == key.chatID { throw QueueTestError.rejected }
+        }
+        try await h.queue.enqueueText(
+            chatID: key.chatID, threadID: key.threadID, text: "draft", clearedDraftRevision: 2)
+        XCTAssertEqual(checkedDestinations, [key])
+        XCTAssertEqual(h.queue.snapshots[key]?.draft.text, "")
+        XCTAssertEqual(h.queue.pendingMessages(chatID: key.chatID, threadID: key.threadID).first?.state, .pending)
+
+        h.queue.setNetworkReachable(true)
+        try await h.queue.enqueueIndependentText(chatID: "other", text: "independent")
+        try await eventually {
+            h.queue.pendingMessages(chatID: key.chatID, threadID: key.threadID).first?.failure?.reason == .rejected
+        }
+        try await eventually { await h.api.requests().count == 1 }
+        let request = try await firstRequest(h.api)
+        XCTAssertEqual(request.chatID, "other")
+    }
+
     func testNetworkFailureRetriesOriginalBodyOnBackoffAndRecovery() async throws {
         let h = try await openHarness()
         _ = try await enqueueABC(h)
@@ -1358,7 +1556,7 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertEqual(successor.body.message, "B")
     }
 
-    func testRetryAfterSurvivesReconnectAndManualRetry() async throws {
+    func testRetryAfterSurvivesReconnectManualRetryAndRestart() async throws {
         let h = try await openHarness()
         let rows = try await enqueueABC(h)
         let date = Date().addingTimeInterval(60)
@@ -1370,6 +1568,13 @@ final class OutgoingMessageQueueTests: XCTestCase {
             else { return false }
             return abs(nextRetry.timeIntervalSince(date)) < 0.5
         }
+        h.queue.requestForegroundActive(false)
+        let wake = try XCTUnwrap(h.queue.automaticBackgroundWakeDate)
+        XCTAssertEqual(wake.timeIntervalSince(date), 0, accuracy: 0.5)
+        let early = await h.queue.drainScheduledRefresh()
+        XCTAssertFalse(early)
+        XCTAssertEqual(h.background.attempts, 0)
+        h.queue.requestForegroundActive(true)
         h.queue.setNetworkReachable(false)
         h.queue.setNetworkReachable(true)
         try await h.queue.retry(chatID: "chat", clientGeneratedID: rows[0].clientGeneratedID)
@@ -1377,17 +1582,93 @@ final class OutgoingMessageQueueTests: XCTestCase {
         try await eventually { await h.api.requests().count == 2 }
         let requests = await h.api.requests()
         XCTAssertEqual(requests.map(\.body.message), ["A", "independent"])
+        await h.api.finish(1, with: .success(try response(requests[1])))
+        try await eventually { h.queue.pendingMessages(chatID: "other").isEmpty }
+        await h.close()
+
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        let restored = try XCTUnwrap(reopened.queue.pendingMessages(chatID: "chat").first)
+        XCTAssertEqual(restored.clientGeneratedID, rows[0].clientGeneratedID)
+        XCTAssertEqual(try XCTUnwrap(restored.retryNotBefore).timeIntervalSince(date), 0, accuracy: 0.001)
+        let restoredWake = try XCTUnwrap(reopened.queue.automaticBackgroundWakeDate)
+        XCTAssertEqual(restoredWake.timeIntervalSince(date), 0, accuracy: 0.001)
+        let scheduledEarly = await reopened.queue.drainScheduledRefresh()
+        XCTAssertFalse(scheduledEarly)
+        reopened.queue.requestForegroundActive(true)
+        reopened.queue.setNetworkReachable(false)
+        try await reopened.queue.retry(chatID: "chat", clientGeneratedID: restored.clientGeneratedID)
+        reopened.queue.setNetworkReachable(true)
+        try await reopened.queue.enqueueIndependentText(chatID: "other", text: "independent after restore")
+        try await eventually { await reopened.api.requests().count == 1 }
+        let untouched = await reopened.api.requests()
+        XCTAssertEqual(untouched.map(\.chatID), ["other"])
+    }
+
+    func testPreflightRetryAfterRestoresPendingWithoutStartingASecondPreflight() async throws {
+        let h = try await openHarness()
+        let deadline = Date().addingTimeInterval(60)
+        h.queue.authorizeWrite = { _, _ in
+            throw APIError.retryableHTTP(status: 503, body: Data(), retryAfter: deadline)
+        }
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "unchanged")
+        try await eventually { h.queue.pendingMessages(chatID: "chat").first?.retryNotBefore != nil }
+        let queued = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
+        XCTAssertEqual(queued.state, .pending)
+        let beforeRestart = await h.api.requests()
+        XCTAssertTrue(beforeRestart.isEmpty)
+        await h.close()
+
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        var preflights: [String] = []
+        reopened.queue.authorizeWrite = { chatID, _ in preflights.append(chatID) }
+        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat").first, queued)
+        let scheduledEarly = await reopened.queue.drainScheduledRefresh()
+        XCTAssertFalse(scheduledEarly)
+        reopened.queue.setNetworkReachable(false)
+        reopened.queue.requestForegroundActive(true)
+        reopened.queue.setNetworkReachable(true)
+        try await reopened.queue.enqueueIndependentText(chatID: "other", text: "independent")
+        try await eventually { await reopened.api.requests().count == 1 }
+        XCTAssertEqual(preflights, ["other"])
+    }
+
+    func testLocalRetryJitterSetsTheFloorWhenRetryAfterIsEarlier() async throws {
+        var jitteredAt: Date?
+        let h = try await openHarness(retryJitter: {
+            jitteredAt = Date()
+            return 0.2
+        })
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "same request")
+        try await eventually { await h.api.requests().count == 1 }
+        let request = try await firstRequest(h.api)
+        await h.api.finish(0, with: .failure(APIError.retryableHTTP(
+            status: 429, body: Data(), retryAfter: Date().addingTimeInterval(0.1))))
+        try await eventually { h.queue.pendingMessages(chatID: "chat").first?.state == .failed }
+        let retryTime = try XCTUnwrap(h.queue.automaticBackgroundWakeDate)
+        XCTAssertEqual(retryTime.timeIntervalSince(try XCTUnwrap(jitteredAt)), 1.2, accuracy: 0.08)
+        h.queue.setNetworkReachable(false)
+        h.queue.setNetworkReachable(true)
+        try await eventually { await h.api.requests().count == 2 }
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(retryTime), -0.05)
+        let requests = await h.api.requests()
+        XCTAssertEqual(requests[1].body, request.body)
     }
 
     func testBackgroundReplyCannotBypassFIFOAndExpirationFencesLateHTTP() async throws {
         let h = try await openHarness(foreground: false)
         try await h.queue.enqueueIndependentText(chatID: "blocked", text: "older")
+        let older = try XCTUnwrap(h.queue.pendingMessages(chatID: "blocked").first)
+        let editor = try h.queue.beginPendingEdit(pendingProjection(older))
+        defer { h.queue.endPendingEdit(editor) }
         let deadline = ContinuousClock.now.advanced(by: .seconds(20))
         try await h.queue.enqueueIndependentText(
             chatID: "blocked", text: "blocked reply", notificationDeadline: deadline)
         try await h.queue.enqueueIndependentText(
             chatID: "expired", text: "expired reply",
             notificationDeadline: ContinuousClock.now.advanced(by: .seconds(-1)))
+        let expired = try XCTUnwrap(h.queue.pendingMessages(chatID: "expired").first)
+        XCTAssertEqual(h.background.attempts, 0)
+        try await h.queue.removeOutgoing(chatID: "expired", itemID: expired.clientGeneratedID)
         try await h.queue.enqueueIndependentText(
             chatID: "allowed", text: "reply", notificationDeadline: deadline)
         try await eventually { await h.api.requests().count == 1 }
@@ -1405,8 +1686,72 @@ final class OutgoingMessageQueueTests: XCTestCase {
         XCTAssertEqual(receipt, .consumed)
         XCTAssertTrue(h.queue.pendingMessages(chatID: "allowed").isEmpty)
         XCTAssertEqual(h.queue.pendingMessages(chatID: "blocked").map(\.text), ["older", "blocked reply"])
-        XCTAssertEqual(h.queue.pendingMessages(chatID: "expired").map(\.text), ["expired reply"])
         XCTAssertEqual(h.background.ended, 1)
+    }
+
+    func testScheduledRefreshCompletionAndCancellationShareTheDispatcher() async throws {
+        let h = try await openHarness(foreground: false)
+        let empty = await h.queue.drainScheduledRefresh()
+        XCTAssertTrue(empty)
+        try await h.queue.enqueueIndependentText(chatID: "chat", text: "A")
+        h.queue.setNetworkReachable(false)
+        let deferred = await h.queue.drainScheduledRefresh()
+        XCTAssertFalse(deferred)
+        XCTAssertNotNil(h.queue.automaticBackgroundWakeDate)
+        h.queue.setNetworkReachable(true)
+        let refresh = Task { await h.queue.drainScheduledRefresh() }
+        try await eventually { await h.api.requests().count == 1 }
+        let duplicate = await h.queue.drainScheduledRefresh()
+        XCTAssertFalse(duplicate)
+        refresh.cancel()
+        let cancelled = await refresh.value
+        XCTAssertFalse(cancelled)
+        try await eventually {
+            h.queue.pendingMessages(chatID: "chat").first?.failure?.reason == .unknownOutcome
+        }
+        let original = try await firstRequest(h.api)
+        await h.api.finish(0, with: .success(try response(original)))
+        let requests = await h.api.requests()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(h.background.attempts, 0)
+    }
+
+    func testBackgroundAttachmentExpiryPreservesSuccessfulUploadAndIgnoresDraft() async throws {
+        let h = try await openHarness(foreground: false)
+        let image = h.root.appendingPathComponent("image.png")
+        try makeMediaPNG(red: 40, green: 30, blue: 20).write(to: image)
+        try await h.queue.importImages(urls: [image], chatID: "draft")
+        XCTAssertNil(h.queue.automaticBackgroundWakeDate)
+        let draftOnly = await h.queue.drainScheduledRefresh()
+        XCTAssertTrue(draftOnly)
+        try await h.queue.importImages(urls: [image, image], chatID: "submitted")
+        try await h.queue.enqueueText(chatID: "submitted", text: "A", clearedDraftRevision: 1)
+        await h.api.enableUploads()
+        h.queue.requestForegroundActive(true)
+        h.queue.requestForegroundActive(false)
+        try await eventually { await h.api.uploadCount() == 2 }
+        let expire = try XCTUnwrap(h.background.expirations.first)
+        expire()
+        await h.api.finishUpload("remote-0")
+        await h.api.finishUpload("remote-1", with: .failure(CancellationError()))
+        try await eventually {
+            h.queue.pendingMessages(chatID: "submitted").first?.attachments.map(\.attachmentID)
+                == ["remote-0", nil]
+        }
+        XCTAssertEqual(h.background.ended, 1)
+        XCTAssertNil(h.queue.draftAttachments(chatID: "draft").first?.preparedPath)
+        let initial = await h.api.requests()
+        XCTAssertTrue(initial.isEmpty)
+        try await h.queue.discardDraftAttachments(chatID: "draft")
+        let refresh = Task { await h.queue.drainScheduledRefresh() }
+        try await eventually { await h.api.uploadCount() == 3 }
+        await h.api.finishUpload("remote-1")
+        try await eventually { await h.api.requests().count == 1 }
+        let request = try await firstRequest(h.api)
+        await h.api.finish(0, with: .success(try response(request)))
+        let completed = await refresh.value
+        XCTAssertTrue(completed)
+        XCTAssertNil(h.queue.automaticBackgroundWakeDate)
     }
 
     func testFailedPreparationRetryKeepsUploadedSlotsAndWaitsForHead() async throws {
@@ -1432,6 +1777,46 @@ final class OutgoingMessageQueueTests: XCTestCase {
         let first = try await firstRequest(h.api)
         XCTAssertEqual(first.body.message, "A")
         XCTAssertEqual(first.body.attachmentIds, ["remote-0", "remote-1"])
+    }
+
+    func testUploadRetryAfterRetainsOtherCheckpointAndBlocksManualRetryAfterRestart() async throws {
+        let h = try await openHarness(foreground: false)
+        let image = h.root.appendingPathComponent("image.png")
+        try makeMediaPNG(red: 40, green: 30, blue: 20).write(to: image)
+        try await h.queue.importImages(urls: [image, image], chatID: "chat")
+        try await h.queue.enqueueText(chatID: "chat", text: "A", clearedDraftRevision: 1)
+        await h.api.enableUploads()
+        h.queue.requestForegroundActive(true)
+        try await eventually { await h.api.uploadCount() == 2 }
+        h.queue.setNetworkReachable(false)
+        let deadline = Date().addingTimeInterval(60)
+        await h.api.finishUpload("remote-1", with: .failure(OutgoingAttachmentUploadError.httpStatus(
+            429, retryAfter: deadline)))
+        await h.api.finishUpload("remote-0")
+        try await eventually {
+            guard let row = h.queue.pendingMessages(chatID: "chat").first else { return false }
+            return row.failure?.stage == .preparation && row.attachments.first?.attachmentID == "remote-0"
+        }
+        await h.close()
+
+        let reopened = try await openHarness(root: h.root, foreground: false)
+        await reopened.api.enableUploads()
+        let restored = try XCTUnwrap(reopened.queue.pendingMessages(chatID: "chat").first)
+        XCTAssertEqual(restored.attachments.map(\.attachmentID), ["remote-0", nil])
+        XCTAssertEqual(restored.attachments.map(\.retryNotBefore), [nil, deadline])
+        let wake = try XCTUnwrap(reopened.queue.automaticBackgroundWakeDate)
+        XCTAssertEqual(wake.timeIntervalSince(deadline), 0, accuracy: 0.001)
+        let scheduledEarly = await reopened.queue.drainScheduledRefresh()
+        XCTAssertFalse(scheduledEarly)
+        reopened.queue.requestForegroundActive(true)
+        reopened.queue.setNetworkReachable(false)
+        try await reopened.queue.retry(chatID: "chat", clientGeneratedID: restored.clientGeneratedID)
+        reopened.queue.setNetworkReachable(true)
+        try await reopened.queue.enqueueIndependentText(chatID: "other", text: "independent")
+        try await eventually { await reopened.api.requests().count == 1 }
+        XCTAssertEqual(reopened.queue.pendingMessages(chatID: "chat").first, restored)
+        let uploads = await reopened.api.uploadCount()
+        XCTAssertEqual(uploads, 0)
     }
 
     func testSignOutFencePurgesOnlyThisAccountAndRetriesFailedPurge() async throws {
@@ -1573,11 +1958,14 @@ final class OutgoingMessageQueueTests: XCTestCase {
         return try XCTUnwrap(requests.first)
     }
 
-    private func openHarness(root: URL? = nil, foreground: Bool = true, failRestore: Bool = false)
-        async throws -> Harness
+    private func openHarness(
+        root: URL? = nil, foreground: Bool = true, failRestore: Bool = false, runsWhileInactive: Bool = false,
+        retryJitter: @escaping @MainActor () -> Double = { 0 }
+    ) async throws -> Harness
     {
         let harness = try await Harness.open(
-            root: root, foreground: foreground, failRestore: failRestore)
+            root: root, foreground: foreground, failRestore: failRestore, runsWhileInactive: runsWhileInactive,
+            retryJitter: retryJitter)
         addTeardownBlock {
             await harness.close()
             if root == nil {
@@ -1610,11 +1998,30 @@ private final class QueueStorageFaults {
 }
 
 @MainActor
+private final class HeldWriteAuthorization {
+    private var continuation: CheckedContinuation<Void, Never>?
+    var isWaiting: Bool { continuation != nil }
+
+    func wait() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func finish() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@MainActor
 private final class BackgroundAttempts {
+    var granted = true
+    private(set) var attempts = 0
     var expirations: [@MainActor () -> Void] = []
     private(set) var ended = 0
 
-    func start(_ expire: @escaping @MainActor () -> Void) -> OutboxBackgroundExecution {
+    func start(_ expire: @escaping @MainActor () -> Void) -> OutboxBackgroundExecution? {
+        attempts += 1
+        guard granted else { return nil }
         expirations.append(expire)
         return OutboxBackgroundExecution { [weak self] in self?.ended += 1 }
     }
@@ -1629,7 +2036,9 @@ private final class Harness {
     var queue: OutgoingMessageQueue!
     var invalidTokenStates: [LocalOutgoingMessage.State]?
 
-    private init(root: URL) {
+    private init(
+        root: URL, foreground: Bool, runsWhileInactive: Bool, retryJitter: @escaping @MainActor () -> Double
+    ) {
         self.root = root
         queue = OutgoingMessageQueue(
             apiClient: api,
@@ -1644,6 +2053,8 @@ private final class Harness {
                 self?.invalidTokenStates = self?.queue.pendingMessages(chatID: "chat").map(\.state)
             },
             beforeStorageOperation: { [faults] operation in try await faults.check(operation) },
+            runsWhileInactive: runsWhileInactive, initiallyForeground: foreground,
+            retryJitter: retryJitter,
             startBackgroundExecution: { [background] expire in background.start(expire) },
             uploadFile: { [api] _, _, allocation, _ in
                 try await api.holdUpload(allocation.attachmentId)
@@ -1651,16 +2062,18 @@ private final class Harness {
         )
     }
 
-    static func open(root: URL? = nil, foreground: Bool = true, failRestore: Bool = false)
-        async throws -> Harness
+    static func open(
+        root: URL? = nil, foreground: Bool = true, failRestore: Bool = false, runsWhileInactive: Bool = false,
+        retryJitter: @escaping @MainActor () -> Double
+    ) async throws -> Harness
     {
         let harness = Harness(
             root: root
                 ?? FileManager.default.temporaryDirectory.appendingPathComponent(
-                    "OutgoingQueue-\(UUID().uuidString)"))
+                    "OutgoingQueue-\(UUID().uuidString)"),
+            foreground: foreground, runsWhileInactive: runsWhileInactive, retryJitter: retryJitter)
         if failRestore { harness.faults.failures = [.restore] }
         await harness.queue.activate(uid: 1)
-        await harness.queue.setForegroundActive(foreground)
         return harness
     }
 
