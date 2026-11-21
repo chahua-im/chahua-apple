@@ -214,13 +214,54 @@
         private var captionSize: CGFloat = 12
         private var overflowCount = 0
         private var document = false
+        private lazy var openAccessibilityElement = OpenAccessibilityElement(tile: self)
+
+        private var retryAccessibilityElements: [Any] {
+            if let stickerView, !stickerView.isHidden {
+                return stickerView.accessibilityElements ?? []
+            }
+            return imageView.isHidden ? [] : imageView.accessibilityElements ?? []
+        }
+
+        override var isAccessibilityElement: Bool {
+            get { retryAccessibilityElements.isEmpty }
+            set { super.isAccessibilityElement = newValue }
+        }
+
+        override var accessibilityElements: [Any]? {
+            get {
+                let retries = retryAccessibilityElements
+                guard !retries.isEmpty else { return nil }
+                let element = openAccessibilityElement
+                element.accessibilityLabel = accessibilityLabel
+                element.accessibilityValue = accessibilityValue
+                element.accessibilityHint = accessibilityHint
+                element.accessibilityTraits = accessibilityTraits
+                element.accessibilityCustomActions = accessibilityCustomActions
+                element.accessibilityFrameInContainerSpace = bounds
+                return [element] + retries
+            }
+            set {}
+        }
+
+        private final class OpenAccessibilityElement: UIAccessibilityElement {
+            private weak var tile: TimelineMediaTileView?
+
+            init(tile: TimelineMediaTileView) {
+                self.tile = tile
+                super.init(accessibilityContainer: tile)
+            }
+
+            override func accessibilityActivate() -> Bool {
+                tile?.accessibilityActivate() ?? false
+            }
+        }
 
         override init(frame: CGRect) {
             super.init(frame: frame)
             clipsToBounds = true
             isAccessibilityElement = true
             surface.clipsToBounds = true
-            surface.isUserInteractionEnabled = false
             addSubview(surface)
             surface.addSubview(imageView)
             warningSymbol.contentMode = .scaleAspectFit
@@ -473,10 +514,22 @@
         }
 
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-            guard isEnabled, !isHidden, alpha > 0, self.point(inside: point, with: event) else {
-                return nil
+            guard isUserInteractionEnabled, !isHidden, alpha > 0,
+                self.point(inside: point, with: event)
+            else { return nil }
+            // Bypass decorative poster/overflow overlays only for a retry button;
+            // successful media retains the existing tile/gesture-marker action.
+            if let stickerView, !stickerView.isHidden,
+                let target = stickerView.hitTest(convert(point, to: stickerView), with: event)
+            {
+                return target
             }
-            return self
+            if !imageView.isHidden,
+                let target = imageView.hitTest(convert(point, to: imageView), with: event)
+            {
+                return target
+            }
+            return isEnabled ? self : nil
         }
 
         override func didMoveToWindow() {

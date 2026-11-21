@@ -162,7 +162,9 @@ private struct ImageDetailOriginal {
         try Task.checkCancellation()
         // Cached image representations may be re-encoded. They can be viewed offline
         // but are not proof of the original bytes promised by Save.
-        guard mediaContext?.loadPolicy.allowsNetwork(userInitiated: true) == true else {
+        guard mediaContext?.loadPolicy.allowsNetwork(
+            isVideo: item.isVideo, userInitiated: true) == true
+        else {
             throw ImageDetailSaveError.notDownloaded
         }
 

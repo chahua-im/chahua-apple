@@ -80,26 +80,19 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 1)
     }
 
-    func testTimelineMediaShowsUnavailableUntilFullMediaIsAllowed() async throws {
+    func testTimelineMediaWaitsForAccountAuthorization() async throws {
         let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
         let connectivity = ConnectivityMonitor(monitorNetwork: false)
         connectivity.update(.init(status: .satisfied, isConstrained: true))
         let context = try makeContext(fixture: fixture, connectivity: connectivity)
+        context.setNetworkAuthorized(false)
         let (image, host) = try makeTimelineHost(context: context, fixture: fixture, animates: false)
         defer { host.close() }
-        try await waitUntil("A constrained cache miss did not show the unavailable placeholder") {
+        try await waitUntil("The blocked image did not offer an in-place load control") {
             #if os(macOS)
-                image.subviews.contains {
-                    guard let label = $0 as? NSTextField else { return false }
-                    return !label.isHidden
-                        && label.stringValue == AppLanguage.localized("Media not downloaded")
-                }
+                image.subviews.contains { ($0 as? NSButton)?.isHidden == false }
             #else
-                image.subviews.contains {
-                    guard let label = $0 as? UILabel else { return false }
-                    return !label.isHidden
-                        && label.text == AppLanguage.localized("Media not downloaded")
-                }
+                image.subviews.contains { ($0 as? UIButton)?.isHidden == false }
             #endif
         }
         XCTAssertFalse(hasVisibleSpinner(in: image))
@@ -118,6 +111,53 @@ final class CachedAvatarPresentationTests: XCTestCase {
         XCTAssertTrue(try containsColor(host.snapshot(), red: 255, green: 0, blue: 255))
         XCTAssertFalse(hasVisibleSpinner(in: image))
         XCTAssertEqual(fixture.requestCount, 1)
+    }
+
+    func testTimelineImagesLoadDespiteLimitedOrOfflinePathHints() async throws {
+        let snapshots: [ConnectivitySnapshot] = [
+            .init(status: .satisfied, isExpensive: true, isConstrained: true),
+            .init(status: .unsatisfied),
+        ]
+        for snapshot in snapshots {
+            let fixture = MediaImageFixture(data: try makeMediaPNG(red: 255, green: 0, blue: 255))
+            let connectivity = ConnectivityMonitor(monitorNetwork: false)
+            connectivity.update(snapshot)
+            let context = try makeContext(fixture: fixture, connectivity: connectivity)
+            let (_, host) = try makeTimelineHost(
+                context: context, fixture: fixture, animates: false)
+            defer { host.close() }
+            try await waitUntil("A network path hint blocked automatic image loading") {
+                try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+            }
+            XCTAssertEqual(fixture.requestCount, 1)
+        }
+    }
+
+    func testTimelineRetryRecoversFromDecodeFailure() async throws {
+        let fixture = MediaImageFixture(data: Data(), cacheControl: "no-store")
+        let context = try makeContext(fixture: fixture)
+        let (image, host) = try makeTimelineHost(context: context, fixture: fixture, animates: false)
+        defer { host.close() }
+        try await waitUntil("A failed image did not offer Retry") {
+            #if os(macOS)
+                image.subviews.contains { ($0 as? NSButton)?.isHidden == false }
+            #else
+                image.subviews.contains { ($0 as? UIButton)?.isHidden == false }
+            #endif
+        }
+        XCTAssertEqual(fixture.requestCount, 1)
+        fixture.replaceBody(try makeMediaPNG(red: 255, green: 0, blue: 255))
+        #if os(macOS)
+            let button = try XCTUnwrap(image.subviews.compactMap { $0 as? NSButton }.first)
+            button.performClick(nil)
+        #else
+            let button = try XCTUnwrap(image.subviews.compactMap { $0 as? UIButton }.first)
+            button.sendActions(for: .touchUpInside)
+        #endif
+        try await waitUntil("Retry did not recover from the failed download") {
+            try self.containsColor(host.snapshot(), red: 255, green: 0, blue: 255)
+        }
+        XCTAssertEqual(fixture.requestCount, 2)
     }
 
     func testHeldAnimationKeepsPixelsAcrossResizeVisibilityAndReuse() async throws {
@@ -276,18 +316,6 @@ final class CachedAvatarPresentationTests: XCTestCase {
         try await waitUntil("Undecodable media was not reported as an error") { failure != nil }
         XCTAssertFalse(hasVisibleSpinner(in: image))
         XCTAssertFalse(availability.contains(true))
-        #if os(macOS)
-            let visibleImages = image.subviews.compactMap { $0 as? NSImageView }.filter {
-                !$0.isHidden && $0.image != nil
-            }
-        #else
-            let visibleImages = image.subviews.compactMap { $0 as? UIImageView }.filter {
-                !$0.isHidden && $0.image != nil
-            }
-        #endif
-        XCTAssertEqual(
-            visibleImages.count, 1,
-            "An undecodable image must display the error symbol, not an empty surface.")
         image.configure(
             url: fixture.url, contentMode: .fit, animates: true, showsBlurredBackdrop: false,
             thumbnailPixelSize: CGSize(width: 128, height: 128), mediaContext: context)

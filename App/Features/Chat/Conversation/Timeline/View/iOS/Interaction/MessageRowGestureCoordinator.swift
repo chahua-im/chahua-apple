@@ -144,6 +144,9 @@
             var ancestor = touch.view
             while let current = ancestor {
                 if current is UITextField { return true }
+                // In-bubble retry buttons own their taps instead of opening the
+                // media viewer through the row's gesture marker.
+                if current is UIButton { return true }
                 // Code blocks own horizontal pans and native selection; a reply
                 // swipe must not steal the block's independent scroll gesture.
                 if current is MessageCodeScrollView { return true }

@@ -11,6 +11,7 @@ nonisolated struct ConnectivitySnapshot: Equatable, Sendable {
     /// The path is a hint. Unknown permits a bounded attempt; satisfied does
     /// not prove that authentication, HTTP or the socket can succeed.
     var canAttempt: Bool { status != .unsatisfied }
+    /// Video downloads wait for an explicit action on costly or constrained paths.
     var allowsAutomaticFullMedia: Bool { canAttempt && !isExpensive && !isConstrained }
 }
 

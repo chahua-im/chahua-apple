@@ -193,9 +193,9 @@
         }
 
         private func applyLoadPolicy(_ policy: MediaLoadPolicy) {
-            let before = loadPolicy.allowsNetwork(userInitiated: userInitiated)
+            let before = loadPolicy.allowsNetwork(isVideo: true, userInitiated: userInitiated)
             loadPolicy = policy
-            let after = policy.allowsNetwork(userInitiated: userInitiated)
+            let after = policy.allowsNetwork(isVideo: true, userInitiated: userInitiated)
             guard before != after, item.url?.isFileURL == false, player == nil else { return }
             cancelDownload()
             if failed { setFailed(false) }
@@ -212,7 +212,8 @@
                 showFailure(notDownloaded: true)
                 return
             }
-            let allowsNetwork = loadPolicy.allowsNetwork(userInitiated: userInitiated)
+            let allowsNetwork = loadPolicy.allowsNetwork(
+                isVideo: true, userInitiated: userInitiated)
             let previousLease = fileLease
             releasePlayer()
             setFailed(false)

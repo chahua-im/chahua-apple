@@ -7,6 +7,8 @@
     /// Native image views avoid a SwiftUI subtree and its independent layout/lifecycle
     /// in every measured timeline row. Only pixels change after decoding; UIKit keeps
     /// the layout engine's frame and explicitly suspends work for nonvisible cells.
+    /// Keep in-bubble failure recovery native as well; a per-row SwiftUI retry host
+    /// would reintroduce that cost and compete with the row's media tap handling.
     @MainActor
     final class TimelineImageView: UIView {
         enum ScalingMode { case fit, fill }
@@ -27,12 +29,15 @@
         private let progress = UIActivityIndicatorView(style: .medium)
         private let errorImage = UIImageView(image: UIImage(systemName: "photo"))
         private var unavailableLabel: UILabel?
+        private var retryButton: UIButton?
+        private var retryUsesCompactLayout: Bool?
         private var requestKey: RequestKey?
         private var mediaContext: AppMediaContext?
         private var loadPolicy = MediaLoadPolicy.full
         private var policyObservation: AnyCancellable?
         private var scalingMode: ScalingMode = .fit
         private var showsBackdrop = false
+        private var userInitiated = false
         private var requestedVisible = false
         private var active = false
         private var generation: UInt64 = 0
@@ -70,7 +75,6 @@
         override init(frame: CGRect) {
             super.init(frame: frame)
             clipsToBounds = true
-            isUserInteractionEnabled = false
             isAccessibilityElement = false
             backdrop.actions = [
                 "contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull(),
@@ -200,6 +204,36 @@
             refreshVisibility()
         }
 
+        /// Explicit retries can load on restricted connections, but never bypass
+        /// the context's cache-only account/offline policy.
+        func retryLoad() {
+            guard !isLocal, requestKey?.url != nil, mediaContext != nil else { return }
+            cancelRequests(preservingImages: true)
+            userInitiated = true
+            failed = false
+            requestFinished = false
+            refreshVisibility()
+            updateChrome()
+        }
+
+        @objc private func retryPressed() { retryLoad() }
+
+        override var accessibilityElements: [Any]? {
+            get {
+                guard let retryButton, !retryButton.isHidden else { return [] }
+                return [retryButton]
+            }
+            set {}
+        }
+
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            guard isUserInteractionEnabled, !isHidden, alpha > 0,
+                self.point(inside: point, with: event),
+                let retryButton, !retryButton.isHidden
+            else { return nil }
+            return retryButton.hitTest(convert(point, to: retryButton), with: event)
+        }
+
         func clear() {
             requestedVisible = false
             active = false
@@ -295,7 +329,9 @@
         }
 
         private var allowsNetwork: Bool {
-            loadPolicy.allowsNetwork(isPreview: requestKey?.isPreview == true)
+            loadPolicy.allowsNetwork(
+                isVideo: requestKey?.isVideoPoster == true,
+                isPreview: requestKey?.isPreview == true, userInitiated: userInitiated)
         }
 
         private func applyLoadPolicy(_ policy: MediaLoadPolicy) {
@@ -566,20 +602,45 @@
             }
             let showUnavailable = showsPlaceholderChrome && failed && !hasImage
             let video = requestKey?.isVideoPoster == true
+            let showRetry =
+                showUnavailable && !isLocal && requestKey?.url != nil && mediaContext != nil
+            if showRetry {
+                let button = retryButton ?? makeRetryButton()
+                let compact = bounds.width < 96 || bounds.height < (video ? 96 : 32)
+                if retryUsesCompactLayout != compact {
+                    var configuration = button.configuration
+                    configuration?.title = compact ? nil : AppLanguage.localized("Retry")
+                    configuration?.contentInsets = NSDirectionalEdgeInsets(
+                        top: 0, leading: compact ? 0 : 8, bottom: 0, trailing: compact ? 0 : 8)
+                    button.configuration = configuration
+                    retryUsesCompactLayout = compact
+                }
+                let inset: CGFloat = min(4, max(0, min(bounds.width, bounds.height) / 8))
+                let width = min(
+                    max(0, bounds.width - inset * 2),
+                    compact ? 28 : button.sizeThatFits(bounds.size).width)
+                let height = min(32, max(0, bounds.height - inset * 2))
+                button.frame = CGRect(
+                    x: video ? inset : bounds.midX - width / 2,
+                    y: video ? inset : bounds.midY - height / 2, width: width, height: height)
+                button.isHidden = false
+            } else {
+                retryButton?.isHidden = true
+            }
             let showText =
                 showUnavailable && !isLocal && !allowsNetwork
-                && bounds.width >= 96 && bounds.height >= (video ? 94 : 44)
+                && bounds.width >= 96 && bounds.height >= (video ? 94 : 108)
             if showText {
                 let label = unavailableLabel ?? makeUnavailableLabel()
                 label.textColor = showsBackdrop ? .white : .secondaryLabel
                 label.frame = CGRect(
-                    x: 4, y: bounds.midY + (video ? 23 : -16),
+                    x: 4, y: bounds.midY + (video ? 23 : 20),
                     width: bounds.width - 8, height: video ? 24 : 32)
                 label.isHidden = false
             } else {
                 unavailableLabel?.isHidden = true
             }
-            errorImage.isHidden = !showUnavailable || showText
+            errorImage.isHidden = !showUnavailable || showText || showRetry
             let showProgress =
                 showsPlaceholderChrome && !hasImage && !failed
                 && (isLocal ? loading : allowsNetwork && requestKey?.url != nil)
@@ -600,6 +661,24 @@
             unavailableLabel = label
             addSubview(label)
             return label
+        }
+
+        private func makeRetryButton() -> UIButton {
+            let button = UIButton(type: .system)
+            var configuration = UIButton.Configuration.filled()
+            configuration.title = AppLanguage.localized("Retry")
+            configuration.image = UIImage(systemName: "arrow.clockwise")
+            configuration.imagePadding = 4
+            configuration.baseBackgroundColor = .darkGray
+            configuration.baseForegroundColor = .white
+            configuration.cornerStyle = .capsule
+            configuration.buttonSize = .small
+            button.configuration = configuration
+            button.accessibilityLabel = AppLanguage.localized("Retry")
+            button.addTarget(self, action: #selector(retryPressed), for: .touchUpInside)
+            retryButton = button
+            addSubview(button)
+            return button
         }
 
         private func cancelRequests(preservingImages: Bool) {
@@ -632,6 +711,7 @@
             decodedImage = nil
             decodedCGImage = nil
             isLocal = false
+            userInitiated = false
             loading = false
             failed = false
             requestFinished = false

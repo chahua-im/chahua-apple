@@ -204,6 +204,47 @@
         private var captionSize: CGFloat = 12
         private var overflowCount = 0
         private var document = false
+        private lazy var openAccessibilityElement = OpenAccessibilityElement(tile: self)
+
+        private var retryAccessibilityElements: [Any] {
+            if let stickerView, !stickerView.isHidden {
+                return stickerView.accessibilityChildren() ?? []
+            }
+            return imageView.isHidden ? [] : imageView.accessibilityChildren() ?? []
+        }
+
+        override func accessibilityRole() -> NSAccessibility.Role? {
+            retryAccessibilityElements.isEmpty ? super.accessibilityRole() : .group
+        }
+
+        override func accessibilityChildren() -> [Any]? {
+            let retries = retryAccessibilityElements
+            guard !retries.isEmpty else { return super.accessibilityChildren() }
+            let element = openAccessibilityElement
+            element.setAccessibilityRole(isEnabled ? .button : .image)
+            element.setAccessibilityLabel(accessibilityLabel())
+            element.setAccessibilityValue(accessibilityValue())
+            element.setAccessibilityHelp(accessibilityHelp())
+            element.setAccessibilityFrame(
+                window?.convertToScreen(convert(bounds, to: nil)) ?? .zero)
+            return [element] + retries
+        }
+
+        private final class OpenAccessibilityElement: NSAccessibilityElement {
+            private weak var tile: TimelineMediaTileView?
+
+            init(tile: TimelineMediaTileView) {
+                self.tile = tile
+                super.init()
+                setAccessibilityParent(tile)
+            }
+
+            override func accessibilityPerformPress() -> Bool {
+                guard let tile, tile.isEnabled, tile.onOpen != nil else { return false }
+                tile.activate()
+                return true
+            }
+        }
 
         override var isFlipped: Bool { true }
 
@@ -451,10 +492,20 @@
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? {
-            guard !isHidden, bounds.contains(convert(point, from: superview)), isEnabled else {
-                return nil
+            guard !isHidden, bounds.contains(convert(point, from: superview)) else { return nil }
+            // The tile owns normal media taps, but recovery controls must receive
+            // their own events even when opening the media is unavailable.
+            if let stickerView, !stickerView.isHidden,
+                let target = stickerView.hitTest(surface.convert(point, from: superview))
+            {
+                return target
             }
-            return self
+            if !imageView.isHidden,
+                let target = imageView.hitTest(surface.convert(point, from: superview))
+            {
+                return target
+            }
+            return isEnabled ? self : nil
         }
 
         override func resetCursorRects() {

@@ -11,6 +11,22 @@ import XCTest
 
 @MainActor
 final class MediaHostingTests: XCTestCase {
+    func testNetworkLimitsApplyToVideoButNotImages() {
+        for snapshot in [
+            ConnectivitySnapshot(status: .satisfied, isExpensive: true),
+            ConnectivitySnapshot(status: .satisfied, isConstrained: true),
+        ] {
+            let policy = MediaLoadPolicy(snapshot)
+            XCTAssertTrue(policy.allowsNetwork())
+            XCTAssertFalse(policy.allowsNetwork(isVideo: true))
+            XCTAssertTrue(policy.allowsNetwork(isVideo: true, userInitiated: true))
+        }
+        let offline = MediaLoadPolicy(.init(status: .unsatisfied))
+        XCTAssertTrue(offline.allowsNetwork())
+        XCTAssertFalse(offline.allowsNetwork(isVideo: true, userInitiated: true))
+        XCTAssertFalse(MediaLoadPolicy.cacheOnly.allowsNetwork(userInitiated: true))
+    }
+
     func testStillImageSizingKeepsAllBoundsWithoutUpscaling() {
         let cases: [(Int, Int, Int, Int)] = [
             (640, 480, 640, 480),
@@ -89,7 +105,7 @@ final class MediaHostingTests: XCTestCase {
         XCTAssertGreaterThan(otherAccountBytes, 0)
     }
 
-    func testLimitedImageLoadRequiresTapAndOfflinePlaybackUsesOnlyAccountCache() async throws {
+    func testCellularImageLoadsAutomaticallyAndOfflinePlaybackUsesOnlyAccountCache() async throws {
         let data = try makeMediaPNG(red: 255, green: 0, blue: 0)
         let fixture = MediaImageFixture(data: data)
         MediaImageURLProtocol.install(fixture)
@@ -111,19 +127,10 @@ final class MediaHostingTests: XCTestCase {
             id: "attachment", url: fixture.url, contentType: "image/png",
             fileName: "attachment.png", width: 16, height: 16)
         let loader = ImageDetailImageLoader()
-        let unavailable = expectation(description: "Automatic full image fetch was suppressed")
-        let failure = loader.$failure.sink {
-            if $0 == .notDownloaded { unavailable.fulfill() }
-        }
-        loader.load(item, mediaContext: context)
-        await fulfillment(of: [unavailable], timeout: 2)
-        failure.cancel()
-        XCTAssertFalse(loader.isLoading)
-        XCTAssertEqual(fixture.requestCount, 0)
-
-        let opened = expectation(description: "An explicit open fetched the full image")
+        let opened = expectation(
+            description: "A cellular connection fetched the full image automatically")
         let loaded = loader.$image.sink { if $0 != nil { opened.fulfill() } }
-        loader.load(item, mediaContext: context, userInitiated: true)
+        loader.load(item, mediaContext: context)
         await fulfillment(of: [opened], timeout: 2)
         loaded.cancel()
         XCTAssertEqual(fixture.requestCount, 1)
@@ -144,6 +151,7 @@ final class MediaHostingTests: XCTestCase {
         let otherCache = try ImageCache(name: "second", cacheDirectoryURL: directory)
         let otherContext = AppMediaContext(
             cache: otherCache, downloader: downloader, connectivity: connectivity)
+        otherContext.setNetworkAuthorized(false)
         let otherLoader = ImageDetailImageLoader()
         let isolated = expectation(description: "Another account did not reuse the image")
         let otherFailure = otherLoader.$failure.sink {
@@ -224,7 +232,10 @@ final class MediaHostingTests: XCTestCase {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [MediaImageURLProtocol.self]
             downloader.sessionConfiguration = configuration
-            let context = AppMediaContext(cache: cache, downloader: downloader)
+            let connectivity = ConnectivityMonitor(monitorNetwork: false)
+            connectivity.update(.init(status: .satisfied, isExpensive: true))
+            let context = AppMediaContext(
+                cache: cache, downloader: downloader, connectivity: connectivity)
             defer {
                 MediaImageURLProtocol.remove(fixture)
                 cache.clearCache()

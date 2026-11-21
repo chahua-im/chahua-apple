@@ -12,14 +12,14 @@ import WebKit
     import UIKit
 #endif
 
-/// A thumbnail generated locally still requires original bytes over the network.
-/// Only a separate, bounded preview URL may be fetched automatically on a limited path.
+/// Images always attempt a load on an authorized account. Network path hints
+/// limit only automatic video downloads, including locally generated posters.
 nonisolated enum MediaLoadPolicy: Equatable, Sendable {
-    case full, previewsOnly, cacheOnly
+    case full, previewsOnly, imagesOnly, cacheOnly
 
     init(_ snapshot: ConnectivitySnapshot) {
         if !snapshot.canAttempt {
-            self = .cacheOnly
+            self = .imagesOnly
         } else if snapshot.allowsAutomaticFullMedia {
             self = .full
         } else {
@@ -27,8 +27,11 @@ nonisolated enum MediaLoadPolicy: Equatable, Sendable {
         }
     }
 
-    func allowsNetwork(isPreview: Bool = false, userInitiated: Bool = false) -> Bool {
-        self == .full || (self == .previewsOnly && (isPreview || userInitiated))
+    func allowsNetwork(
+        isVideo: Bool = false, isPreview: Bool = false, userInitiated: Bool = false
+    ) -> Bool {
+        if !isVideo { return self != .cacheOnly }
+        return self == .full || (self == .previewsOnly && (isPreview || userInitiated))
     }
 }
 

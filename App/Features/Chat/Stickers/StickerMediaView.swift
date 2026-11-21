@@ -88,11 +88,13 @@ final class StickerMediaSurfaceView: StickerNativeView {
     #if os(iOS)
         private let statusLabel = UILabel(frame: .zero)
         private let progress = UIActivityIndicatorView(style: .medium)
+        private let retryButton = UIButton(type: .system)
         private weak var observedScrollView: UIScrollView?
         private var scrollObservation: NSKeyValueObservation?
     #else
         private let statusLabel = NSTextField(wrappingLabelWithString: "")
         private let progress = NSProgressIndicator(frame: .zero)
+        private let retryButton = NSButton(title: "", target: nil, action: nil)
         private weak var observedClipView: NSClipView?
         override var isFlipped: Bool { true }
         override var intrinsicContentSize: NSSize {
@@ -103,6 +105,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
     private var media: MessageStickerMediaResponse?
     private var mediaContext: AppMediaContext?
     private var loadPolicy = MediaLoadPolicy.cacheOnly
+    private var userInitiated = false
     private var policyObservation: AnyCancellable?
     private var videoPosterRequested = false
     private var mediaGeneration: UInt64 = 0
@@ -120,8 +123,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         #if os(iOS)
-            isUserInteractionEnabled = false
-            isAccessibilityElement = true
+            isUserInteractionEnabled = true
             accessibilityTraits = .image
             clipsToBounds = true
             statusLabel.font = .preferredFont(forTextStyle: .caption2)
@@ -130,6 +132,9 @@ final class StickerMediaSurfaceView: StickerNativeView {
             statusLabel.isAccessibilityElement = false
             statusLabel.textAlignment = .center
             progress.hidesWhenStopped = true
+            retryButton.setTitle(AppLanguage.localized("Retry"), for: .normal)
+            retryButton.accessibilityLabel = AppLanguage.localized("Retry")
+            retryButton.addTarget(self, action: #selector(retryMedia), for: .touchUpInside)
             for name in [
                 UIApplication.didBecomeActiveNotification,
                 UIApplication.willResignActiveNotification,
@@ -151,6 +156,11 @@ final class StickerMediaSurfaceView: StickerNativeView {
             progress.style = .spinning
             progress.controlSize = .small
             progress.isDisplayedWhenStopped = false
+            retryButton.title = AppLanguage.localized("Retry")
+            retryButton.setAccessibilityLabel(AppLanguage.localized("Retry"))
+            retryButton.bezelStyle = .rounded
+            retryButton.target = self
+            retryButton.action = #selector(retryMedia)
             for name in [
                 NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
                 NSWindow.didChangeOcclusionStateNotification,
@@ -164,6 +174,10 @@ final class StickerMediaSurfaceView: StickerNativeView {
         addSubview(imageView)
         addSubview(statusLabel)
         addSubview(progress)
+        // Retry stays native: measured timeline rows must not host a SwiftUI tree
+        // just for recovery controls. Only the controls intercept sticker hits.
+        addSubview(retryButton)
+        retryButton.isHidden = true
         statusLabel.isHidden = true
     }
 
@@ -181,6 +195,8 @@ final class StickerMediaSurfaceView: StickerNativeView {
         let changed = self.media != media || self.mediaContext !== mediaContext
         if changed {
             imageView.clear()
+            video?.onStatus = nil
+            video?.onPoster = nil
             video?.stop()
             video?.view.removeFromSuperview()
             video = nil
@@ -192,6 +208,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
             videoLoading = false
             hasVideoPoster = false
             loadPolicy = .cacheOnly
+            userInitiated = false
             #if os(macOS)
                 toolTip = nil
             #endif
@@ -206,8 +223,8 @@ final class StickerMediaSurfaceView: StickerNativeView {
         let type = media.contentType.lowercased()
         isVideo = type.hasPrefix("video/")
         imageView.isHidden =
-            failure != nil
-            || (isVideo && (!hasVideoPoster || (!videoLoading && video?.view.isHidden == false)))
+            isVideo && (failure != nil || !hasVideoPoster
+                || (!videoLoading && video?.view.isHidden == false))
         if changed {
             guard let url = URL(string: media.url),
                 ["https", "http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil
@@ -245,7 +262,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
                     }
                 }
                 playback.onPoster = { [weak self] image in
-                    guard let self, self.loadPolicy.allowsNetwork(), !self.hasVideoPoster else {
+                    guard let self, self.allowsVideoNetwork, !self.hasVideoPoster else {
                         return
                     }
                     cache.store(image, forKey: Self.posterKey(url))
@@ -258,7 +275,9 @@ final class StickerMediaSurfaceView: StickerNativeView {
                 addSubview(statusLabel)
                 progress.removeFromSuperview()
                 addSubview(progress)
-                videoLoading = loadPolicy.allowsNetwork()
+                retryButton.removeFromSuperview()
+                addSubview(retryButton)
+                videoLoading = allowsVideoNetwork
                 playback.view.isHidden = !videoLoading
             } else if !type.hasPrefix("image/") {
                 showFailure(
@@ -279,6 +298,8 @@ final class StickerMediaSurfaceView: StickerNativeView {
     func clear() {
         requestedVisible = false
         imageView.clear()
+        video?.onStatus = nil
+        video?.onPoster = nil
         video?.stop()
         video?.view.removeFromSuperview()
         video = nil
@@ -288,6 +309,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
         media = nil
         mediaContext = nil
         failure = nil
+        userInitiated = false
         videoLoading = false
         hasVideoPoster = false
         #if os(macOS)
@@ -297,6 +319,37 @@ final class StickerMediaSurfaceView: StickerNativeView {
         setStatus(nil)
         updateProgress(visible: false)
         onError = nil
+    }
+
+    private var allowsVideoNetwork: Bool {
+        loadPolicy.allowsNetwork(isVideo: true, userInitiated: userInitiated)
+    }
+
+    @objc private func retryMedia() {
+        guard let media else { return }
+        guard isVideo else {
+            imageView.retryLoad()
+            return
+        }
+        let context = mediaContext
+        let emoji = emoji
+        let scale = displayScale
+        let insets = insetsArtwork
+        let visible = requestedVisible
+        let errorHandler = onError
+        // Clear tears down WebKit and invalidates pending poster callbacks before
+        // configure recreates playback; restore viewport visibility only afterward.
+        clear()
+        onError = errorHandler
+        configure(
+            media: media, emoji: emoji, displayScale: scale,
+            mediaContext: context, insetsArtwork: insets)
+        userInitiated = true
+        videoLoading = allowsVideoNetwork && failure == nil
+        video?.view.isHidden = !videoLoading
+        setStatus(failure)
+        setVisible(visible)
+        updateAccessibility()
     }
 
     #if os(iOS)
@@ -316,7 +369,29 @@ final class StickerMediaSurfaceView: StickerNativeView {
             refreshVisibility()
         }
         override var isHidden: Bool { didSet { refreshVisibility() } }
-        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+        override var accessibilityElements: [Any]? {
+            get {
+                isVideo
+                    ? (retryButton.isHidden ? [] : [retryButton])
+                    : imageView.accessibilityElements
+            }
+            set {}
+        }
+        override var isAccessibilityElement: Bool {
+            get { accessibilityElements?.isEmpty != false }
+            set {}
+        }
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            guard !isHidden, alpha > 0, bounds.contains(point) else { return nil }
+            if !retryButton.isHidden,
+                let hit = retryButton.hitTest(convert(point, to: retryButton), with: event)
+            {
+                return hit
+            }
+            guard !isVideo, !imageView.isHidden else { return nil }
+            let hit = imageView.hitTest(convert(point, to: imageView), with: event)
+            return hit === imageView ? nil : hit
+        }
     #else
         override func layout() {
             super.layout()
@@ -341,7 +416,26 @@ final class StickerMediaSurfaceView: StickerNativeView {
             super.viewDidUnhide()
             refreshVisibility()
         }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func accessibilityChildren() -> [Any]? {
+            isVideo
+                ? (retryButton.isHidden ? [] : [retryButton])
+                : imageView.accessibilityChildren()
+        }
+        override func isAccessibilityElement() -> Bool {
+            accessibilityChildren()?.isEmpty != false
+        }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            let local = convert(point, from: superview)
+            guard !isHidden, bounds.contains(local) else { return nil }
+            if !retryButton.isHidden,
+                let hit = retryButton.hitTest(local)
+            {
+                return hit
+            }
+            guard !isVideo, !imageView.isHidden else { return nil }
+            let hit = imageView.hitTest(local)
+            return hit === imageView ? nil : hit
+        }
     #endif
 
     // Lazy SwiftUI cells can appear before entering the viewport. Scrolling moves
@@ -405,7 +499,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
         #endif
         imageView.setVisible(visible && !isVideo && failure == nil)
         if isVideo, let video {
-            let allowsNetwork = loadPolicy.allowsNetwork()
+            let allowsNetwork = allowsVideoNetwork
             if visible { restoreVideoPoster() }
             video.setVisible(visible && failure == nil && allowsNetwork)
             if failure == nil, !allowsNetwork {
@@ -416,9 +510,9 @@ final class StickerMediaSurfaceView: StickerNativeView {
     }
 
     private func applyLoadPolicy(_ policy: MediaLoadPolicy) {
-        let previouslyAllowed = loadPolicy.allowsNetwork()
+        let previouslyAllowed = allowsVideoNetwork
         loadPolicy = policy
-        let allowsNetwork = policy.allowsNetwork()
+        let allowsNetwork = allowsVideoNetwork
         guard previouslyAllowed != allowsNetwork, let video else { return }
         if !allowsNetwork { video.stop() }
         video.view.isHidden = !allowsNetwork
@@ -463,9 +557,16 @@ final class StickerMediaSurfaceView: StickerNativeView {
         #else
             progress.frame = CGRect(x: bounds.midX - 8, y: bounds.midY - 8, width: 16, height: 16)
         #endif
+        let retryVisible = !retryButton.isHidden
+        let buttonHeight = min(bounds.height, 32)
+        retryButton.frame = CGRect(
+            x: max(0, bounds.midX - 42),
+            y: min(max(0, bounds.height - buttonHeight), (bounds.height - buttonHeight) / 2 + 24),
+            width: min(bounds.width, 84), height: buttonHeight)
         let height = min(bounds.height, 56)
         statusLabel.frame = CGRect(
-            x: 4, y: (bounds.height - height) / 2, width: max(0, bounds.width - 8), height: height)
+            x: 4, y: max(0, (bounds.height - height) / 2 - (retryVisible ? 16 : 0)),
+            width: max(0, bounds.width - 8), height: height)
         guard let media, !isVideo, failure == nil, artwork.width > 0, artwork.height > 0 else {
             return
         }
@@ -473,7 +574,9 @@ final class StickerMediaSurfaceView: StickerNativeView {
             width: ceil(artwork.width * displayScale), height: ceil(artwork.height * displayScale))
         guard pixels != imagePixels else { return }
         imagePixels = pixels
-        imageView.onLoadFailure = { [weak self] error in self?.showFailure(error) }
+        // Image failures belong to TimelineImageView, whose native Retry must stay
+        // visible rather than being replaced by the video failure surface.
+        imageView.onLoadFailure = { [weak self] error in self?.onError?(error) }
         imageView.configure(
             url: URL(string: media.url), contentMode: .fit,
             animates: RemoteImageFormat.isAnimated(contentType: media.contentType),
@@ -530,16 +633,32 @@ final class StickerMediaSurfaceView: StickerNativeView {
             statusLabel.stringValue = text ?? ""
         #endif
         statusLabel.isHidden = text == nil
+        updateRetryVisibility()
+    }
+
+    private func updateRetryVisibility() {
+        let hidden =
+            media == nil || !isVideo
+            || (failure == nil && (allowsVideoNetwork || hasVideoPoster))
+        guard retryButton.isHidden != hidden else { return }
+        retryButton.isHidden = hidden
+        #if os(iOS)
+            setNeedsLayout()
+        #else
+            needsLayout = true
+        #endif
     }
 
     private func updateAccessibility() {
+        updateRetryVisibility()
         let label =
             emoji.isEmpty
             ? AppLanguage.localized("Sticker") : AppLanguage.localized("Sticker \(emoji)")
         let unavailable =
-            isVideo && !loadPolicy.allowsNetwork() && !hasVideoPoster
+            isVideo && !allowsVideoNetwork && !hasVideoPoster
             ? AppLanguage.localized("Media not downloaded") : nil
         #if os(iOS)
+            accessibilityLabel = label
             accessibilityValue =
                 failure
                 ?? unavailable
