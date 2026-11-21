@@ -8,6 +8,297 @@ import XCTest
 final class ConversationTimelineModelTests: XCTestCase {
     private var cancellables: Set<AnyCancellable> = []
 
+    func testIsolatedLatestSeedRetainsRowThroughHeldFailureAndExplicitRetry() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let key = ConversationKey(chatID: "chat")
+        let seed = try TimelineTestFixtures.message(id: 20, senderID: 2, at: 20)
+        let epoch = try await local.cacheEpoch()
+        try await local.cacheChange(.create(seed, key, adjoining: nil), epoch: epoch)
+        let source = ScriptedTimelineSource(pages: [
+            .failure(StubError()), .success(try TimelineTestFixtures.page([seed]))
+        ])
+        var online = true
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store, historyCache: cache,
+            canFetchHistory: { online })
+        defer { model.close() }
+        source.holdNextRequest()
+        let opening = Task { await model.open() }
+        await source.waitUntilHeld()
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
+        XCTAssertTrue(model.state.hasUnverifiedLatestSeed)
+        XCTAssertEqual(model.state.olderEdgePresentation, .loading)
+        source.release()
+        await opening.value
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
+        XCTAssertEqual(model.state.olderEdgePresentation, .retryNetworkHistory)
+        online = false // Explicit retry must bypass a stale path hint.
+        source.holdNextRequest()
+        let retrying = Task { await model.retryNetworkHistory() }
+        await source.waitUntilHeld()
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
+        XCTAssertEqual(model.state.olderEdgePresentation, .loading)
+        source.release()
+        await retrying.value
+        XCTAssertFalse(model.state.hasUnverifiedLatestSeed)
+        XCTAssertEqual(model.state.history, .server)
+    }
+
+    func testOnlineUnreadSeedWaitsForMissingAnchorWithoutPublishingBoundary() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let key = ConversationKey(chatID: "chat")
+        let seed = try TimelineTestFixtures.message(id: 20, senderID: 2, at: 20)
+        let anchor = try TimelineTestFixtures.message(id: 10, senderID: 2, at: 10)
+        let epoch = try await local.cacheEpoch()
+        try await local.cacheChange(.create(seed, key, adjoining: nil), epoch: epoch)
+        let source = ScriptedTimelineSource(pages: [
+            .success(try TimelineTestFixtures.page([anchor, seed]))
+        ])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store, historyCache: cache)
+        defer { model.close() }
+        source.holdNextRequest()
+        let opening = Task { await model.loadInitial(position: .unread(after: anchor.id)) }
+        await source.waitUntilHeld()
+        XCTAssertEqual(model.state.content, .loadingInitial)
+        XCTAssertTrue(model.rows.isEmpty)
+        source.release()
+        await opening.value
+        XCTAssertEqual(model.state.history, .server)
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [anchor.id, seed.id])
+        XCTAssertTrue(model.rows.contains { $0.id == .unreadSeparator })
+    }
+
+    func testOfflineIsolatedSeedAndVerifiedSingletonRemainDistinct() async throws {
+        for isolated in [true, false] {
+            let (cache, local) = try await makeHistoryCache()
+            let key = ConversationKey(chatID: "chat")
+            let message = try TimelineTestFixtures.message(id: 20, senderID: 2, at: 20)
+            let epoch = try await local.cacheEpoch()
+            if isolated {
+                try await local.cacheChange(.create(message, key, adjoining: nil), epoch: epoch)
+            } else {
+                try await local.cacheHistory(
+                    key, query: .init(max: 50),
+                    response: TimelineTestFixtures.page([message]), epoch: epoch)
+            }
+            let source = ScriptedTimelineSource(pages: [])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: source, messageStore: source.store, historyCache: cache,
+                canFetchHistory: { false })
+            await model.loadInitial(position: .unread(after: MessageID(10)))
+            XCTAssertEqual(model.state.content, .ready)
+            XCTAssertEqual(model.rows.compactMap(\.messageID), [message.id])
+            XCTAssertEqual(model.state.hasUnverifiedLatestSeed, isolated)
+            XCTAssertEqual(model.state.olderEdgePresentation, .none)
+            XCTAssertTrue(source.queries.isEmpty)
+            model.close()
+        }
+    }
+
+    func testIsolatedMessageTargetReplaysEditOverHeldStaleHistory() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let key = ConversationKey(chatID: "chat")
+        let seed = try TimelineTestFixtures.message(id: 20, senderID: 2, at: 20, text: "stale")
+        let edited = try TimelineTestFixtures.message(id: 20, senderID: 2, at: 20, text: "edited")
+        let epoch = try await local.cacheEpoch()
+        try await local.cacheChange(.create(seed, key, adjoining: nil), epoch: epoch)
+        let source = ScriptedTimelineSource(pages: [
+            .success(try TimelineTestFixtures.page([seed]))
+        ])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store, historyCache: cache)
+        defer { model.close() }
+        source.holdNextRequest()
+        let opening = Task { await model.loadInitial(position: .message(seed.id)) }
+        await source.waitUntilHeld()
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
+        XCTAssertFalse(model.state.live.followsLatest)
+        source.store.apply(.messageUpdated(edited))
+        source.release()
+        await opening.value
+        XCTAssertEqual(remoteMessages(model).map(\.id), [seed.id])
+        XCTAssertEqual(remoteMessages(model).first?.message, "edited")
+        XCTAssertFalse(model.state.hasUnverifiedLatestSeed)
+        XCTAssertFalse(model.state.live.followsLatest)
+    }
+
+    func testColdChatSwitchPublishesReplayedSQLiteTailBeforeResumeWithoutFetching() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let a = ConversationKey(chatID: "a")
+        let b = ConversationKey(chatID: "b")
+        let original = try TimelineTestFixtures.message(
+            id: 10, chatID: a.chatID, senderID: 2, at: 10, text: "original")
+        let edited = try TimelineTestFixtures.message(
+            id: 10, chatID: a.chatID, senderID: 2, at: 10, text: "edited while hidden")
+        let removed = try TimelineTestFixtures.message(
+            id: 20, chatID: a.chatID, senderID: 2, at: 20, text: "deleted while hidden")
+        let arrival = try TimelineTestFixtures.message(
+            id: 30, chatID: a.chatID, senderID: 2, at: 30)
+        let other = try TimelineTestFixtures.message(id: 40, chatID: b.chatID, senderID: 2, at: 40)
+        try await seedSyncTail([original, removed], for: a, at: "a-base", in: local)
+        try await seedSyncTail([other], for: b, at: "b-base", in: local)
+
+        let offline = ScriptedTimelineSource(pages: [])
+        func offlineTimeline(_ key: ConversationKey) -> ConversationTimelineModel {
+            ConversationTimelineModel(
+                chatID: key.chatID, currentUserID: 1, isGroupChat: false,
+                source: offline, messageStore: offline.store, historyCache: cache,
+                canFetchHistory: { false })
+        }
+        do {
+            let firstA = offlineTimeline(a)
+            defer { firstA.close() }
+            await firstA.open()
+            XCTAssertEqual(firstA.rows.compactMap(\.messageID), [original.id, removed.id])
+        }
+        do {
+            let showingB = offlineTimeline(b)
+            defer { showingB.close() }
+            await showingB.open()
+            let replay = try await cache.commitSyncBatch(
+                chatID: a.chatID, from: "a-base", to: "a-replayed",
+                changes: [
+                    .upsert(message: edited, appeared: false),
+                    .delete(messageID: removed.id, threadRootID: nil),
+                    .upsert(message: arrival, appeared: true),
+                ])
+            XCTAssertEqual(replay, .committed)
+            XCTAssertEqual(showingB.rows.compactMap(\.messageID), [other.id])
+        }
+
+        // No previous model or in-memory message journal can supply the returning rows.
+        let source = ScriptedTimelineSource(pages: [.failure(StubError())])
+        let waiting = expectation(description: "Freshness decision waits for sync resume")
+        var resumeSync: CheckedContinuation<Void, Never>?
+        source.waitForSync = {
+            await withCheckedContinuation {
+                resumeSync = $0
+                waiting.fulfill()
+            }
+        }
+        let returningA = ConversationTimelineModel(
+            chatID: a.chatID, currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store, historyCache: cache)
+        defer {
+            returningA.close()
+            resumeSync?.resume()
+        }
+        let opening = Task { await returningA.open() }
+        await fulfillment(of: [waiting], timeout: 3)
+
+        XCTAssertEqual(returningA.state.history, .saved)
+        XCTAssertEqual(returningA.rows.compactMap(\.messageID), [edited.id, arrival.id])
+        XCTAssertEqual(remoteMessages(returningA).first?.message, "edited while hidden")
+        XCTAssertTrue(source.queries.isEmpty)
+        reportVisible([edited.id, arrival.id], to: returningA, distanceToBottom: 0)
+
+        source.syncCoverage.insert(a)
+        source.waitForSync = nil
+        resumeSync?.resume()
+        resumeSync = nil
+        await opening.value
+
+        XCTAssertEqual(returningA.state.history, .server)
+        XCTAssertTrue(returningA.isAtLiveEdge)
+        XCTAssertEqual(returningA.rows.compactMap(\.messageID), [edited.id, arrival.id])
+        XCTAssertNil(
+            returningA.updates.value.pendingScroll, "Promotion must not reposition the viewport")
+        XCTAssertTrue(source.queries.isEmpty, "A covered, certified tail needs no history request")
+    }
+
+    func testExpiredSyncTailStaysVisibleUntilRevocationFencesHeldReplacement() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let key = ConversationKey(chatID: "chat")
+        let saved = try TimelineTestFixtures.message(id: 10, senderID: 2, at: 10)
+        let late = try TimelineTestFixtures.message(id: 20, senderID: 2, at: 20)
+        try await seedSyncTail([saved], for: key, at: "base", in: local)
+        // Expiry drops the proof, not the saved rows.
+        try await cache.resetSyncChat(chatID: key.chatID, cursor: "expired-head", purge: false)
+        let source = ScriptedTimelineSource(timelinePages: [
+            .success(
+                TimelinePage(
+                    response: .init(messages: [saved, late]), journalFloor: 0, at: "expired-head"))
+        ])
+        let model = ConversationTimelineModel(
+            chatID: key.chatID, currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store, historyCache: cache)
+        defer { model.close() }
+        let requested = expectation(description: "Expired tail requests one replacement")
+        source.holdNextRequest { requested.fulfill() }
+        let opening = Task { await model.open() }
+        await fulfillment(of: [requested], timeout: 3)
+
+        XCTAssertEqual(model.state.history, .saved)
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [saved.id])
+        XCTAssertEqual(source.queries.count, 1)
+
+        cache.revoke(key.chatID)
+        model.invalidateCachedHistory()
+        XCTAssertTrue(model.rows.isEmpty, "Revocation clears rows even while the page is held")
+        source.release()
+        await opening.value
+
+        XCTAssertTrue(model.rows.isEmpty, "A late replacement cannot restore revoked rows")
+        XCTAssertEqual(source.queries.count, 1)
+        let persisted = try await cache.read { try await $0.cachedHistory(key) }
+        XCTAssertTrue(persisted.messages.isEmpty)
+    }
+
+    func testSyncPageReplaysOnlyJournalEntriesAfterItsFloor() async throws {
+        let pageText = try TimelineTestFixtures.message(id: 10, at: 10, text: "page state")
+        let earlier = try TimelineTestFixtures.message(id: 10, at: 10, text: "at the floor")
+        let pageOther = try TimelineTestFixtures.message(id: 20, at: 20, text: "as of page")
+        let later = try TimelineTestFixtures.message(id: 20, at: 20, text: "after the floor")
+        let floor: UInt64 = 1
+        let source = ScriptedTimelineSource(timelinePages: [
+            .success(
+                TimelinePage(
+                    response: .init(messages: [pageText, pageOther]), journalFloor: floor,
+                    at: "page"))
+        ])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store)
+        defer { model.close() }
+        source.holdNextRequest()
+        let loading = Task { await model.open() }
+        await source.waitUntilHeld()
+
+        source.store.apply(.messageUpdated(earlier))
+        XCTAssertEqual(source.store.receiveRevision, floor)
+        source.store.apply(.messageUpdated(later))
+        source.release()
+        await loading.value
+
+        XCTAssertEqual(remoteMessages(model).map(\.message), ["page state", "after the floor"])
+    }
+
+    func testDelayedCreateInsertsInIDOrderInsideHistoricalWindow() async throws {
+        let first = try TimelineTestFixtures.message(id: 10, at: 10)
+        let last = try TimelineTestFixtures.message(id: 20, at: 20)
+        let delayed = try TimelineTestFixtures.message(id: 15, senderID: 2, at: 15, type: .audio)
+        let beyond = try TimelineTestFixtures.message(id: 25, senderID: 2, at: 25)
+        let (model, source, _) = try makeModel(pages: [
+            .success(try TimelineTestFixtures.page([first, last], newerCursor: last.id))
+        ])
+        defer { model.close() }
+        await model.open()
+        XCTAssertFalse(model.isAtLiveEdge)
+
+        source.store.apply(.message(delayed))
+        source.store.apply(.message(delayed))
+        source.store.apply(.message(beyond))
+
+        XCTAssertEqual(model.rows.compactMap(\.messageID), [first.id, delayed.id, last.id])
+        XCTAssertFalse(model.isAtLiveEdge)
+        XCTAssertEqual(source.queries.count, 1)
+    }
+
     func testSavedHistoryPagesWithinASectionAndRequiresExplicitGapNavigation() async throws {
         let (cache, local) = try await makeHistoryCache()
         let key = ConversationKey(chatID: "chat")
@@ -18,11 +309,13 @@ final class ConversationTimelineModelTests: XCTestCase {
                 ids: 7...9, olderCursor: MessageID(7), newerCursor: MessageID(9)), epoch: epoch)
         try await local.cacheHistory(
             key, query: .init(max: 50),
-            response: try historyPage(ids: 110...159, olderCursor: MessageID(110), newerCursor: nil),
+            response: try historyPage(
+                ids: 110...159, olderCursor: MessageID(110), newerCursor: nil),
             epoch: epoch)
         try await local.cacheHistory(
             key, query: .init(before: MessageID(110), max: 50),
-            response: try historyPage(ids: 100...109, olderCursor: MessageID(100), newerCursor: nil),
+            response: try historyPage(
+                ids: 100...109, olderCursor: MessageID(100), newerCursor: nil),
             epoch: epoch)
 
         let source = ScriptedTimelineSource(pages: [])
@@ -39,8 +332,10 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.state.olderSaved, .more)
 
         let contiguous = expectation(description: "contiguous saved page")
-        let more = model.$rows.filter { $0.first(where: { $0.messageID != nil })?.messageID == MessageID(100) }
-            .prefix(1).sink { _ in contiguous.fulfill() }
+        let more = model.$rows.filter {
+            $0.first(where: { $0.messageID != nil })?.messageID == MessageID(100)
+        }
+        .prefix(1).sink { _ in contiguous.fulfill() }
         model.browseSavedEdge(.older)
         await fulfillment(of: [contiguous], timeout: 3)
         more.cancel()
@@ -73,7 +368,9 @@ final class ConversationTimelineModelTests: XCTestCase {
         cache.accept(.messageDeleted(saved.redactedForDeletion()), fromSocket: true)
         try await cache.read { store in
             let history = try await store.cachedHistory(key, position: .latest)
-            XCTAssertTrue(history.messages.isEmpty, "The new row must not be cached and the deleted row must not survive")
+            XCTAssertTrue(
+                history.messages.isEmpty,
+                "The new row must not be cached and the deleted row must not survive")
         }
     }
 
@@ -134,7 +431,9 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(remoteMessages(latest).map(\.id), [10, 11, 12, 14].map(MessageID.init))
     }
 
-    func testSavedSocketTailReplaysEditsAndTombstonesOverStaleRefreshWithoutDuplicates() async throws {
+    func testSavedSocketTailReplaysEditsAndTombstonesOverStaleRefreshWithoutDuplicates()
+        async throws
+    {
         let (cache, local) = try await makeHistoryCache()
         let key = ConversationKey(chatID: "chat")
         let epoch = try await local.cacheEpoch()
@@ -143,9 +442,10 @@ final class ConversationTimelineModelTests: XCTestCase {
         let edited = try TimelineTestFixtures.message(id: 14, senderID: 2, at: 14, text: "stale")
         let fresh = try TimelineTestFixtures.message(id: 14, senderID: 2, at: 14, text: "edited")
         try await local.cacheHistory(
-            key, query: .init(max: 50), response: TimelineTestFixtures.page([baseline]), epoch: epoch)
+            key, query: .init(max: 50), response: TimelineTestFixtures.page([baseline]),
+            epoch: epoch)
         let source = ScriptedTimelineSource(pages: [
-            .success(try TimelineTestFixtures.page([baseline, removed, edited])),
+            .success(try TimelineTestFixtures.page([baseline, removed, edited]))
         ])
         var online = false
         let model = ConversationTimelineModel(
@@ -178,7 +478,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(saved.messages.first { $0.id == fresh.id }?.message, "edited")
     }
 
-    func testSavedHistoryAutomaticRecoveryUsesCurrentAnchorAndStopsAfterThreeAttempts() async throws {
+    func testSavedHistoryAutomaticRecoveryUsesCurrentAnchorAndStopsAfterThreeAttempts() async throws
+    {
         let (cache, local) = try await makeHistoryCache()
         let epoch = try await local.cacheEpoch()
         try await local.cacheHistory(
@@ -222,7 +523,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertTrue(model.state.reconciliationFailed)
     }
 
-    func testSavedHistoryAutomaticRecoveryPausesForPathAndVisibilityAndCancelsOnClose() async throws {
+    func testSavedHistoryAutomaticRecoveryPausesForPathAndVisibilityAndCancelsOnClose() async throws
+    {
         let (cache, local) = try await makeHistoryCache()
         let epoch = try await local.cacheEpoch()
         try await local.cacheHistory(
@@ -322,14 +624,16 @@ final class ConversationTimelineModelTests: XCTestCase {
         reportVisible([MessageID(12)], to: model, reason: .user)
         XCTAssertTrue(read.isEmpty)
         let durable = try TimelineTestFixtures.message(id: 11, senderID: 2, at: 11, text: "durable")
-        let optimistic = try TimelineTestFixtures.message(id: 11, senderID: 2, at: 11, text: "optimistic")
+        let optimistic = try TimelineTestFixtures.message(
+            id: 11, senderID: 2, at: 11, text: "optimistic")
         source.store.apply(.messageUpdated(durable))
         source.store.apply(.messageUpdated(optimistic), persistent: false)
         source.release()
         await recovering.value
         XCTAssertEqual(model.state.history, .server)
         XCTAssertNil(model.updates.value.pendingScroll, "The native host keeps the row's offset")
-        XCTAssertEqual(remoteMessages(model).first { $0.id == MessageID(11) }?.message, "optimistic")
+        XCTAssertEqual(
+            remoteMessages(model).first { $0.id == MessageID(11) }?.message, "optimistic")
         let saved = try await cache.read { try await $0.cachedHistory(key) }
         XCTAssertEqual(saved.messages.first { $0.id == MessageID(11) }?.message, "durable")
     }
@@ -344,7 +648,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         var online = false
         let model = ConversationTimelineModel(
             chatID: "chat", currentUserID: 1, isGroupChat: false,
-            source: source, messageStore: source.store, historyCache: cache, canFetchHistory: { online })
+            source: source, messageStore: source.store, historyCache: cache,
+            canFetchHistory: { online })
         defer { model.close() }
         cache.onClear = { [weak model] in model?.invalidateCachedHistory() }
         source.store.replacePending(chatID: "chat", with: [pending(id: "offline")])
@@ -369,7 +674,9 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertNil(saved.context)
     }
 
-    func testManualHistoryRetryWhilePathIsStaleKeepsSavedRowsAndRecordsOnlyServerVisibility() async throws {
+    func testManualHistoryRetryWhilePathIsStaleKeepsSavedRowsAndRecordsOnlyServerVisibility()
+        async throws
+    {
         let (cache, local) = try await makeHistoryCache()
         let key = ConversationKey(chatID: "chat")
         let epoch = try await local.cacheEpoch()
@@ -382,7 +689,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         var authorized = false
         var validationRetries = 0
         let model = ConversationTimelineModel(
-            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source, messageStore: source.store,
+            chatID: "chat", currentUserID: 1, isGroupChat: false, source: source,
+            messageStore: source.store,
             historyCache: cache, canFetchHistory: { false },
             canRetryHistory: {
                 if !authorized { validationRetries += 1 }
@@ -405,7 +713,8 @@ final class ConversationTimelineModelTests: XCTestCase {
         authorized = true
         await model.retryNetworkHistory()
         XCTAssertEqual(model.state.history, .saved)
-        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(10), MessageID(11), MessageID(12)])
+        XCTAssertEqual(
+            remoteMessages(model).map(\.id), [MessageID(10), MessageID(11), MessageID(12)])
         XCTAssertTrue(model.state.reconciliationFailed)
 
         await model.retryNetworkHistory()
@@ -3285,6 +3594,19 @@ final class ConversationTimelineModelTests: XCTestCase {
         return (cache, local)
     }
 
+    private func seedSyncTail(
+        _ messages: [MessageResponse], for key: ConversationKey, at cursor: String,
+        in local: ChahuaLocalStore
+    ) async throws {
+        let epoch = try await local.cacheEpoch()
+        try await local.resetSyncChat(
+            chatID: key.chatID, cursor: cursor, purge: false, epoch: epoch)
+        let accepted = try await local.cacheHistory(
+            key, query: .init(max: 50), response: .init(messages: messages), at: cursor,
+            epoch: epoch)
+        XCTAssertTrue(accepted)
+    }
+
     private func makeModel(
         pages: [Result<ListMessagesResponse, Error>],
         threadID: String? = nil,
@@ -3371,27 +3693,38 @@ private final class SavedRefreshRetryClock {
 final class ScriptedTimelineSource: TimelineMessageSource {
     let store = ConversationMessageStore()
     private(set) var queries: [ListMessagesQuery] = []
-    private var pages: [Result<ListMessagesResponse, Error>]
-    private var shouldHoldNextRequest = false
+    var syncCoverage: Set<ConversationKey> = []
+    var waitForSync: (@MainActor () async throws -> Void)?
+    private var pages: [Result<TimelinePage, Error>]
+    private var onHold: (() -> Void)?
     private var heldResponse: CheckedContinuation<Void, Never>?
     private var heldWaiter: CheckedContinuation<Void, Never>?
 
-    init(pages: [Result<ListMessagesResponse, Error>]) {
-        self.pages = pages
+    convenience init(pages: [Result<ListMessagesResponse, Error>]) {
+        self.init(timelinePages: pages.map { $0.map { TimelinePage(response: $0) } })
     }
 
-    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-        -> ListMessagesResponse
-    {
+    init(timelinePages: [Result<TimelinePage, Error>]) {
+        pages = timelinePages
+    }
+
+    func waitForTimelineSync() async throws {
+        if let waitForSync { try await waitForSync() }
+    }
+
+    func canPromoteCachedTail(_ key: ConversationKey) -> Bool { syncCoverage.contains(key) }
+
+    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
         queries.append(query)
         precondition(!pages.isEmpty, "Unscripted fetch: \(query)")
         let result = pages.removeFirst()
-        if shouldHoldNextRequest {
-            shouldHoldNextRequest = false
+        if let onHold {
+            self.onHold = nil
             await withCheckedContinuation { continuation in
                 heldResponse = continuation
                 heldWaiter?.resume()
                 heldWaiter = nil
+                onHold()
             }
         } else {
             await Task.yield()
@@ -3399,7 +3732,7 @@ final class ScriptedTimelineSource: TimelineMessageSource {
         return try result.get()
     }
 
-    func holdNextRequest() { shouldHoldNextRequest = true }
+    func holdNextRequest(onHold: @escaping () -> Void = {}) { self.onHold = onHold }
 
     func waitUntilHeld() async {
         guard heldResponse == nil else { return }

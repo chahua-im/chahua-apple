@@ -17,6 +17,121 @@
             TimelineDisplayScheduler.tickSource = .display
         }
 
+
+        func testMountedLatestSeedRetainsBottomRowDuringHistoryRecovery() async throws {
+            struct HistoryFailure: Error {}
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "MountedLatestSeed-\(UUID().uuidString)")
+            addTeardownBlock { try FileManager.default.removeItem(at: root) }
+            let local = try await Task.detached {
+                try ChahuaLocalStore(directory: root, userID: 1)
+            }.value
+            let owner = AccountLocalStoreOwner(factory: { _ in local })
+            owner.setSession(uid: 1)
+            let cache = AccountHistoryCache(owner: owner)
+            cache.setSession(uid: 1)
+            let seed = try TimelineTestFixtures.message(
+                id: 900, chatID: "seed", senderID: 2, at: 900,
+                text: "Latest saved message stays here while earlier history loads.")
+            let epoch = try await local.cacheEpoch()
+            try await local.cacheChange(
+                .create(seed, ConversationKey(chatID: "seed"), adjoining: nil), epoch: epoch)
+            let source = ScriptedTimelineSource(pages: [
+                .failure(HistoryFailure()), .success(.init(messages: [seed])),
+            ])
+            source.holdNextRequest()
+            let model = ConversationTimelineModel(
+                chatID: "seed", currentUserID: 1, isGroupChat: false,
+                source: source, messageStore: source.store, historyCache: cache)
+            let controller = TimelineViewController(model: model)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 800),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentViewController = controller
+            window.setContentSize(NSSize(width: 600, height: 800))
+            window.orderFront(nil)
+            let opening = Task { await model.open() }
+            defer {
+                source.release()
+                opening.cancel()
+                model.close()
+                window.close()
+            }
+            func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
+                (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+            }
+            func capture(_ name: String) async throws {
+                try await Task.sleep(for: .milliseconds(300))
+                controller.view.layoutSubtreeIfNeeded()
+                XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
+                let row = try XCTUnwrap(
+                    descendants(TimelineRowView.self, in: controller.view).first {
+                        $0.binding?.presentation.row.messageID == seed.id
+                    })
+                let frame = row.convert(row.bounds, to: controller.view)
+                let bottomDistance = controller.view.isFlipped
+                    ? controller.view.bounds.maxY - frame.maxY : frame.minY
+                XCTAssertLessThan(bottomDistance, 160, "Seed remains near the live edge")
+                let bitmap = try XCTUnwrap(
+                    controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds))
+                controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
+                let attachment = XCTAttachment(
+                    data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                    uniformTypeIdentifier: "public.png")
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            func visibleProgress() -> [NSProgressIndicator] {
+                descendants(NSProgressIndicator.self, in: controller.view).filter {
+                    !$0.isHiddenOrHasHiddenAncestor
+                }
+            }
+            func assertNearTop(_ view: NSView, file: StaticString = #filePath, line: UInt = #line) {
+                let frame = view.convert(view.bounds, to: controller.view)
+                let topDistance = controller.view.isFlipped
+                    ? frame.minY : controller.view.bounds.maxY - frame.maxY
+                XCTAssertLessThan(topDistance, 100, file: file, line: line)
+            }
+            await source.waitUntilHeld()
+            try await capture("Latest seed — held normal history loading")
+            XCTAssertEqual(model.state.olderEdgePresentation, .loading)
+            XCTAssertEqual(visibleProgress().count, 1)
+            assertNearTop(try XCTUnwrap(visibleProgress().first))
+            source.release()
+            await opening.value
+            try await capture("Latest seed — failed history with native retry")
+            XCTAssertEqual(model.state.olderEdgePresentation, .retryNetworkHistory)
+            let retry = try XCTUnwrap(
+                descendants(NSButton.self, in: controller.view).first {
+                    !$0.isHiddenOrHasHiddenAncestor
+                        && $0.title == AppLanguage.localized("Couldn’t refresh messages — Retry")
+                })
+            XCTAssertTrue(retry.isEnabled)
+            assertNearTop(retry)
+            let chrome = try XCTUnwrap(
+                descendants(TimelineChromeView.self, in: controller.view).first)
+            let point = retry.convert(NSPoint(x: retry.bounds.midX, y: retry.bounds.midY), to: chrome)
+            XCTAssertNotNil(chrome.hitTest(point), "Native retry participates in hit testing")
+            source.holdNextRequest()
+            retry.performClick(nil)
+            await source.waitUntilHeld()
+            try await capture("Latest seed — native retry holds normal history")
+            XCTAssertEqual(source.queries.count, 2)
+            XCTAssertNil(source.queries.last?.before)
+            XCTAssertNil(source.queries.last?.after)
+            XCTAssertNil(source.queries.last?.around)
+            XCTAssertEqual(model.state.olderEdgePresentation, .loading)
+            XCTAssertEqual(visibleProgress().count, 1)
+            assertNearTop(try XCTUnwrap(visibleProgress().first))
+            source.release()
+            await source.drain()
+            model.close()
+            await cache.fenceForSignOut()
+            try local.close()
+        }
+
         func testAccountDisplayScopeUpdatesMountedDMGroupAndCapturedNativeTimelines() async throws {
             let suite = "NativeTimelinePreferences.\(UUID().uuidString)"
             let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -2013,11 +2128,9 @@
             self.older = older
         }
 
-        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-            -> ListMessagesResponse
-        {
+        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
             queries.append(query)
-            return query.before == nil ? initial : older
+            return TimelinePage(response: query.before == nil ? initial : older)
         }
     }
 
@@ -2028,12 +2141,10 @@
 
         init(pages: [ListMessagesResponse]) { self.pages = pages }
 
-        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-            -> ListMessagesResponse
-        {
+        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
             queries.append(query)
             guard !pages.isEmpty else { throw CocoaError(.fileReadUnknown) }
-            return pages.removeFirst()
+            return TimelinePage(response: pages.removeFirst())
         }
     }
 #endif

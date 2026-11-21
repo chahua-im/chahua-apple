@@ -19,6 +19,11 @@ public protocol RealtimeConnection: Sendable {
     func sendWatchConversationStates(
         requestID: UInt32, conversations: [ConversationRef]
     ) async throws
+    func sendMessageSyncResume(
+        chats: [MessageSyncCheckpoint], last: Bool, priorityChatID: String?
+    ) async throws
+    func sendMessageSyncPage(requestID: UInt64, chatID: String, query: ListMessagesQuery)
+        async throws
     func close() async
 }
 
@@ -38,8 +43,8 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
         self.socket = socket
     }
 
-    func authenticate(ticket: String) async throws {
-        try await send(AuthFrame(ticket: ticket))
+    func authenticate(ticket: String, messageSync: Int?) async throws {
+        try await send(AuthFrame(ticket: ticket, messageSync: messageSync))
     }
 
     func receive() async throws -> RealtimeServerEvent {
@@ -99,6 +104,23 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
             WatchConversationStatesFrame(requestId: requestID, conversations: conversations))
     }
 
+    func sendMessageSyncResume(
+        chats: [MessageSyncCheckpoint], last: Bool, priorityChatID: String?
+    ) async throws {
+        try await send(
+            MessageSyncResumeFrame(chats: chats, last: last, priorityChatId: priorityChatID))
+    }
+
+    func sendMessageSyncPage(requestID: UInt64, chatID: String, query: ListMessagesQuery)
+        async throws
+    {
+        try await send(
+            MessageSyncPageFrame(
+                requestId: requestID, chatId: chatID, threadId: query.threadID,
+                before: query.before,
+                after: query.after, around: query.around, max: query.max))
+    }
+
     func close() {
         guard !isClosed else { return }
         isClosed = true
@@ -127,6 +149,25 @@ actor URLSessionRealtimeConnection: RealtimeConnection {
     private struct AuthFrame: Encodable {
         let type = "auth"
         let ticket: String
+        let messageSync: Int?
+    }
+
+    private struct MessageSyncResumeFrame: Encodable {
+        let type = "messageSyncResume"
+        let chats: [MessageSyncCheckpoint]
+        let last: Bool
+        let priorityChatId: String?
+    }
+
+    private struct MessageSyncPageFrame: Encodable {
+        let type = "messageSyncPage"
+        let requestId: UInt64
+        let chatId: String
+        let threadId: String?
+        let before: MessageID?
+        let after: MessageID?
+        let around: MessageID?
+        let max: Int64?
     }
 
     private struct StateFrame: Encodable {

@@ -109,6 +109,15 @@ struct TimelineWindow: Equatable {
         case deferred
     }
 
+    /// Publication can arrive after newer IDs, including in a historical slice.
+    mutating func insertWithinRange(_ message: MessageResponse) -> Bool {
+        guard let first = messages.first, let last = messages.last,
+            first.id <= message.id, message.id <= last.id, index(matching: message) == nil
+        else { return false }
+        insert(message)
+        return true
+    }
+
     mutating func insertLive(_ message: MessageResponse) -> LiveInsertOutcome {
         // A duplicate create is not a mutable snapshot, even in a historical window.
         guard index(matching: message) == nil else { return .duplicate }

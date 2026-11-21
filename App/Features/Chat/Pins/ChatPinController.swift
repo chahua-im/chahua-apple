@@ -107,6 +107,7 @@ final class ChatPinController: ObservableObject {
             let response = try await apiClient.createPin(
                 chatID: message.chatId, messageID: message.id)
             try checkSession(requestGeneration)
+            guard snapshots[token] != nil else { return }
             guard validScope(response, chatID: message.chatId), response.message.id == message.id
             else {
                 throw APIError.unexpectedResponse
@@ -193,6 +194,19 @@ final class ChatPinController: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             for chatID in chatIDs { group.addTask { await self.load(chatID: chatID, force: true) } }
         }
+    }
+
+    func invalidate(chatID: String) {
+        loadTasks.removeValue(forKey: chatID)?.cancel()
+        loadIDs.removeValue(forKey: chatID)
+        loadingChatIDs.remove(chatID)
+        refreshDirty.remove(chatID)
+        snapshots = snapshots.filter { $0.value.chatID != chatID }
+        knownChatIDs.remove(chatID)
+        loadedChatIDs.remove(chatID)
+        failedChatIDs.remove(chatID)
+        pinsByChatID.removeValue(forKey: chatID)
+        scheduleExpiry()
     }
 
     func cancelLoads() {

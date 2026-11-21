@@ -4,9 +4,11 @@ Status: implemented. Verified with package transport tests, macOS/iOS behavioral
 
 ## Purpose and consistency model
 
-The Apple client combines HTTP snapshots with WebSocket mutations. HTTP supplies chat-list projections and bounded message-history windows. WebSocket delivers immediate changes to those windows. Reconciliation combines both inputs before publishing timeline rows.
+The Apple client uses HTTP for chat lists and other projections, and an ordered WebSocket stream for message changes when the server supports message sync. Each chat uses one opaque checkpoint for its main timeline and threads. The account cache commits the checkpoint and replayed changes together. A checkpoint proves that changes were applied, not that a saved window covers the requested position.
 
-WebSocket is not a durable event stream. The backend has no event sequence, replay cursor, message revision, or deletion log. Its per-connection queue can silently drop an event. The client protects its own HTTP/event races, but cannot infer a global mutation order or guarantee lossless delivery. Fresh HTTP snapshots repair state on manual refresh, conversation open/reopen, and reconnect. There is no periodic reconciliation timer.
+An older server still uses legacy events and HTTP history. Legacy events do not have replay checkpoints; a fresh snapshot repairs a gap on open, manual refresh or reconnect. Neither mode has a periodic history-reconciliation timer.
+
+Account lists use `GET /chats/difference` independently of socket mode. Resets follow the returned token through baseline enumeration and catch-up while the previous install stays visible. Only this route's authenticated 404 selects legacy scans for the connection attempt. See [Account list sync](offline-cache.md#account-list-sync) for durable staging, mutation fences and the list/history boundary.
 
 ## Components and data flow
 
@@ -23,16 +25,16 @@ flowchart TD
     Coordinator -->|Serial main-actor ingress| Chats[ChatStore]
     Chats -->|Normalized message mutations| Shared[ConversationMessageStore]
     Shared -->|Broadcast changes| Timeline[Each ConversationTimelineModel]
-    Timeline -->|Fetch page through ChatStore| Client
-    Client -->|HTTP snapshot| Reconcile[Install baseline and replay request events]
+    Timeline -->|Fetch page through ChatStore| Chats
+    Chats -->|Checkpointed socket page or legacy HTTP page| Reconcile[Install baseline and replay request journal]
     Shared -->|Request-scoped journal| Reconcile
     Reconcile --> Timeline
     Timeline --> Rows[TimelineWindow and row projection]
     Rows --> Host[Native UIKit or AppKit host]
-    Chats -->|Refresh active-list projection| Client
+    Chats -->|Account list difference over HTTP| Client
 ```
 
-The diagram separates connection lifecycle, event routing, message reconciliation, and native rendering. The transport never changes a timeline directly. HTTP refresh work must not block the socket receive loop.
+The transport never changes a timeline directly. History recovery must not block the socket receive loop.
 
 ### Ownership and lifetime
 
@@ -72,8 +74,8 @@ Connection setup:
 
 1. Wait for normal authentication to install the shared session JWT. Existing authentication and HTTP refresh behavior remains unchanged. Use `ChahuaClient`'s current credential for WS just as for HTTP; do not call `/ws/ticket` or read a separate credential from Keychain. Opening WS does not initiate refresh; if shared refresh is already running, await it before reading the credential.
 2. Open API-root-relative `/ws` without a trailing slash, mapping HTTP(S) to WS(S) and preserving the API path prefix. The backend's nested upgrade route does not accept `/ws/`.
-3. Send the first text frame `{"type":"auth","ticket":"<current session JWT>"}` within the server's five-second deadline. `ticket` remains the backend's wire field name; its value is the ordinary session JWT, not a separately issued WS ticket.
-4. `openRealtimeConnection()` returns after authentication only. The coordinator then sends `{"type":"appState","state":"active"}` or `{"type":"appState","state":"inactive"}`, reading current foreground and computer-activity state after the asynchronous opening completes. There is no implicit initial active ping. Initial/reconnect bulk HTTP recovery runs only while foreground-active and does not block receiving frames.
+3. Send `{"type":"auth","ticket":"<current session JWT>","messageSync":1}` within the server's five-second deadline. `ticket` carries the ordinary session JWT, not a separately issued WS ticket.
+4. The coordinator sends `appState` from the current scene state and decides the mode from the first server frame. `messageSyncHello` version 1 starts resume; other first events use legacy mode. The client sends chunks of at most 128 chats and prioritizes the frontmost visible chat. Only `messageSyncResumed` permits a socket page. List and read-state recovery still runs in the foreground without blocking event receipt.
 5. Send JSON `{"type":"ping","state":"<current state>"}` every 10 seconds, including while inactive. Preserve a 10-second outstanding-pong timeout; a simultaneous heartbeat must not replace an unanswered ping's deadline. Reconnect regardless of focus on close, transport/protocol failure, or timeout. Backoff starts at one second, doubles with 0–20% jitter, caps the complete delay at 30 seconds, and resets after five seconds on an open connection rather than on a focus transition.
 
 Each aggregate activity transition promptly sends `{"type":"appState","state":"<current state>"}` on the retained socket. State frames and heartbeats are serialized without cancelling in-flight sends on focus changes. Inactive presence allows the server to send push again; it is not a request to disconnect. Foreground outbox, draft-flush, read-dwell, and bulk recovery gating remain separate from socket lifetime. Event-driven reductions and required hydration still run for incoming events. Do not use RFC WebSocket ping as the application heartbeat. `presenceUpdate.activeConnections` is a same-account registered-connection count, not another user's online status.
@@ -127,19 +129,19 @@ A toggle first reads `GET /chats/{chatID}/messages/{messageID}` to establish the
 
 No optimistic count is installed. After mutation success, a new request-scoped journal protects the authoritative readback: reaction/deletion events received during that GET win over the response. Events received during the preceding PUT/DELETE do not suppress the subsequent personalized GET. Pending state prevents duplicate taps, failures remain visible, and account/session reset cancels work and rejects stale completion.
 
-## HTTP and WebSocket reconciliation
+## Message page reconciliation
 
 ### Request-scoped journal
 
 Every initial, reopen, around, latest, older/newer or recovery fetch participates in the same operation:
 
-1. Before starting HTTP, create a snapshot token recording chat ID and the local receive revision.
+1. Before requesting history, create a snapshot token recording chat ID and the local receive revision.
 2. Continue applying incoming mutations immediately to visible models. Retain matching events in receive order while outstanding snapshot tokens need them.
-3. When HTTP returns, reject stale model/session generations.
-4. Install the HTTP page as the baseline, then replay events received since that token began, synchronously before publishing.
+3. On return, reject stale model/session generations. A sync page must match the installed checkpoint when received.
+4. Install the page and replay the journal before publishing. For a sync page, replay only entries newer than the receive revision captured at page receipt. For legacy HTTP, replay from the token’s starting revision.
 5. End the token on success, failure or cancellation. Prune journal entries no remaining token needs.
 
-The journal is temporary race protection, not a persistent log or replay cursor. Multiple windows can have overlapping tokens without consuming each other's events. Replay repairs data only: it must not repeat pending confirmations, unseen increments or animations.
+The journal is temporary race protection, separate from the durable chat checkpoint. Multiple windows can have overlapping tokens without consuming each other's events. Replay repairs data only: it must not repeat pending confirmations, unseen increments or animations. The diagram shows the legacy HTTP path.
 
 ```mermaid
 sequenceDiagram
@@ -165,23 +167,23 @@ A later request begun after that edit may replace it with newer HTTP state. Keep
 
 A replacement fetch replaces its old remote window; do not merge all old rows back in, because that would resurrect deletions and stale history. Paging preserves rows outside the fetched page and updates matching page records before replay.
 
-At the live edge, retain only deferred creates that are not covered by the fetched latest page and do not introduce an older history gap; equal-time distinct identities remain distinct. Creates received during the fetch are reconciled through its journal. An empty snapshot must not resurrect pre-request buffered content. A historical window does not absorb unknown live creates across its newer cursor.
+At the live edge, retain only deferred creates that are not covered by the fetched latest page and do not introduce an older history gap. An empty snapshot must not resurrect pre-request buffered content. A delayed publication inside the loaded interval inserts in ID order. A historical window does not absorb creates beyond its newer edge.
 
-Two windows can temporarily contain different HTTP slices or snapshot ages. They share the live event broadcast and reducer rules, not one scrolling window or one globally drained buffer.
+Two windows can contain different slices or snapshot ages. They share the live event broadcast and reducer rules, not one scrolling window or one globally drained buffer.
 
 ## Refresh and recovery
 
-| Trigger | HTTP action | Presentation policy |
+| Trigger | Recovery action | Presentation policy |
 |---|---|---|
 | Conversation-list pull-to-refresh | Fetch the full active projection for the selected scope | Keep loaded rows during refresh; failures are logged without an error row or Retry action; successful chat/thread data remains visible if the other source fails |
-| Every conversation open/reopen | Fetch around the last-read boundary when the chat/thread has unread messages; otherwise fetch latest | Freeze an unread separator before the first unread message and reveal it below the header; do not rely on SwiftUI destroying the previous model |
-| Initial connection/reconnect while active, or inactive-to-active transition | Refresh chats, subscribed threads, and visible conversation windows | Receive and apply WS events concurrently with recovery; inactive presence alone never reconnects |
+| Conversation open/reopen | Read the account cache. If the saved window lacks current coverage, fetch around the unread boundary or target, or fetch latest | Show eligible saved rows before waiting for resume, metadata or a history response |
+| Initial connection/reconnect while active, or inactive-to-active transition | Refresh chats and subscribed threads. Replay missed message changes; reconcile only windows without usable coverage | Receive and apply WS events during recovery; inactive presence alone never reconnects |
 | Message/archive/thread/friendship events affecting summaries | Coalesced conversation-list refresh | Server controls unread counts and previews; local draft activity participates in ordering |
-| Bulk deletion batches | Coalesced same-chat visible-window/list refresh | Immediate local redaction, then scoped HTTP repair |
+| Bulk deletion batches | Legacy: coalesced same-chat history repair. Sync: no replacement read for a covered window | Redact known message bodies and previews immediately |
 
 Reconnect recovery follows latest only if that model was already following latest. Otherwise fetch around a visible remote anchor and restore it without animation/highlight. Keep old rows while recovery runs; on failure retain a readable window with explicit retry. Navigation/jump supersedes an older recovery request.
 
-No timer periodically refreshes data. Silent drops and cross-device read-state changes can remain stale until an applicable manual/open/reconnect refresh. The backend has no bulk-completion event, so batch-triggered repair cannot prove the background job has finished.
+No timer periodically refreshes history. Legacy event loss can leave the window stale until an applicable manual, open or reconnect refresh. Sync replay gaps cause the visible window to fetch a replacement. Read-state synchronization is independent of message checkpoints.
 
 ### Visible-message read progress
 

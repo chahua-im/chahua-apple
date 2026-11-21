@@ -96,6 +96,9 @@ public protocol ChahuaAPIClient: SocialAPIClient, GroupAPIClient {
     /// reorder pages.
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse
 
+    /// Account list baseline and catch-up; the cursor is opaque.
+    func conversationDifference(cursor: String?) async throws -> ConversationDifference
+
     /// Fetches one server-ordered page of subscriptions with `GET /threads`.
     ///
     /// Use `archived: false` for active threads and pass `nextCursor` as

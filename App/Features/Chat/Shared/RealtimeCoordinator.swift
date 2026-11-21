@@ -208,7 +208,7 @@ final class RealtimeCoordinator: ObservableObject {
                     return
                 }
                 connection = socket
-                store.historyCache?.setSocketAttempt(currentAttempt)
+                store.beginMessageSyncAttempt(currentAttempt, socket: socket)
                 opened = true
                 hasConnected = true
                 connectionIsStable = false
@@ -228,16 +228,28 @@ final class RealtimeCoordinator: ObservableObject {
                     guard generation == currentGeneration, attempt == currentAttempt,
                         !Task.isCancelled
                     else { break }
-                    if case .pong = event {
+                    if store.syncMode == .pending {
+                        if case .messageSyncHello(let version) = event {
+                            guard version == 1 else { throw MessageSyncStreamError.unexpectedFrame }
+                            try await store.startMessageSync()
+                            continue
+                        }
+                        store.useLegacyRealtime()
+                    }
+                    switch event {
+                    case .messageSyncHello, .messageSyncBatch, .messageSyncReady, .messageSyncReset,
+                        .messageSyncRevoked, .messageSyncPageResult, .messageSyncResumed:
+                        try await store.applyMessageSync(event, currentUserID: uid)
+                    case .pong:
                         awaitingPong = false
                         pongDeadline?.cancel()
                         pongDeadline = nil
-                    } else {
+                    default:
                         await store.applyRealtimeEvent(event, currentUserID: uid)
-                        guard generation == currentGeneration, attempt == currentAttempt,
-                            !Task.isCancelled
-                        else { return }
                     }
+                    guard generation == currentGeneration, attempt == currentAttempt,
+                        !Task.isCancelled
+                    else { return }
                 }
             } catch {
                 guard generation == currentGeneration, !Task.isCancelled else { return }
@@ -249,6 +261,7 @@ final class RealtimeCoordinator: ObservableObject {
             }
             guard generation == currentGeneration, !Task.isCancelled else { return }
             store.historyCache?.setSocketAttempt(nil)
+            store.endMessageSyncAttempt()
             recovery?.cancel()
             recovery = nil
             if !activeScenes.isEmpty {
@@ -283,7 +296,9 @@ final class RealtimeCoordinator: ObservableObject {
             let disconnected = connection
             connection = nil
             await disconnected?.close()
-            guard networkOpportunity, generation == currentGeneration, !Task.isCancelled else { return }
+            guard networkOpportunity, generation == currentGeneration, !Task.isCancelled else {
+                return
+            }
             let seconds = min(30.0, pow(2.0, Double(min(failures, 5))))
             failures += 1
             let delay = min(30.0, seconds * (1 + min(0.2, max(0, jitter()))))
@@ -426,14 +441,17 @@ final class RealtimeCoordinator: ObservableObject {
             // Request/profile/block resources are not replayed by the websocket. Refresh
             // mounted social destinations alongside conversation recovery after an outage.
             self.store.socialInvalidations.send(())
-            async let chats: Void = self.store.refreshActiveConversations()
-            async let messages: Void = self.store.reconcileVisibleTimelines()
-            _ = await (chats, messages)
-            guard !Task.isCancelled, self.generation == currentGeneration, self.networkOpportunity else { return }
-            await self.store.refreshArchivedConversations()
-            guard !Task.isCancelled, self.generation == currentGeneration, self.networkOpportunity else { return }
+            async let lists: Void = self.refreshListsAfterReconnect()
+            async let messages: Void = self.store.reconcileTimelinesAfterResume()
+            _ = await (lists, messages)
+            guard !Task.isCancelled, self.generation == currentGeneration, self.networkOpportunity
+            else { return }
             self.needsRecovery = false
         }
+    }
+
+    private func refreshListsAfterReconnect() async {
+        await store.refreshConversationListsAfterReconnect()
     }
 
     private func startStableReset(generation currentGeneration: Int, attempt currentAttempt: Int) {
@@ -484,6 +502,7 @@ final class RealtimeCoordinator: ObservableObject {
 
     private func stop() {
         store.historyCache?.setSocketAttempt(nil)
+        store.endMessageSyncAttempt()
         generation += 1
         runner?.cancel()
         reconnectDelay?.cancel()

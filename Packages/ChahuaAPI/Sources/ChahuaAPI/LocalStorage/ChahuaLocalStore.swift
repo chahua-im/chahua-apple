@@ -42,14 +42,16 @@ public final class ChahuaLocalStore: Sendable {
             ).map(Self.key)
             if !interrupted.isEmpty {
                 try db.execute(
-                    sql: "UPDATE outgoing_message SET state = 'failed', failure = ? WHERE state = 'sending'",
+                    sql:
+                        "UPDATE outgoing_message SET state = 'failed', failure = ? WHERE state = 'sending'",
                     arguments: [try JSONEncoder().encode(failure)])
             }
-            let changed = Dictionary(uniqueKeysWithValues: interrupted.map { key in
-                var stamp = self.stamps[key, default: Stamp()]
-                stamp.revision += 1
-                return (key, stamp)
-            })
+            let changed = Dictionary(
+                uniqueKeysWithValues: interrupted.map { key in
+                    var stamp = self.stamps[key, default: Stamp()]
+                    stamp.revision += 1
+                    return (key, stamp)
+                })
             let snapshots = try Self.keys(db).map { key in
                 try self.snapshot(db, key, changed[key] ?? self.stamps[key, default: Stamp()])
             }
@@ -75,7 +77,8 @@ public final class ChahuaLocalStore: Sendable {
             var draft = try self.readDraft(db, key)
             draft.text = text
             draft.reply = replyToMessage
-            draft.metadata = linkPreviews.isEmpty ? nil : MessageMetadataInput(linkPreviews: linkPreviews)
+            draft.metadata =
+                linkPreviews.isEmpty ? nil : MessageMetadataInput(linkPreviews: linkPreviews)
             try self.writeDraft(db, key, draft, date: updatedAt)
             return .draft(editRevision, updatedAt)
         }.snapshot
@@ -87,29 +90,39 @@ public final class ChahuaLocalStore: Sendable {
         metadata: MessageMetadataInput? = nil
     ) async throws -> LocalConversationSnapshot {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return try await update(ConversationKey(chatID: chatID, threadID: threadID)) { db, key, stamp in
-            guard clearedDraftRevision > stamp.draftRevision else { throw LocalStorageError.staleDraft }
+        return try await update(ConversationKey(chatID: chatID, threadID: threadID)) {
+            db, key, stamp in
+            guard clearedDraftRevision > stamp.draftRevision else {
+                throw LocalStorageError.staleDraft
+            }
             var draft = try self.readDraft(db, key)
-            guard !text.isEmpty || !draft.attachments.isEmpty else { throw LocalStorageError.blankMessage }
+            guard !text.isEmpty || !draft.attachments.isEmpty else {
+                throw LocalStorageError.blankMessage
+            }
             let isFile = draft.attachments.contains(where: \.isFile)
             draft.text = isFile ? "" : text
             draft.reply = replyToMessage
             draft.metadata = isFile ? nil : metadata
-            let failure = draft.attachments.lazy.compactMap(\.failure).first.map(Self.preparationFailure)
-            try self.insert(db, key, id: clientGeneratedID, draft, date: enqueuedAt, failure: failure)
+            let failure = draft.attachments.lazy.compactMap(\.failure).first.map(
+                Self.preparationFailure)
+            try self.insert(
+                db, key, id: clientGeneratedID, draft, date: enqueuedAt, failure: failure)
             // File payloads cannot carry a caption. Append it in the same transaction.
             if isFile, !text.isEmpty {
                 try self.insert(
-                    db, key, id: UUID().uuidString, Content(text: text, metadata: metadata), date: enqueuedAt)
+                    db, key, id: UUID().uuidString, Content(text: text, metadata: metadata),
+                    date: enqueuedAt)
             }
             try db.execute(
-                sql: "DELETE FROM draft WHERE chat_id = ? AND thread_id = ?", arguments: Self.arguments(key))
+                sql: "DELETE FROM draft WHERE chat_id = ? AND thread_id = ?",
+                arguments: Self.arguments(key))
             return .draft(clearedDraftRevision, enqueuedAt)
         }.snapshot
     }
 
     public func enqueueIndependentText(
-        chatID: String, threadID: String? = nil, clientGeneratedID: String, text: String, enqueuedAt: Date
+        chatID: String, threadID: String? = nil, clientGeneratedID: String, text: String,
+        enqueuedAt: Date
     ) async throws -> LocalConversationSnapshot {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw LocalStorageError.blankMessage }
@@ -137,7 +150,8 @@ public final class ChahuaLocalStore: Sendable {
         try validateAttachments([attachment], requireSource: true)
         return try await enqueue(
             ConversationKey(chatID: chatID, threadID: threadID), id: clientGeneratedID,
-            Content(reply: replyToMessage, attachments: [attachment], compressionEnabled: false), date: enqueuedAt)
+            Content(reply: replyToMessage, attachments: [attachment], compressionEnabled: false),
+            date: enqueuedAt)
     }
 
     public func enqueueForward(
@@ -188,7 +202,8 @@ public final class ChahuaLocalStore: Sendable {
                     guard try Self.mergeCheckpoint(slot, into: &draft.attachments[index])
                     else { return .unchanged }
                     try self.validateAttachments(draft.attachments)
-                    try self.writeDraft(db, key, draft, date: Date(timeIntervalSince1970: row["updated_at"]))
+                    try self.writeDraft(
+                        db, key, draft, date: Date(timeIntervalSince1970: row["updated_at"]))
                     return .changed
                 }
             }
@@ -204,7 +219,8 @@ public final class ChahuaLocalStore: Sendable {
                 else { return .unchanged }
                 try self.validateAttachments(content.attachments)
                 let rowFailure = oldFailure ?? failure ?? slot.failure.map(Self.preparationFailure)
-                try self.writeContent(db, id: row["client_generated_id"], content, failure: rowFailure)
+                try self.writeContent(
+                    db, id: row["client_generated_id"], content, failure: rowFailure)
                 return .changed
             }
             return .unchanged
@@ -213,7 +229,8 @@ public final class ChahuaLocalStore: Sendable {
 
     public func editOutgoing(
         key: ConversationKey, itemID: String, text: String, replyToMessage: MessagePreview?,
-        attachments: [LocalOutgoingAttachment], compressionEnabled: Bool, metadata: MessageMetadataInput? = nil
+        attachments: [LocalOutgoingAttachment], compressionEnabled: Bool,
+        metadata: MessageMetadataInput? = nil
     ) async throws -> LocalConversationSnapshot {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await update(key) { db, key, _ in
@@ -222,24 +239,32 @@ public final class ChahuaLocalStore: Sendable {
             }
             let old = try self.message(row, key)
             guard old.isEditable else { throw LocalStorageError.outgoingNotEditable }
-            guard !text.isEmpty || !attachments.isEmpty else { throw LocalStorageError.blankMessage }
+            guard !text.isEmpty || !attachments.isEmpty else {
+                throw LocalStorageError.blankMessage
+            }
             let isFile = attachments.contains(where: \.isFile)
             guard !isFile || text.isEmpty else { throw LocalStorageError.unsupportedMessageType }
             var updated = try self.mergeSelection(
-                attachments, with: old.attachments, compressionChanged: compressionEnabled != old.compressionEnabled)
+                attachments, with: old.attachments,
+                compressionChanged: compressionEnabled != old.compressionEnabled)
             for i in updated.indices { updated[i].failure = nil }
             let content = Content(
-                text: text, reply: replyToMessage, attachments: updated, compressionEnabled: compressionEnabled,
+                text: text, reply: replyToMessage, attachments: updated,
+                compressionEnabled: compressionEnabled,
                 metadata: isFile ? nil : metadata)
             try self.writeContent(db, id: itemID, content, failure: nil)
             return .changed
         }.snapshot
     }
 
-    public func removeOutgoing(key: ConversationKey, itemID: String) async throws -> LocalConversationSnapshot {
+    public func removeOutgoing(key: ConversationKey, itemID: String) async throws
+        -> LocalConversationSnapshot
+    {
         try await update(key) { db, key, _ in
             guard let row = try Self.outgoingRow(db, key, id: itemID) else { return .unchanged }
-            guard (row["state"] as String) != "sending" else { throw LocalStorageError.outgoingSending }
+            guard (row["state"] as String) != "sending" else {
+                throw LocalStorageError.outgoingSending
+            }
             try Self.delete(db, id: itemID)
             return .changed
         }.snapshot
@@ -251,10 +276,12 @@ public final class ChahuaLocalStore: Sendable {
         let key = ConversationKey(chatID: chatID, threadID: threadID)
         // The caller serializes this transaction with acquisition/release of editor holds.
         let (snapshot, changed) = try await update(key) { db, key, _ in
-            guard let row = try Row.fetchOne(
-                db,
-                sql: "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? ORDER BY position LIMIT 1",
-                arguments: Self.arguments(key)),
+            guard
+                let row = try Row.fetchOne(
+                    db,
+                    sql:
+                        "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? ORDER BY position LIMIT 1",
+                    arguments: Self.arguments(key)),
                 (row["client_generated_id"] as String) == expectedID
             else { return .unchanged }
             let head = try self.message(row, key)
@@ -263,18 +290,20 @@ public final class ChahuaLocalStore: Sendable {
                 head.state == .pending || (retryCreate && head.failure?.stage == .create)
             else { return .unchanged }
             try db.execute(
-                sql: "UPDATE outgoing_message SET state = 'sending', failure = NULL WHERE client_generated_id = ?",
+                sql:
+                    "UPDATE outgoing_message SET state = 'sending', failure = NULL WHERE client_generated_id = ?",
                 arguments: [expectedID])
             return .changed
         }
-        return LocalOutgoingClaim(snapshot: snapshot, message: changed ? snapshot.outgoing.first : nil)
+        return LocalOutgoingClaim(
+            snapshot: snapshot, message: changed ? snapshot.outgoing.first : nil)
     }
 
     /// Revert a claim only when the queue can prove it never entered the transport.
     public func releaseUnsentClaim(
-        key: ConversationKey, itemID: String, priorFailure: OutboxFailure?, retryNotBefore: Date? = nil
-    ) async throws -> LocalConversationSnapshot
-    {
+        key: ConversationKey, itemID: String, priorFailure: OutboxFailure?,
+        retryNotBefore: Date? = nil
+    ) async throws -> LocalConversationSnapshot {
         try await update(key) { db, key, _ in
             try db.execute(
                 sql: """
@@ -294,8 +323,7 @@ public final class ChahuaLocalStore: Sendable {
 
     public func fail(
         key: ConversationKey, itemID: String, failure: OutboxFailure, retryNotBefore: Date? = nil
-    ) async throws -> LocalConversationSnapshot
-    {
+    ) async throws -> LocalConversationSnapshot {
         precondition(failure.stage == .create)
         return try await update(key) { db, key, _ in
             try db.execute(
@@ -311,9 +339,12 @@ public final class ChahuaLocalStore: Sendable {
         }.snapshot
     }
 
-    public func retryPreparation(key: ConversationKey, itemID: String) async throws -> LocalConversationSnapshot {
+    public func retryPreparation(key: ConversationKey, itemID: String) async throws
+        -> LocalConversationSnapshot
+    {
         try await update(key) { db, key, _ in
-            guard let row = try Self.outgoingRow(db, key, id: itemID), try Self.failure(row)?.stage == .preparation
+            guard let row = try Self.outgoingRow(db, key, id: itemID),
+                try Self.failure(row)?.stage == .preparation
             else { return .unchanged }
             var content = try self.decode(row)
             let now = Date()
@@ -325,7 +356,9 @@ public final class ChahuaLocalStore: Sendable {
         }.snapshot
     }
 
-    public func settleCreate(_ message: MessageResponse, published: Bool) async throws -> LocalConversationSnapshot? {
+    public func settleCreate(
+        _ message: MessageResponse, published: Bool, cacheHistory: Bool = true
+    ) async throws -> LocalConversationSnapshot? {
         guard message.sender.uid == userID, message.replyRootId != "" else { return nil }
         let key = ConversationKey(chatID: message.chatId, threadID: message.replyRootId)
         let (snapshot, changed) = try await update(key) { db, key, _ in
@@ -334,9 +367,11 @@ public final class ChahuaLocalStore: Sendable {
             }
             let state: String = row["state"]
             if state != "sending" {
-                guard state == "failed", try Self.failure(row)?.stage == .create else { return .unchanged }
+                guard state == "failed", try Self.failure(row)?.stage == .create else {
+                    return .unchanged
+                }
             }
-            if published {
+            if published && cacheHistory {
                 try Self.cacheIsolatedMessage(db, message, in: key)
             }
             try Self.delete(db, id: message.clientGeneratedId)
@@ -348,7 +383,8 @@ public final class ChahuaLocalStore: Sendable {
     public func hasWork() async throws -> Bool {
         try await database.read { db in
             try Bool.fetchOne(
-                db, sql: "SELECT EXISTS (SELECT 1 FROM draft UNION ALL SELECT 1 FROM outgoing_message)"
+                db,
+                sql: "SELECT EXISTS (SELECT 1 FROM draft UNION ALL SELECT 1 FROM outgoing_message)"
             ) ?? false
         }
     }
@@ -356,7 +392,8 @@ public final class ChahuaLocalStore: Sendable {
     public func purge() async throws {
         try await database.write { db in
             try Self.clearCache(db)
-            try db.execute(sql: "DELETE FROM pending_read; DELETE FROM outgoing_message; DELETE FROM draft;")
+            try db.execute(
+                sql: "DELETE FROM pending_read; DELETE FROM outgoing_message; DELETE FROM draft;")
         }
     }
 
@@ -367,7 +404,8 @@ public final class ChahuaLocalStore: Sendable {
     }
 
     private enum Change {
-        case unchanged, changed, draft(Int64, Date)
+        case unchanged, changed
+        case draft(Int64, Date)
     }
 
     private struct Content: Codable, Sendable {
@@ -380,7 +418,8 @@ public final class ChahuaLocalStore: Sendable {
         var metadata: MessageMetadataInput?
 
         var isEmptyDraft: Bool {
-            text.isEmpty && reply == nil && attachments.isEmpty && (metadata?.linkPreviews.isEmpty ?? true)
+            text.isEmpty && reply == nil && attachments.isEmpty
+                && (metadata?.linkPreviews.isEmpty ?? true)
         }
     }
 
@@ -406,7 +445,8 @@ public final class ChahuaLocalStore: Sendable {
         }
     }
 
-    private func enqueue(_ key: ConversationKey, id: String, _ content: Content, date: Date) async throws
+    private func enqueue(_ key: ConversationKey, id: String, _ content: Content, date: Date)
+        async throws
         -> LocalConversationSnapshot
     {
         try await update(key) { db, key, _ in
@@ -433,19 +473,25 @@ public final class ChahuaLocalStore: Sendable {
             ])
     }
 
-    private func writeContent(_ db: Database, id: String, _ content: Content, failure: OutboxFailure?) throws {
+    private func writeContent(
+        _ db: Database, id: String, _ content: Content, failure: OutboxFailure?
+    ) throws {
         try db.execute(
-            sql: "UPDATE outgoing_message SET content = ?, state = ?, failure = ? WHERE client_generated_id = ?",
+            sql:
+                "UPDATE outgoing_message SET content = ?, state = ?, failure = ? WHERE client_generated_id = ?",
             arguments: [
                 try encode(content), failure == nil ? "pending" : "failed",
                 try failure.map { try JSONEncoder().encode($0) }, id,
             ])
     }
 
-    private func writeDraft(_ db: Database, _ key: ConversationKey, _ content: Content, date: Date) throws {
+    private func writeDraft(_ db: Database, _ key: ConversationKey, _ content: Content, date: Date)
+        throws
+    {
         guard !content.isEmptyDraft else {
             try db.execute(
-                sql: "DELETE FROM draft WHERE chat_id = ? AND thread_id = ?", arguments: Self.arguments(key))
+                sql: "DELETE FROM draft WHERE chat_id = ? AND thread_id = ?",
+                arguments: Self.arguments(key))
             return
         }
         try db.execute(
@@ -454,7 +500,9 @@ public final class ChahuaLocalStore: Sendable {
                 ON CONFLICT(chat_id, thread_id) DO UPDATE
                 SET content = excluded.content, updated_at = excluded.updated_at
                 """,
-            arguments: [key.chatID, key.threadID ?? "", try encode(content), date.timeIntervalSince1970])
+            arguments: [
+                key.chatID, key.threadID ?? "", try encode(content), date.timeIntervalSince1970,
+            ])
     }
 
     private func readDraft(_ db: Database, _ key: ConversationKey) throws -> Content {
@@ -469,8 +517,10 @@ public final class ChahuaLocalStore: Sendable {
         return LocalConversationSnapshot(
             chatID: key.chatID, threadID: key.threadID, revision: stamp.revision,
             draft: LocalDraft(
-                text: content.text, replyToMessage: content.reply, editRevision: stamp.draftRevision,
-                updatedAt: row.map { Date(timeIntervalSince1970: $0["updated_at"]) } ?? stamp.draftDate,
+                text: content.text, replyToMessage: content.reply,
+                editRevision: stamp.draftRevision,
+                updatedAt: row.map { Date(timeIntervalSince1970: $0["updated_at"]) }
+                    ?? stamp.draftDate,
                 attachments: content.attachments, compressionEnabled: content.compressionEnabled,
                 linkPreviews: content.metadata?.linkPreviews ?? []),
             outgoing: try Self.outgoingRows(db, key).map { try message($0, key) })
@@ -483,12 +533,16 @@ public final class ChahuaLocalStore: Sendable {
         let content = try decode(row)
         let failure = try Self.failure(row)
         let item = LocalOutgoingMessage(
-            clientGeneratedID: row["client_generated_id"], chatID: key.chatID, threadID: key.threadID,
+            clientGeneratedID: row["client_generated_id"], chatID: key.chatID,
+            threadID: key.threadID,
             senderID: userID, text: content.text, replyToMessage: content.reply,
             enqueuedAt: Date(timeIntervalSince1970: row["created_at"]), position: row["position"],
-            state: state, attachments: content.attachments, compressionEnabled: content.compressionEnabled,
-            sticker: content.sticker, forwardRequest: content.forward, metadata: content.metadata, failure: failure,
-            retryNotBefore: (row["retry_not_before"] as Double?).map(Date.init(timeIntervalSince1970:)))
+            state: state, attachments: content.attachments,
+            compressionEnabled: content.compressionEnabled,
+            sticker: content.sticker, forwardRequest: content.forward, metadata: content.metadata,
+            failure: failure,
+            retryNotBefore: (row["retry_not_before"] as Double?).map(
+                Date.init(timeIntervalSince1970:)))
         guard (state != .sending && failure?.stage != .create) || item.isReadyForDispatch else {
             throw LocalStorageError.corruptRecord
         }
@@ -500,7 +554,8 @@ public final class ChahuaLocalStore: Sendable {
     }
 
     private static func preparationFailure(_ reason: OutboxFailure.Reason) -> OutboxFailure {
-        let retry: OutboxFailure.Retry = reason == .network || reason == .unknownOutcome
+        let retry: OutboxFailure.Retry =
+            reason == .network || reason == .unknownOutcome
             ? .automatic : .manual
         return OutboxFailure(stage: .preparation, reason: reason, retry: retry)
     }
@@ -531,24 +586,32 @@ public final class ChahuaLocalStore: Sendable {
             arguments: arguments(key))
     }
 
-    private static func outgoingRow(_ db: Database, _ key: ConversationKey, id: String) throws -> Row? {
+    private static func outgoingRow(_ db: Database, _ key: ConversationKey, id: String) throws
+        -> Row?
+    {
         try Row.fetchOne(
             db,
-            sql: "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ?",
+            sql:
+                "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? AND client_generated_id = ?",
             arguments: [key.chatID, key.threadID ?? "", id])
     }
 
-    private static func outgoingRows(_ db: Database, _ key: ConversationKey, itemID: String? = nil) throws -> [Row] {
+    private static func outgoingRows(_ db: Database, _ key: ConversationKey, itemID: String? = nil)
+        throws -> [Row]
+    {
         if let itemID {
             return try outgoingRow(db, key, id: itemID).map { [$0] } ?? []
         }
         return try Row.fetchAll(
-            db, sql: "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? ORDER BY position",
+            db,
+            sql:
+                "SELECT * FROM outgoing_message WHERE chat_id = ? AND thread_id = ? ORDER BY position",
             arguments: arguments(key))
     }
 
     private static func delete(_ db: Database, id: String) throws {
-        try db.execute(sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?", arguments: [id])
+        try db.execute(
+            sql: "DELETE FROM outgoing_message WHERE client_generated_id = ?", arguments: [id])
     }
 
     private func mergeSelection(
@@ -562,7 +625,8 @@ public final class ChahuaLocalStore: Sendable {
         let updated = selected.enumerated().map { position, choice in
             var slot = choice
             if let old = byID[choice.id] {
-                let sameSource = old.sourcePath == choice.sourcePath && old.previewPath == choice.previewPath
+                let sameSource =
+                    old.sourcePath == choice.sourcePath && old.previewPath == choice.previewPath
                 if sameSource, old.generation == choice.generation { slot = old }
                 if !sameSource || (compressionChanged && !slot.isFile) {
                     if slot.generation == old.generation { slot.generation = UUID().uuidString }
@@ -600,7 +664,8 @@ public final class ChahuaLocalStore: Sendable {
             throw LocalStorageError.invalidAttachments
         }
         if current.isAudio || current.isFile {
-            guard current.preparedPath == checkpoint.preparedPath, current.mimeType == checkpoint.mimeType,
+            guard current.preparedPath == checkpoint.preparedPath,
+                current.mimeType == checkpoint.mimeType,
                 current.fileName == checkpoint.fileName, current.byteCount == checkpoint.byteCount,
                 current.width == checkpoint.width, current.height == checkpoint.height
             else { throw LocalStorageError.invalidAttachments }
@@ -612,12 +677,15 @@ public final class ChahuaLocalStore: Sendable {
         return true
     }
 
-    private func validateAttachments(_ attachments: [LocalOutgoingAttachment], requireSource: Bool = false) throws {
+    private func validateAttachments(
+        _ attachments: [LocalOutgoingAttachment], requireSource: Bool = false
+    ) throws {
         guard attachments.count <= 20 else { throw LocalStorageError.invalidAttachments }
         var ids = Set<String>()
         var uploaded = Set<String>()
         for (position, slot) in attachments.enumerated() {
-            let validDimensions = slot.isAudio || slot.isFile
+            let validDimensions =
+                slot.isAudio || slot.isFile
                 ? slot.width == 0 && slot.height == 0 : slot.width > 0 && slot.height > 0
             guard slot.position == position, !slot.id.isEmpty, ids.insert(slot.id).inserted,
                 !slot.generation.isEmpty, validDimensions, slot.byteCount > 0
@@ -644,8 +712,9 @@ public final class ChahuaLocalStore: Sendable {
         for path in [slot.sourcePath, slot.previewPath] + [slot.preparedPath].compactMap({ $0 }) {
             _ = try relativePath(path)
             if FileManager.default.fileExists(atPath: path) {
-                guard try URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey])
-                    .isRegularFile == true
+                guard
+                    try URL(fileURLWithPath: path).resourceValues(forKeys: [.isRegularFileKey])
+                        .isRegularFile == true
                 else { throw LocalStorageError.invalidAttachments }
             } else if requireSource && !slot.isUploaded {
                 throw LocalStorageError.invalidAttachments
@@ -668,26 +737,37 @@ public final class ChahuaLocalStore: Sendable {
         return stored
     }
 
-    static func redactDurableReplyPreviews(_ db: Database, chatID: String, ids: Set<MessageID>) throws {
-        let encoder = JSONEncoder(), decoder = JSONDecoder()
-        for row in try Row.fetchAll(db, sql: "SELECT thread_id, content FROM draft WHERE chat_id = ?",
+    static func redactDurableReplyPreviews(_ db: Database, chatID: String, ids: Set<MessageID>)
+        throws
+    {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        for row in try Row.fetchAll(
+            db, sql: "SELECT thread_id, content FROM draft WHERE chat_id = ?",
             arguments: [chatID])
         {
             var content = try decoder.decode(Content.self, from: row["content"])
-            guard let reply = content.reply, ids.contains(reply.id), !reply.isDeleted else { continue }
+            guard let reply = content.reply, ids.contains(reply.id), !reply.isDeleted else {
+                continue
+            }
             content.reply = reply.redactedForDeletion()
-            try db.execute(sql: "UPDATE draft SET content = ? WHERE chat_id = ? AND thread_id = ?",
+            try db.execute(
+                sql: "UPDATE draft SET content = ? WHERE chat_id = ? AND thread_id = ?",
                 arguments: [try encoder.encode(content), chatID, row["thread_id"] as String])
         }
-        let outgoing = try Row.fetchAll(db, sql: """
-            SELECT chat_id, client_generated_id, content FROM outgoing_message
-            WHERE chat_id = ? OR json_extract(CAST(content AS TEXT), '$.forward.sourceChatID') = ?
-            """, arguments: [chatID, chatID])
+        let outgoing = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT chat_id, client_generated_id, content FROM outgoing_message
+                WHERE chat_id = ? OR json_extract(CAST(content AS TEXT), '$.forward.sourceChatID') = ?
+                """, arguments: [chatID, chatID])
         for row in outgoing {
             let destination: String = row["chat_id"]
             var content = try decoder.decode(Content.self, from: row["content"])
             var changed = false
-            if destination == chatID, let reply = content.reply, ids.contains(reply.id), !reply.isDeleted {
+            if destination == chatID, let reply = content.reply, ids.contains(reply.id),
+                !reply.isDeleted
+            {
                 content.reply = reply.redactedForDeletion()
                 changed = true
             }
@@ -704,7 +784,8 @@ public final class ChahuaLocalStore: Sendable {
                 }
             }
             if changed {
-                try db.execute(sql: "UPDATE outgoing_message SET content = ? WHERE client_generated_id = ?",
+                try db.execute(
+                    sql: "UPDATE outgoing_message SET content = ? WHERE client_generated_id = ?",
                     arguments: [try encoder.encode(content), row["client_generated_id"] as String])
             }
         }
@@ -724,7 +805,9 @@ public final class ChahuaLocalStore: Sendable {
     private func relativePath(_ path: String) throws -> String {
         let root = accountRoot.path + "/"
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-        guard path.hasPrefix("/"), resolved.hasPrefix(root) else { throw LocalStorageError.invalidAttachments }
+        guard path.hasPrefix("/"), resolved.hasPrefix(root) else {
+            throw LocalStorageError.invalidAttachments
+        }
         return String(resolved.dropFirst(root.count))
     }
 

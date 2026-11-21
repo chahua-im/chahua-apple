@@ -14,6 +14,466 @@ import XCTest
 
 @MainActor
 final class ChatStoreTests: XCTestCase {
+    private func difference(
+        _ cursor: String, complete: Bool = false, reset: String? = nil,
+        chats: [ChatListItem] = [], muted: Bool = false, showMembershipMessages: Bool = true
+    ) -> ConversationDifference {
+        .init(
+            cursor: cursor, complete: complete, reset: reset,
+            chatSettings: .init(showMembershipMessages: showMembershipMessages),
+            notificationSettings: .init(
+                muteGroupChatsByDefault: muted, muteDirectChatsByDefault: muted),
+            chats: chats)
+    }
+
+    private func durableListState(_ db: ChahuaLocalStore) async throws -> ListSyncState {
+        let epoch = try await db.cacheEpoch()
+        return try await db.listSyncState(epoch: epoch)
+    }
+
+    private func assertNoLegacyLists(_ api: FakeChatAPI) async {
+        let chats = await api.recordedChatQueries()
+        let threads = await api.recordedThreadQueries()
+        XCTAssertTrue(chats.isEmpty)
+        XCTAssertTrue(threads.isEmpty)
+    }
+
+    func testNativeBaselineFollowsReturnedTokensAndKeepsOldInstallVisible() async throws {
+        let api = FakeChatAPI()
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        let epoch = try await db.cacheEpoch()
+        try await db.cacheList(
+            .activeChats, items: [.chat(chat(id: "1"))],
+            seen: [.init(chatID: "1")], epoch: epoch)
+        store.setNetworkAuthorized(false)
+        await store.loadActiveChats()
+        XCTAssertEqual(store.state.chats.map(\.id), ["1"])
+        await api.holdNextDifferenceRequest()
+        await api.setDifferenceResults([
+            .success(difference("middle", chats: [chat(id: "2")])),
+            .success(difference("catchup")),
+            .success(difference("done", complete: true)),
+        ])
+        store.setNetworkAuthorized(true)
+        let pass = Task {
+            await store.retryConversations(chats: true, threads: true, archived: false)
+        }
+        await api.waitForDifferenceRequest()
+        XCTAssertEqual(store.state.chats.map(\.id), ["1"])
+        await api.resumeDifferenceRequest(
+            with: .success(difference("B", reset: "noBaseline")))
+        await pass.value
+        let cursors = await api.recordedDifferenceCursors()
+        XCTAssertEqual(cursors, [nil, "B", "middle", "catchup"])
+        XCTAssertEqual(store.state.chats.map(\.id), ["2"])
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "done")
+        XCTAssertNil(saved.stagingToken)
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeFailedPageRetryResumesDurableStageAndManualRefreshStartsNil() async throws {
+        let api = FakeChatAPI()
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("C", chats: [chat(id: "2")])),
+            .failure(APIError.unavailable),
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        let failed = try await durableListState(db)
+        XCTAssertEqual(failed.stagingToken, "C")
+        XCTAssertNil(failed.installedToken)
+        XCTAssertTrue(store.state.chats.isEmpty)
+        await api.setDifferenceResults([.success(difference("D", complete: true))])
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        XCTAssertEqual(store.state.chats.map(\.id), ["2"])
+        await api.setDifferenceResults([
+            .success(difference("fresh", reset: "noBaseline")),
+            .success(difference("final", complete: true)),
+        ])
+        await store.refreshConversations(chats: true, threads: true, archived: false)
+        let cursors = await api.recordedDifferenceCursors()
+        XCTAssertEqual(cursors, [nil, "B", "C", "C", nil, "fresh"])
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "final")
+        XCTAssertTrue(store.state.chats.isEmpty)
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeRepeatedResetPersistsFreshTokenThenStops() async throws {
+        let api = FakeChatAPI()
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("C", reset: "unknownFutureReason")),
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.stagingToken, "C")
+        XCTAssertNil(saved.installedToken)
+        XCTAssertEqual(store.state.chatListLoadPhase, .failed)
+        let cursors = await api.recordedDifferenceCursors()
+        XCTAssertEqual(cursors, [nil, "B"])
+        await api.setDifferenceResults([.success(difference("done", complete: true))])
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        let resumed = await api.recordedDifferenceCursors()
+        XCTAssertEqual(resumed, [nil, "B", "C"])
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeIncompleteRepeatedTokenFailsWithoutLegacyOrTokenAdvance() async throws {
+        let api = FakeChatAPI()
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("B", chats: [chat(id: "3")])),
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.stagingToken, "B")
+        XCTAssertNil(saved.installedToken)
+        XCTAssertTrue(store.state.chats.isEmpty)
+        XCTAssertEqual(store.state.chatListLoadPhase, .failed)
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeCompleteEmptyPageUpdatesSettingsAndRetainsLowerSavedPage() async throws {
+        let api = FakeChatAPI()
+        let rows = (1...51).map { chat(id: "\($0)") }
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: rows)),
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        XCTAssertEqual(store.state.chats.count, 50)
+        XCTAssertTrue(store.state.savedListHasMore.contains(.activeChats))
+        await api.setDifferenceResults([
+            .success(difference("settings", complete: true, muted: true))
+        ])
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        XCTAssertEqual(store.state.notificationDefaults?.muteGroupChatsByDefault, true)
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "settings")
+        XCTAssertEqual(saved.installedNotificationSettings?.muteDirectChatsByDefault, true)
+        await store.loadMoreSavedConversations(chats: true, threads: false, archived: false)
+        XCTAssertEqual(store.state.chats.count, 51)
+        XCTAssertEqual(Set(store.state.chats.map(\.id)), Set(rows.map(\.id)))
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeHeldPageCannotPublishAfterAccountReset() async throws {
+        let api = FakeChatAPI()
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        await api.holdNextDifferenceRequest()
+        let pass = Task {
+            await store.retryConversations(chats: true, threads: true, archived: false)
+        }
+        await api.waitForDifferenceRequest()
+        store.reset()
+        cache.setSession(uid: nil)
+        await api.resumeDifferenceRequest(
+            with: .success(difference("B", reset: "noBaseline")))
+        await pass.value
+        await cache.fenceForSignOut()
+        XCTAssertTrue(store.state.chats.isEmpty)
+        let saved = try await durableListState(db)
+        XCTAssertNil(saved.installedToken)
+        XCTAssertNil(saved.stagingToken)
+        await assertNoLegacyLists(api)
+    }
+    func testNativeSimultaneousViewsJoinAndDirtySignalsCoalesceOneFollowup() async throws {
+        let api = FakeChatAPI()
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true))
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        await api.holdNextDifferenceRequest()
+        await api.setDifferenceResults([.success(difference("followup", complete: true))])
+        let reconnect = Task { await store.refreshConversationListsAfterReconnect() }
+        await api.waitForDifferenceRequest()
+        let joined = expectation(description: "Views and invalidations enter the shared pass")
+        joined.expectedFulfillmentCount = 4
+        let chats = Task {
+            joined.fulfill()
+            await store.loadActiveChats()
+        }
+        let threads = Task {
+            joined.fulfill()
+            await store.loadActiveThreads()
+        }
+        let dirtyOne = Task {
+            joined.fulfill()
+            await store.refreshConversationListsAfterReconnect()
+        }
+        let dirtyTwo = Task {
+            joined.fulfill()
+            await store.refreshConversationListsAfterReconnect()
+        }
+        await fulfillment(of: [joined], timeout: 1)
+        await api.resumeDifferenceRequest(
+            with: .success(difference("delta", complete: true)))
+        await reconnect.value
+        await chats.value
+        await threads.value
+        await dirtyOne.value
+        await dirtyTwo.value
+        let cursors = await api.recordedDifferenceCursors()
+        XCTAssertEqual(cursors, [nil, "B", "installed", "delta"])
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "followup")
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeHeldArchiveProjectionRetriesWithoutResurrectingActiveRow() async throws {
+        let api = FakeChatAPI()
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [chat(id: "5")]))
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        store.setNetworkAuthorized(false)
+        await store.loadArchivedChats()
+        store.setNetworkAuthorized(true)
+        await api.holdNextDifferenceRequest()
+        let archived = ChatListItem(
+            id: "5", name: "Archived", unreadCount: 0, archived: true, kind: .group)
+        await api.setDifferenceResults([
+            .success(difference("fresh", complete: true, chats: [archived])),
+            .success(difference("fresh", complete: true)),
+        ])
+        let pass = Task {
+            await store.retryConversations(chats: true, threads: true, archived: false)
+        }
+        await api.waitForDifferenceRequest()
+        await store.applyRealtimeEvent(
+            .chatArchiveStateChanged(.init(chatId: "5", archived: true)), currentUserID: 1)
+        await api.resumeDifferenceRequest(
+            with: .success(difference("stale", complete: true, chats: [chat(id: "5")])))
+        await pass.value
+        XCTAssertTrue(store.state.chats.isEmpty)
+        XCTAssertEqual(store.state.archivedChats.map(\.id), ["5"])
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "fresh")
+        let cursors = await api.recordedDifferenceCursors()
+        XCTAssertEqual(Array(cursors.prefix(4)), [nil, "B", "installed", "installed"])
+        await assertNoLegacyLists(api)
+    }
+    func testNativeHeldRevokedRowCannotAdvanceStaleProjection() async throws {
+        let api = FakeChatAPI()
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [chat(id: "6")]))
+        ])
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        await api.holdNextDifferenceRequest()
+        await api.setDifferenceResults([
+            .success(.init(
+                cursor: "revoked", complete: true,
+                chatSettings: .init(showMembershipMessages: true),
+                notificationSettings: .init(
+                    muteGroupChatsByDefault: false, muteDirectChatsByDefault: false),
+                removed: [.init(chatId: "6")])),
+            .success(difference("revoked", complete: true)),
+        ])
+        let pass = Task {
+            await store.retryConversations(chats: true, threads: true, archived: false)
+        }
+        await api.waitForDifferenceRequest()
+        cache.revoke("6")
+        await api.resumeDifferenceRequest(
+            with: .success(difference("stale", complete: true, chats: [chat(id: "6")])))
+        await pass.value
+        XCTAssertTrue(store.state.chats.isEmpty)
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "revoked")
+        let rows = try await cache.read { try await $0.cachedList(.activeChats) }
+        XCTAssertTrue(rows?.items.isEmpty == true)
+        XCTAssertTrue(cache.accessRevoked("6"))
+        await api.setDifferenceResults([
+            .success(difference("rejoined", complete: true, chats: [chat(id: "6")]))
+        ])
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        XCTAssertEqual(store.state.chats.map(\.id), ["6"])
+        XCTAssertFalse(cache.accessRevoked("6"))
+        let rejoined = try await durableListState(db)
+        XCTAssertEqual(rejoined.installedToken, "rejoined")
+        await assertNoLegacyLists(api)
+    }
+    func testNativeHeldReadProjectionCannotRestoreUnreadCounts() async throws {
+        let api = FakeChatAPI(
+            readResults: [.success(.init(lastReadMessageId: MessageID(9), unreadCount: 0))])
+        let unread = ChatListItem(
+            id: "7", unreadCount: 7, archived: false, kind: .group)
+        let read = ChatListItem(
+            id: "7", unreadCount: 0, lastReadMessageId: MessageID(9),
+            archived: false, kind: .group)
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [unread]))
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        await api.holdNextDifferenceRequest()
+        await api.setDifferenceResults([
+            .success(difference("read", complete: true, chats: [read])),
+            .success(difference("read", complete: true)),
+        ])
+        let pass = Task {
+            await store.retryConversations(chats: true, threads: true, archived: false)
+        }
+        await api.waitForDifferenceRequest()
+        try await store.markRead(chatID: "7", threadID: nil, messageID: MessageID(9))
+        await api.resumeDifferenceRequest(
+            with: .success(difference("stale", complete: true, chats: [unread])))
+        await pass.value
+        XCTAssertEqual(store.state.chats.first?.unreadCount, 0)
+        XCTAssertEqual(store.state.chats.first?.lastReadMessageId, MessageID(9))
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "read")
+        let rows = try await db.cachedList(.activeChats)
+        guard case .chat(let persisted)? = rows?.items.first else {
+            return XCTFail("Expected the committed read chat")
+        }
+        XCTAssertEqual(persisted.unreadCount, 0)
+        XCTAssertEqual(persisted.lastReadMessageId, MessageID(9))
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeHeldPolicyProjectionCannotRestoreRestrictiveSettings() async throws {
+        let api = FakeChatAPI()
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [chat(id: "8")]))
+        ])
+        let (store, _, _, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await store.retryConversations(chats: true, threads: true, archived: false)
+        await api.holdNextDifferenceRequest()
+        await api.setDifferenceResults([
+            .success(difference("private", complete: true, showMembershipMessages: false)),
+            .success(difference("private", complete: true, showMembershipMessages: false)),
+        ])
+        let pass = Task {
+            await store.retryConversations(chats: true, threads: true, archived: false)
+        }
+        await api.waitForDifferenceRequest()
+        await store.applyRealtimeEvent(
+            .chatSettingsChanged(.init(showMembershipMessages: false)), currentUserID: 1)
+        await api.resumeDifferenceRequest(
+            with: .success(difference("stale", complete: true)))
+        await pass.value
+        let saved = try await durableListState(db)
+        XCTAssertEqual(saved.installedToken, "private")
+        XCTAssertEqual(saved.installedChatSettings?.showMembershipMessages, false)
+        await assertNoLegacyLists(api)
+    }
+
+    func testNativeServerAuthenticationAndDecodeFailuresNeverSelectLegacy() async throws {
+        let errors: [Error] = [
+            APIError.http(status: 500, body: Data()),
+            APIError.http(status: 401, body: Data()),
+            DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Invalid list")),
+        ]
+        for error in errors {
+            let api = FakeChatAPI()
+            let (store, _, _, db) = try await makeDurableReadStore(api: api)
+            await api.setDifferenceResults([
+                .success(difference("B", reset: "noBaseline")),
+                .success(difference("installed", complete: true, chats: [chat(id: "9")])),
+            ])
+            await store.retryConversations(chats: true, threads: true, archived: false)
+            await api.setDifferenceResults([.failure(error)])
+            await store.retryConversations(chats: true, threads: true, archived: false)
+            XCTAssertEqual(store.state.chats.map(\.id), ["9"])
+            let saved = try await durableListState(db)
+            XCTAssertEqual(saved.installedToken, "installed")
+            XCTAssertNil(saved.stagingToken)
+            let cursors = await api.recordedDifferenceCursors()
+            XCTAssertEqual(cursors, [nil, "B", "installed"])
+            await assertNoLegacyLists(api)
+            store.reset()
+        }
+    }
+
+    func testListPageWriterRejectsRevokedAndSupersededAccountResponses() async throws {
+        let (store, _, cache, db) = try await makeDurableReadStore(api: FakeChatAPI())
+        defer { store.reset() }
+        let page = ConversationDifference(
+            cursor: "baseline", complete: false, reset: "noBaseline",
+            chatSettings: .init(showMembershipMessages: true),
+            notificationSettings: .init(
+                muteGroupChatsByDefault: false, muteDirectChatsByDefault: false))
+        let pending = try await cache.startListPage(forced: true)
+        let refused = try await cache.commitListPage(page, token: pending, accepting: { false })
+        XCTAssertEqual(refused, .stale)
+        let epoch = try await db.cacheEpoch()
+        let unchanged = try await db.listSyncState(epoch: epoch)
+        XCTAssertNil(unchanged.stagingToken)
+
+        cache.revoke("chat")
+        let revoked = try await cache.commitListPage(page, token: pending, accepting: { true })
+        XCTAssertEqual(revoked, .stale)
+        let fresh = try await cache.startListPage(forced: true)
+        let accepted = try await cache.commitListPage(page, token: fresh, accepting: { true })
+        XCTAssertEqual(accepted, .committed)
+
+        cache.setSession(uid: nil)
+        let retired = try await cache.commitListPage(page, token: fresh, accepting: { true })
+        XCTAssertEqual(retired, .stale)
+        await cache.fenceForSignOut()
+    }
+
+    func testSyncReadyCannotAdvanceOnFailedCommitThenVisibilityResetPurgesRows() async throws {
+        let (store, _, cache, db) = try await makeDurableReadStore(api: FakeChatAPI())
+        defer { store.reset() }
+        let socket = RealtimeTestSocket()
+        store.beginMessageSyncAttempt(1, socket: socket)
+        try await cache.resetSyncChat(chatID: "chat", cursor: "old", purge: false)
+        try await store.startMessageSync()
+        let epoch = try await db.cacheEpoch()
+        let key = ConversationKey(chatID: "chat")
+        let old = try TimelineTestFixtures.message(id: 10, senderID: 2, at: 10)
+        try await db.cacheHistory(
+            key, query: .init(), response: .init(messages: [old]), at: "old", epoch: epoch)
+        // The disk checkpoint changed since the attempt's manifest was read.
+        try await db.resetSyncChat(chatID: key.chatID, cursor: "other", purge: false, epoch: epoch)
+        do {
+            try await store.applyMessageSync(
+                .messageSyncBatch(.init(chatID: key.chatID, from: "old", to: "new", changes: [])),
+                currentUserID: 1)
+            XCTFail("A batch whose disk checkpoint changed must fail")
+        } catch MessageSyncStreamError.checkpointMismatch {}
+        do {
+            try await store.applyMessageSync(
+                .messageSyncReady(chatID: key.chatID, cursor: "new"), currentUserID: 1)
+            XCTFail("A failed commit must not install its cursor")
+        } catch MessageSyncStreamError.checkpointMismatch {}
+        try await store.applyMessageSync(
+            .messageSyncReset(
+                chatID: key.chatID, cursor: "visible", reason: .visibilityChanged), currentUserID: 1
+        )
+        let saved = try await db.cachedHistory(key)
+        XCTAssertTrue(saved.messages.isEmpty)
+        XCTAssertFalse(saved.syncLatest)
+        let manifest = try await cache.syncManifest()
+        XCTAssertEqual(manifest, [.init(chatID: key.chatID, cursor: "visible")])
+    }
+
     #if os(macOS)
         private func formControls(in view: NSView) -> [NSView] {
             [view] + view.subviews.flatMap { formControls(in: $0) }
@@ -827,6 +1287,19 @@ final class ChatStoreTests: XCTestCase {
         }
     }
 
+    func testReceiptAcceptedDuringHeldListFencesItsOlderProjection() {
+        let receipts = ConversationListReadReceipts()
+        let key = ConversationKey(chatID: "1")
+        receipts.acceptCached(nil, for: key)
+        let receiptRequest = receipts.snapshot()
+        let heldList = receipts.snapshot()
+        XCTAssertTrue(receipts.accept(MessageID(9), for: key, version: receiptRequest))
+        XCTAssertFalse(receipts.accept(MessageID(8), for: key, version: heldList))
+        XCTAssertEqual(receipts.values[key], MessageID(9))
+        receipts.acceptCached(MessageID(1), for: key)
+        XCTAssertEqual(receipts.values[key], MessageID(9))
+    }
+
     func testListReceiptsFenceOldSnapshotsAndClearAllDMTopicScopes() {
         let receipts = ConversationListReadReceipts()
         defer { receipts.reset() }
@@ -1552,8 +2025,7 @@ final class ChatStoreTests: XCTestCase {
         for model in [parentModel, threadModel, unlistedModel] { store.registerTimeline(model) }
         await store.loadArchivedChats()
         await store.loadArchivedThreads()
-        let resolvedParent = try await store.chatForThread(thread)
-        XCTAssertEqual(resolvedParent, parent)
+        XCTAssertEqual(store.chat(id: thread.chatId), parent)
         XCTAssertEqual(parentModel.jumpUnreadCount, 7)
         XCTAssertEqual(threadModel.jumpUnreadCount, thread.unreadCount)
         try await store.markRead(chatID: "chat", threadID: "1", messageID: MessageID(2))
@@ -1661,7 +2133,8 @@ final class ChatStoreTests: XCTestCase {
     func testOnlineAutomaticReadBypassesBlockedCacheTailAndOtherScopeReplay() async throws {
         let savedKey = ConversationKey(chatID: "saved")
         let visibleKey = ConversationKey(chatID: "visible")
-        let savedTarget = MessageID(9), visibleTarget = MessageID(15)
+        let savedTarget = MessageID(9)
+        let visibleTarget = MessageID(15)
         let api = FakeChatAPI(
             readResults: [.success(.init(lastReadMessageId: visibleTarget, unreadCount: 0))],
             suspendStateRequests: true)
@@ -1672,12 +2145,14 @@ final class ChatStoreTests: XCTestCase {
         await api.waitForStateRequest()
 
         let cacheGate = FakeChatAPI(suspendStateRequests: true)
-        let hold = try XCTUnwrap(cache.accessPendingReads { _ in
-            try await cacheGate.chatReadState(chatID: "cache-gate")
-        })
+        let hold = try XCTUnwrap(
+            cache.accessPendingReads { _ in
+                try await cacheGate.chatReadState(chatID: "cache-gate")
+            })
         await cacheGate.waitForStateRequest()
 
-        let finished = expectation(description: "Online acknowledgement while cache and replay are blocked")
+        let finished = expectation(
+            description: "Online acknowledgement while cache and replay are blocked")
         let read = Task {
             defer { finished.fulfill() }
             try await store.recordAutomaticRead(visibleKey, target: visibleTarget)
@@ -1699,7 +2174,8 @@ final class ChatStoreTests: XCTestCase {
 
     func testTransientOnlineAutomaticReadPersistsAndVerifiesBeforeReplay() async throws {
         let key = ConversationKey(chatID: "chat")
-        let base = MessageID(3), target = MessageID(19)
+        let base = MessageID(3)
+        let target = MessageID(19)
         let api = FakeChatAPI(
             readResults: [.failure(APIError.transport(URLError(.networkConnectionLost)))],
             stateResults: [
@@ -1723,14 +2199,18 @@ final class ChatStoreTests: XCTestCase {
         let writes = await api.recordedReadRequests()
         let states = await api.recordedStateRequests()
         XCTAssertNil(cleared)
-        XCTAssertEqual(writes, ["chat::19"], "The verified cursor already covers the uncertain write")
+        XCTAssertEqual(
+            writes, ["chat::19"], "The verified cursor already covers the uncertain write")
         XCTAssertEqual(states, ["chat:", "chat:"])
     }
 
     func testOfflineVisibleReadsCoalesceAndReplayAfterRefreshingScopedState() async throws {
-        let base = MessageID(3), target = MessageID(19)
+        let base = MessageID(3)
+        let target = MessageID(19)
         let key = ConversationKey(chatID: "chat")
-        let readingAPI = FakeChatAPI(stateResults: [.success(.init(lastReadMessageId: base, unreadCount: 8))])
+        let readingAPI = FakeChatAPI(stateResults: [
+            .success(.init(lastReadMessageId: base, unreadCount: 8))
+        ])
         let (store, queue, cache, db) = try await makeDurableReadStore(api: readingAPI)
         _ = try await store.conversationReadState(chatID: key.chatID, threadID: key.threadID)
         queue.setNetworkReachable(false)
@@ -1754,7 +2234,8 @@ final class ChatStoreTests: XCTestCase {
         let message = try TimelineTestFixtures.message(id: target.rawValue, senderID: 2, at: 19)
         await retryAPI.setNotificationMessage(message)
         let restored = ChatStore(
-            apiClient: retryAPI, outgoingQueue: testOutgoingQueue(apiClient: retryAPI), historyCache: cache,
+            apiClient: retryAPI, outgoingQueue: testOutgoingQueue(apiClient: retryAPI),
+            historyCache: cache,
             onInvalidToken: {})
         defer { restored.reset() }
         let attempt = try XCTUnwrap(restored.replayPendingReads())
@@ -1779,7 +2260,8 @@ final class ChatStoreTests: XCTestCase {
 
     func testDurableReadDiscardsRewoundBaseAndRefetchesAfterMissingTarget() async throws {
         let key = ConversationKey(chatID: "chat")
-        let base = MessageID(5), target = MessageID(10)
+        let base = MessageID(5)
+        let target = MessageID(10)
         let api = FakeChatAPI(stateResults: [
             .success(.init(lastReadMessageId: nil, unreadCount: 7)),
             .success(.init(lastReadMessageId: nil, unreadCount: 7)),
@@ -1842,7 +2324,8 @@ final class ChatStoreTests: XCTestCase {
         defer { store.reset() }
         queue.setNetworkReachable(false)
         try await store.recordAutomaticRead(chat, target: message.id)
-        await store.applyRealtimeEvent(.messageDeleted(message.redactedForDeletion()), currentUserID: 1)
+        await store.applyRealtimeEvent(
+            .messageDeleted(message.redactedForDeletion()), currentUserID: 1)
         let deleted = try await cache.read { try await $0.pendingRead(chat) }
         XCTAssertNil(deleted)
         try await store.recordAutomaticRead(chat, target: MessageID(11))
@@ -1859,7 +2342,9 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(reads.isEmpty)
     }
 
-    func testManualConversationRetryOverridesOnlyTheRequestedPathAndRequiresAuthorization() async throws {
+    func testManualConversationRetryOverridesOnlyTheRequestedPathAndRequiresAuthorization()
+        async throws
+    {
         let api = FakeChatAPI(chatResults: [.success(.init(chats: [chat(id: "fresh")]))])
         let (store, queue, _, _) = try await makeDurableReadStore(api: api)
         defer { store.reset() }
@@ -1890,13 +2375,15 @@ final class ChatStoreTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "DurableRead-\(UUID().uuidString)", isDirectory: true)
         addTeardownBlock { try FileManager.default.removeItem(at: directory) }
-        let db = try await Task.detached { try ChahuaLocalStore(directory: directory, userID: 1) }.value
+        let db = try await Task.detached { try ChahuaLocalStore(directory: directory, userID: 1) }
+            .value
         let owner = AccountLocalStoreOwner { _ in db }
         let cache = AccountHistoryCache(owner: owner)
         cache.setSession(uid: 1)
         owner.setSession(uid: 1)
         let queue = testOutgoingQueue(apiClient: api)
-        let store = ChatStore(apiClient: api, outgoingQueue: queue, historyCache: cache, onInvalidToken: {})
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: queue, historyCache: cache, onInvalidToken: {})
         return (store, queue, cache, db)
     }
 
@@ -1904,11 +2391,13 @@ final class ChatStoreTests: XCTestCase {
         let api = FakeChatAPI()
         let (store, queue, _, _) = try await makeDurableReadStore(api: api)
         let key = ConversationKey(chatID: "chat")
-        await api.setConversationPageMetadata(group: .init(id: key.chatID, myRole: .admin, kind: .group))
+        await api.setConversationPageMetadata(
+            group: .init(id: key.chatID, myRole: .admin, kind: .group))
         try await store.prepareForwardDestination(key)
 
         // No new permission request can succeed after the fixture changes.
-        await api.setConversationPageMetadata(group: .init(id: "other", myRole: .admin, kind: .group))
+        await api.setConversationPageMetadata(
+            group: .init(id: "other", myRole: .admin, kind: .group))
         let authorize = try XCTUnwrap(queue.authorizeWrite)
         try await authorize(key.chatID, nil)
 
@@ -1921,7 +2410,8 @@ final class ChatStoreTests: XCTestCase {
     }
 
     func testOfflineSubmitUsesOnlyTheLastResolvedDestinationDecision() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let db = try ChahuaLocalStore(directory: directory, userID: 1)
         let key = ConversationKey(chatID: "allowed")
@@ -1932,7 +2422,8 @@ final class ChatStoreTests: XCTestCase {
         let cache = AccountHistoryCache(owner: owner)
         let api = FakeChatAPI()
         let queue = OutgoingMessageQueue(apiClient: api, storage: owner, onInvalidToken: {})
-        let store = ChatStore(apiClient: api, outgoingQueue: queue, historyCache: cache, onInvalidToken: {})
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: queue, historyCache: cache, onInvalidToken: {})
         cache.setSession(uid: 1)
         store.setNetworkAuthorized(false)
         await queue.activate(uid: 1)
@@ -1946,12 +2437,14 @@ final class ChatStoreTests: XCTestCase {
         ] {
             do {
                 try await queue.enqueueIndependentText(
-                    chatID: unavailable.chatID, threadID: unavailable.threadID, text: "Never submitted")
+                    chatID: unavailable.chatID, threadID: unavailable.threadID,
+                    text: "Never submitted")
                 XCTFail("A different destination must not inherit the saved write decision")
             } catch SpeakingWriteError.unavailable {}
         }
         await store.applyRealtimeEvent(
-            .groupSpeakingModeChanged(.init(chatId: key.chatID, speakingMode: .readOnly)), currentUserID: 1)
+            .groupSpeakingModeChanged(.init(chatId: key.chatID, speakingMode: .readOnly)),
+            currentUserID: 1)
         do {
             try await queue.enqueueIndependentText(chatID: key.chatID, text: "Never submitted")
             XCTFail("An invalidated decision must not authorize a new send")
@@ -1972,12 +2465,13 @@ final class ChatStoreTests: XCTestCase {
         }.value
         let epoch = try await db.cacheEpoch()
         let items: [CachedConversation] = (1...51).map { index in
-            .chat(.init(
-                id: "saved-\(index)", name: "Cached \(index)",
-                lastMessageAt: Date(timeIntervalSince1970: Double(100 - index)),
-                unreadCount: 42, unreadMentions: 12, unreadReactions: 13,
-                lastReadMessageId: MessageID(4), peerLastReadMessageId: MessageID(5),
-                archived: false, kind: .dm))
+            .chat(
+                .init(
+                    id: "saved-\(index)", name: "Cached \(index)",
+                    lastMessageAt: Date(timeIntervalSince1970: Double(100 - index)),
+                    unreadCount: 42, unreadMentions: 12, unreadReactions: 13,
+                    lastReadMessageId: MessageID(4), peerLastReadMessageId: MessageID(5),
+                    archived: false, kind: .dm))
         }
         try await db.cacheList(
             .activeChats, items: items, seen: Set(items.map(\.key)), epoch: epoch)
@@ -2005,10 +2499,12 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.state.chats.map(\.id), (1...50).map { "saved-\($0)" })
         XCTAssertTrue(store.state.archivedChats.isEmpty)
         XCTAssertTrue(store.state.savedListHasMore.contains(.activeChats))
-        XCTAssertEqual(store.state.unreadBadgeCount(), 0)
+        XCTAssertEqual(store.state.unreadBadgeCount(), 2_100)
         XCTAssertNil(store.state.appBadgeCount)
-        XCTAssertTrue(store.listReadReceipts.values.isEmpty)
-        XCTAssertNil(store.state.chats.first?.peerLastReadMessageId)
+        XCTAssertEqual(store.state.chats.first?.unreadMentions, 12)
+        XCTAssertEqual(store.state.chats.first?.unreadReactions, 13)
+        XCTAssertEqual(store.state.chats.first?.peerLastReadMessageId, MessageID(5))
+        XCTAssertEqual(store.listReadReceipts.values[.init(chatID: "saved-1")], MessageID(5))
         XCTAssertEqual(store.state.chats.first?.lastReadMessageId, MessageID(4))
         let offlineRequests = await api.recordedChatQueries()
         XCTAssertTrue(offlineRequests.isEmpty)
@@ -2020,10 +2516,15 @@ final class ChatStoreTests: XCTestCase {
         store.setNetworkAuthorized(true)
         let refresh = Task { await store.refreshActiveChats() }
         await api.waitForChatRequest()
-        await api.resumeChatRequest(with: .success(.init(
-            chats: [.init(id: "saved-1", name: "Fresh metadata", unreadCount: 0,
-                          archived: false, kind: .dm)],
-            nextCursor: "next")))
+        await api.resumeChatRequest(
+            with: .success(
+                .init(
+                    chats: [
+                        .init(
+                            id: "saved-1", name: "Fresh metadata", unreadCount: 0,
+                            archived: false, kind: .dm)
+                    ],
+                    nextCursor: "next")))
         await api.waitForChatRequest()
         XCTAssertEqual(store.state.chats.first?.name, "Fresh metadata")
         XCTAssertEqual(store.state.chats.count, 51)
@@ -3221,6 +3722,8 @@ final class ChatStoreTests: XCTestCase {
             onInvalidToken: {},
             beforeStorageOperation: { operation in try await probe.check(operation) }
         )
+        // These fixtures drive durable outbox transitions directly, independent of reachability.
+        queue.setDispatchAuthorized(false)
         let store = ChatStore(apiClient: api, outgoingQueue: queue, onInvalidToken: {})
         addTeardownBlock {
             await MainActor.run { store.reset() }
@@ -3254,7 +3757,9 @@ final class ChatStoreTests: XCTestCase {
         let item = try XCTUnwrap(h.queue.pendingMessages(chatID: "chat").first)
         let claim = try await h.localStore.claimNext(
             chatID: "chat", threadID: nil, expectedID: item.clientGeneratedID, retryCreate: false)
-        XCTAssertEqual(claim.message?.clientGeneratedID, item.clientGeneratedID)
+        let sending = try XCTUnwrap(claim.message)
+        XCTAssertEqual(sending.clientGeneratedID, item.clientGeneratedID)
+        XCTAssertEqual(sending.state, .sending)
         await h.queue.deactivate()
         h.store.reset()
         await h.queue.activate(uid: 1)
@@ -3318,7 +3823,7 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(h.store.state.chats.first?.lastMessage?.message, "late server copy")
         XCTAssertEqual(h.store.state.chats.first?.lastMessage?.isDeleted, false)
         await api.appendMessageResult(chatID: "chat", page: .init(messages: [remote]))
-        let page = try await h.store.fetchMessages(chatID: "chat")
+        let page = try await h.store.fetchMessages(chatID: "chat").response
         XCTAssertEqual(page.messages, [remote])
         XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
     }
@@ -3331,7 +3836,7 @@ final class ChatStoreTests: XCTestCase {
             id: 1, at: 1, text: "private body", isDeleted: true,
             clientGeneratedID: pending.clientGeneratedID)
         await api.appendMessageResult(chatID: "chat", page: try TimelineTestFixtures.page([remote]))
-        let page = try await h.store.fetchMessages(chatID: "chat")
+        let page = try await h.store.fetchMessages(chatID: "chat").response
         XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
         XCTAssertEqual(page.messages.map(\.clientGeneratedId), [pending.clientGeneratedID])
         XCTAssertEqual(page.messages.first?.isDeleted, true)
@@ -3343,7 +3848,8 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertTrue(h.queue.pendingMessages(chatID: "chat").isEmpty)
     }
 
-    func testThreadPaginationDeduplicatesAndRejectsRepeatedCursorWithoutRemovingRows() async throws {
+    func testThreadPaginationDeduplicatesAndRejectsRepeatedCursorWithoutRemovingRows() async throws
+    {
         let first = try ScopeTestFixtures.thread(id: 1)
         let second = try ScopeTestFixtures.thread(id: 2)
         let rejected = try ScopeTestFixtures.thread(id: 3)
@@ -5435,6 +5941,47 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
         -> MessageResponse
     { throw APIError.unavailable }
+
+    private var differenceResults: [Result<ConversationDifference, Error>] = []
+    private var differenceCursors: [String?] = []
+    private var holdsDifference = false
+    private var pendingDifference: CheckedContinuation<ConversationDifference, Error>?
+    private var differenceObserver: CheckedContinuation<Void, Never>?
+
+    func setDifferenceResults(_ results: [Result<ConversationDifference, Error>]) {
+        differenceResults = results
+    }
+
+    func holdNextDifferenceRequest() { holdsDifference = true }
+
+    func recordedDifferenceCursors() -> [String?] { differenceCursors }
+
+    func waitForDifferenceRequest() async {
+        if pendingDifference != nil { return }
+        await withCheckedContinuation { differenceObserver = $0 }
+    }
+
+    func resumeDifferenceRequest(with result: Result<ConversationDifference, Error>) {
+        let continuation = pendingDifference
+        pendingDifference = nil
+        continuation?.resume(with: result)
+    }
+
+    func conversationDifference(cursor: String?) async throws -> ConversationDifference {
+        differenceCursors.append(cursor)
+        if holdsDifference {
+            holdsDifference = false
+            return try await withCheckedThrowingContinuation {
+                pendingDifference = $0
+                differenceObserver?.resume()
+                differenceObserver = nil
+            }
+        }
+        guard !differenceResults.isEmpty else {
+            throw APIError.http(status: 404, body: Data())
+        }
+        return try differenceResults.removeFirst().get()
+    }
 
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         chatQueries.append(query)

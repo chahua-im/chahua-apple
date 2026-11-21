@@ -58,7 +58,15 @@
             jumpControl.onReaction = { [weak self] in self?.perform(.reaction) }
             initialFailure.onRetry = { [weak self] in self?.perform(.initial) }
             initialBanner.onAction = { [weak self] in self?.perform(.initial) }
-            olderEdge.onRetry = { [weak self] in self?.model?.retryOlder() }
+            olderEdge.onRetry = { [weak self] in
+                guard let self, let model = self.model else { return }
+                switch model.state.olderEdgePresentation {
+                case .retryNetworkHistory: self.perform(.reconcile)
+                case .saved: model.browseSavedEdge(.older)
+                case .retryOlder: model.retryOlder()
+                case .none, .loading: break
+                }
+            }
             newerEdge.onRetry = { [weak self] in self?.model?.retryNewer() }
             repositionFailure.onAction = { [weak self] in self?.model?.dismissRepositionFailure() }
             historyStatus.onAction = { [weak self] in self?.perform(.reconcile) }
@@ -121,8 +129,16 @@
             } else {
                 initialBanner.hide()
             }
-            olderEdge.update(showsTable ? state.older : .idle, savedTitle: showsTable ? savedTitle(
-                state.olderSaved, side: .older) : nil)
+            switch showsTable ? state.olderEdgePresentation : .none {
+            case .none: olderEdge.update(.idle, savedTitle: nil)
+            case .loading: olderEdge.update(.loading, savedTitle: nil)
+            case .retryOlder: olderEdge.update(.failed, savedTitle: nil)
+            case .retryNetworkHistory:
+                olderEdge.update(
+                    .idle, savedTitle: AppLanguage.localized("Couldn’t refresh messages — Retry"))
+            case .saved(let saved):
+                olderEdge.update(.idle, savedTitle: savedTitle(saved, side: .older))
+            }
             newerEdge.update(showsTable ? state.newer : .idle, savedTitle: showsTable ? savedTitle(
                 state.newerSaved, side: .newer) : nil)
             repositionProgress.setLoading(showsTable && isRepositioning)
@@ -148,7 +164,9 @@
             case .unavailable:
                 connectionMessage = AppLanguage.localized("Can’t connect right now. Retrying…")
             }
-            if showsTable, state.historyConnection == .offline {
+            if showsTable, state.suppressesSeedHistoryStatus {
+                historyStatus.hide()
+            } else if showsTable, state.historyConnection == .offline {
                 historyStatus.configure(
                     text: state.history == .notDownloaded && next.hasRows
                         ? AppLanguage.localized("Offline · No messages downloaded")

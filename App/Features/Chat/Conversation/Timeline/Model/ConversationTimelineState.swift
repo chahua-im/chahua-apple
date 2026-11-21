@@ -39,6 +39,14 @@ struct ConversationTimelineState: Equatable {
         case section
     }
 
+    enum OlderEdgePresentation: Equatable {
+        case none
+        case loading
+        case retryOlder
+        case retryNetworkHistory
+        case saved(SavedEdge)
+    }
+
     struct Live: Equatable {
         var isPinnedToBottom = false
         var followsLatest = true
@@ -61,4 +69,23 @@ struct ConversationTimelineState: Equatable {
     var repositionFailure: RepositionTarget?
     /// HTTP recovery failed; the previous window remains browsable.
     var reconciliationFailed = false
+    var hasUnverifiedLatestSeed = false
+
+    /// One recovery control above an isolated list seed, without hiding offline saved sections.
+    var olderEdgePresentation: OlderEdgePresentation {
+        if hasUnverifiedLatestSeed, history == .saved {
+            if historyConnection == .refreshing { return .loading }
+            if reconciliationFailed, historyConnection != .offline { return .retryNetworkHistory }
+        }
+        switch older {
+        case .loading: return .loading
+        case .failed: return .retryOlder
+        case .idle: return olderSaved.map { .saved($0) } ?? .none
+        }
+    }
+
+    var suppressesSeedHistoryStatus: Bool {
+        guard hasUnverifiedLatestSeed, history == .saved else { return false }
+        return olderEdgePresentation == .loading || olderEdgePresentation == .retryNetworkHistory
+    }
 }

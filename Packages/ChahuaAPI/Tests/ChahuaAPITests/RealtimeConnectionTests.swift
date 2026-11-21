@@ -111,7 +111,7 @@ final class RealtimeConnectionTests: XCTestCase {
             XCTAssertEqual(
                 wireFrames,
                 [
-                    .init(type: "auth", ticket: "installed", state: nil),
+                    .init(type: "auth", ticket: "installed", state: nil, messageSync: 1),
                     .init(type: "appState", ticket: nil, state: "inactive"),
                     .init(type: "ping", ticket: nil, state: "inactive"),
                 ])
@@ -142,7 +142,7 @@ final class RealtimeConnectionTests: XCTestCase {
             XCTAssertEqual(
                 frames,
                 [
-                    .init(type: "auth", ticket: "installed", state: nil),
+                    .init(type: "auth", ticket: "installed", state: nil, messageSync: 1),
                     .init(type: "appState", ticket: nil, state: "active"),
                     .init(type: "ping", ticket: nil, state: "active"),
                     .init(type: "appState", ticket: nil, state: "inactive"),
@@ -179,7 +179,7 @@ final class RealtimeConnectionTests: XCTestCase {
             XCTAssertEqual(
                 frames,
                 [
-                    .init(type: "auth", ticket: "installed", state: nil),
+                    .init(type: "auth", ticket: "installed", state: nil, messageSync: 1),
                     .init(
                         type: "watchPresence", ticket: nil, state: nil,
                         requestId: UInt64.max, userIds: [7, Int32.max],
@@ -230,7 +230,7 @@ final class RealtimeConnectionTests: XCTestCase {
             XCTAssertEqual(
                 frames,
                 [
-                    .init(type: "auth", ticket: "installed", state: nil),
+                    .init(type: "auth", ticket: "installed", state: nil, messageSync: 1),
                     .init(
                         type: "watchConversationUnread", ticket: nil, state: nil,
                         requestId: UInt64(UInt32.max), views: views, appBadge: true),
@@ -310,6 +310,91 @@ final class RealtimeConnectionTests: XCTestCase {
                 "Bearer account-B")
             let auth = await server.authentications
             XCTAssertEqual(auth, ["account-B"])
+            await connection.close()
+            await server.stop()
+        } catch {
+            await server.stop()
+            throw error
+        }
+    }
+
+    func testMessageSyncTicketControlsAndEvents() async throws {
+        let server = try await RealtimeLoopbackServer.start()
+        do {
+            await server.setFrames([
+                .string(#"{"type":"messageSyncHello","payload":{"version":1}}"#),
+                .string(
+                    #"{"type":"messageSyncBatch","payload":{"chatId":"42","from":"a","to":"b","changes":[{"kind":"delete","messageId":"9007199254740993"},{"kind":"delete","messageId":"4","threadRootId":null},{"kind":"upsert","appeared":true,"message":{"id":"5","chatId":"42","clientGeneratedId":"c","messageType":"text","sender":{"uid":1,"gender":0},"createdAt":"2026-09-01T00:00:00Z","isEdited":false,"isDeleted":false,"hasAttachments":false,"attachments":[],"reactions":[],"message":"received"}}]}}"#
+                ),
+                .string(#"{"type":"messageSyncReady","payload":{"chatId":"42","cursor":"b"}}"#),
+                .string(
+                    #"{"type":"messageSyncReset","payload":{"chatId":"42","cursor":"c","reason":"futureReason"}}"#
+                ),
+                .string(#"{"type":"messageSyncRevoked","payload":{"chatId":"43"}}"#),
+                .string(
+                    #"{"type":"messageSyncPageResult","payload":{"requestId":4294967296,"chatId":"42","at":"c","page":{"messages":[]}}}"#
+                ),
+                .string(#"{"type":"messageSyncResumed","payload":{}}"#),
+                .string(
+                    #"{"type":"messageSyncBatch","payload":{"chatId":"42","from":"c","changes":[]}}"#
+                ),
+            ])
+            let client = ChahuaClient(
+                configuration: .init(baseURL: await server.baseURL), token: "installed")
+            let connection = try await client.openRealtimeConnection()
+            let requestID: UInt64 = 4_294_967_296
+            try await connection.sendMessageSyncResume(
+                chats: [.init(chatID: "42", cursor: "a"), .init(chatID: "43")], last: true,
+                priorityChatID: "42")
+            try await connection.sendMessageSyncPage(
+                requestID: requestID, chatID: "42",
+                query: .init(around: MessageID(9_007_199_254_740_993), max: 50, threadID: "44"))
+            try await connection.sendPing(state: .active)
+            guard case .pong = try await connection.receive(),
+                case .messageSyncHello(1) = try await connection.receive(),
+                case .messageSyncBatch(let batch) = try await connection.receive(),
+                case .messageSyncReady(chatID: "42", cursor: "b") = try await connection.receive(),
+                case .messageSyncReset(chatID: "42", cursor: "c", reason: .invalidCursor) =
+                    try await connection.receive(),
+                case .messageSyncRevoked(chatID: "43") = try await connection.receive(),
+                case .messageSyncPageResult(let page) = try await connection.receive(),
+                case .messageSyncResumed = try await connection.receive()
+            else { throw APIError.unexpectedResponse }
+            XCTAssertEqual(batch.from, "a")
+            XCTAssertEqual(batch.to, "b")
+            XCTAssertEqual(batch.changes.count, 3)
+            guard case .delete(let id, nil) = batch.changes[0],
+                case .delete(_, nil) = batch.changes[1],
+                case .upsert(let message, true) = batch.changes[2]
+            else { throw APIError.unexpectedResponse }
+            XCTAssertEqual(id, MessageID(9_007_199_254_740_993))
+            XCTAssertEqual(message.message, "received")
+            XCTAssertEqual(page.requestID, requestID)
+            XCTAssertEqual(page.at, "c")
+            XCTAssertEqual(page.page?.messages, [])
+            let wire = try await server.syncFrames.map {
+                try XCTUnwrap(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+            }
+            XCTAssertEqual(wire.count, 2)
+            XCTAssertEqual(Set(wire[0].keys), ["type", "chats", "last", "priorityChatId"])
+            XCTAssertEqual(wire[0]["type"] as? String, "messageSyncResume")
+            XCTAssertEqual(
+                wire[0]["chats"] as? [[String: String]],
+                [["chatId": "42", "cursor": "a"], ["chatId": "43"]])
+            XCTAssertEqual(wire[0]["last"] as? Bool, true)
+            XCTAssertEqual(wire[0]["priorityChatId"] as? String, "42")
+            XCTAssertEqual(
+                Set(wire[1].keys), ["type", "requestId", "chatId", "threadId", "around", "max"])
+            XCTAssertEqual(wire[1]["type"] as? String, "messageSyncPage")
+            XCTAssertEqual(wire[1]["requestId"] as? UInt64, requestID)
+            XCTAssertEqual(wire[1]["chatId"] as? String, "42")
+            XCTAssertEqual(wire[1]["threadId"] as? String, "44")
+            XCTAssertEqual(wire[1]["around"] as? String, "9007199254740993")
+            XCTAssertEqual(wire[1]["max"] as? Int, 50)
+            do {
+                _ = try await connection.receive()
+                XCTFail("A known sync event with a missing checkpoint must fail.")
+            } catch is DecodingError {}
             await connection.close()
             await server.stop()
         } catch {
@@ -480,6 +565,7 @@ private actor RealtimeLoopbackServer {
     private(set) var authentications: [String] = []
     private(set) var clientFrames: [ClientFrame] = []
     private(set) var rpcFrames: [Data] = []
+    private(set) var syncFrames: [Data] = []
     private var previewReply: String? =
         #""result":[{"url":"https://example.com/article","status":"ready","title":"Article"}]"#
     private var frames: [URLSessionWebSocketTask.Message] = []
@@ -593,6 +679,11 @@ private actor RealtimeLoopbackServer {
                     let (opcode, data) = try await wire.readFrame()
                     if opcode == 8 { break }
                     let frame = try JSONDecoder().decode(ClientFrame.self, from: data)
+                    if frame.type == "messageSyncResume" || frame.type == "messageSyncPage" {
+                        guard opcode == 1 else { throw APIError.unexpectedResponse }
+                        syncFrames.append(data)
+                        continue
+                    }
                     if frame.type == "watchPresence" {
                         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
                         guard opcode == 1, let object,
@@ -679,6 +770,7 @@ private actor RealtimeLoopbackServer {
         let type: String
         let ticket: String?
         let state: String?
+        var messageSync: Int? = nil
         var requestId: UInt64? = nil
         var userIds: [Int32]? = nil
         var chatIds: [String]? = nil

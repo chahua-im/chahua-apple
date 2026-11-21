@@ -301,9 +301,9 @@ final class MessageReactionControllerTests: XCTestCase {
 private final class ReactionTimelineSource: TimelineMessageSource {
     let page: ListMessagesResponse
     init(page: ListMessagesResponse) { self.page = page }
-    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-        -> ListMessagesResponse
-    { page }
+    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
+        TimelinePage(response: page)
+    }
 }
 
 private actor HeldReactionAPI: ChahuaAPIClient {
@@ -450,6 +450,9 @@ private actor HeldReactionAPI: ChahuaAPIClient {
         throw APIError.unavailable
     }
     func updateStickerPackOrder(_ order: [StickerPackOrderUpdate]) async throws {
+        throw APIError.unavailable
+    }
+    func conversationDifference(cursor: String?) async throws -> ConversationDifference {
         throw APIError.unavailable
     }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {

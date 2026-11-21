@@ -10,6 +10,40 @@ final class ChahuaAPITests: XCTestCase {
         super.tearDown()
     }
 
+    func testConversationDifferenceUsesOpaqueCursorAndRequiresSettings() async throws {
+        let requests = RequestRecorder()
+        let body = """
+            {"cursor":"next","complete":false,"reset":"futureReason",
+             "chatSettings":{"showMembershipMessages":false,"showUnreadMessageCount":true},
+             "notificationSettings":{"muteGroupChatsByDefault":true,"muteDirectChatsByDefault":false},
+             "chats":[],"threads":[],"latestMessages":[],
+             "removed":[{"chatId":"9007199254740993","threadId":"9007199254740995"}]}
+            """
+        StubURLProtocol.handler = { request in
+            requests.append(request)
+            return (200, body)
+        }
+        let client: any ChahuaAPIClient = ChahuaClient(
+            configuration: .init(baseURL: URL(string: "https://api.example")!),
+            token: "candidate", session: testSession())
+        let page = try await client.conversationDifference(cursor: nil)
+        _ = try await client.conversationDifference(cursor: "opaque+/=?")
+        XCTAssertEqual(page.reset, "futureReason")
+        XCTAssertEqual(page.removed.first?.threadId?.description, "9007199254740995")
+        XCTAssertTrue(page.notificationSettings.muteGroupChatsByDefault)
+        XCTAssertEqual(requests.values.map(\.httpMethod), ["GET", "GET"])
+        XCTAssertTrue(requests.values.allSatisfy { $0.url?.path == "/chats/difference" })
+        XCTAssertNil(requests.values[0].url?.query)
+        let query = URLComponents(url: requests.values[1].url!, resolvingAgainstBaseURL: false)?
+            .queryItems
+        XCTAssertEqual(query, [URLQueryItem(name: "cursor", value: "opaque+/=?")])
+        let malformed = body.replacingOccurrences(
+            of: #""notificationSettings":{"muteGroupChatsByDefault":true,"muteDirectChatsByDefault":false},"#,
+            with: "")
+        XCTAssertThrowsError(
+            try JSONCoding.decoder.decode(ConversationDifference.self, from: Data(malformed.utf8)))
+    }
+
     func testCreateRequestRoundTripsOmittedAttachmentIDsAndRejectsMalformedSelections() throws {
         let original = CreateMessageBody(
             messageType: .text, clientGeneratedId: "frozen", message: "text",

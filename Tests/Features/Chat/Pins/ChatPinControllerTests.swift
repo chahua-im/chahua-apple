@@ -311,6 +311,9 @@ private actor HeldPinAPI: ChahuaAPIClient {
     func updateStickerPackOrder(_ order: [StickerPackOrderUpdate]) async throws {
         throw APIError.unavailable
     }
+    func conversationDifference(cursor: String?) async throws -> ConversationDifference {
+        throw APIError.unavailable
+    }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         throw APIError.unavailable
     }

@@ -198,6 +198,35 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
     migrator.registerMigration("v12_outbox_retry_deadline") { db in
         try db.execute(sql: "ALTER TABLE outgoing_message ADD COLUMN retry_not_before REAL")
     }
+    migrator.registerMigration("v13_message_sync") { db in
+        try db.execute(
+            sql: """
+                CREATE TABLE sync_checkpoint (
+                    chat_id TEXT PRIMARY KEY NOT NULL, cursor TEXT NOT NULL
+                ) WITHOUT ROWID;
+                CREATE TABLE sync_latest (
+                    chat_id TEXT NOT NULL, thread_id TEXT NOT NULL, PRIMARY KEY (chat_id, thread_id)
+                ) WITHOUT ROWID;
+                """)
+    }
+    migrator.registerMigration("v14_list_sync") { db in
+        try db.execute(
+            sql: """
+                CREATE TABLE list_sync_state (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    installed_token TEXT, staging_token TEXT,
+                    installed_chat_settings BLOB, staged_chat_settings BLOB,
+                    installed_notification_settings BLOB, staged_notification_settings BLOB
+                );
+                INSERT INTO list_sync_state(singleton) VALUES (1);
+                CREATE TABLE list_sync_stage (
+                    chat_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+                    archived INTEGER NOT NULL, activity REAL NOT NULL, payload BLOB NOT NULL,
+                    latest_message BLOB,
+                    PRIMARY KEY(chat_id, thread_id)
+                ) WITHOUT ROWID;
+                """)
+    }
     let superseded = try queue.read { db in
         // SQLite can coerce non-text values to String. A malformed ledger is
         // an error, not evidence that a newer client migrated this database.
@@ -206,7 +235,8 @@ func migrateLocalStorage(_ queue: DatabaseQueue) throws {
             guard columns.count == 1, columns.first?.name == "identifier",
                 try db.primaryKey("grdb_migrations").columns == ["identifier"],
                 try Bool.fetchOne(
-                    db, sql: """
+                    db,
+                    sql: """
                         SELECT EXISTS(
                             SELECT 1 FROM grdb_migrations
                             WHERE typeof(identifier) != 'text' OR length(identifier) = 0

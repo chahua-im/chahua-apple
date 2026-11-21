@@ -17,6 +17,12 @@ final class ConversationListReadReceipts: ObservableObject {
     private var dirty = Set<ConversationKey>()
     private var generation = 0
 
+    var currentRevision: Int { revision }
+
+    func currentVersion(for key: ConversationKey) -> Int {
+        max(versions[key, default: 0], privacyVersion, privacyVersions[key.chatID, default: 0])
+    }
+
     func snapshot() -> Int {
         revision += 1
         return revision
@@ -24,18 +30,36 @@ final class ConversationListReadReceipts: ObservableObject {
 
     @discardableResult
     func accept(_ value: MessageID?, for key: ConversationKey, version: Int) -> Bool {
+        if knownScopes.contains(key), values[key] == value {
+            versions[key] = max(versions[key, default: 0], version)
+            return true
+        }
         knownScopes.insert(key)
         guard version >= versions[key, default: 0], version >= privacyVersion,
             version >= privacyVersions[key.chatID, default: 0]
         else { return false }
-        versions[key] = version
-        if values[key] != value { values[key] = value }
+        if values[key] != value {
+            revision += 1
+            versions[key] = max(version, revision)
+            values[key] = value
+        } else {
+            versions[key] = version
+        }
         return true
     }
 
-    func acceptIfKnown(_ value: MessageID?, for key: ConversationKey, version: Int) {
-        guard knownScopes.contains(key) else { return }
-        accept(value, for: key, version: version)
+    @discardableResult
+    func acceptIfKnown(_ value: MessageID?, for key: ConversationKey, version: Int) -> Bool {
+        guard knownScopes.contains(key) else { return false }
+        return accept(value, for: key, version: version)
+    }
+
+    func acceptCached(_ value: MessageID?, for key: ConversationKey) {
+        guard knownScopes.insert(key).inserted, privacyVersion == 0,
+            privacyVersions[key.chatID, default: 0] == 0
+        else { return }
+        // Hydration restores the installed projection, not a new accepted mutation.
+        if values[key] != value { values[key] = value }
     }
 
     func refresh(

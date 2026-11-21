@@ -11,6 +11,116 @@ import XCTest
 
 @MainActor
 final class RealtimeCoordinatorTests: XCTestCase {
+    func testSyncHelloSendsFinalManifestAndWaitsForResumed() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let socket = RealtimeTestSocket()
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {})
+        defer { coordinator.setSession(uid: nil) }
+        coordinator.setSession(uid: 1)
+        await socket.emit(.messageSyncHello(1))
+        await eventually { await socket.frames.contains(.resume([], true, nil)) }
+        XCTAssertFalse(store.syncResumed)
+        await socket.emit(.messageSyncResumed)
+        await eventually { store.syncResumed }
+    }
+
+    func testFirstPongSelectsLegacyAndLateHelloReconnectsInSyncMode() async {
+        let api = RealtimeTestHTTP()
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {})
+        let legacy = RealtimeTestSocket()
+        let upgraded = RealtimeTestSocket()
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [legacy, upgraded]), store: store,
+            onInvalidToken: {},
+            sleep: { duration in
+                if duration != .seconds(1) { try await Task.sleep(for: duration) }
+            }, jitter: { 0 })
+        defer { coordinator.setSession(uid: nil) }
+        coordinator.setSession(uid: 1)
+        await legacy.emit(.pong)
+        await eventually { store.syncMode == .legacy }
+        await legacy.emit(.messageSyncHello(1))
+        await upgraded.emit(.messageSyncHello(1))
+        await eventually { await upgraded.frames.contains(.resume([], true, nil)) }
+        let rejected = await legacy.closed
+        XCTAssertTrue(rejected)
+    }
+
+    func testSyncPageWaitsForResumeAndReturnsItsCheckpoint() async throws {
+        let api = RealtimeTestHTTP()
+        let socket = RealtimeTestSocket()
+        let (store, cache) = try makeSyncStore(api)
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket]), store: store, onInvalidToken: {})
+        defer { coordinator.setSession(uid: nil) }
+        coordinator.setSession(uid: 1)
+        try await cache.resetSyncChat(chatID: "chat", cursor: "base", purge: false)
+        await socket.emit(.messageSyncHello(1))
+        let manifest = MessageSyncCheckpoint(chatID: "chat", cursor: "base")
+        await eventually { await socket.frames.contains(.resume([manifest], true, nil)) }
+
+        let query = ListMessagesQuery(max: 50)
+        let page = Task { try await store.fetchMessages(chatID: "chat", query: query) }
+        defer { page.cancel() }
+        for _ in 0..<20 { await Task.yield() }
+        let sentBeforeResume = await socket.frames.contains(.syncPage(1, "chat", query))
+        XCTAssertFalse(sentBeforeResume)
+        await socket.emit(.messageSyncReady(chatID: "chat", cursor: "base"))
+        await socket.emit(.messageSyncResumed)
+        await eventually { await socket.frames.contains(.syncPage(1, "chat", query)) }
+        await socket.emit(
+            .messageSyncPageResult(
+                .init(
+                    requestID: 1, chatID: "chat", at: "base", page: .init(messages: []))))
+        let result = try await page.value
+        XCTAssertEqual(result.at, "base")
+        XCTAssertEqual(result.journalFloor, store.conversationMessages.receiveRevision)
+        XCTAssertTrue(result.response.messages.isEmpty)
+    }
+
+    func testMismatchedSyncBatchClosesAndResumesFromSavedCheckpoint() async throws {
+        let api = RealtimeTestHTTP()
+        let (store, cache) = try makeSyncStore(api)
+        let first = RealtimeTestSocket()
+        let second = RealtimeTestSocket()
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [first, second]), store: store,
+            onInvalidToken: {},
+            sleep: { duration in
+                if duration != .seconds(1) { try await Task.sleep(for: duration) }
+            }, jitter: { 0 })
+        defer { coordinator.setSession(uid: nil) }
+        coordinator.setSession(uid: 1)
+        try await cache.resetSyncChat(chatID: "chat", cursor: "base", purge: false)
+        let manifest = [MessageSyncCheckpoint(chatID: "chat", cursor: "base")]
+        await first.emit(.messageSyncHello(1))
+        await eventually { await first.frames.contains(.resume(manifest, true, nil)) }
+        await first.emit(
+            .messageSyncBatch(.init(chatID: "chat", from: "wrong", to: "next", changes: [])))
+        await second.emit(.messageSyncHello(1))
+        await eventually { await second.frames.contains(.resume(manifest, true, nil)) }
+        let closed = await first.closed
+        XCTAssertTrue(closed)
+    }
+
+    private func makeSyncStore(_ api: RealtimeTestHTTP) throws -> (ChatStore, AccountHistoryCache) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        let db = try ChahuaLocalStore(directory: directory, userID: 1)
+        let owner = AccountLocalStoreOwner { _ in db }
+        owner.setSession(uid: 1)
+        let cache = AccountHistoryCache(owner: owner)
+        let store = ChatStore(
+            apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), historyCache: cache,
+            onInvalidToken: {})
+        return (store, cache)
+    }
+
     func testLanguageDraftSelectionAndRevertNeverWritePreferences() throws {
         let namespace = UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
@@ -1295,6 +1405,69 @@ final class RealtimeCoordinatorTests: XCTestCase {
         coordinator.setSession(uid: nil)
     }
 
+    func testNativeListRecoveryStartsBeforeHelloAndJoinsConcurrentRefreshes() async throws {
+        let api = RealtimeTestHTTP()
+        await api.configureDifference(
+            pages: [
+                .init(
+                    cursor: "baseline", complete: false, reset: "noBaseline",
+                    chatSettings: .init(showMembershipMessages: true),
+                    notificationSettings: .init(
+                        muteGroupChatsByDefault: false, muteDirectChatsByDefault: false)),
+                .init(
+                    cursor: "installed", complete: true,
+                    chatSettings: .init(showMembershipMessages: true),
+                    notificationSettings: .init(
+                        muteGroupChatsByDefault: false, muteDirectChatsByDefault: false)),
+                .init(
+                    cursor: "installed", complete: true,
+                    chatSettings: .init(showMembershipMessages: true),
+                    notificationSettings: .init(
+                        muteGroupChatsByDefault: false, muteDirectChatsByDefault: false)),
+            ], holdFirst: true)
+        let (store, _) = try makeSyncStore(api)
+        let socket = RealtimeTestSocket()
+        let reconnected = RealtimeTestSocket()
+        let coordinator = RealtimeCoordinator(
+            provider: RealtimeTestProvider(sockets: [socket, reconnected]), store: store,
+            onInvalidToken: {},
+            sleep: { duration in
+                if duration != .seconds(1) { try await Task.sleep(for: duration) }
+            }, jitter: { 0 })
+        defer { coordinator.setSession(uid: nil) }
+        coordinator.setSceneActive(id: UUID(), active: true)
+        coordinator.setSession(uid: 1)
+
+        // No hello or resumed frame is sent: list HTTP must be independently usable.
+        try await Task.sleep(for: .milliseconds(350))
+        await eventually { await api.hasHeldDifference }
+        XCTAssertEqual(store.syncMode, .pending)
+        XCTAssertFalse(store.syncResumed)
+        let active = Task { await store.refreshActiveConversations() }
+        let archived = Task { await store.refreshArchivedConversations() }
+        for _ in 0..<20 { await Task.yield() }
+        await api.releaseDifference()
+        await active.value
+        await archived.value
+        await eventually { !coordinator.needsRecovery }
+        let cursors = await api.differenceCursors
+        let legacyCalls = await api.chatRequestCount
+        XCTAssertEqual(cursors, [nil, "baseline"])
+        XCTAssertEqual(legacyCalls, 0)
+        XCTAssertEqual(store.state.chatListLoadPhase, .loaded)
+        XCTAssertEqual(store.state.archivedChatListLoadPhase, .loaded)
+        XCTAssertEqual(store.state.threadListLoadPhase, .loaded)
+        XCTAssertEqual(store.state.archivedThreadListLoadPhase, .loaded)
+        await socket.close()
+        await eventually { await reconnected.frames.contains(.appState(.active)) }
+        try await Task.sleep(for: .milliseconds(350))
+        await eventually { !coordinator.needsRecovery }
+        let reconnectCursors = await api.differenceCursors
+        XCTAssertEqual(reconnectCursors, [nil, "baseline", "installed"])
+        let legacyCallsAfterReconnect = await api.chatRequestCount
+        XCTAssertEqual(legacyCallsAfterReconnect, 0)
+    }
+
     func testInactiveOpenDefersBulkRecoveryUntilActivationWithoutReconnecting() async {
         let api = RealtimeTestHTTP()
         let socket = RealtimeTestSocket()
@@ -1553,9 +1726,10 @@ final class RealtimeCoordinatorTests: XCTestCase {
     private func eventually(
         _ condition: () async -> Bool, file: StaticString = #filePath, line: UInt = #line
     ) async {
-        for _ in 0..<5_000 {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while ContinuousClock.now < deadline {
             if await condition() { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("Expected asynchronous transition did not occur", file: file, line: line)
     }
@@ -1602,11 +1776,13 @@ private actor RealtimeTestClock {
     }
 }
 
-private actor RealtimeTestSocket: RealtimeConnection {
+actor RealtimeTestSocket: RealtimeConnection {
     enum Frame: Equatable, Sendable {
         case appState(RealtimeAppState)
         case ping(RealtimeAppState)
         case watch(UInt64, [Int32], [String])
+        case resume([MessageSyncCheckpoint], Bool, String?)
+        case syncPage(UInt64, String, ListMessagesQuery)
     }
     struct UnreadWatch: Sendable {
         let requestID: UInt32
@@ -1675,6 +1851,18 @@ private actor RealtimeTestSocket: RealtimeConnection {
         guard !closed else { throw CancellationError() }
         stateWatches.append(.init(requestID: requestID, conversations: conversations))
     }
+    func sendMessageSyncResume(
+        chats: [MessageSyncCheckpoint], last: Bool, priorityChatID: String?
+    ) async throws {
+        guard !closed else { throw CancellationError() }
+        frames.append(.resume(chats, last, priorityChatID))
+    }
+    func sendMessageSyncPage(requestID: UInt64, chatID: String, query: ListMessagesQuery)
+        async throws
+    {
+        guard !closed else { throw CancellationError() }
+        frames.append(.syncPage(requestID, chatID, query))
+    }
     func close() {
         closed = true
         releaseAppState()
@@ -1720,10 +1908,25 @@ private actor RealtimeTestProvider: RealtimeConnectionProviding {
 
 private actor RealtimeTestHTTP: ChahuaAPIClient, SessionAuthenticating {
     private let holdChats: Bool
-    private var chats: CheckedContinuation<Void, Never>?
+    private var chats: [CheckedContinuation<Void, Never>] = []
     private(set) var chatRequestStarted = false
     private(set) var chatRequestCount = 0
     init(holdChats: Bool = false) { self.holdChats = holdChats }
+    private var differencePages: [ConversationDifference]?
+    private(set) var differenceCursors: [String?] = []
+    private var holdFirstDifference = false
+    private var heldDifference: CheckedContinuation<Void, Never>?
+    var hasHeldDifference: Bool { heldDifference != nil }
+
+    func configureDifference(pages: [ConversationDifference], holdFirst: Bool = false) {
+        differencePages = pages
+        holdFirstDifference = holdFirst
+    }
+
+    func releaseDifference() {
+        heldDifference?.resume()
+        heldDifference = nil
+    }
     private var visibility: PresenceVisibility = .everyone
     private var presenceUpdateError: APIError?
     private(set) var presenceUpdateCount = 0
@@ -1917,15 +2120,29 @@ private actor RealtimeTestHTTP: ChahuaAPIClient, SessionAuthenticating {
     func sendThreadMessage(chatID: String, threadID: String, body: CreateMessageBody) async throws
         -> MessageResponse
     { throw APIError.unavailable }
+    func conversationDifference(cursor: String?) async throws -> ConversationDifference {
+        differenceCursors.append(cursor)
+        guard differencePages != nil else {
+            throw APIError.http(status: 404, body: Data())
+        }
+        if holdFirstDifference {
+            holdFirstDifference = false
+            await withCheckedContinuation { heldDifference = $0 }
+        }
+        guard let page = differencePages?.first else { throw APIError.unavailable }
+        differencePages?.removeFirst()
+        return page
+    }
     func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
         chatRequestStarted = true
         chatRequestCount += 1
-        if holdChats { await withCheckedContinuation { chats = $0 } }
+        if holdChats { await withCheckedContinuation { chats.append($0) } }
         return ListChatsResponse(chats: [])
     }
     func releaseChats() {
-        chats?.resume()
-        chats = nil
+        let pending = chats
+        chats.removeAll()
+        for request in pending { request.resume() }
     }
     func listMessages(chatID: String, query: ListMessagesQuery) async throws -> ListMessagesResponse
     { throw APIError.unavailable }

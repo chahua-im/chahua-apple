@@ -285,6 +285,7 @@
             applying = true
             stopPhysicalAnimation()
             UIView.performWithoutAnimation {
+                collectionView.collectionViewLayout.invalidateLayout()
                 if environmentChanged {
                     layoutEnvironment = currentEnvironment
                     unsettledRows = Set(rows.map(\.id))
@@ -1327,6 +1328,27 @@
     }
 
     private final class TimelineFlowLayout: UICollectionViewFlowLayout {
+        override func prepare() {
+            super.prepare()
+            guard let collectionView else { return }
+            let insets = collectionView.adjustedContentInset
+            let available = max(0, collectionView.bounds.height - insets.top - insets.bottom)
+            let contentHeight = super.collectionViewContentSize.height - sectionInset.top
+            let scale = max(1, collectionView.traitCollection.displayScale)
+            let padding = collectionView.numberOfSections > 0
+                && collectionView.numberOfItems(inSection: 0) > 0
+                ? (max(0, available - contentHeight) * scale).rounded(.down) / scale : 0
+            guard sectionInset.top != padding else { return }
+            // SwiftUI cannot position the native flow layout's short document.
+            // Section geometry gives real rows bottom alignment without fake items.
+            sectionInset.top = padding
+            super.prepare()
+        }
+
+        override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
+            newBounds.size != collectionView?.bounds.size
+        }
+
         override func invalidationContext(forBoundsChange newBounds: CGRect)
             -> UICollectionViewLayoutInvalidationContext
         {

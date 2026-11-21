@@ -6,6 +6,7 @@ enum ConversationChange {
     case pendingChanged(chatID: String)
     case realtime(RealtimeServerEvent)
     case membershipVisibilityChanged(chatID: String?)
+    case syncHistoryInvalidated(chatID: String, purge: Bool)
     case reset
 }
 
@@ -16,7 +17,7 @@ final class ConversationMessageStore: ObservableObject {
 
     private var pendingOutgoing: [ConversationKey: [PendingOutgoingMessage]] = [:]
     private var deletedReplyIDs: [String: Set<MessageID>] = [:]
-    private var receiveRevision: UInt64 = 0
+    private(set) var receiveRevision: UInt64 = 0
     private struct Snapshot {
         let chatID: String
         let revision: UInt64
@@ -102,7 +103,8 @@ final class ConversationMessageStore: ObservableObject {
         if let chatID = event.conversationChatID,
             snapshots.values.contains(where: { $0.chatID == chatID })
         {
-            journals[chatID, default: []].append(.init(revision: receiveRevision, event: event, persistent: persistent))
+            journals[chatID, default: []].append(
+                .init(revision: receiveRevision, event: event, persistent: persistent))
         }
         changes.send(.realtime(event))
     }
@@ -116,17 +118,21 @@ final class ConversationMessageStore: ObservableObject {
         return token
     }
 
-    func eventsDuringSnapshot(_ token: UUID) -> [RealtimeServerEvent] {
+    func eventsDuringSnapshot(_ token: UUID, after floor: UInt64? = nil) -> [RealtimeServerEvent] {
         guard let snapshot = snapshots[token] else { return [] }
+        let revision = max(snapshot.revision, floor ?? 0)
         return journals[snapshot.chatID, default: []].compactMap {
-            $0.revision > snapshot.revision ? $0.event : nil
+            $0.revision > revision ? $0.event : nil
         }
     }
 
-    func cacheEventsDuringSnapshot(_ token: UUID) -> [RealtimeServerEvent] {
+    func cacheEventsDuringSnapshot(_ token: UUID, after floor: UInt64? = nil)
+        -> [RealtimeServerEvent]
+    {
         guard let snapshot = snapshots[token] else { return [] }
+        let revision = max(snapshot.revision, floor ?? 0)
         return journals[snapshot.chatID, default: []].compactMap {
-            $0.revision > snapshot.revision && $0.persistent ? $0.event : nil
+            $0.revision > revision && $0.persistent ? $0.event : nil
         }
     }
 
@@ -198,6 +204,8 @@ extension RealtimeServerEvent {
             .membershipMessagePolicyChanged, .chatMembershipChanged, .chatSettingsChanged,
             .conversationUnread, .conversationUnreadError, .conversationStates,
             .conversationStatesError,
+            .messageSyncHello, .messageSyncBatch, .messageSyncReady, .messageSyncReset,
+            .messageSyncRevoked, .messageSyncPageResult, .messageSyncResumed,
             .pinAdded, .threadPinAdded, .pinRemoved, .threadPinRemoved, .stickerPackOrderUpdated,
             .friendRequestReceived, .friendRequestResolved, .friendshipRemoved, .unknown:
             nil

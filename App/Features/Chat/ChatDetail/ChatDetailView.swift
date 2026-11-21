@@ -674,7 +674,8 @@ struct ChatDetailView: View {
                 .filter { !$0.isDeleted && $0.messageType != .system }
         }
         let page = try await store.fetchMessages(
-            chatID: chat.id, query: .init(max: 100, threadID: threadID))
+            chatID: chat.id, query: .init(max: 100, threadID: threadID)
+        ).response
         guard page.olderCursor == nil else { throw ForwardDestinationPicker.SourceError.tooMany }
         return page.messages.filter { !$0.isDeleted && $0.messageType != .system }
     }

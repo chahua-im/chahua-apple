@@ -185,6 +185,9 @@
         func updateStickerPackOrder(_ order: [StickerPackOrderUpdate]) async throws {
             throw Failure.unexpectedOperation
         }
+        func conversationDifference(cursor: String?) async throws -> ConversationDifference {
+            throw Failure.unexpectedOperation
+        }
         func listChats(query: ListChatsQuery) async throws -> ListChatsResponse {
             throw Failure.unexpectedOperation
         }

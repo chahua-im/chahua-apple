@@ -686,9 +686,7 @@
                 }.sorted { $0.uid < $1.uid }.prefix(max(0, query.limit)))
         }
 
-        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-            -> ListMessagesResponse
-        {
+        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try JSONSerialization.data(withJSONObject: [
@@ -702,7 +700,7 @@
                 "olderCursor": NSNull(), "newerCursor": NSNull(), "nextCursor": NSNull(),
                 "prevCursor": NSNull(),
             ])
-            return try decoder.decode(ListMessagesResponse.self, from: data)
+            return TimelinePage(response: try decoder.decode(ListMessagesResponse.self, from: data))
         }
 
         private func sender(_ id: Int) -> [String: Any] {

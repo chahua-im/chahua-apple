@@ -10,6 +10,87 @@
     @MainActor
     final class TimelineCollectionViewControllerTests: XCTestCase {
 
+        func testMountedLatestSeedStaysAtBottomThroughHistoryRetry() async throws {
+            struct HistoryFailure: Error {}
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "MountedLatestSeed-\(UUID().uuidString)")
+            addTeardownBlock { try FileManager.default.removeItem(at: root) }
+            let local = try ChahuaLocalStore(directory: root, userID: 1)
+            let owner = AccountLocalStoreOwner(factory: { _ in local })
+            owner.setSession(uid: 1)
+            let cache = AccountHistoryCache(owner: owner)
+            cache.setSession(uid: 1)
+            let seed = try TimelineTestFixtures.message(
+                id: 900, chatID: "seed", senderID: 2, at: 900,
+                text: "Latest saved message stays visible while earlier history loads.")
+            let epoch = try await local.cacheEpoch()
+            try await local.cacheChange(
+                .create(seed, .init(chatID: "seed"), adjoining: nil), epoch: epoch)
+            let source = ScriptedTimelineSource(pages: [
+                .failure(HistoryFailure()), .success(.init(messages: [seed])),
+            ])
+            source.holdNextRequest()
+            let model = ConversationTimelineModel(
+                chatID: "seed", currentUserID: 1, isGroupChat: false,
+                source: source, messageStore: source.store, historyCache: cache)
+            let host = UIHostingController(
+                rootView: ConversationTimelineView(model: model, loadsInitialAutomatically: false))
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previous = scene.windows.first(where: \.isKeyWindow)
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            let opening = Task { await model.open() }
+            defer {
+                source.release()
+                opening.cancel()
+                model.close()
+                window.isHidden = true
+                window.rootViewController = nil
+                previous?.makeKey()
+            }
+            func nativeRows(in view: UIView) -> [TimelineRowView] {
+                (view as? TimelineRowView).map { [$0] } ?? view.subviews.flatMap { nativeRows(in: $0) }
+            }
+            func capture(_ name: String) async throws {
+                try await Task.sleep(for: .milliseconds(300))
+                window.layoutIfNeeded()
+                XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
+                let row = try XCTUnwrap(nativeRows(in: host.view).first {
+                    $0.binding?.presentation.row.messageID == seed.id
+                })
+                let frame = row.convert(row.bounds, to: host.view)
+                XCTAssertLessThan(host.view.bounds.maxY - frame.maxY, 160)
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let attachment = XCTAttachment(image: image)
+                attachment.name = name
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            await source.waitUntilHeld()
+            XCTAssertEqual(model.state.olderEdgePresentation, .loading)
+            try await capture("iOS latest seed — held normal history")
+            source.release()
+            await opening.value
+            XCTAssertEqual(model.state.olderEdgePresentation, .retryNetworkHistory)
+            try await capture("iOS latest seed — history retry")
+            source.holdNextRequest()
+            let retry = Task { await model.retryNetworkHistory() }
+            await source.waitUntilHeld()
+            XCTAssertEqual(model.state.olderEdgePresentation, .loading)
+            try await capture("iOS latest seed — retrying normal history")
+            XCTAssertEqual(source.queries.count, 2)
+            XCTAssertNil(source.queries.last?.before)
+            XCTAssertNil(source.queries.last?.around)
+            source.release()
+            await retry.value
+            model.close()
+            await cache.fenceForSignOut()
+            try local.close()
+        }
+
         func testAccountDisplayScopeUpdatesMountedDMGroupAndCapturedNativeTimelines() async throws {
             let suite = "NativeTimelinePreferences.\(UUID().uuidString)"
             let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -462,8 +543,8 @@
                 ConversationTimelineView(
                     model: model, loadsInitialAutomatically: false, actions: routed
                 )
-                    .onAppear { actions = routed }
-                    .onChange(of: routed.selectedMessageIDs) { _, _ in actions = routed }
+                .onAppear { actions = routed }
+                .onChange(of: routed.selectedMessageIDs) { _, _ in actions = routed }
             }
             let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
             let window = UIWindow(windowScene: scene)
@@ -489,7 +570,8 @@
             let native = try await layoutUntil("The initial native viewport did not settle") {
                 () -> TimelineCollectionViewController? in
                 guard
-                    let controller = model.selectionViewportSource as? TimelineCollectionViewController,
+                    let controller = model.selectionViewportSource
+                        as? TimelineCollectionViewController,
                     model.updates.value.pendingScroll == nil,
                     actions.toggleMessageSelection != nil,
                     controller.visibleMessageIDsForSelection()?.isEmpty == false
@@ -1486,10 +1568,14 @@
             let growth = expanded[1].height - initial[1].height
             XCTAssertGreaterThan(
                 growth, 0, "Reactions must increase the message's allocated height.")
+            XCTAssertEqual(expanded[0].size, initial[0].size)
             XCTAssertEqual(
-                expanded[0], initial[0], "Messages before the changed row must not move.")
+                expanded.last!.maxY, initial.last!.maxY, accuracy: 0.5,
+                "Reaction growth in a short timeline must retain the latest edge.")
             for index in 2..<messages.count {
-                XCTAssertEqual(expanded[index].minY - initial[index].minY, growth, accuracy: 0.5)
+                XCTAssertEqual(
+                    expanded[index].minY - expanded[0].minY,
+                    initial[index].minY - initial[0].minY + growth, accuracy: 0.5)
                 XCTAssertGreaterThanOrEqual(
                     expanded[index].minY, expanded[index - 1].maxY - 0.5,
                     "Following messages must not cover the expanded row.")
@@ -1582,9 +1668,9 @@
     private final class BubbleSource: TimelineMessageSource {
         let page: ListMessagesResponse
         init(page: ListMessagesResponse) { self.page = page }
-        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-            -> ListMessagesResponse
-        { page }
+        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
+            TimelinePage(response: page)
+        }
     }
 
     @MainActor
@@ -1597,10 +1683,8 @@
             self.older = older
         }
 
-        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-            -> ListMessagesResponse
-        {
-            query.before == nil ? initial : older
+        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
+            TimelinePage(response: query.before == nil ? initial : older)
         }
     }
 #endif

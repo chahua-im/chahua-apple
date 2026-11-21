@@ -13,6 +13,13 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case messageDeleted(MessageResponse)
     case messagesBulkDeleted(BulkDeletedPayload)
     case reactionUpdated(ReactionUpdatePayload)
+    case messageSyncHello(Int)
+    case messageSyncBatch(MessageSyncBatch)
+    case messageSyncReady(chatID: String, cursor: String)
+    case messageSyncReset(chatID: String, cursor: String, reason: MessageSyncResetReason)
+    case messageSyncRevoked(chatID: String)
+    case messageSyncPageResult(MessageSyncPageResult)
+    case messageSyncResumed
     case notification(NotificationPayload)
     case presenceUpdate(PresenceUpdatePayload)
     case presenceSnapshot(PresenceSnapshotPayload)
@@ -38,6 +45,9 @@ public enum RealtimeServerEvent: Decodable, Sendable {
     case unknown(type: String)
 
     private enum CodingKeys: String, CodingKey { case type, payload }
+    private enum SyncPayloadKeys: String, CodingKey {
+        case version, chatID = "chatId", cursor, reason
+    }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -71,6 +81,35 @@ public enum RealtimeServerEvent: Decodable, Sendable {
         case "reactionUpdated":
             self = .reactionUpdated(
                 try container.decode(ReactionUpdatePayload.self, forKey: .payload))
+        case "messageSyncHello":
+            let payload = try container.nestedContainer(
+                keyedBy: SyncPayloadKeys.self, forKey: .payload)
+            self = .messageSyncHello(try payload.decode(Int.self, forKey: .version))
+        case "messageSyncBatch":
+            self = .messageSyncBatch(try container.decode(MessageSyncBatch.self, forKey: .payload))
+        case "messageSyncReady":
+            let payload = try container.nestedContainer(
+                keyedBy: SyncPayloadKeys.self, forKey: .payload)
+            self = .messageSyncReady(
+                chatID: try payload.decode(String.self, forKey: .chatID),
+                cursor: try payload.decode(String.self, forKey: .cursor))
+        case "messageSyncReset":
+            let payload = try container.nestedContainer(
+                keyedBy: SyncPayloadKeys.self, forKey: .payload)
+            self = .messageSyncReset(
+                chatID: try payload.decode(String.self, forKey: .chatID),
+                cursor: try payload.decode(String.self, forKey: .cursor),
+                reason: try payload.decode(MessageSyncResetReason.self, forKey: .reason))
+        case "messageSyncRevoked":
+            let payload = try container.nestedContainer(
+                keyedBy: SyncPayloadKeys.self, forKey: .payload)
+            self = .messageSyncRevoked(chatID: try payload.decode(String.self, forKey: .chatID))
+        case "messageSyncPageResult":
+            self = .messageSyncPageResult(
+                try container.decode(MessageSyncPageResult.self, forKey: .payload))
+        case "messageSyncResumed":
+            _ = try container.nestedContainer(keyedBy: SyncPayloadKeys.self, forKey: .payload)
+            self = .messageSyncResumed
         case "notification":
             self = .notification(
                 try container.decode(NotificationPayload.self, forKey: .payload))

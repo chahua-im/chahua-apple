@@ -225,7 +225,12 @@ struct ChatListView: View {
             state: store.state, scope: scope, archivedMode: archivedMode,
             showThreadsInMessages: showThreadsInMessages,
             isPullRefreshing: isPullRefreshing, canFetchHistory: store.canFetchHistory,
-            onRetry: { await performManualRefresh() }
+            onRetry: {
+                await store.retryConversations(
+                    chats: scope.includesChats,
+                    threads: scope.includesThreads(showThreadsInMessages: showThreadsInMessages),
+                    archived: archivedMode)
+            }
         )
         let viewport = ConversationListViewport {
             if !isWideChatLayout, !usesPrototypePull,
@@ -704,7 +709,7 @@ struct ChatListView: View {
             isPullRefreshing = false
             scrollScope.isRefreshing = false
         }
-        await store.retryConversations(
+        await store.refreshConversations(
             chats: scope.includesChats, threads: scope.includesThreads(showThreadsInMessages: showThreadsInMessages),
             archived: archivedMode)
     }

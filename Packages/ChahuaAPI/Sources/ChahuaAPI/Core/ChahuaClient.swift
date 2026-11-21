@@ -86,7 +86,7 @@ public actor ChahuaClient: ChahuaAPIClient, SessionAuthenticating, RealtimeConne
             let opened = URLSessionRealtimeConnection(socket: socket)
             connection = opened
             socket.resume()
-            try await opened.authenticate(ticket: token)
+            try await opened.authenticate(ticket: token, messageSync: 1)
             try checkSession(generation)
             return opened
         } catch {

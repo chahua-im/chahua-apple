@@ -164,6 +164,16 @@ extension ChahuaClient {
         )
     }
 
+    public func conversationDifference(cursor: String?) async throws -> ConversationDifference {
+        try await send(
+            HTTPRequestSpec(
+                method: .get, path: ["chats", "difference"],
+                query: cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ?? [],
+                interactivePage: true),
+            decoding: ConversationDifference.self
+        )
+    }
+
     public func groupInfo(chatID: String) async throws -> GroupInfoResponse {
         try await send(
             HTTPRequestSpec(method: .get, path: ["group", chatID], capturesRetryAfter: true),

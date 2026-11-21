@@ -114,7 +114,9 @@
 
         @ViewBuilder
         private var historyStatusBanner: some View {
-            if model.state.historyConnection == .offline {
+            if model.state.suppressesSeedHistoryStatus {
+                EmptyView()
+            } else if model.state.historyConnection == .offline {
                 statusBanner(model.state.history == .notDownloaded && !model.rows.isEmpty
                     ? "Offline · No messages downloaded" : "Offline", retry: true)
             } else if model.state.historyConnection == .refreshing {
@@ -186,11 +188,18 @@
 
         @ViewBuilder
         private var olderEdgeOverlay: some View {
-            if model.state.older == .loading {
+            switch model.state.olderEdgePresentation {
+            case .none:
+                EmptyView()
+            case .loading:
                 ProgressView().controlSize(.small).padding()
-            } else if model.state.older == .failed {
+            case .retryOlder:
                 Button("Couldn’t load older messages — Retry") { model.retryOlder() }.padding()
-            } else if let saved = model.state.olderSaved {
+            case .retryNetworkHistory:
+                Button("Couldn’t refresh messages — Retry") {
+                    Task { await model.retryNetworkHistory() }
+                }.padding()
+            case .saved(let saved):
                 let title: LocalizedStringKey =
                     saved == .section ? "Older saved section" : "Load older saved messages"
                 Button(title) {

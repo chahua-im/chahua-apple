@@ -12,14 +12,12 @@ private final class ForwardedRecordMessageSource: TimelineMessageSource {
         snapshot = ListMessagesResponse(messages: messages)
     }
 
-    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-        -> ListMessagesResponse
-    {
+    func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
         try Task.checkCancellation()
         guard let snapshot else { throw CancellationError() }
         // Detail responses contain all immediate items, even when larger than the
         // live timeline's page size. Both ends are complete: all cursors are nil.
-        return snapshot
+        return TimelinePage(response: snapshot)
     }
 
     func invalidate() { snapshot = nil }
@@ -215,6 +213,10 @@ final class ForwardedRecordsSession: ObservableObject {
                     invalidate(permanently: true)
                 }
             default: break
+            }
+        case .syncHistoryInvalidated(let chatID, let purge):
+            if purge, case .chat(let rootChatID, _) = root, rootChatID == chatID {
+                invalidate(permanently: false)
             }
         case .pendingChanged, .membershipVisibilityChanged: break
         }

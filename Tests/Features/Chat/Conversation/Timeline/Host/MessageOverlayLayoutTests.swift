@@ -214,8 +214,8 @@
     private final class OverlayPageSource: TimelineMessageSource {
         let page: ListMessagesResponse
         init(page: ListMessagesResponse) { self.page = page }
-        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws
-            -> ListMessagesResponse
-        { page }
+        func fetchMessages(chatID: String, query: ListMessagesQuery) async throws -> TimelinePage {
+            TimelinePage(response: page)
+        }
     }
 #endif

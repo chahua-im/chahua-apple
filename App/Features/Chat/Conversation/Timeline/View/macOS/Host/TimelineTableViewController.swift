@@ -17,6 +17,24 @@
         }
     }
 
+    /// AppKit top-aligns a short table. A clip-view constraint keeps the live
+    /// edge at the bottom without adding synthetic rows or scrollable padding.
+    @MainActor
+    private final class TimelineClipView: NSClipView {
+        override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+            var bounds = super.constrainBoundsRect(proposedBounds)
+            guard let table = documentView as? NSTableView, table.numberOfRows > 0,
+                let scroll = enclosingScrollView
+            else { return bounds }
+            let height = table.rect(ofRow: table.numberOfRows - 1).maxY
+            let insets = scroll.contentInsets
+            if height < proposedBounds.height - insets.top - insets.bottom {
+                bounds.origin.y = height - proposedBounds.height + insets.bottom
+            }
+            return bounds
+        }
+    }
+
     @MainActor
     final class TimelineTableViewController: NSViewController, NSTableViewDataSource,
         NSTableViewDelegate, TimelineSelectionViewportSource
@@ -229,6 +247,8 @@
             scrollView.horizontalScrollElasticity = .none
             scrollView.drawsBackground = false
             scrollView.automaticallyAdjustsContentInsets = false
+            scrollView.contentView = TimelineClipView()
+            scrollView.contentView.drawsBackground = false
             // SwiftUI's floating header/pins and composer cover the full native
             // viewport. Content insets make both edges reachable without moving
             // that viewport, so rows can still render beneath the header blur.
