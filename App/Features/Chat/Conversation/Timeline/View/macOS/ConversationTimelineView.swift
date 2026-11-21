@@ -20,6 +20,7 @@
                 interactionContext: interactionContext
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay { TimelineInitialLoadingView(model: model) }
             .overlay(alignment: .top) {
                 if #available(macOS 26, *) {
                     // Liquid Glass samples the rows directly; a second material

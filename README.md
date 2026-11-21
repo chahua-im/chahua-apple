@@ -4,6 +4,8 @@ The native Apple client for Chahua, with messaging, threads, media, reactions, a
 
 The app uses SwiftUI with native UIKit/AppKit conversation timelines. Shared Swift packages provide networking, Markdown rendering, and audio support.
 
+Initial message loading uses grouped bubble placeholders with the PWA’s soft 1.4-second pulse. Placeholders follow the avatar and direct-message detail preferences, stop pulsing with Reduce Motion, and do not replace loaded messages during refresh or pagination.
+
 Message link previews use optional backend-enriched metadata from full message responses and `messageUpdated` events. The Apple client renders up to three compact cards, loads only backend-cached thumbnails, and expires pending placeholders locally; it never fetches destination pages or polls for enrichment. Servers without preview metadata continue to display ordinary links. Availability depends on backend deployment.
 
 ## Getting started

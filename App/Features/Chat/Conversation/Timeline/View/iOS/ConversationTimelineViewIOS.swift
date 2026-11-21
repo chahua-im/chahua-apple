@@ -108,7 +108,7 @@
                     Button("Try again") { Task { await model.retryInitial() } }
                 }
             } else {
-                ProgressView("Loading messages")
+                TimelineInitialLoadingView(model: model)
             }
         }
 

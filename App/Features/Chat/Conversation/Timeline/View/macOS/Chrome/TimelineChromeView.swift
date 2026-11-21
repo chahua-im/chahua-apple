@@ -25,8 +25,6 @@
         private var viewportSubscription: AnyCancellable?
         private var viewportShowsJumpToLatest = false
         private var tasks: [Operation: Task<Void, Never>] = [:]
-        private let initialLoading = TimelineLoadingPanel(
-            label: AppLanguage.localized("Loading messages"))
         private let initialFailure = TimelineInitialFailurePanel()
         private let emptyHistory = timelineChromeLabel(style: .body)
         private let initialBanner = TimelineBannerView(cornerRadius: 0)
@@ -34,7 +32,7 @@
             title: AppLanguage.localized("Couldn’t load older messages — Retry"))
         private let newerEdge = TimelineEdgeView(
             title: AppLanguage.localized("Couldn’t load newer messages — Retry"))
-        private let repositionProgress = TimelineLoadingPanel(label: nil, material: true)
+        private let repositionProgress = TimelineLoadingPanel()
         private let repositionFailure = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
         private let historyStatus = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
         // The native table owns this overlay and its hit region; retained AppKit
@@ -47,7 +45,7 @@
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
             for child in [
-                initialLoading, initialFailure, emptyHistory, initialBanner, olderEdge, newerEdge,
+                initialFailure, emptyHistory, initialBanner, olderEdge, newerEdge,
                 repositionProgress, repositionFailure, historyStatus,
             ] as [NSView] {
                 child.isHidden = true
@@ -108,7 +106,6 @@
             }
             showsTable = next.hasRows || state.content == .ready || isRepositioning
 
-            initialLoading.setLoading(!showsTable && state.content != .initialLoadFailed)
             initialFailure.isHidden = showsTable || state.content != .initialLoadFailed
             emptyHistory.isHidden = next.hasRows || state.content != .ready
             emptyHistory.stringValue = state.history == .notDownloaded
@@ -206,7 +203,6 @@
             let contentBottom = max(contentTop, height - presentation.composerInset)
             let contentBounds = NSRect(
                 x: 0, y: contentTop, width: width, height: contentBottom - contentTop)
-            initialLoading.frame = contentBounds
             initialFailure.frame = contentBounds
             emptyHistory.frame = NSRect(x: 0, y: contentBounds.midY - 12, width: width, height: 24)
             var top = contentTop
@@ -344,25 +340,17 @@
     @MainActor
     private final class TimelineLoadingPanel: NSView {
         private let progress = NSProgressIndicator()
-        private let label: NSTextField?
-        private let material: NSVisualEffectView?
+        private let material = timelineChromeMaterial(cornerRadius: ChahuaTheme.Radius.medium)
         override var isFlipped: Bool { true }
 
-        init(label text: String?, material: Bool = false) {
-            label = text.map { timelineChromeLabel($0, style: .body) }
-            self.material =
-                material ? timelineChromeMaterial(cornerRadius: ChahuaTheme.Radius.medium) : nil
+        init() {
             super.init(frame: .zero)
-            if let background = self.material { addSubview(background) }
+            addSubview(material)
             progress.style = .spinning
             progress.controlSize = .regular
             progress.isDisplayedWhenStopped = false
-            progress.setAccessibilityLabel(text ?? AppLanguage.localized("Loading messages"))
+            progress.setAccessibilityLabel(AppLanguage.localized("Loading messages"))
             addSubview(progress)
-            if let label {
-                label.alignment = .center
-                addSubview(label)
-            }
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -374,17 +362,12 @@
 
         override func layout() {
             super.layout()
-            material?.frame = bounds
+            material.frame = bounds
             let spinnerSize: CGFloat = 20
-            let labelHeight: CGFloat = label == nil ? 0 : 20
-            let contentHeight = spinnerSize + (label == nil ? 0 : 8 + labelHeight)
-            let top = max(0, (bounds.height - contentHeight) / 2)
+            let top = max(0, (bounds.height - spinnerSize) / 2)
             progress.frame = NSRect(
                 x: max(0, (bounds.width - spinnerSize) / 2), y: top, width: spinnerSize,
                 height: spinnerSize)
-            label?.frame = NSRect(
-                x: 16, y: top + spinnerSize + 8, width: max(0, bounds.width - 32),
-                height: labelHeight)
         }
     }
 
