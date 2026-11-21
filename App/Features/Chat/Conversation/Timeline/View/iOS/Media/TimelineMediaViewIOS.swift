@@ -463,7 +463,7 @@
                 view.onError = { [weak self] in self?.accessibilityValue = $0 }
                 view.configure(
                     media: sticker.media, emoji: sticker.emoji, displayScale: displayScale,
-                    mediaContext: mediaContext)
+                    mediaContext: mediaContext, insetsArtwork: false)
             } else {
                 clearSticker()
                 showWarning(

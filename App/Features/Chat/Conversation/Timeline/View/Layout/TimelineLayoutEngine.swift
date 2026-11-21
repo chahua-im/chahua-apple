@@ -49,6 +49,11 @@ struct TimelineLayoutEngine {
             ? MessageSummaryContent.placeholderLabel(row.entry.text) : row.entry.text ?? ""
         let deleted = row.entry.presentationMessage?.isDeleted == true
         let sticker = row.entry.messageType == .sticker && !deleted
+        let stickerSize =
+            sticker
+            ? StickerMediaLayout.size(
+                for: row.entry.sticker?.media,
+                fitting: CGSize(width: min(200, bubbleWidthLimit), height: 200)) : .zero
         let audio = row.entry.messageType == .audio && !deleted
         let supported = [.text, .file, .placeholder].contains(row.entry.messageType) && !deleted
         let hasBody =
@@ -159,7 +164,11 @@ struct TimelineLayoutEngine {
             metadata.map { $0.size.width + 24 } ?? 0, preferredTitle, preferredPreviews)
         var b = min(
             bubbleWidthLimit,
-            pixel(max(sticker ? 200 : preferred, preferredReply, preferredThread), e))
+            pixel(
+                max(
+                    sticker ? max(preferred, stickerSize.width) : preferred,
+                    preferredReply, preferredThread),
+                e))
         if hasBody, !hasMedia, p.linkPreviews.isEmpty, let metadata, p.originLabel == nil,
             p.originalReply == nil
         {
@@ -264,12 +273,8 @@ struct TimelineLayoutEngine {
         }
         var mediaFrames: [CGRect] = []
         if sticker {
-            let dimensions = row.entry.sticker?.media
-            let w = CGFloat(dimensions?.width ?? 0)
-            let h = CGFloat(dimensions?.height ?? 0)
-            let ratio = w.isFinite && h.isFinite && w > 0 && h > 0 ? w / h : 1
-            let mediaWidth = min(b, 200)
-            let mediaHeight = pixel(min(mediaWidth / ratio, mediaWidth), e)
+            let mediaWidth = pixel(stickerSize.width, e)
+            let mediaHeight = pixel(stickerSize.height, e)
             frames[.media] = CGRect(
                 x: bubbleX + (row.isOutgoing ? b - mediaWidth : 0), y: bubbleY + height,
                 width: mediaWidth, height: mediaHeight)

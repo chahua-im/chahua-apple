@@ -126,6 +126,43 @@
                 fitsFullContent: true)
         }
 
+        func testStickerRowsUseSourceSizeBelowCapAndPreserveWideAndTallArtwork() throws {
+            let environment = environment(width: 900)
+            let cases: [(Int, Int, CGSize)] = [
+                (32, 32, CGSize(width: 32, height: 32)),
+                (640, 640, CGSize(width: 200, height: 200)),
+                (64, 32, CGSize(width: 64, height: 32)),
+                (640, 320, CGSize(width: 200, height: 100)),
+                (320, 640, CGSize(width: 100, height: 200)),
+            ]
+            for (width, height, expected) in cases {
+                let message = try TimelineTestFixtures.message(
+                    id: 2, at: 0,
+                    fields: [
+                        "messageType": "sticker",
+                        "sticker": [
+                            "id": "sticker", "emoji": "🙂",
+                            "createdAt": "2026-09-01T00:00:00Z",
+                            "media": [
+                                "id": "media", "url": "https://example.test/sticker.png",
+                                "contentType": "image/png", "size": 0,
+                                "width": width, "height": height,
+                            ],
+                        ],
+                    ])
+                let row = TimelineRow.message(
+                    .init(
+                        entry: .remote(message), isOutgoing: true, groupPosition: .single,
+                        showsSenderName: false))
+                let presentation = TimelineRowPresentation.make(
+                    row: row, currentUserID: 1, isThreadTimeline: false, environment: environment)
+                let layout = TimelineLayoutEngine().layout(presentation, environment: environment)
+                let media = try XCTUnwrap(layout.frames[.media])
+                XCTAssertEqual(media.size, expected)
+                XCTAssertEqual(media.maxX, try XCTUnwrap(layout.frames[.bubble]).maxX)
+            }
+        }
+
         private func environment(width: CGFloat, captionSize: CGFloat? = nil)
             -> TimelineLayoutEnvironment
         {

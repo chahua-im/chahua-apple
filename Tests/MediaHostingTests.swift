@@ -27,6 +27,33 @@ final class MediaHostingTests: XCTestCase {
         XCTAssertFalse(MediaLoadPolicy.cacheOnly.allowsNetwork(userInitiated: true))
     }
 
+    func testStickerArtworkFitsTimelineAndPickerWithoutUpscaling() throws {
+        let cases: [(Int32, Int32, CGSize, Bool, CGSize)] = [
+            (32, 32, CGSize(width: 200, height: 200), false, CGSize(width: 32, height: 32)),
+            (640, 640, CGSize(width: 200, height: 200), false, CGSize(width: 200, height: 200)),
+            (64, 32, CGSize(width: 200, height: 100), false, CGSize(width: 64, height: 32)),
+            (640, 320, CGSize(width: 200, height: 100), false, CGSize(width: 200, height: 100)),
+            (320, 640, CGSize(width: 100, height: 200), false, CGSize(width: 100, height: 200)),
+            (32, 16, CGSize(width: 72, height: 72), true, CGSize(width: 32, height: 16)),
+            (640, 320, CGSize(width: 72, height: 72), true, CGSize(width: 54.72, height: 27.36)),
+        ]
+        for (width, height, bounds, inset, expected) in cases {
+            let surface = StickerMediaSurfaceView(frame: CGRect(origin: .zero, size: bounds))
+            surface.configure(
+                media: .init(
+                    id: "sticker", url: "https://example.test/sticker.png",
+                    contentType: "image/png", size: 0, width: width, height: height),
+                emoji: "", displayScale: 2, mediaContext: nil, insetsArtwork: inset)
+            defer { surface.clear() }
+            let image = try XCTUnwrap(
+                surface.subviews.compactMap { $0 as? TimelineImageView }.first)
+            XCTAssertEqual(image.frame.width, expected.width, accuracy: 0.01)
+            XCTAssertEqual(image.frame.height, expected.height, accuracy: 0.01)
+            XCTAssertEqual(image.frame.midX, surface.bounds.midX, accuracy: 0.01)
+            XCTAssertEqual(image.frame.midY, surface.bounds.midY, accuracy: 0.01)
+        }
+    }
+
     func testStillImageSizingKeepsAllBoundsWithoutUpscaling() {
         let cases: [(Int, Int, Int, Int)] = [
             (640, 480, 640, 480),

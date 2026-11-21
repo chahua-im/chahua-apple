@@ -543,13 +543,15 @@ final class StickerMediaSurfaceView: StickerNativeView {
     }
 
     private func layoutMedia() {
-        // Native timeline rows and SwiftUI previews share one square, inset canvas.
-        // Inset the surfaces, not decoded pixels, so animation and video use the same fit.
-        let side = max(0, min(bounds.width, bounds.height))
-        let slot = CGRect(
-            x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
-        let inset = insetsArtwork ? side * 0.12 : 0
-        let artwork = slot.insetBy(dx: inset, dy: inset)
+        // Fit the full rectangular surface, not its inscribed square. Picker
+        // cells keep padding; measured timeline frames already bound the artwork.
+        let slot =
+            insetsArtwork
+            ? bounds.insetBy(dx: bounds.width * 0.12, dy: bounds.height * 0.12) : bounds
+        let size = StickerMediaLayout.size(for: media, fitting: slot.size)
+        let artwork = CGRect(
+            x: slot.midX - size.width / 2, y: slot.midY - size.height / 2,
+            width: size.width, height: size.height)
         imageView.frame = artwork
         video?.view.frame = artwork
         #if os(iOS)
