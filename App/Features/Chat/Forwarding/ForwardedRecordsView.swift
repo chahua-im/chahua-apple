@@ -38,15 +38,10 @@ struct ForwardedRecordsView: View {
 
     var body: some View {
         profileContent
-            .environment(\.chatHeaderInset, 0)
+            .modifier(ForwardedRecordsHeader())
             .environment(\.chatComposerInset, 0)
             .voicePlaybackHeader()
             .voicePlaybackCovered(presentedFile != nil)
-            .navigationTitle("Forwarded Messages")
-            #if os(iOS)
-                .toolbar(.visible, for: .navigationBar)
-                .navigationBarTitleDisplayMode(.inline)
-            #endif
             .navigationDestination(item: $childBundleID) { bundleID in
                 ForwardedRecordsView(session: session, bundleID: bundleID)
             }
@@ -198,5 +193,20 @@ struct ForwardedRecordsView: View {
             childBundleID = bundleID
         }
         return actions
+    }
+}
+
+/// Keep iOS push/swipe navigation; macOS uses the same in-pane chrome as threads.
+private struct ForwardedRecordsHeader: ViewModifier {
+    func body(content: Content) -> some View {
+        #if os(macOS)
+            content.modifier(MacForwardedRecordsHeader())
+        #else
+            content
+                .environment(\.chatHeaderInset, 0)
+                .navigationTitle("Forwarded Messages")
+                .toolbar(.visible, for: .navigationBar)
+                .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }

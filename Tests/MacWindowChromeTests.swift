@@ -224,6 +224,79 @@ import ChahuaAPI
             try assertPositions(in: window, equalTo: original)
         }
 
+        func testForwardedBackStaysInDetailPaneAndPopsOneLevel() async throws {
+            let api = FakeChatAPI()
+            let store = ChatStore(
+                apiClient: api, outgoingQueue: testOutgoingQueue(apiClient: api), onInvalidToken: {}
+            )
+            defer { store.reset() }
+            var path = [1, 2]
+            let surface = ChatSplitLayout(hasSelection: true) { _ in
+                Text("Chats").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } detail: { _ in
+                NavigationStack(path: Binding(get: { path }, set: { path = $0 })) {
+                    Text("Conversation")
+                        .navigationDestination(for: Int.self) { level in
+                            ForwardedRecordsView(
+                                store: store, chatID: "chat", messageID: MessageID(1),
+                                bundleID: level == 2 ? "child" : nil)
+                        }
+                }
+            }
+            .frame(minWidth: 900, minHeight: 600)
+            .modifier(MacConversationWindowChrome())
+            let host = NSHostingController(rootView: surface)
+            host.sizingOptions = []
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.toolbarStyle = .unified
+            window.contentViewController = host
+            window.setContentSize(NSSize(width: 900, height: 600))
+            host.view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+            window.makeKeyAndOrderFront(nil)
+            defer { window.close() }
+            await settle(window)
+            let original = try positions(in: window)
+            let bitmap = try XCTUnwrap(
+                host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
+            host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
+            let capture = XCTAttachment(
+                data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),
+                uniformTypeIdentifier: "public.png")
+            capture.name = "Forwarded messages detail header"
+            capture.lifetime = .keepAlways
+            add(capture)
+
+            for remaining in [1, 0] {
+                // The thread's Back target: sidebar + 16pt inset + half of 44pt.
+                let point = host.view.convert(
+                    NSPoint(x: 338, y: host.view.isFlipped ? 36 : host.view.bounds.height - 36),
+                    to: nil)
+                let timestamp = ProcessInfo.processInfo.systemUptime
+                let release = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: .leftMouseUp, location: point, modifierFlags: [],
+                        timestamp: timestamp + 0.01, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 1, clickCount: 1, pressure: 0))
+                let press = try XCTUnwrap(
+                    NSEvent.mouseEvent(
+                        with: .leftMouseDown, location: point, modifierFlags: [],
+                        timestamp: timestamp, windowNumber: window.windowNumber,
+                        context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+                NSApp.postEvent(release, atStart: true)
+                NSApp.sendEvent(press)
+                await settle(window)
+                XCTAssertEqual(
+                    path.count, remaining, "Back must pop only the current detail level.")
+                try assertPositions(in: window, equalTo: original)
+            }
+        }
+
         private func assertPositions(in window: NSWindow, equalTo original: [CGPoint]) throws {
             for (before, after) in zip(original, try positions(in: window)) {
                 XCTAssertEqual(after.x, before.x, accuracy: 0.5)

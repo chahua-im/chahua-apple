@@ -239,7 +239,11 @@ struct ChatFloatingHeader<Avatar: View>: View {
                 navigationControl
                 identity
                     .frame(maxWidth: .infinity, alignment: .leading)
-                wideControls
+                if onSearch != nil || (notificationChat != nil && onUpdateNotifications != nil)
+                    || onOpenInfo != nil || onForward != nil || trailingIsControl
+                {
+                    wideControls
+                }
             }
             .frame(maxWidth: .infinity)
             .background { searchShortcut }
