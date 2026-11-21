@@ -18,11 +18,13 @@ final class SessionCredentialWriter {
         }
     }
 
-    func save(_ token: String, profile: MeResponse, replacing expected: String? = nil) async throws {
+    func save(_ token: String, profile: MeResponse, replacing expected: String? = nil) async throws
+    {
         try await ordered { [baseURL] storage in
             if let expected, try await storage.loadToken() != expected { throw CancellationError() }
             if expected != token { try await storage.saveToken(token) }
-            try await storage.saveOfflineBinding(.init(baseURL: baseURL, token: token, profile: profile))
+            try await storage.saveOfflineBinding(
+                .init(baseURL: baseURL, token: token, profile: profile))
         }
     }
 
@@ -32,7 +34,8 @@ final class SessionCredentialWriter {
             let binding = try await storage.loadOfflineBinding()
             try await storage.saveToken(new)
             if retainBinding, let binding, binding.matches(baseURL: baseURL, token: old) {
-                try await storage.saveOfflineBinding(.init(baseURL: baseURL, token: new, profile: binding.profile))
+                try await storage.saveOfflineBinding(
+                    .init(baseURL: baseURL, token: new, profile: binding.profile))
             } else {
                 try await storage.saveOfflineBinding(nil)
             }

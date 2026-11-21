@@ -15,7 +15,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         let epoch = try await local.cacheEpoch()
         try await local.cacheChange(.create(seed, key, adjoining: nil), epoch: epoch)
         let source = ScriptedTimelineSource(pages: [
-            .failure(StubError()), .success(try TimelineTestFixtures.page([seed]))
+            .failure(StubError()), .success(try TimelineTestFixtures.page([seed])),
         ])
         var online = true
         let model = ConversationTimelineModel(
@@ -33,7 +33,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         await opening.value
         XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
         XCTAssertEqual(model.state.olderEdgePresentation, .retryNetworkHistory)
-        online = false // Explicit retry must bypass a stale path hint.
+        online = false  // Explicit retry must bypass a stale path hint.
         source.holdNextRequest()
         let retrying = Task { await model.retryNetworkHistory() }
         await source.waitUntilHeld()

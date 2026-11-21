@@ -154,6 +154,7 @@ final class RealtimeCoordinator: ObservableObject {
         schedulePresenceWatch()
         scheduleConversationWatches(includeUnread: true)
         if isActive {
+            if store.syncMode == .active { needsRecovery = true }
             store.replayPendingReads()
             presentationFailures = 0
             shortLivedReconnects = 0

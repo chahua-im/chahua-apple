@@ -170,17 +170,19 @@ final class AccountHistoryCache {
 
     /// Capture state through the same writer that will accept the response.
     func startListPage(forced: Bool) async throws -> ListPageToken {
-        guard let task = enqueueSync({ cache, store, epoch in
-            let state = try await store.listSyncState(epoch: epoch)
-            let request: ListSyncRequest =
-                forced || (state.stagingToken == nil && state.installedToken == nil)
-                ? .forcedStart : (state.stagingToken != nil ? .staged : .installed)
-            return ListPageToken(
-                state: state, request: request,
-                cursor: forced ? nil : state.stagingToken ?? state.installedToken,
-                revision: cache.revision, epoch: epoch, privacy: cache.privacyRevision,
-                chatPrivacy: cache.chatPrivacyRevisions)
-        }), let token = try await task.value else { throw CancellationError() }
+        guard
+            let task = enqueueSync({ cache, store, epoch in
+                let state = try await store.listSyncState(epoch: epoch)
+                let request: ListSyncRequest =
+                    forced || (state.stagingToken == nil && state.installedToken == nil)
+                    ? .forcedStart : (state.stagingToken != nil ? .staged : .installed)
+                return ListPageToken(
+                    state: state, request: request,
+                    cursor: forced ? nil : state.stagingToken ?? state.installedToken,
+                    revision: cache.revision, epoch: epoch, privacy: cache.privacyRevision,
+                    chatPrivacy: cache.chatPrivacyRevisions)
+            }), let token = try await task.value
+        else { throw CancellationError() }
         return token
     }
 
@@ -188,45 +190,51 @@ final class AccountHistoryCache {
         _ page: ConversationDifference, token: ListPageToken,
         accepting: @escaping @MainActor () -> Bool
     ) async throws -> SyncCommit {
-        guard let task = enqueueSync({ cache, store, epoch in
-            guard cache.revision == token.revision, epoch == token.epoch,
-                cache.privacyRevision == token.privacy,
-                cache.chatPrivacyRevisions == token.chatPrivacy,
-                accepting()
-            else { return SyncCommit.stale }
-            let rejoins = Set(page.chats.map(\.id))
-            let result = try await store.commitListDifference(
-                page, expected: token.state, request: token.request, epoch: epoch,
-                authorizedRejoins: rejoins)
-            if result == .committed, cache.revision == token.revision,
-                cache.privacyRevision == token.privacy,
-                cache.chatPrivacyRevisions == token.chatPrivacy
-            {
-                cache.revoked.subtract(rejoins)
-                cache.confirmedAccess.formUnion(rejoins)
-            }
-            return result
-        }) else { return .stale }
+        guard
+            let task = enqueueSync({ cache, store, epoch in
+                guard cache.revision == token.revision, epoch == token.epoch,
+                    cache.privacyRevision == token.privacy,
+                    cache.chatPrivacyRevisions == token.chatPrivacy,
+                    accepting()
+                else { return SyncCommit.stale }
+                let rejoins = Set(page.chats.map(\.id))
+                let result = try await store.commitListDifference(
+                    page, expected: token.state, request: token.request, epoch: epoch,
+                    authorizedRejoins: rejoins)
+                if result == .committed, cache.revision == token.revision,
+                    cache.privacyRevision == token.privacy,
+                    cache.chatPrivacyRevisions == token.chatPrivacy
+                {
+                    cache.revoked.subtract(rejoins)
+                    cache.confirmedAccess.formUnion(rejoins)
+                }
+                return result
+            })
+        else { return .stale }
         let result = try await task.value
         return revision == token.revision ? result ?? .stale : .stale
     }
 
     func invalidateListSync() async throws {
-        guard let task = enqueueSync({ _, store, epoch in
-            try await store.invalidateListSync(epoch: epoch)
-            return true
-        }), try await task.value == true else { throw CancellationError() }
+        guard
+            let task = enqueueSync({ _, store, epoch in
+                try await store.invalidateListSync(epoch: epoch)
+                return true
+            }), try await task.value == true
+        else { throw CancellationError() }
     }
 
     func commitLegacyList(
         _ scope: CachedListScope, items: [CachedConversation], seen: Set<ConversationKey>?,
         accepting: @escaping @MainActor () -> Bool
     ) async throws -> Bool {
-        guard let task = enqueueSync({ _, store, epoch in
-            guard accepting() else { return false }
-            try await store.cacheList(scope, items: items, seen: seen, epoch: epoch)
-            return true
-        }) else { return false }
+        guard
+            let task = enqueueSync({ _, store, epoch in
+                guard accepting() else { return false }
+                try await store.cacheList(scope, items: items, seen: seen, epoch: epoch)
+                return true
+            })
+        else { return false }
         return try await task.value == true
     }
 

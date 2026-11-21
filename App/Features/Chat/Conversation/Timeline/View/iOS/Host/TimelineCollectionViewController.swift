@@ -1335,8 +1335,9 @@
             let available = max(0, collectionView.bounds.height - insets.top - insets.bottom)
             let contentHeight = super.collectionViewContentSize.height - sectionInset.top
             let scale = max(1, collectionView.traitCollection.displayScale)
-            let padding = collectionView.numberOfSections > 0
-                && collectionView.numberOfItems(inSection: 0) > 0
+            let padding =
+                collectionView.numberOfSections > 0
+                    && collectionView.numberOfItems(inSection: 0) > 0
                 ? (max(0, available - contentHeight) * scale).rounded(.down) / scale : 0
             guard sectionInset.top != padding else { return }
             // SwiftUI cannot position the native flow layout's short document.

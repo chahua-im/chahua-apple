@@ -68,7 +68,8 @@
                 timelineHost
                     .overlay {
                         if model.rows.isEmpty, model.state.content == .ready {
-                            let title: LocalizedStringKey = model.state.history == .notDownloaded
+                            let title: LocalizedStringKey =
+                                model.state.history == .notDownloaded
                                 ? "No messages downloaded" : "No messages yet"
                             Text(title)
                                 .foregroundStyle(ChahuaTheme.secondaryText)
@@ -82,8 +83,10 @@
                             if model.state.missingOfflineMessage != nil {
                                 failureBanner("Message not available offline")
                             } else if let failure = model.state.repositionFailure {
-                                failureBanner(failure == .liveEdge
-                                    ? "Couldn’t load messages." : "That message isn’t available.")
+                                failureBanner(
+                                    failure == .liveEdge
+                                        ? "Couldn’t load messages."
+                                        : "That message isn’t available.")
                             }
                             olderEdgeOverlay
                         }
@@ -117,8 +120,9 @@
             if model.state.suppressesSeedHistoryStatus {
                 EmptyView()
             } else if model.state.historyConnection == .offline {
-                statusBanner(model.state.history == .notDownloaded && !model.rows.isEmpty
-                    ? "Offline · No messages downloaded" : "Offline", retry: true)
+                statusBanner(
+                    model.state.history == .notDownloaded && !model.rows.isEmpty
+                        ? "Offline · No messages downloaded" : "Offline", retry: true)
             } else if model.state.historyConnection == .refreshing {
                 statusBanner("Reconnecting…", loading: true)
             } else if model.state.reconciliationFailed {
@@ -143,7 +147,9 @@
             }
             .font(.caption)
             .padding(ChahuaTheme.Spacing.small)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small))
+            .background(
+                .regularMaterial, in: RoundedRectangle(cornerRadius: ChahuaTheme.Radius.small)
+            )
             .padding(.horizontal)
         }
 

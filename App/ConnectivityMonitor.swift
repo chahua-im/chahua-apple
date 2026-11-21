@@ -24,12 +24,13 @@ final class ConnectivityMonitor: ObservableObject {
         let monitor = monitorNetwork ? NWPathMonitor() : nil
         self.monitor = monitor
         monitor?.pathUpdateHandler = { [weak self] path in
-            let status: ConnectivitySnapshot.Status = switch path.status {
-            case .satisfied: .satisfied
-            case .unsatisfied: .unsatisfied
-            case .requiresConnection: .unknown
-            @unknown default: .unknown
-            }
+            let status: ConnectivitySnapshot.Status =
+                switch path.status {
+                case .satisfied: .satisfied
+                case .unsatisfied: .unsatisfied
+                case .requiresConnection: .unknown
+                @unknown default: .unknown
+                }
             let snapshot = ConnectivitySnapshot(
                 status: status,
                 isExpensive: path.isExpensive, isConstrained: path.isConstrained)

@@ -183,7 +183,8 @@ extension ChahuaClient {
     /// Fetches one subscribed thread page with authenticated `GET /threads`.
     public func listThreads(query: ListThreadsQuery) async throws -> ListThreadsResponse {
         try await send(
-            HTTPRequestSpec(method: .get, path: ["threads"], query: query.queryItems, interactivePage: true),
+            HTTPRequestSpec(
+                method: .get, path: ["threads"], query: query.queryItems, interactivePage: true),
             decoding: ListThreadsResponse.self
         )
     }

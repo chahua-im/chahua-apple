@@ -86,7 +86,8 @@ final class CachedAvatarPresentationTests: XCTestCase {
         connectivity.update(.init(status: .satisfied, isConstrained: true))
         let context = try makeContext(fixture: fixture, connectivity: connectivity)
         context.setNetworkAuthorized(false)
-        let (image, host) = try makeTimelineHost(context: context, fixture: fixture, animates: false)
+        let (image, host) = try makeTimelineHost(
+            context: context, fixture: fixture, animates: false)
         defer { host.close() }
         try await waitUntil("The blocked image did not offer an in-place load control") {
             #if os(macOS)
@@ -136,7 +137,8 @@ final class CachedAvatarPresentationTests: XCTestCase {
     func testTimelineRetryRecoversFromDecodeFailure() async throws {
         let fixture = MediaImageFixture(data: Data(), cacheControl: "no-store")
         let context = try makeContext(fixture: fixture)
-        let (image, host) = try makeTimelineHost(context: context, fixture: fixture, animates: false)
+        let (image, host) = try makeTimelineHost(
+            context: context, fixture: fixture, animates: false)
         defer { host.close() }
         try await waitUntil("A failed image did not offer Retry") {
             #if os(macOS)

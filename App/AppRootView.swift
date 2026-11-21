@@ -85,7 +85,9 @@ struct AppRootView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Remove downloaded conversations to make space. Drafts and unsent messages are kept.")
+            Text(
+                "Remove downloaded conversations to make space. Drafts and unsent messages are kept."
+            )
         }
         .onOpenURL { pendingURL = $0 }
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in

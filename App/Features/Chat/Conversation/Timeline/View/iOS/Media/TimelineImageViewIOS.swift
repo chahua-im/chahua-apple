@@ -141,7 +141,8 @@
                     && requestKey?.isPreview == isPreview
                 if sameMedia {
                     cancelRequests(preservingImages: true)
-                    requestFinished = animates && requestKey?.animates == true && requestFinished && !failed
+                    requestFinished =
+                        animates && requestKey?.animates == true && requestFinished && !failed
                     if !animates {
                         animatedForeground?.image = nil
                         animatedForeground?.isHidden = true

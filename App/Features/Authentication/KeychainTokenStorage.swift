@@ -81,7 +81,10 @@ struct KeychainTokenStorage: SessionTokenStorage {
     }
 
     func loadOfflineBinding() throws -> OfflineSessionBinding? {
-        guard let data = try SharedSessionCredentials.offlineRecord(service: bindingService).loadData() else { return nil }
+        guard
+            let data = try SharedSessionCredentials.offlineRecord(service: bindingService)
+                .loadData()
+        else { return nil }
         return try? JSONDecoder().decode(OfflineSessionBinding.self, from: data)
     }
 

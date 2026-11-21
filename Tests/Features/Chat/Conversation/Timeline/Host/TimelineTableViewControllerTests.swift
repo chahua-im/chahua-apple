@@ -17,7 +17,6 @@
             TimelineDisplayScheduler.tickSource = .display
         }
 
-
         func testMountedLatestSeedRetainsBottomRowDuringHistoryRecovery() async throws {
             struct HistoryFailure: Error {}
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
@@ -70,7 +69,8 @@
                         $0.binding?.presentation.row.messageID == seed.id
                     })
                 let frame = row.convert(row.bounds, to: controller.view)
-                let bottomDistance = controller.view.isFlipped
+                let bottomDistance =
+                    controller.view.isFlipped
                     ? controller.view.bounds.maxY - frame.maxY : frame.minY
                 XCTAssertLessThan(bottomDistance, 160, "Seed remains near the live edge")
                 let bitmap = try XCTUnwrap(
@@ -90,7 +90,8 @@
             }
             func assertNearTop(_ view: NSView, file: StaticString = #filePath, line: UInt = #line) {
                 let frame = view.convert(view.bounds, to: controller.view)
-                let topDistance = controller.view.isFlipped
+                let topDistance =
+                    controller.view.isFlipped
                     ? frame.minY : controller.view.bounds.maxY - frame.maxY
                 XCTAssertLessThan(topDistance, 100, file: file, line: line)
             }
@@ -112,7 +113,8 @@
             assertNearTop(retry)
             let chrome = try XCTUnwrap(
                 descendants(TimelineChromeView.self, in: controller.view).first)
-            let point = retry.convert(NSPoint(x: retry.bounds.midX, y: retry.bounds.midY), to: chrome)
+            let point = retry.convert(
+                NSPoint(x: retry.bounds.midX, y: retry.bounds.midY), to: chrome)
             XCTAssertNotNil(chrome.hitTest(point), "Native retry participates in hit testing")
             source.holdNextRequest()
             retry.performClick(nil)

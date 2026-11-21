@@ -97,7 +97,8 @@ final class AppCompositionRoot {
             onInvalidToken: invalidToken)
         if productionLifecycle { chatStore.setForegroundActive(false) }
         #if os(iOS)
-            outboxRefresh = productionLifecycle
+            outboxRefresh =
+                productionLifecycle
                 ? OutboxRefreshScheduler(queue: outgoingQueue, session: sessionModel) : nil
         #endif
         historyCache.onClear = { [weak chatStore, weak outgoingQueue] in
@@ -162,7 +163,8 @@ final class AppCompositionRoot {
                     self.mediaContext?.setNetworkAuthorized(false)
                     self.mediaContext?.clearMemoryCache()
                     self.mediaContext = AppMediaContext(
-                        namespace: "\(mediaNamespace)|account:\(me.uid)", connectivity: self.connectivity)
+                        namespace: "\(mediaNamespace)|account:\(me.uid)",
+                        connectivity: self.connectivity)
                 }
                 let verified = self.sessionModel.sessionValidation == .verified
                 self.mediaContext?.setNetworkAuthorized(verified)
@@ -183,7 +185,8 @@ final class AppCompositionRoot {
         }
         pathObservation = connectivity.$snapshot.sink { [weak self, weak outgoingQueue] path in
             guard let self, let outgoingQueue, path.status != self.lastPathStatus else { return }
-            let recoveryHint = path.canAttempt
+            let recoveryHint =
+                path.canAttempt
                 && (path.status == .satisfied || self.lastPathStatus == .unsatisfied)
             self.lastPathStatus = path.status
             self.sessionModel.setNetworkOpportunity(path.canAttempt)

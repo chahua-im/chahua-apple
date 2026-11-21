@@ -52,7 +52,10 @@ public enum CachedConversation: Sendable {
             if preview.systemKind?.isMembership == true, hidesMembership {
                 return keepsIdentity ? preview.redactedForDeletion() : nil
             }
-            return if try preview.isDeleted || ChahuaLocalStore.hasTombstone(db, key.chatID, preview.id) {
+            return
+                if try preview.isDeleted
+                || ChahuaLocalStore.hasTombstone(db, key.chatID, preview.id)
+            {
                 preview.redactedForDeletion()
             } else { preview }
         }
@@ -939,8 +942,9 @@ extension ChahuaLocalStore {
                 sql: "UPDATE cached_scope SET settings = ?",
                 arguments: [try encoder.encode(settings)])
         }
-        guard policy?.canView != true && chatID != nil
-            || settings?.showMembershipMessages == false
+        guard
+            policy?.canView != true && chatID != nil
+                || settings?.showMembershipMessages == false
         else { return }
         // Visibility changes do not prove deletion. Retain canonical identities
         // separately from list membership and continuous-history coverage.
@@ -1066,7 +1070,8 @@ extension ChahuaLocalStore {
         let existing = try Data.fetchOne(
             db, sql: "SELECT payload FROM cached_message WHERE chat_id = ? AND message_id = ?",
             arguments: [item.id, cacheBlob(message.id)])
-        let candidate = try existing.map { try JSONDecoder().decode(MessageResponse.self, from: $0) }
+        let candidate =
+            try existing.map { try JSONDecoder().decode(MessageResponse.self, from: $0) }
             ?? message
         guard let body = try sanitizedListSidecar(db, candidate) else { return }
         try cacheIsolatedMessage(db, body, in: ConversationKey(chatID: item.id))

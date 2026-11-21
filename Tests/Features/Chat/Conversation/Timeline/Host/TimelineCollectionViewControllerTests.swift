@@ -50,15 +50,17 @@
                 previous?.makeKey()
             }
             func nativeRows(in view: UIView) -> [TimelineRowView] {
-                (view as? TimelineRowView).map { [$0] } ?? view.subviews.flatMap { nativeRows(in: $0) }
+                (view as? TimelineRowView).map { [$0] }
+                    ?? view.subviews.flatMap { nativeRows(in: $0) }
             }
             func capture(_ name: String) async throws {
                 try await Task.sleep(for: .milliseconds(300))
                 window.layoutIfNeeded()
                 XCTAssertEqual(model.rows.compactMap(\.messageID), [seed.id])
-                let row = try XCTUnwrap(nativeRows(in: host.view).first {
-                    $0.binding?.presentation.row.messageID == seed.id
-                })
+                let row = try XCTUnwrap(
+                    nativeRows(in: host.view).first {
+                        $0.binding?.presentation.row.messageID == seed.id
+                    })
                 let frame = row.convert(row.bounds, to: host.view)
                 XCTAssertLessThan(host.view.bounds.maxY - frame.maxY, 160)
                 let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in

@@ -116,8 +116,7 @@ final class AuthSessionModel: ObservableObject {
     func activateForBackground() async -> Int32? {
         guard !isSubmitting, !Task.isCancelled else { return nil }
         if bootstrapTask == nil {
-            if case .bootstrapping = state { bootstrap() }
-            else { retryValidationIfNeeded() }
+            if case .bootstrapping = state { bootstrap() } else { retryValidationIfNeeded() }
         }
         await bootstrapTask?.value
         guard !isSubmitting, !Task.isCancelled, sessionValidation == .verified,
@@ -154,7 +153,9 @@ final class AuthSessionModel: ObservableObject {
                 if case .bootstrapping = state { state = .restorationFailed(.network) }
                 return
             }
-            let profile = try await withAuthenticationDeadline { [apiClient] in try await apiClient.me() }
+            let profile = try await withAuthenticationDeadline { [apiClient] in
+                try await apiClient.me()
+            }
             try checkBootstrap(id)
             guard let token = currentToken else { throw CancellationError() }
             try await credentials.save(token, profile: profile, replacing: token)
@@ -208,8 +209,11 @@ final class AuthSessionModel: ObservableObject {
     }
 
     private func persistRefresh(from old: String, to new: String, generation: UUID) async throws {
-        guard credentialGeneration == generation, currentToken == old else { throw CancellationError() }
-        try await credentials.refresh(from: old, to: new, retainBinding: sessionValidation == .verified)
+        guard credentialGeneration == generation, currentToken == old else {
+            throw CancellationError()
+        }
+        try await credentials.refresh(
+            from: old, to: new, retainBinding: sessionValidation == .verified)
         guard credentialGeneration == generation else { throw CancellationError() }
         currentToken = new
     }

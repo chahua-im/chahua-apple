@@ -134,7 +134,8 @@
                     && requestKey?.isPreview == isPreview
                 if sameMedia {
                     cancelRequests(preservingImages: true)
-                    requestFinished = animates && requestKey?.animates == true && requestFinished && !failed
+                    requestFinished =
+                        animates && requestKey?.animates == true && requestFinished && !failed
                     if !animates {
                         animatedForeground?.image = nil
                         animatedForeground?.isHidden = true
@@ -571,7 +572,8 @@
         }
 
         private func makeUnavailableLabel() -> NSTextField {
-            let label = NSTextField(wrappingLabelWithString: AppLanguage.localized("Media not downloaded"))
+            let label = NSTextField(
+                wrappingLabelWithString: AppLanguage.localized("Media not downloaded"))
             label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
             label.alignment = .center
             label.maximumNumberOfLines = 2
@@ -583,10 +585,12 @@
 
         private func makeRetryButton() -> NSButton {
             let button = NSButton(
-                title: AppLanguage.localized("Retry"), target: self, action: #selector(retryPressed))
+                title: AppLanguage.localized("Retry"), target: self, action: #selector(retryPressed)
+            )
             button.bezelStyle = .rounded
             button.controlSize = .small
-            button.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+            button.image = NSImage(
+                systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
             button.imageScaling = .scaleProportionallyDown
             button.setAccessibilityLabel(AppLanguage.localized("Retry"))
             retryButton = button

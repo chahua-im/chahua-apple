@@ -175,7 +175,9 @@ nonisolated struct SessionCredentialKeychainStore {
 
     func load() throws -> String? {
         guard let data = try loadData() else { return nil }
-        guard let token = String(data: data, encoding: .utf8) else { throw failure("load", errSecDecode) }
+        guard let token = String(data: data, encoding: .utf8) else {
+            throw failure("load", errSecDecode)
+        }
         return token
     }
 

@@ -116,7 +116,8 @@
 
             initialFailure.isHidden = showsTable || state.content != .initialLoadFailed
             emptyHistory.isHidden = next.hasRows || state.content != .ready
-            emptyHistory.stringValue = state.history == .notDownloaded
+            emptyHistory.stringValue =
+                state.history == .notDownloaded
                 ? AppLanguage.localized("No messages downloaded")
                 : AppLanguage.localized("No messages yet")
             if showsTable && (state.content == .idle || state.content == .loadingInitial) {
@@ -139,8 +140,11 @@
             case .saved(let saved):
                 olderEdge.update(.idle, savedTitle: savedTitle(saved, side: .older))
             }
-            newerEdge.update(showsTable ? state.newer : .idle, savedTitle: showsTable ? savedTitle(
-                state.newerSaved, side: .newer) : nil)
+            newerEdge.update(
+                showsTable ? state.newer : .idle,
+                savedTitle: showsTable
+                    ? savedTitle(
+                        state.newerSaved, side: .newer) : nil)
             repositionProgress.setLoading(showsTable && isRepositioning)
             if showsTable, state.missingOfflineMessage != nil {
                 repositionFailure.configure(

@@ -951,7 +951,8 @@ final class LocalPersistenceTests: XCTestCase {
                 store, listDifference("baseline", complete: false, reset: "noBaseline"),
                 request: .forcedStart)
             let stage = try await applyListPage(
-                store, listDifference(
+                store,
+                listDifference(
                     "enumerated", complete: false, chats: [replacement], latestMessages: [latest]),
                 request: .staged)
             XCTAssertEqual(stage.stagingToken, "enumerated")
@@ -973,10 +974,14 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertNil(installed.stagingToken)
         XCTAssertEqual(installed.installedChatSettings, ChatSettings(showMembershipMessages: true))
         XCTAssertNotNil(installed.installedNotificationSettings)
-        for scope in [CachedListScope.activeChats, .archivedChats, .activeThreads, .archivedThreads] {
+        for scope in [
+            CachedListScope.activeChats, .archivedChats, .activeThreads, .archivedThreads,
+        ] {
             let saved = try await reopened.cachedList(scope)
             XCTAssertEqual(saved?.complete, true)
-            XCTAssertEqual(saved?.items.map(\.key), scope == .activeChats ? [ConversationKey(chatID: "2")] : [])
+            XCTAssertEqual(
+                saved?.items.map(\.key), scope == .activeChats ? [ConversationKey(chatID: "2")] : []
+            )
         }
         let seed = try await reopened.cachedHistory(ConversationKey(chatID: "2"))
         XCTAssertEqual(seed.messages, [latest])
@@ -1029,7 +1034,9 @@ final class LocalPersistenceTests: XCTestCase {
             request: .forcedStart)
         _ = try await applyListPage(
             store, listDifference("empty", complete: true), request: .staged)
-        for scope in [CachedListScope.activeChats, .archivedChats, .activeThreads, .archivedThreads] {
+        for scope in [
+            CachedListScope.activeChats, .archivedChats, .activeThreads, .archivedThreads,
+        ] {
             let page = try await store.cachedList(scope)
             XCTAssertEqual(page?.complete, true)
             XCTAssertEqual(page?.items.count, 0)
@@ -1041,8 +1048,10 @@ final class LocalPersistenceTests: XCTestCase {
         let notifications = NotificationSettingsResponse(
             muteGroupChatsByDefault: true, muteDirectChatsByDefault: true)
         let changed = try await applyListPage(
-            store, listDifference(
-                "delta", complete: true, chatSettings: settings, notificationSettings: notifications),
+            store,
+            listDifference(
+                "delta", complete: true, chatSettings: settings, notificationSettings: notifications
+            ),
             request: .installed)
         XCTAssertEqual(changed.installedChatSettings, settings)
         XCTAssertEqual(changed.installedNotificationSettings, notifications)
@@ -1084,7 +1093,8 @@ final class LocalPersistenceTests: XCTestCase {
             store, listDifference("B", complete: false, reset: "noBaseline"),
             request: .forcedStart)
         _ = try await applyListPage(
-            store, listDifference(
+            store,
+            listDifference(
                 "installed", complete: true, chats: [firstRow, secondRow], threads: [thread],
                 latestMessages: [second, first]), request: .staged)
         let savedFirst = try await store.cachedHistory(ConversationKey(chatID: "1"))
@@ -1139,14 +1149,16 @@ final class LocalPersistenceTests: XCTestCase {
             store, listDifference("B", complete: false, reset: "noBaseline"),
             request: .forcedStart)
         _ = try await applyListPage(
-            store, listDifference(
+            store,
+            listDifference(
                 "installed", complete: true, chats: [chat],
                 threads: [
                     listThread(chatID: "1", root: first.replyPreview),
                     listThread(chatID: "1", root: second.replyPreview, archived: true),
                 ]), request: .staged)
         _ = try await applyListPage(
-            store, listDifference(
+            store,
+            listDifference(
                 "unsubscribed", complete: true,
                 removed: [ConversationRef(chatId: "1", threadId: first.id)]),
             request: .installed)
@@ -1157,7 +1169,8 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(activeThreads?.items.count, 0)
         XCTAssertEqual(archivedThreads?.items.count, 1)
         _ = try await applyListPage(
-            store, listDifference(
+            store,
+            listDifference(
                 "removed", complete: true, removed: [ConversationRef(chatId: "1")]),
             request: .installed)
         let removedChat = try await store.cachedList(.activeChats)
@@ -1220,13 +1233,15 @@ final class LocalPersistenceTests: XCTestCase {
             store, listDifference("B", complete: false, reset: "noBaseline"),
             request: .forcedStart)
         let state = try await applyListPage(
-            store, listDifference("staged", complete: false, chats: [new], latestMessages: [message]),
+            store,
+            listDifference("staged", complete: false, chats: [new], latestMessages: [message]),
             request: .staged)
         try await store.database.write { db in
-            try db.execute(sql: """
-                CREATE TRIGGER fail_list_install AFTER UPDATE OF installed_token ON list_sync_state
-                BEGIN SELECT RAISE(ABORT, 'list install blocked'); END
-                """)
+            try db.execute(
+                sql: """
+                    CREATE TRIGGER fail_list_install AFTER UPDATE OF installed_token ON list_sync_state
+                    BEGIN SELECT RAISE(ABORT, 'list install blocked'); END
+                    """)
         }
         let final = listDifference("installed", complete: true)
         do {
@@ -1242,7 +1257,8 @@ final class LocalPersistenceTests: XCTestCase {
         XCTAssertEqual(after, state)
         XCTAssertEqual(visible?.items.map(\.key.chatID), ["1"])
         XCTAssertTrue(seed.messages.isEmpty)
-        try await store.database.write { db in try db.execute(sql: "DROP TRIGGER fail_list_install") }
+        try await store.database.write { db in try db.execute(sql: "DROP TRIGGER fail_list_install")
+        }
         let retry = try await store.commitListDifference(
             final, expected: state, request: .staged, epoch: epoch)
         XCTAssertEqual(retry, .committed)
@@ -1270,14 +1286,16 @@ final class LocalPersistenceTests: XCTestCase {
             store, listDifference("B", complete: false, reset: "noBaseline"),
             request: .forcedStart)
         _ = try await applyListPage(
-            store, listDifference(
+            store,
+            listDifference(
                 "enumerated", complete: false, chats: rows,
                 threads: [
                     listThread(chatID: "1", root: first.replyPreview, archived: true),
                     listThread(chatID: "2", root: second.replyPreview),
                 ], latestMessages: [second, first]), request: .staged)
         _ = try await applyListPage(
-            store, listDifference(
+            store,
+            listDifference(
                 "installed", complete: true,
                 removed: [
                     ConversationRef(chatId: "1"), ConversationRef(chatId: "2", threadId: second.id),
@@ -1294,7 +1312,8 @@ final class LocalPersistenceTests: XCTestCase {
             store, listDifference("rebuild", complete: false, reset: "expired"),
             request: .forcedStart)
         _ = try await applyListPage(
-            store, listDifference(
+            store,
+            listDifference(
                 "partial", complete: false, chats: [rows[0]], latestMessages: [first]),
             request: .staged)
         let reset = try await applyListPage(
@@ -1331,7 +1350,8 @@ final class LocalPersistenceTests: XCTestCase {
                 store, listDifference("B", complete: false, reset: "noBaseline"),
                 request: .forcedStart)
             _ = try await applyListPage(
-                store, listDifference(
+                store,
+                listDifference(
                     "staged", complete: false,
                     chats: [
                         ChatListItem(

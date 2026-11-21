@@ -360,7 +360,8 @@ final class ComposerFocusTests: XCTestCase {
             func capture(_ name: String) throws {
                 let surface = composerSurface()
                 surface.layoutSubtreeIfNeeded()
-                let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+                let bitmap = try XCTUnwrap(
+                    surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
                 surface.cacheDisplay(in: surface.bounds, to: bitmap)
                 let attachment = XCTAttachment(
                     data: try XCTUnwrap(bitmap.representation(using: .png, properties: [:])),

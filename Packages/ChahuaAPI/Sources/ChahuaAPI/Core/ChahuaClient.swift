@@ -243,8 +243,11 @@ public actor ChahuaClient: ChahuaAPIClient, SessionAuthenticating, RealtimeConne
         if firstResponse.status == 401, spec.allowsTokenRefresh, initialToken != nil {
             let refreshed: String
             do {
-                if let token, initialToken != token { refreshed = token }
-                else { refreshed = try await refreshedToken() }
+                if let token, initialToken != token {
+                    refreshed = token
+                } else {
+                    refreshed = try await refreshedToken()
+                }
             } catch {
                 try checkSession(generation)
                 throw error
@@ -336,7 +339,8 @@ public actor ChahuaClient: ChahuaAPIClient, SessionAuthenticating, RealtimeConne
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpMethod = spec.method.rawValue
         request.httpBody = spec.body
-        request.timeoutInterval = spec.interactivePage
+        request.timeoutInterval =
+            spec.interactivePage
             ? min(configuration.requestTimeout, 15) : configuration.requestTimeout
         return request
     }

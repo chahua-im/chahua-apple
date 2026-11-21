@@ -960,7 +960,8 @@
             progress.isHidden = true
             statusLabel.stringValue = AppLanguage.localized(
                 state == .notDownloaded ? "Media not downloaded" : "This video can’t be played")
-            retryButton.title = AppLanguage.localized(state == .notDownloaded ? "Download" : "Retry")
+            retryButton.title = AppLanguage.localized(
+                state == .notDownloaded ? "Download" : "Retry")
             let showFailure = state == .failed || state == .notDownloaded
             statusLabel.isHidden = !showFailure
             retryButton.isHidden = !showFailure

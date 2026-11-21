@@ -223,7 +223,8 @@ final class StickerMediaSurfaceView: StickerNativeView {
         let type = media.contentType.lowercased()
         isVideo = type.hasPrefix("video/")
         imageView.isHidden =
-            isVideo && (failure != nil || !hasVideoPoster
+            isVideo
+            && (failure != nil || !hasVideoPoster
                 || (!videoLoading && video?.view.isHidden == false))
         if changed {
             guard let url = URL(string: media.url),
@@ -530,7 +531,8 @@ final class StickerMediaSurfaceView: StickerNativeView {
         else { return }
         videoPosterRequested = true
         let generation = mediaGeneration
-        cache.retrieveImage(forKey: Self.posterKey(url), options: .init(nil)) { [weak self] result in
+        cache.retrieveImage(forKey: Self.posterKey(url), options: .init(nil)) {
+            [weak self] result in
             Task { @MainActor [weak self] in
                 guard let self, self.mediaGeneration == generation,
                     let image = try? result.get().image

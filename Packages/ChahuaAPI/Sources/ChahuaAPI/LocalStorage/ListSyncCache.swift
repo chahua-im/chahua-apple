@@ -64,7 +64,8 @@ extension ChahuaLocalStore {
             // Earlier staged rows never clear the durable access fence.
             for chat in page.chats where authorizedRejoins.contains(chat.id) {
                 try db.execute(
-                    sql: "UPDATE cached_scope SET access_revoked = 0 WHERE chat_id = ? AND thread_id = ''",
+                    sql:
+                        "UPDATE cached_scope SET access_revoked = 0 WHERE chat_id = ? AND thread_id = ''",
                     arguments: [chat.id])
             }
             let encoder = JSONEncoder()
@@ -91,7 +92,8 @@ extension ChahuaLocalStore {
                 db, chatID: nil, policy: nil, settings: page.chatSettings)
             for chat in page.chats where try !Self.chatAccessRevoked(db, chat.id) {
                 try Self.invalidateCachedPolicy(
-                    db, chatID: chat.id, policy: chat.membershipMessagePolicy, settings: page.chatSettings)
+                    db, chatID: chat.id, policy: chat.membershipMessagePolicy,
+                    settings: page.chatSettings)
             }
             var sidecars: [ConversationKey: MessageResponse] = [:]
             for message in page.latestMessages {
@@ -113,11 +115,15 @@ extension ChahuaLocalStore {
                         let item = try Self.decodeConversation(row, isChat: thread.isEmpty)
                         try Self.upsertConversation(db, item)
                         if case .chat(let chat) = item, let payload: Data = row["latest_message"] {
-                            let message = try JSONDecoder().decode(MessageResponse.self, from: payload)
+                            let message = try JSONDecoder().decode(
+                                MessageResponse.self, from: payload)
                             try Self.seedListLatestMessage(db, message, for: chat)
                         }
                     }
-                    for scope in [CachedListScope.activeChats, .archivedChats, .activeThreads, .archivedThreads] {
+                    for scope in [
+                        CachedListScope.activeChats, .archivedChats, .activeThreads,
+                        .archivedThreads,
+                    ] {
                         try db.execute(
                             sql: """
                                 INSERT INTO cached_list (scope, complete, fetched_at) VALUES (?, 1, ?)
@@ -204,16 +210,19 @@ extension ChahuaLocalStore {
     public func invalidateListSync(epoch: Int64) async throws {
         try await database.write { db in
             guard try Self.readEpoch(db) == epoch else { return }
-            try db.execute(sql: """
-                DELETE FROM list_sync_stage;
-                UPDATE list_sync_state SET installed_token = NULL, staging_token = NULL,
-                    staged_chat_settings = NULL, staged_notification_settings = NULL WHERE singleton = 1;
-                """)
+            try db.execute(
+                sql: """
+                    DELETE FROM list_sync_stage;
+                    UPDATE list_sync_state SET installed_token = NULL, staging_token = NULL,
+                        staged_chat_settings = NULL, staged_notification_settings = NULL WHERE singleton = 1;
+                    """)
         }
     }
 
     private static func readListSyncState(_ db: Database) throws -> ListSyncState {
-        guard let row = try Row.fetchOne(db, sql: "SELECT * FROM list_sync_state WHERE singleton = 1") else {
+        guard
+            let row = try Row.fetchOne(db, sql: "SELECT * FROM list_sync_state WHERE singleton = 1")
+        else {
             return ListSyncState()
         }
         let decoder = JSONDecoder()
@@ -233,7 +242,8 @@ extension ChahuaLocalStore {
             })
     }
 
-    private static func installListSyncState(_ db: Database, _ page: ConversationDifference) throws {
+    private static func installListSyncState(_ db: Database, _ page: ConversationDifference) throws
+    {
         let encoder = JSONEncoder()
         try db.execute(
             sql: """
@@ -276,12 +286,14 @@ extension ChahuaLocalStore {
                     sql: "DELETE FROM \(table) WHERE chat_id = ? AND thread_id = ?",
                     arguments: [reference.chatId, thread.description])
             } else {
-                try db.execute(sql: "DELETE FROM \(table) WHERE chat_id = ?", arguments: [reference.chatId])
+                try db.execute(
+                    sql: "DELETE FROM \(table) WHERE chat_id = ?", arguments: [reference.chatId])
             }
         }
     }
 
-    private static func validateListDifference(_ page: ConversationDifference, from: String?) throws {
+    private static func validateListDifference(_ page: ConversationDifference, from: String?) throws
+    {
         guard !page.cursor.isEmpty else { throw LocalStorageError.corruptRecord }
         if page.reset != nil {
             guard !page.complete, page.chats.isEmpty, page.threads.isEmpty,
@@ -307,8 +319,10 @@ extension ChahuaLocalStore {
         for thread in page.threads {
             guard validChatID(thread.chatId), thread.unreadCount >= 0,
                 thread.unreadMentions >= 0, thread.unreadReactions >= 0, thread.replyCount >= 0,
-                keys.insert(ConversationKey(
-                    chatID: thread.chatId, threadID: thread.threadRootMessage.id.description)).inserted
+                keys.insert(
+                    ConversationKey(
+                        chatID: thread.chatId, threadID: thread.threadRootMessage.id.description)
+                ).inserted
             else { throw LocalStorageError.corruptRecord }
         }
         var sidecars = Set<ConversationKey>()
@@ -320,10 +334,12 @@ extension ChahuaLocalStore {
         }
         var removals = Set<ConversationRef>()
         for reference in page.removed {
-            let key = ConversationKey(chatID: reference.chatId, threadID: reference.threadId?.description)
+            let key = ConversationKey(
+                chatID: reference.chatId, threadID: reference.threadId?.description)
             guard validChatID(reference.chatId), removals.insert(reference).inserted,
                 !keys.contains(key),
-                reference.threadId != nil || !keys.contains(where: { $0.chatID == reference.chatId })
+                reference.threadId != nil
+                    || !keys.contains(where: { $0.chatID == reference.chatId })
             else { throw LocalStorageError.corruptRecord }
         }
     }

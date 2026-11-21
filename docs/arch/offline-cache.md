@@ -61,7 +61,7 @@ An empty `thread_id` means the parent chat timeline. A thread root can appear in
 
 ## Account list sync
 
-One account task coalesces list appearances, reconnect, path restoration and invalidations. HTTP does not wait for message-sync negotiation. Automatic requests require a verified session and usable path; explicit retry can bypass the path hint, not authentication.
+One account task coalesces list appearances, reconnect, foreground resume, path restoration and invalidations. HTTP does not wait for message-sync negotiation. Automatic requests require a verified session and usable path; explicit retry can bypass the path hint, not authentication.
 
 A nil cursor starts a native baseline. Every reset starts empty staging with the returned cursor, including unknown reset reasons. Follow that cursor through enumeration and catch-up, including empty incomplete pages. Keep the installed list visible until the final complete page replaces its key set atomically. Restart resumes the durable staging cursor first. A second reset without page progress saves its new cursor and stops with retry.
 
@@ -72,6 +72,8 @@ An installed delta replaces keys, not archive buckets. Removing a main chat remo
 Only an authenticated 404 from this route selects legacy list scans. Clear native cursors and staging before a legacy scan writes. Remember unsupported status for the connection attempt and probe again on reconnect. Transport, authentication, decoding and storage errors do not select legacy. Pull-to-refresh requests a new baseline; failure retry resumes the last durable cursor.
 
 Local reads retain the first-page size of 50 and activity ordering. Requery the displayed row count after an accepted reorder, removal or promotion, with fresh boundaries. Archived rows load on demand. HTTP completion does not exhaust local paging.
+
+Native message sync holds new sidebar previews until the resume list refresh installs the current projection. History replay and access revocations continue without waiting for HTTP. Keep only the newest deferred message per conversation; publish it after its batch commits and only if its ID is newer than the installed preview. Edits and deletions of the selected message still apply. If list refresh fails, hold candidates until initial replay completes, then publish one newest preview per conversation. Disconnect, visibility reset and revocation discard the affected candidates.
 
 Only a top-level sidecar matching the chat's selected latest message can seed history. Prefer an existing canonical body; otherwise save one isolated message segment after visibility and tombstone checks. A list cursor never creates message-sync checkpoints or continuous-history proof. At live edge, retain that saved row at the bottom with loading or network retry above it. Online unread entry still seeks a missing read anchor through normal history; offline entry can show the seed.
 

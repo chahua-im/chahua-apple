@@ -76,11 +76,14 @@ final class AccountLocalStoreOwner {
         } else {
             let factory = factory
             let fence = openingFence
-            request = (UUID(), Task {
-                await fence?.value
-                try Task.checkCancellation()
-                return try await factory(uid)
-            })
+            request = (
+                UUID(),
+                Task {
+                    await fence?.value
+                    try Task.checkCancellation()
+                    return try await factory(uid)
+                }
+            )
             opening = request
         }
         defer { if opening?.id == request.id { opening = nil } }

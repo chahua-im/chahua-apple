@@ -16,14 +16,15 @@ import XCTest
 final class ChatStoreTests: XCTestCase {
     private func difference(
         _ cursor: String, complete: Bool = false, reset: String? = nil,
-        chats: [ChatListItem] = [], muted: Bool = false, showMembershipMessages: Bool = true
+        chats: [ChatListItem] = [], threads: [ThreadListItem] = [],
+        muted: Bool = false, showMembershipMessages: Bool = true
     ) -> ConversationDifference {
         .init(
             cursor: cursor, complete: complete, reset: reset,
             chatSettings: .init(showMembershipMessages: showMembershipMessages),
             notificationSettings: .init(
                 muteGroupChatsByDefault: muted, muteDirectChatsByDefault: muted),
-            chats: chats)
+            chats: chats, threads: threads)
     }
 
     private func durableListState(_ db: ChahuaLocalStore) async throws -> ListSyncState {
@@ -192,7 +193,7 @@ final class ChatStoreTests: XCTestCase {
         let api = FakeChatAPI()
         await api.setDifferenceResults([
             .success(difference("B", reset: "noBaseline")),
-            .success(difference("installed", complete: true))
+            .success(difference("installed", complete: true)),
         ])
         let (store, _, _, db) = try await makeDurableReadStore(api: api)
         defer { store.reset() }
@@ -238,7 +239,7 @@ final class ChatStoreTests: XCTestCase {
         let api = FakeChatAPI()
         await api.setDifferenceResults([
             .success(difference("B", reset: "noBaseline")),
-            .success(difference("installed", complete: true, chats: [chat(id: "5")]))
+            .success(difference("installed", complete: true, chats: [chat(id: "5")])),
         ])
         let (store, _, _, db) = try await makeDurableReadStore(api: api)
         defer { store.reset() }
@@ -274,19 +275,20 @@ final class ChatStoreTests: XCTestCase {
         let api = FakeChatAPI()
         await api.setDifferenceResults([
             .success(difference("B", reset: "noBaseline")),
-            .success(difference("installed", complete: true, chats: [chat(id: "6")]))
+            .success(difference("installed", complete: true, chats: [chat(id: "6")])),
         ])
         let (store, _, cache, db) = try await makeDurableReadStore(api: api)
         defer { store.reset() }
         await store.retryConversations(chats: true, threads: true, archived: false)
         await api.holdNextDifferenceRequest()
         await api.setDifferenceResults([
-            .success(.init(
-                cursor: "revoked", complete: true,
-                chatSettings: .init(showMembershipMessages: true),
-                notificationSettings: .init(
-                    muteGroupChatsByDefault: false, muteDirectChatsByDefault: false),
-                removed: [.init(chatId: "6")])),
+            .success(
+                .init(
+                    cursor: "revoked", complete: true,
+                    chatSettings: .init(showMembershipMessages: true),
+                    notificationSettings: .init(
+                        muteGroupChatsByDefault: false, muteDirectChatsByDefault: false),
+                    removed: [.init(chatId: "6")])),
             .success(difference("revoked", complete: true)),
         ])
         let pass = Task {
@@ -323,7 +325,7 @@ final class ChatStoreTests: XCTestCase {
             archived: false, kind: .group)
         await api.setDifferenceResults([
             .success(difference("B", reset: "noBaseline")),
-            .success(difference("installed", complete: true, chats: [unread]))
+            .success(difference("installed", complete: true, chats: [unread])),
         ])
         let (store, _, _, db) = try await makeDurableReadStore(api: api)
         defer { store.reset() }
@@ -358,7 +360,7 @@ final class ChatStoreTests: XCTestCase {
         let api = FakeChatAPI()
         await api.setDifferenceResults([
             .success(difference("B", reset: "noBaseline")),
-            .success(difference("installed", complete: true, chats: [chat(id: "8")]))
+            .success(difference("installed", complete: true, chats: [chat(id: "8")])),
         ])
         let (store, _, _, db) = try await makeDurableReadStore(api: api)
         defer { store.reset() }
@@ -436,6 +438,236 @@ final class ChatStoreTests: XCTestCase {
         let retired = try await cache.commitListPage(page, token: fresh, accepting: { true })
         XCTAssertEqual(retired, .stale)
         await cache.fenceForSignOut()
+    }
+
+    func testResumeListHeadPreventsReplayPreviewWalkAndAllowsNewerMessages() async throws {
+        let api = FakeChatAPI()
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        let old = try TimelineTestFixtures.message(id: 10, chatID: "1", senderID: 2, at: 10)
+        let head = try TimelineTestFixtures.message(id: 40, chatID: "1", senderID: 2, at: 40)
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [chat(id: "1", latest: old)])),
+        ])
+        await store.refreshConversationListsAfterReconnect()
+        var displayed: [MessageID] = []
+        let observation = store.$state.compactMap { $0.chats.first?.lastMessage?.id }
+            .removeDuplicates().sink { displayed.append($0) }
+        defer { observation.cancel() }
+        try await cache.resetSyncChat(chatID: "1", cursor: "base", purge: false)
+        store.beginMessageSyncAttempt(1, socket: RealtimeTestSocket())
+        try await store.startMessageSync()
+        await api.holdNextDifferenceRequest()
+        let refresh = Task { await store.refreshConversationListsAfterReconnect() }
+        await api.waitForDifferenceRequest()
+
+        let replay = try [20, 30].map {
+            try TimelineTestFixtures.message(id: UInt64($0), chatID: "1", senderID: 2, at: $0)
+        }
+        try await store.applyMessageSync(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "base", to: "caught-up",
+                    changes: replay.map { .upsert(message: $0, appeared: true) })),
+            currentUserID: 1)
+        XCTAssertEqual(displayed, [old.id])
+        for message in replay {
+            let saved = try await db.cachedHistory(
+                .init(chatID: "1"), position: .around(message.id))
+            XCTAssertEqual(
+                saved.messages.first(where: { $0.id == message.id })?.message, message.message)
+        }
+        await api.resumeDifferenceRequest(
+            with: .success(
+                difference("current", complete: true, chats: [chat(id: "1", latest: head)])))
+        await refresh.value
+        XCTAssertEqual(displayed, [old.id, head.id])
+
+        try await store.applyMessageSync(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "caught-up", to: "at-head",
+                    changes: (replay + [head]).map { .upsert(message: $0, appeared: true) })),
+            currentUserID: 1)
+        XCTAssertEqual(displayed, [old.id, head.id])
+        let newer = try TimelineTestFixtures.message(id: 50, chatID: "1", senderID: 2, at: 50)
+        try await store.applyMessageSync(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "at-head", to: "newer",
+                    changes: [.upsert(message: newer, appeared: true)])),
+            currentUserID: 1)
+        try await store.applyMessageSync(
+            .messageSyncReady(chatID: "1", cursor: "newer"), currentUserID: 1)
+        try await store.applyMessageSync(.messageSyncResumed, currentUserID: 1)
+        let live = try TimelineTestFixtures.message(id: 60, chatID: "1", senderID: 2, at: 59)
+        try await store.applyMessageSync(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "newer", to: "live",
+                    changes: [.upsert(message: live, appeared: true)])),
+            currentUserID: 1)
+        XCTAssertEqual(displayed, [old.id, head.id, newer.id, live.id])
+        await assertNoLegacyLists(api)
+    }
+
+    func testResumeThreadKeepsNewerBufferedReplyAndItsEditThenRedactsDeletion() async throws {
+        let api = FakeChatAPI()
+        let (store, _, cache, _) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        let root = try ScopeTestFixtures.thread(chatID: "1", id: 5)
+        let head = try TimelineTestFixtures.message(
+            id: 40, chatID: "1", senderID: 2, at: 40, fields: ["replyRootId": "5"])
+        let newer = try TimelineTestFixtures.message(
+            id: 50, chatID: "1", senderID: 2, at: 50, fields: ["replyRootId": "5"])
+        let edited = try TimelineTestFixtures.message(
+            id: 50, chatID: "1", senderID: 2, at: 50, text: "Edited reply",
+            fields: ["replyRootId": "5", "isEdited": true])
+        let latestThread = ThreadListItem(
+            chatId: "1", chatName: root.chatName, threadRootMessage: root.threadRootMessage,
+            lastReply: head.replyPreview, replyCount: 3, lastReplyAt: head.createdAt,
+            unreadCount: 0, subscribedAt: root.subscribedAt, archived: false)
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(
+                difference("installed", complete: true, chats: [chat(id: "1")], threads: [root])),
+        ])
+        await store.refreshConversationListsAfterReconnect()
+        var displayed: [MessageID] = []
+        let observation = store.$state.compactMap { $0.threads.first?.lastReply?.id }
+            .removeDuplicates().sink { displayed.append($0) }
+        defer { observation.cancel() }
+        try await cache.resetSyncChat(chatID: "1", cursor: "base", purge: false)
+        store.beginMessageSyncAttempt(1, socket: RealtimeTestSocket())
+        try await store.startMessageSync()
+        await api.holdNextDifferenceRequest()
+        let refresh = Task { await store.refreshConversationListsAfterReconnect() }
+        await api.waitForDifferenceRequest()
+        try await store.applyMessageSync(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "base", to: "replayed",
+                    changes: [
+                        .upsert(message: newer, appeared: true),
+                        .upsert(message: edited, appeared: false),
+                    ])),
+            currentUserID: 1)
+        XCTAssertTrue(displayed.isEmpty)
+        await api.setDifferenceResults([
+            .success(difference("current", complete: true, threads: [latestThread]))
+        ])
+        await api.resumeDifferenceRequest(
+            with: .success(difference("current", complete: true, threads: [latestThread])))
+        await refresh.value
+        XCTAssertEqual(displayed, [head.id, newer.id])
+        XCTAssertEqual(store.state.threads.first?.lastReply?.message, "Edited reply")
+        try await store.applyMessageSync(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "replayed", to: "deleted",
+                    changes: [
+                        .delete(messageID: newer.id, threadRootID: root.threadRootMessage.id)
+                    ])),
+            currentUserID: 1)
+        XCTAssertEqual(store.state.threads.first?.lastReply?.id, newer.id)
+        XCTAssertEqual(store.state.threads.first?.lastReply?.isDeleted, true)
+        XCTAssertNil(store.state.threads.first?.lastReply?.message)
+    }
+
+    func testResumeListFailurePublishesOnlyNewestPreviewAfterReplayFinishes() async throws {
+        let api = FakeChatAPI()
+        let (store, _, cache, _) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        let old = try TimelineTestFixtures.message(id: 10, chatID: "1", senderID: 2, at: 10)
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [chat(id: "1", latest: old)])),
+        ])
+        await store.refreshConversationListsAfterReconnect()
+        var displayed: [MessageID] = []
+        let observation = store.$state.compactMap { $0.chats.first?.lastMessage?.id }
+            .removeDuplicates().sink { displayed.append($0) }
+        defer { observation.cancel() }
+        try await cache.resetSyncChat(chatID: "1", cursor: "base", purge: false)
+        store.beginMessageSyncAttempt(1, socket: RealtimeTestSocket())
+        try await store.startMessageSync()
+        await api.setDifferenceResults([.failure(APIError.unavailable)])
+        await store.refreshConversationListsAfterReconnect()
+        for (index, id) in [20, 30].enumerated() {
+            let message = try TimelineTestFixtures.message(
+                id: UInt64(id), chatID: "1", senderID: 2, at: id)
+            try await store.applyMessageSync(
+                .messageSyncBatch(
+                    .init(
+                        chatID: "1", from: index == 0 ? "base" : "batch-0", to: "batch-\(index)",
+                        changes: [.upsert(message: message, appeared: true)])),
+                currentUserID: 1)
+            XCTAssertEqual(displayed, [old.id])
+        }
+        try await store.applyMessageSync(
+            .messageSyncReady(chatID: "1", cursor: "batch-1"), currentUserID: 1)
+        try await store.applyMessageSync(.messageSyncResumed, currentUserID: 1)
+        XCTAssertEqual(displayed.map(\.description), ["10", "30"])
+        XCTAssertTrue(store.state.chatListRefreshFailed)
+        await assertNoLegacyLists(api)
+    }
+
+    func testResumeRevocationCannotRestoreBufferedPreviewAfterListRefresh() async throws {
+        let api = FakeChatAPI()
+        let (store, _, cache, _) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [chat(id: "1")])),
+        ])
+        await store.refreshConversationListsAfterReconnect()
+        try await cache.resetSyncChat(chatID: "1", cursor: "base", purge: false)
+        store.beginMessageSyncAttempt(1, socket: RealtimeTestSocket())
+        try await store.startMessageSync()
+        let message = try TimelineTestFixtures.message(id: 20, chatID: "1", senderID: 2, at: 20)
+        try await store.applyMessageSync(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "base", to: "replayed",
+                    changes: [.upsert(message: message, appeared: true)])),
+            currentUserID: 1)
+        try await store.applyMessageSync(.messageSyncRevoked(chatID: "1"), currentUserID: 1)
+        XCTAssertTrue(store.state.chats.isEmpty)
+        await api.setDifferenceResults([.success(difference("current", complete: true))])
+        await store.refreshConversationListsAfterReconnect()
+        try await store.applyMessageSync(.messageSyncResumed, currentUserID: 1)
+        XCTAssertTrue(store.state.chats.isEmpty)
+    }
+
+    func testResumeFailedBatchCannotPublishItsBufferedPreview() async throws {
+        let api = FakeChatAPI()
+        let (store, _, cache, db) = try await makeDurableReadStore(api: api)
+        defer { store.reset() }
+        let old = try TimelineTestFixtures.message(id: 10, chatID: "1", senderID: 2, at: 10)
+        await api.setDifferenceResults([
+            .success(difference("B", reset: "noBaseline")),
+            .success(difference("installed", complete: true, chats: [chat(id: "1", latest: old)])),
+        ])
+        await store.refreshConversationListsAfterReconnect()
+        try await cache.resetSyncChat(chatID: "1", cursor: "base", purge: false)
+        store.beginMessageSyncAttempt(1, socket: RealtimeTestSocket())
+        try await store.startMessageSync()
+        let epoch = try await db.cacheEpoch()
+        try await db.resetSyncChat(chatID: "1", cursor: "other", purge: false, epoch: epoch)
+        let message = try TimelineTestFixtures.message(id: 20, chatID: "1", senderID: 2, at: 20)
+        do {
+            try await store.applyMessageSync(
+                .messageSyncBatch(
+                    .init(
+                        chatID: "1", from: "base", to: "failed",
+                        changes: [.upsert(message: message, appeared: true)])),
+                currentUserID: 1)
+            XCTFail("A failed batch must not publish its preview")
+        } catch MessageSyncStreamError.checkpointMismatch {}
+        await api.setDifferenceResults([.success(difference("current", complete: true))])
+        await store.refreshConversationListsAfterReconnect()
+        XCTAssertEqual(store.state.chats.first?.lastMessage?.id, old.id)
     }
 
     func testSyncReadyCannotAdvanceOnFailedCommitThenVisibilityResetPurgesRows() async throws {
@@ -2548,8 +2780,10 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(emptied?.complete, true)
     }
 
-    private func chat(id: String) -> ChatListItem {
-        ChatListItem(id: id, name: "Chat \(id)", unreadCount: 0, archived: false, kind: .group)
+    private func chat(id: String, latest: MessageResponse? = nil) -> ChatListItem {
+        ChatListItem(
+            id: id, name: "Chat \(id)", lastMessageAt: latest?.createdAt, unreadCount: 0,
+            lastMessage: latest?.replyPreview, archived: false, kind: .group)
     }
 
     func testRefreshReplacesLoadedAndEmptyListsAndRetainsRowsOnFailure() async {

@@ -6,7 +6,9 @@ struct MediaCacheSettingsSection: View {
     @State private var confirmsHistoryClear = false
 
     init(context: AppMediaContext, historyCache: AccountHistoryCache) {
-        _model = StateObject(wrappedValue: MediaCacheSettingsModel(mediaContext: context, historyCache: historyCache))
+        _model = StateObject(
+            wrappedValue: MediaCacheSettingsModel(mediaContext: context, historyCache: historyCache)
+        )
     }
 
     var body: some View {
@@ -22,11 +24,17 @@ struct MediaCacheSettingsSection: View {
             .task { await model.refreshMessageSize() }
             Button("Clear Message History", role: .destructive) { confirmsHistoryClear = true }
                 .disabled(model.isClearingMessages)
-                .confirmationDialog("Remove downloaded messages?", isPresented: $confirmsHistoryClear) {
-                    Button("Clear Message History", role: .destructive) { Task { await model.clearMessages() } }
+                .confirmationDialog(
+                    "Remove downloaded messages?", isPresented: $confirmsHistoryClear
+                ) {
+                    Button("Clear Message History", role: .destructive) {
+                        Task { await model.clearMessages() }
+                    }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Downloaded conversations will be removed from this device. Drafts and unsent messages are kept.")
+                    Text(
+                        "Downloaded conversations will be removed from this device. Drafts and unsent messages are kept."
+                    )
                 }
             if model.isClearingMessages {
                 ProgressView("Clearing message history…").controlSize(.small)

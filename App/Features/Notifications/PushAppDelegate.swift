@@ -151,7 +151,8 @@ final class PushAppDelegate: NSObject, UNUserNotificationCenterDelegate {
     extension PushAppDelegate: UIApplicationDelegate {
         func application(
             _ application: UIApplication,
-            didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+            didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? =
+                nil
         ) -> Bool {
             outboxRefresh?.register()
             return true

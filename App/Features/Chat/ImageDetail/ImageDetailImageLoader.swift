@@ -60,7 +60,9 @@ final class ImageDetailImageLoader: ObservableObject {
             url.isFileURL
             ? .provider(LocalFileImageDataProvider(fileURL: url))
             : .network(KF.ImageResource(downloadURL: url))
-        var options: KingfisherOptionsInfo = [.cacheOriginalImage, .backgroundDecode, .scaleFactor(1)]
+        var options: KingfisherOptionsInfo = [
+            .cacheOriginalImage, .backgroundDecode, .scaleFactor(1),
+        ]
         if let context {
             options += [.targetCache(context.cache), .downloader(context.downloader)]
         }
@@ -80,19 +82,19 @@ final class ImageDetailImageLoader: ObservableObject {
                     }
                     self.task = task
                 }
-            }
-        ) { [weak self] result in
-            Task { @MainActor [weak self] in
-                guard let self, self.generation == current else { return }
-                self.task = nil
-                self.isLoading = false
-                switch result {
-                case .success(let value): self.image = value.image
-                case .failure:
-                    self.failure = allowsNetwork || url.isFileURL ? .failed : .notDownloaded
+            },
+            completionHandler: { [weak self] result in
+                Task { @MainActor [weak self] in
+                    guard let self, self.generation == current else { return }
+                    self.task = nil
+                    self.isLoading = false
+                    switch result {
+                    case .success(let value): self.image = value.image
+                    case .failure:
+                        self.failure = allowsNetwork || url.isFileURL ? .failed : .notDownloaded
+                    }
                 }
-            }
-        }
+            })
     }
 
     /// Cancels work without discarding an already decoded page.

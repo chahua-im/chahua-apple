@@ -149,7 +149,8 @@ final class MediaHostingTests: XCTestCase {
         let cache = try ImageCache(name: "first", cacheDirectoryURL: directory)
         let connectivity = ConnectivityMonitor(monitorNetwork: false)
         connectivity.update(.init(status: .satisfied, isExpensive: true))
-        let context = AppMediaContext(cache: cache, downloader: downloader, connectivity: connectivity)
+        let context = AppMediaContext(
+            cache: cache, downloader: downloader, connectivity: connectivity)
         let item = MessageImageItem(
             id: "attachment", url: fixture.url, contentType: "image/png",
             fileName: "attachment.png", width: 16, height: 16)
@@ -163,9 +164,10 @@ final class MediaHostingTests: XCTestCase {
         XCTAssertEqual(fixture.requestCount, 1)
 
         try await cache.storeToDisk(data, forKey: fixture.url.absoluteString)
-        XCTAssertTrue(cache.diskStorage.isCached(
-            forKey: fixture.url.absoluteString,
-            referenceDate: Date.now.addingTimeInterval(365 * 24 * 60 * 60)))
+        XCTAssertTrue(
+            cache.diskStorage.isCached(
+                forKey: fixture.url.absoluteString,
+                referenceDate: Date.now.addingTimeInterval(365 * 24 * 60 * 60)))
         cache.clearMemoryCache()
         connectivity.update(.init(status: .unsatisfied))
         let cachedLoader = ImageDetailImageLoader()

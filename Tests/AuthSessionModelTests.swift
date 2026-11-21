@@ -172,15 +172,21 @@ final class AuthSessionModelTests: XCTestCase {
     func testMatchingBindingOpensBeforeValidationAndRetryDoesNotResetShell() async throws {
         let api = FakeChatAPI()
         let profile = try JSONDecoder().decode(
-            MeResponse.self, from: Data(#"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            MeResponse.self,
+            from: Data(
+                #"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
         let storage = InMemorySessionTokenStorage(
-            token: "exact token", binding: .init(baseURL: "test", token: "exact token", profile: profile))
+            token: "exact token",
+            binding: .init(baseURL: "test", token: "exact token", profile: profile))
         let model = AuthSessionModel(
             apiClient: api, credentialLoginClient: PrototypeCredentialLoginClient(),
             tokenStorage: storage, baseURL: "test")
         await api.setAuthenticationFailure(.transport(URLError(.notConnectedToInternet)))
         await restore(model)
-        guard case .authenticated(let cached) = model.state else { return XCTFail("Expected cached session") }
+        guard case .authenticated(let cached) = model.state else {
+            return XCTFail("Expected cached session")
+        }
         XCTAssertEqual(cached.uid, 17)
         XCTAssertEqual(model.sessionValidation, .localOnly)
         let verified = expectation(description: "Verification completes")
@@ -201,7 +207,10 @@ final class AuthSessionModelTests: XCTestCase {
     func testMismatchedCredentialCannotOpenCachedIdentity() async throws {
         let api = FakeChatAPI()
         let profile = try JSONDecoder().decode(
-            MeResponse.self, from: Data(#"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            MeResponse.self,
+            from: Data(
+                #"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
         await api.setAuthenticationFailure(.transport(URLError(.notConnectedToInternet)))
         for (base, token) in [("test", "other token"), ("different", "exact token")] {
             let storage = InMemorySessionTokenStorage(
@@ -219,11 +228,15 @@ final class AuthSessionModelTests: XCTestCase {
     func testBackgroundActivationJoinsValidationOfOpenLocalSession() async throws {
         let api = FakeChatAPI()
         let profile = try JSONDecoder().decode(
-            MeResponse.self, from: Data(#"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            MeResponse.self,
+            from: Data(
+                #"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
         let model = AuthSessionModel(
             apiClient: api, credentialLoginClient: PrototypeCredentialLoginClient(),
             tokenStorage: InMemorySessionTokenStorage(
-                token: "test-token", binding: .init(baseURL: "test", token: "test-token", profile: profile)),
+                token: "test-token",
+                binding: .init(baseURL: "test", token: "test-token", profile: profile)),
             baseURL: "test")
         await api.holdNextMeRequest()
         model.bootstrap()
@@ -232,7 +245,9 @@ final class AuthSessionModelTests: XCTestCase {
         XCTAssertEqual(model.sessionValidation, .localOnly)
         if case .authenticated(let cached) = model.state {
             XCTAssertEqual(cached.uid, profile.uid)
-        } else { XCTFail("The account shell must open before validation completes") }
+        } else {
+            XCTFail("The account shell must open before validation completes")
+        }
         await api.releaseMeRequest(profile)
         let uid = await backgroundActivation.value
         let requests = await api.meRequestCount
@@ -244,9 +259,13 @@ final class AuthSessionModelTests: XCTestCase {
     func testExplicitRetryCanValidateDespiteAnUnsatisfiedPathHint() async throws {
         let api = FakeChatAPI()
         let profile = try JSONDecoder().decode(
-            MeResponse.self, from: Data(#"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            MeResponse.self,
+            from: Data(
+                #"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
         let storage = InMemorySessionTokenStorage(
-            token: "test-token", binding: .init(baseURL: "test", token: "test-token", profile: profile))
+            token: "test-token",
+            binding: .init(baseURL: "test", token: "test-token", profile: profile))
         let model = AuthSessionModel(
             apiClient: api, credentialLoginClient: PrototypeCredentialLoginClient(),
             tokenStorage: storage, baseURL: "test")
@@ -266,7 +285,10 @@ final class AuthSessionModelTests: XCTestCase {
     func testRefreshedStoredSessionReopensOfflineWithNewCredentialBinding() async throws {
         let api = FakeChatAPI()
         let profile = try JSONDecoder().decode(
-            MeResponse.self, from: Data(#"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#.utf8))
+            MeResponse.self,
+            from: Data(
+                #"{"uid":17,"username":"Ada","gender":2,"stickerPackOrder":[],"permissions":[]}"#
+                    .utf8))
         let old = " old-token "
         let storage = InMemorySessionTokenStorage(
             token: old, binding: .init(baseURL: "test", token: old, profile: profile))

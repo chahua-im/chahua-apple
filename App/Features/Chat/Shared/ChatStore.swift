@@ -268,6 +268,12 @@ final class ChatStore: ObservableObject {
     private(set) var syncCoveredChats = Set<String>()
     private var installedSyncCursors: [String: String] = [:]
     private var syncConnection: (attempt: Int, socket: any RealtimeConnection)?
+    private enum SyncPreviewGate {
+        case open, waitingForList, waitingForReplay
+    }
+    private var syncPreviewGate = SyncPreviewGate.open
+    private var syncPreviewBatchAttempt: Int?
+    private var deferredSyncPreviews: [ConversationKey: MessageResponse] = [:]
     private var syncWaiters: [UUID: CheckedContinuation<Bool, Error>] = [:]
     private struct PendingSyncPage {
         let chatID: String
@@ -648,6 +654,9 @@ final class ChatStore: ObservableObject {
     }
 
     func setForegroundActive(_ active: Bool) {
+        if active, !foregroundActive, syncMode == .active {
+            syncPreviewGate = .waitingForList
+        }
         foregroundActive = active
         if !active { clearPresence() }
         outgoingQueue.requestForegroundActive(active)
@@ -713,7 +722,8 @@ final class ChatStore: ObservableObject {
     func retryConversations(chats: Bool, threads: Bool, archived: Bool) async {
         guard canRetryHistory() else { return }
         await requestAccountListSync(
-            ignoringPath: true, lists: ListKind.selected(chats: chats, threads: threads, archived: archived))
+            ignoringPath: true,
+            lists: ListKind.selected(chats: chats, threads: threads, archived: archived))
     }
 
     func refreshConversations(chats: Bool, threads: Bool, archived: Bool) async {
@@ -1010,6 +1020,10 @@ final class ChatStore: ObservableObject {
                         accountListRequestedScopes.removeAll()
                     }
                 } while accountListForced || accountListDirty || !accountListRequestedScopes.isEmpty
+                finishResumeListRefresh(
+                    succeeded: !ListKind.allCases.contains {
+                        state[keyPath: $0.phase] == .failed || state[keyPath: $0.refreshFailed]
+                    })
             } catch {
                 guard accountListSerial == serial, generation == requestGeneration,
                     !(error is CancellationError)
@@ -1019,6 +1033,7 @@ final class ChatStore: ObservableObject {
                     state[keyPath: list.refreshFailed] = hasSaved
                     if !hasSaved { state[keyPath: list.phase] = .failed }
                 }
+                finishResumeListRefresh(succeeded: false)
                 if case APIError.invalidToken = error { await onInvalidToken() }
             }
         }
@@ -1066,7 +1081,8 @@ final class ChatStore: ObservableObject {
             if accountListForced { return }
             let receiptVersion = listReadReceipts.snapshot()
             let before = nativeListFence(staging: false)
-            for list in accountListRequestedScopes where state.listAvailability[list.cacheScope] == nil {
+            for list in accountListRequestedScopes
+            where state.listAvailability[list.cacheScope] == nil {
                 state[keyPath: list.phase] = .loading
             }
             accountListRequestStarted = true
@@ -1133,23 +1149,27 @@ final class ChatStore: ObservableObject {
                                 .init(subscribed: false, archived: false),
                                 key: .init(chatID: removed.chatId, threadID: threadID.description))
                         } else {
-                            for key in membershipStates.keys.filter({ $0.chatID == removed.chatId }) {
+                            for key in membershipStates.keys.filter({ $0.chatID == removed.chatId })
+                            {
                                 cacheMembership(.init(subscribed: false, archived: false), key: key)
                             }
                         }
                     }
                     for chat in page.chats {
-                        _ = resolveReadSnapshot(chat.readState, key: .init(chatID: chat.id), version: before.read)
+                        _ = resolveReadSnapshot(
+                            chat.readState, key: .init(chatID: chat.id), version: before.read)
                         acceptListReadReceipt(.chat(chat), version: receiptVersion)
                     }
                     for thread in page.threads {
-                        _ = resolveReadSnapshot(thread.readState, key: thread.conversationKey, version: before.read)
+                        _ = resolveReadSnapshot(
+                            thread.readState, key: thread.conversationKey, version: before.read)
                         acceptListReadReceipt(.thread(thread), version: receiptVersion)
                     }
                     if !page.chats.isEmpty || !page.threads.isEmpty || !page.removed.isEmpty
                         || token.state.stagingToken != nil
                     {
-                        try await reloadInstalledLists(generation: expected, receiptVersion: receiptVersion)
+                        try await reloadInstalledLists(
+                            generation: expected, receiptVersion: receiptVersion)
                     }
                     for list in ListKind.allCases {
                         state.listAvailability[list.cacheScope] = .server(complete: page.complete)
@@ -1220,8 +1240,9 @@ final class ChatStore: ObservableObject {
                     var cursor: CachedListPage.Cursor?
                     var complete = false
                     repeat {
-                        guard let page = try await store.cachedList(
-                            scope, after: cursor, limit: min(100, desired - items.count))
+                        guard
+                            let page = try await store.cachedList(
+                                scope, after: cursor, limit: min(100, desired - items.count))
                         else { break }
                         items.append(contentsOf: page.items)
                         complete = page.complete
@@ -1252,22 +1273,33 @@ final class ChatStore: ObservableObject {
                             chatId: row.id, kind: row.kind, archived: row.archived,
                             muteOverride: row.muteOverride, mutedUntil: row.mutedUntil,
                             isMuted: row.notificationMuted(defaults: state.notificationDefaults))
-                        if list.archived { snapshot.archivedChats.append(row) }
-                        else { snapshot.chats.append(row) }
+                        if list.archived {
+                            snapshot.archivedChats.append(row)
+                        } else {
+                            snapshot.chats.append(row)
+                        }
                     case .thread(let thread):
                         let read = resolveReadSnapshot(
                             thread.readState, key: thread.conversationKey, version: version.read)
                         let row = displayFilteredSnapshot(thread.withReadState(read))
                         acceptListReadReceipt(.thread(row), version: receiptVersion)
-                        cacheMembership(.init(subscribed: true, archived: row.archived), key: row.conversationKey)
-                        if list.archived { snapshot.archivedThreads.append(row) }
-                        else { snapshot.threads.append(row) }
+                        cacheMembership(
+                            .init(subscribed: true, archived: row.archived),
+                            key: row.conversationKey)
+                        if list.archived {
+                            snapshot.archivedThreads.append(row)
+                        } else {
+                            snapshot.threads.append(row)
+                        }
                     }
                 }
                 savedListsRead.insert(list)
                 savedListCursors[list] = page.next
-                if page.next != nil { snapshot.savedListHasMore.insert(list.cacheScope) }
-                else { snapshot.savedListHasMore.remove(list.cacheScope) }
+                if page.next != nil {
+                    snapshot.savedListHasMore.insert(list.cacheScope)
+                } else {
+                    snapshot.savedListHasMore.remove(list.cacheScope)
+                }
                 snapshot.listAvailability[list.cacheScope] = .cached(complete: page.complete)
             }
             state = snapshot
@@ -1463,9 +1495,11 @@ final class ChatStore: ObservableObject {
                     // write waits. Fence read/receipt changes only for these keys.
                     let fence = nativeListFence(staging: false, legacy: true)
                     let rows = items.map { item in
-                        (key: item.key, read: readStateVersions[item.key, default: 0],
-                         receipt: listReadReceipts.currentVersion(for: item.key),
-                         privacy: historyCache.privacyStamp(chatID: item.key.chatID))
+                        (
+                            key: item.key, read: readStateVersions[item.key, default: 0],
+                            receipt: listReadReceipts.currentVersion(for: item.key),
+                            privacy: historyCache.privacyStamp(chatID: item.key.chatID)
+                        )
                     }
                     let accepting: @MainActor () -> Bool = { [weak self] in
                         guard let self else { return false }
@@ -1474,8 +1508,10 @@ final class ChatStore: ObservableObject {
                             && self.nativeListFence(staging: false, legacy: true) == fence
                             && rows.allSatisfy {
                                 self.readStateVersions[$0.key, default: 0] == $0.read
-                                    && self.listReadReceipts.currentVersion(for: $0.key) == $0.receipt
-                                    && historyCache.privacyStamp(chatID: $0.key.chatID) == $0.privacy
+                                    && self.listReadReceipts.currentVersion(for: $0.key)
+                                        == $0.receipt
+                                    && historyCache.privacyStamp(chatID: $0.key.chatID)
+                                        == $0.privacy
                             }
                     }
                     let committed = try await historyCache.commitLegacyList(
@@ -2087,6 +2123,26 @@ final class ChatStore: ObservableObject {
             reconcileRow(key)
             return
         }
+        if deferredSyncPreviews[key]?.id == message.id {
+            deferredSyncPreviews[key] = message
+        }
+        if isNew, !message.isDeleted,
+            syncPreviewGate != .open || syncPreviewBatchAttempt != nil
+        {
+            if let rootID = key.threadID {
+                if let preview = thread(chatID: key.chatID, threadID: rootID)?.lastReply,
+                    preview.id >= message.id
+                {
+                    return
+                }
+            } else if let preview = chat(id: key.chatID)?.lastMessage, preview.id >= message.id {
+                return
+            }
+            if deferredSyncPreviews[key].map({ $0.id <= message.id }) ?? true {
+                deferredSyncPreviews[key] = message
+            }
+            return
+        }
         rowRevisions[key, default: 0] += 1
         listStateRevision += 1
         func replaces(_ preview: MessagePreview?) -> Bool {
@@ -2125,6 +2181,27 @@ final class ChatStore: ObservableObject {
         }
     }
 
+    private func finishResumeListRefresh(succeeded: Bool) {
+        guard syncPreviewGate != .open else { return }
+        if succeeded || syncResumed {
+            syncPreviewGate = .open
+            publishDeferredSyncPreviews()
+        } else {
+            // A failed list refresh must not expose the replay one message at a time.
+            syncPreviewGate = .waitingForReplay
+        }
+    }
+
+    private func publishDeferredSyncPreviews() {
+        guard syncPreviewGate == .open, syncPreviewBatchAttempt == nil else { return }
+        // Keep only each conversation's newest candidate while the list projection
+        // catches up. The normal ID check then rejects replay older than that projection.
+        while let (_, message) = deferredSyncPreviews.popFirst() {
+            guard historyCache?.accessRevoked(message.chatId) != true else { continue }
+            receivePreview(deletedContentProjection(message) ?? message, isNew: true)
+        }
+    }
+
     private func invalidateChatList() {
         listStateRevision += 1
         invalidateConversationWatches()
@@ -2143,6 +2220,7 @@ final class ChatStore: ObservableObject {
         endMessageSyncAttempt()
         syncConnection = (attempt, socket)
         syncMode = .pending
+        syncPreviewGate = .waitingForList
         historyCache?.setSocketAttempt(attempt)
     }
 
@@ -2152,6 +2230,9 @@ final class ChatStore: ObservableObject {
         syncMode = .disconnected
         syncResumed = false
         syncCoveredChats.removeAll()
+        syncPreviewGate = .open
+        syncPreviewBatchAttempt = nil
+        deferredSyncPreviews.removeAll()
         installedSyncCursors.removeAll()
         resolveMessageSyncWaiters(.failure(CancellationError()))
         nextSyncRequestID = 0
@@ -2165,6 +2246,8 @@ final class ChatStore: ObservableObject {
 
     func useLegacyRealtime() {
         syncMode = .legacy
+        syncPreviewGate = .open
+        publishDeferredSyncPreviews()
         resolveMessageSyncWaiters(.success(false))
     }
 
@@ -2259,6 +2342,10 @@ final class ChatStore: ObservableObject {
         case .messageSyncResumed:
             guard !syncResumed else { throw MessageSyncStreamError.unexpectedFrame }
             syncResumed = true
+            if syncPreviewGate == .waitingForReplay {
+                syncPreviewGate = .open
+                publishDeferredSyncPreviews()
+            }
             resolveMessageSyncWaiters(.success(true))
         default:
             throw MessageSyncStreamError.unexpectedFrame
@@ -2271,6 +2358,13 @@ final class ChatStore: ObservableObject {
         }
         guard installedSyncCursors[batch.chatID] == batch.from else {
             throw MessageSyncStreamError.checkpointMismatch
+        }
+        syncPreviewBatchAttempt = attempt
+        defer {
+            if syncPreviewBatchAttempt == attempt {
+                syncPreviewBatchAttempt = nil
+                deferredSyncPreviews.removeAll()
+            }
         }
         let cacheRevision = historyCache.revision
         var changes = batch.changes
@@ -2300,7 +2394,10 @@ final class ChatStore: ObservableObject {
             chatID: batch.chatID, from: batch.from, to: batch.to, changes: changes)
         try requireMessageSyncAttempt(attempt)
         switch result {
-        case .committed: installedSyncCursors[batch.chatID] = batch.to
+        case .committed:
+            installedSyncCursors[batch.chatID] = batch.to
+            syncPreviewBatchAttempt = nil
+            publishDeferredSyncPreviews()
         case .mismatch: throw MessageSyncStreamError.checkpointMismatch
         case .stale: throw MessageSyncStreamError.obsoleteAttempt
         }
@@ -2345,6 +2442,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func invalidateSyncPreviews(_ chatID: String) {
+        deferredSyncPreviews = deferredSyncPreviews.filter { $0.key.chatID != chatID }
         pins.invalidate(chatID: chatID)
         for index in state.chats.indices where state.chats[index].id == chatID {
             state.chats[index] = state.chats[index].withPreview(nil, preserveActivity: true)
@@ -4054,7 +4152,9 @@ final class ChatStore: ObservableObject {
 
     private func acceptChatSettings(_ settings: ChatSettings, coveredByList: Bool = false) {
         guard membershipChatSettings != settings else { return }
-        if networkAuthorized && !coveredByList { historyCache?.invalidatePolicy(settings: settings) }
+        if networkAuthorized && !coveredByList {
+            historyCache?.invalidatePolicy(settings: settings)
+        }
         let membershipChanged =
             membershipChatSettings?.showMembershipMessages != settings.showMembershipMessages
         membershipChatSettings = settings
@@ -4110,7 +4210,8 @@ final class ChatStore: ObservableObject {
         return thread.withActivity(root: root, lastReply: reply)
     }
 
-    private func invalidateMembershipVisibility(chatID: String? = nil, coveredByList: Bool = false) {
+    private func invalidateMembershipVisibility(chatID: String? = nil, coveredByList: Bool = false)
+    {
         listStateRevision += 1
         if !coveredByList {
             dirtyLists.formUnion([.chats, .archivedChats].filter { refreshTasks[$0] != nil })
@@ -4620,6 +4721,7 @@ final class ChatStore: ObservableObject {
 
     private func removeGroupFromLists(chatID: String) {
         historyCache?.revoke(chatID)
+        deferredSyncPreviews = deferredSyncPreviews.filter { $0.key.chatID != chatID }
         syncCoveredChats.remove(chatID)
         pins.invalidate(chatID: chatID)
         pendingReadChatVersions[chatID, default: 0] += 1

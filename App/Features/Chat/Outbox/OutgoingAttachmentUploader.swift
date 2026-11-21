@@ -62,7 +62,8 @@ nonisolated struct OutgoingAttachmentUploader: Sendable {
         let response: URLResponse
         do {
             // Foundation owns cancellation before a result has arrived.
-            response = try await session.upload(for: request, fromFile: source, delegate: progress).1
+            response = try await session.upload(for: request, fromFile: source, delegate: progress)
+                .1
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 throw CancellationError()
@@ -76,7 +77,8 @@ nonisolated struct OutgoingAttachmentUploader: Sendable {
         }
         let status = response.statusCode
         guard (200..<300).contains(status) else {
-            let retryAfter = status == 408 || status == 429 || (500...599).contains(status)
+            let retryAfter =
+                status == 408 || status == 429 || (500...599).contains(status)
                 ? APIError.retryDate(from: response.value(forHTTPHeaderField: "Retry-After")) : nil
             throw OutgoingAttachmentUploadError.httpStatus(status, retryAfter: retryAfter)
         }

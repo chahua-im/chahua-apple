@@ -1430,33 +1430,35 @@ final class ConversationTimelineModel: ObservableObject {
                             return page.messages.contains {
                                 $0.id == acceptedAnchor && !$0.isDeleted
                             }
-                        }
-                    ) {
-                        state.reconciliationFailed = false
-                        state.live.followsLatest = acceptedAnchor == nil
-                        if wasSaved {
-                            unreadBeforeMessageID = savedUnread.flatMap {
-                                rowID(forServerID: $0) == nil ? nil : $0
-                            }
-                        }
-                        let position: TimelineScrollIntent?
-                        if let acceptedAnchor {
-                            if wasSaved, rowID(forServerID: acceptedAnchor) != nil {
-                                // Native hosts compensate a surviving stable row's offset.
-                                position = placement
-                            } else {
-                                let target =
-                                    rowID(forServerID: acceptedAnchor)
-                                    ?? window.messages.first.flatMap { rowID(forServerID: $0.id) }
-                                position = target.map {
-                                    .reveal($0, animated: false, highlight: false)
+                        },
+                        commit: {
+                            state.reconciliationFailed = false
+                            state.live.followsLatest = acceptedAnchor == nil
+                            if wasSaved {
+                                unreadBeforeMessageID = savedUnread.flatMap {
+                                    rowID(forServerID: $0) == nil ? nil : $0
                                 }
                             }
-                        } else {
-                            position = .bottom(animated: false)
-                        }
-                        publish(position: position, reset: true)
-                    }
+                            let position: TimelineScrollIntent?
+                            if let acceptedAnchor {
+                                if wasSaved, rowID(forServerID: acceptedAnchor) != nil {
+                                    // Native hosts compensate a surviving stable row's offset.
+                                    position = placement
+                                } else {
+                                    let target =
+                                        rowID(forServerID: acceptedAnchor)
+                                        ?? window.messages.first.flatMap {
+                                            rowID(forServerID: $0.id)
+                                        }
+                                    position = target.map {
+                                        .reveal($0, animated: false, highlight: false)
+                                    }
+                                }
+                            } else {
+                                position = .bottom(animated: false)
+                            }
+                            publish(position: position, reset: true)
+                        })
                     return
                 } catch is RecoveryAnchorMoved {
                     continue

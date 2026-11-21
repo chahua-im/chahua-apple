@@ -243,10 +243,12 @@ struct ChatDetailView: View {
                     await model.open(position: openingPosition)
                 }
             }
-            .task(id: ThreadRootRequest(
-                threadID: threadID, canFetchHistory: observation.canFetchHistory,
-                revision: threadRootRequestRevision
-            )) {
+            .task(
+                id: ThreadRootRequest(
+                    threadID: threadID, canFetchHistory: observation.canFetchHistory,
+                    revision: threadRootRequestRevision
+                )
+            ) {
                 hasVerifiedThreadRoot = false
                 guard isCurrentSession, store.canFetchHistory,
                     let threadID, let rootID = MessageID(threadID)
@@ -645,7 +647,8 @@ struct ChatDetailView: View {
             if message.id == rootID { return message }
             if reply == nil, message.replyRootId == threadID { reply = message }
         }
-        if let root = forwardingThreadRoot, root.messageType != .system, root.messageType != .invite {
+        if let root = forwardingThreadRoot, root.messageType != .system, root.messageType != .invite
+        {
             return root
         }
         // A reply can seed the picker when the root isn't in this saved window.
@@ -655,7 +658,8 @@ struct ChatDetailView: View {
 
     private var wholeThreadForwardAction: ForwardThreadAction? {
         guard let seed = wholeThreadForwardSeed else { return nil }
-        let replies = forwardingThreadReplyCount ?? observation.threadReplyCount
+        let replies =
+            forwardingThreadReplyCount ?? observation.threadReplyCount
             ?? seed.threadInfo?.replyCount ?? 0
         guard replies < 100 else { return nil }
         let count = replies + 1
@@ -803,12 +807,16 @@ struct ChatDetailView: View {
                                     if !context.canUseNetworkActions, !context.canSend, !isEditing,
                                         outgoingQueue.storageState == .ready
                                     {
-                                        Text(context.savedSendDecision == false
-                                            ? AppLanguage.localized("Sending is not allowed in this conversation.")
-                                            : AppLanguage.localized("Connect to check whether you can send."))
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .padding(.horizontal, 12)
+                                        Text(
+                                            context.savedSendDecision == false
+                                                ? AppLanguage.localized(
+                                                    "Sending is not allowed in this conversation.")
+                                                : AppLanguage.localized(
+                                                    "Connect to check whether you can send.")
+                                        )
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .padding(.horizontal, 12)
                                     }
                                     messageComposer(maxHeight: max(36, geometry.size.height / 3))
                                 }
@@ -876,7 +884,8 @@ struct ChatDetailView: View {
 
         composer.attachments = composerMedia
         composer.attachmentProgress = session == nil ? outgoingQueue.attachmentProgress : [:]
-        composer.compressionEnabled = session?.compressionEnabled
+        composer.compressionEnabled =
+            session?.compressionEnabled
             ?? outgoingQueue.compressionEnabled(chatID: chat.id, threadID: threadID)
         if session != nil || !isEditing {
             if allowsCaption {
@@ -992,7 +1001,8 @@ struct ChatDetailView: View {
             if permissions.isDM, permissions.canWrite {
                 guard let peer = info.peer else { throw APIError.unexpectedResponse }
                 let relationship = try await store.friendRelationship(peerUID: peer.uid)
-                permissions.canWrite = relationship.canDm && relationship.blocking != true
+                permissions.canWrite =
+                    relationship.canDm && relationship.blocking != true
                     && relationship.blockedBy != true
                     && (relationship.dmChatId == nil || relationship.dmChatId == chat.id)
             }
@@ -1006,7 +1016,8 @@ struct ChatDetailView: View {
             // A replies-only thread still needs a fresh root check at dispatch.
             let context = currentInteractionContext
             if context.resolvedSendDecision == true,
-                context.isDM || context.isAdmin || !context.isThreadView || context.speakingMode != .repliesOnly
+                context.isDM || context.isAdmin || !context.isThreadView
+                    || context.speakingMode != .repliesOnly
             {
                 store.rememberVerifiedSendPermission(for: conversationKey, stamp: stamp)
             }
@@ -1061,16 +1072,19 @@ struct ChatDetailView: View {
             context.canWrite = false
             return context
         }
-        let hasCurrentInfo = hasLoadedInteractionPermissions
+        let hasCurrentInfo =
+            hasLoadedInteractionPermissions
             && store.hasCurrentGroupWriteInfo(chatID: chat.id)
         let info = store.groupInfoByChatID[chat.id]
         if !context.isDM {
             context.canWrite = hasCurrentInfo && info?.myRole != nil
             context.isAdmin = info?.myRole == .admin
             context.speakingMode = info?.effectiveSpeakingMode
-            context.hasExistingThread = hasVerifiedThreadRoot && forwardingThreadRoot?.threadInfo != nil
+            context.hasExistingThread =
+                hasVerifiedThreadRoot && forwardingThreadRoot?.threadInfo != nil
             let requiresRoot = context.isThreadView && context.speakingMode == .repliesOnly
-            context.isSendPermissionResolved = hasCurrentInfo
+            context.isSendPermissionResolved =
+                hasCurrentInfo
                 && (!context.canWrite || context.isAdmin
                     || (context.speakingMode != nil && (!requiresRoot || hasVerifiedThreadRoot)))
         } else {
@@ -1169,7 +1183,8 @@ struct ChatDetailView: View {
             actions.togglePin = requestPinChange
         }
         if isCurrentSession {
-            let heldID = pendingEditSession?.clientGeneratedID ?? enteringPendingEdit?.clientGeneratedID
+            let heldID =
+                pendingEditSession?.clientGeneratedID ?? enteringPendingEdit?.clientGeneratedID
             let pending = outgoingQueue.pendingMessages(chatID: chat.id, threadID: threadID)
                 .filter { $0.clientGeneratedID != heldID }
             actions.removablePendingMessageIDs = Set(
@@ -1234,7 +1249,8 @@ struct ChatDetailView: View {
             actions.toggleReaction = { row, emoji in
                 guard let message = row.entry.remoteMessage, !message.isDeleted else { return }
                 Task {
-                    guard MessageActionPolicy(row: row, context: currentInteractionContext).canReact,
+                    guard
+                        MessageActionPolicy(row: row, context: currentInteractionContext).canReact,
                         !model.knownDeletedMessageIDs.contains(message.id)
                     else { return }
                     await reactions.toggle(
@@ -1439,7 +1455,8 @@ struct ChatDetailView: View {
             if asFiles {
                 try await outgoingQueue.importFiles(urls: urls, chatID: chat.id, threadID: threadID)
             } else {
-                try await outgoingQueue.importImages(urls: urls, chatID: chat.id, threadID: threadID)
+                try await outgoingQueue.importImages(
+                    urls: urls, chatID: chat.id, threadID: threadID)
             }
         }
     }
@@ -1453,7 +1470,8 @@ struct ChatDetailView: View {
             case .mixedAttachments:
                 AppLanguage.localized("Files must be sent separately from photos and videos.")
             case .caption:
-                AppLanguage.localized("Remove the caption before adding files to this queued message.")
+                AppLanguage.localized(
+                    "Remove the caption before adding files to this queued message.")
             }
         }
     }
@@ -1774,14 +1792,17 @@ struct ChatDetailView: View {
                 detail += "\n" + AppLanguage.localized("Next retry at \(time).")
             }
             if hasPossibleDelivery {
-                detail += "\n" + AppLanguage.localized("The message may already have been delivered.")
+                detail +=
+                    "\n" + AppLanguage.localized("The message may already have been delivered.")
             }
             return detail
         }
     }
 
     private var outboxActionTarget: OutboxActionTarget? {
-        guard let action = outboxAction, let target = removableOutgoing(action.id) else { return nil }
+        guard let action = outboxAction, let target = removableOutgoing(action.id) else {
+            return nil
+        }
         if case .failure = action, !target.phase.isFailed { return nil }
         return target
     }

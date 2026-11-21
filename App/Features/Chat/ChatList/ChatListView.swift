@@ -152,7 +152,8 @@ struct ChatListView: View {
         (scope.includesChats
             && store.state.savedListHasMore.contains(archivedMode ? .archivedChats : .activeChats))
             || (includesThreads
-                && store.state.savedListHasMore.contains(archivedMode ? .archivedThreads : .activeThreads))
+                && store.state.savedListHasMore.contains(
+                    archivedMode ? .archivedThreads : .activeThreads))
     }
 
     var body: some View {
@@ -162,8 +163,9 @@ struct ChatListView: View {
     }
 
     private var activityID: ActivityID {
-        ActivityID(list: LoadID(
-            scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages),
+        ActivityID(
+            list: LoadID(
+                scope: scope, archived: archivedMode, showThreadsInMessages: showThreadsInMessages),
             active: isActive, canFetchHistory: store.canFetchHistory, currentUserID: currentUserID)
     }
 
@@ -336,7 +338,8 @@ struct ChatListView: View {
                 Button("Show more saved conversations") {
                     Task {
                         await store.loadMoreSavedConversations(
-                            chats: scope.includesChats, threads: includesThreads, archived: archivedMode)
+                            chats: scope.includesChats, threads: includesThreads,
+                            archived: archivedMode)
                     }
                 }
                 #if os(iOS)
@@ -460,90 +463,90 @@ struct ChatListView: View {
 
     private func configure(_ viewport: some View, conversations: [ConversationRef]) -> some View {
         viewport
-        .onAppear { configureListPresentation() }
-        .onReceive(
-            presentation?.requests.eraseToAnyPublisher()
-                ?? Empty<ConversationListPresentation.Request, Never>().eraseToAnyPublisher()
-        ) { request in
-            switch request {
-            case .reset:
-                isSearchFocused = false
-                searchText = ""
-                presentationGeneration = presentation?.resetGeneration ?? 0
-                scrollScope.reset()
-                scrollScope.isSearchPinned = isSearchPinned
-            case .revealSearch:
-                if isListVisible { revealSearch() }
-            case .dismissSearchKeyboard:
-                isSearchFocused = false
+            .onAppear { configureListPresentation() }
+            .onReceive(
+                presentation?.requests.eraseToAnyPublisher()
+                    ?? Empty<ConversationListPresentation.Request, Never>().eraseToAnyPublisher()
+            ) { request in
+                switch request {
+                case .reset:
+                    isSearchFocused = false
+                    searchText = ""
+                    presentationGeneration = presentation?.resetGeneration ?? 0
+                    scrollScope.reset()
+                    scrollScope.isSearchPinned = isSearchPinned
+                case .revealSearch:
+                    if isListVisible { revealSearch() }
+                case .dismissSearchKeyboard:
+                    isSearchFocused = false
+                }
             }
-        }
-        .onChange(of: isSearchPinned) { _, pinned in scrollScope.isSearchPinned = pinned }
-        .onChange(of: usesPrototypePull) { _, enabled in
-            scrollScope.prototypePullEnabled = enabled
-        }
-        .onChange(of: prototypeSearchAdditionalHeight) { _, height in
-            scrollScope.prototypeSearchAdditionalHeight = height
-        }
-        .onChange(of: scope) { _, _ in resetScopePresentation() }
-        .onChange(of: archivedMode) { _, _ in resetScopePresentation() }
-        .onChange(of: currentUserID) { _, _ in resetScopePresentation(preservingSearch: false) }
-        .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
-        .onChange(of: isActive) { _, active in
-            if !active {
+            .onChange(of: isSearchPinned) { _, pinned in scrollScope.isSearchPinned = pinned }
+            .onChange(of: usesPrototypePull) { _, enabled in
+                scrollScope.prototypePullEnabled = enabled
+            }
+            .onChange(of: prototypeSearchAdditionalHeight) { _, height in
+                scrollScope.prototypeSearchAdditionalHeight = height
+            }
+            .onChange(of: scope) { _, _ in resetScopePresentation() }
+            .onChange(of: archivedMode) { _, _ in resetScopePresentation() }
+            .onChange(of: currentUserID) { _, _ in resetScopePresentation(preservingSearch: false) }
+            .onChange(of: selectedConversationID) { _, _ in revealedConversationID = nil }
+            .onChange(of: isActive) { _, active in
+                if !active {
+                    revealedConversationID = nil
+                    archiveConfirmation = nil
+                    notificationChat = nil
+                }
+            }
+            .onChange(of: archiveConfirmationContext) { _, _ in archiveConfirmation = nil }
+            .onDisappear {
+                isListVisible = false
                 revealedConversationID = nil
                 archiveConfirmation = nil
-                notificationChat = nil
-            }
-        }
-        .onChange(of: archiveConfirmationContext) { _, _ in archiveConfirmation = nil }
-        .onDisappear {
-            isListVisible = false
-            revealedConversationID = nil
-            archiveConfirmation = nil
-            scrollScope.onRefresh = nil
-            scrollScope.detach()
-            store.removeConversationStateScope(for: conversationStateConsumer)
-        }
-        .task(
-            id: ConsumerID(
-                conversations: conversations,
-                active: isActive && store.canFetchHistory)
-        ) {
-            if isActive && store.canFetchHistory {
-                store.setConversationStateScope(
-                    conversations, for: conversationStateConsumer)
-            } else {
+                scrollScope.onRefresh = nil
+                scrollScope.detach()
                 store.removeConversationStateScope(for: conversationStateConsumer)
             }
-        }
-        .sheet(item: $notificationChat) { chat in
-            NavigationStack {
-                ChatNotificationSettingsView(store: store, chat: chat)
-            }
-            .frame(minWidth: 320, minHeight: 420)
-        }
-        .alert(
-            listAlertTitle,
-            isPresented: Binding(
-                get: { listAlert != nil },
-                set: { if !$0 { dismissListAlert() } }),
-            presenting: listAlert
-        ) { alert in
-            switch alert {
-            case .archive(let confirmation):
-                if confirmation.action == .archive {
-                    Button("Archive") { confirmArchiveAction(confirmation) }
+            .task(
+                id: ConsumerID(
+                    conversations: conversations,
+                    active: isActive && store.canFetchHistory)
+            ) {
+                if isActive && store.canFetchHistory {
+                    store.setConversationStateScope(
+                        conversations, for: conversationStateConsumer)
                 } else {
-                    Button("Unarchive") { confirmArchiveAction(confirmation) }
+                    store.removeConversationStateScope(for: conversationStateConsumer)
                 }
-                Button("Cancel", role: .cancel) { archiveConfirmation = nil }
-            case .failure:
-                Button("OK") { store.listActionError = nil }
             }
-        } message: { alert in
-            if case .failure(let message) = alert { Text(message) }
-        }
+            .sheet(item: $notificationChat) { chat in
+                NavigationStack {
+                    ChatNotificationSettingsView(store: store, chat: chat)
+                }
+                .frame(minWidth: 320, minHeight: 420)
+            }
+            .alert(
+                listAlertTitle,
+                isPresented: Binding(
+                    get: { listAlert != nil },
+                    set: { if !$0 { dismissListAlert() } }),
+                presenting: listAlert
+            ) { alert in
+                switch alert {
+                case .archive(let confirmation):
+                    if confirmation.action == .archive {
+                        Button("Archive") { confirmArchiveAction(confirmation) }
+                    } else {
+                        Button("Unarchive") { confirmArchiveAction(confirmation) }
+                    }
+                    Button("Cancel", role: .cancel) { archiveConfirmation = nil }
+                case .failure:
+                    Button("OK") { store.listActionError = nil }
+                }
+            } message: { alert in
+                if case .failure(let message) = alert { Text(message) }
+            }
     }
 
     private var isSearchPinned: Bool {
@@ -710,7 +713,8 @@ struct ChatListView: View {
             scrollScope.isRefreshing = false
         }
         await store.refreshConversations(
-            chats: scope.includesChats, threads: scope.includesThreads(showThreadsInMessages: showThreadsInMessages),
+            chats: scope.includesChats,
+            threads: scope.includesThreads(showThreadsInMessages: showThreadsInMessages),
             archived: archivedMode)
     }
 
@@ -805,10 +809,12 @@ struct ChatListView: View {
     }
 
     private var isLoaded: Bool {
-        let chatAvailability = store.state.listAvailability[
-            archivedMode ? .archivedChats : .activeChats] ?? .absent
-        let threadAvailability = store.state.listAvailability[
-            archivedMode ? .archivedThreads : .activeThreads] ?? .absent
+        let chatAvailability =
+            store.state.listAvailability[
+                archivedMode ? .archivedChats : .activeChats] ?? .absent
+        let threadAvailability =
+            store.state.listAvailability[
+                archivedMode ? .archivedThreads : .activeThreads] ?? .absent
         return (!scope.includesChats || chatPhase == .loaded || chatAvailability.isComplete)
             && (!includesThreads || threadPhase == .loaded || threadAvailability.isComplete)
     }
@@ -895,7 +901,8 @@ struct ConversationListLoadStatus: View {
 
     private var hasBaseline: Bool {
         let chat = state.listAvailability[archivedMode ? .archivedChats : .activeChats] ?? .absent
-        let thread = state.listAvailability[archivedMode ? .archivedThreads : .activeThreads] ?? .absent
+        let thread =
+            state.listAvailability[archivedMode ? .archivedThreads : .activeThreads] ?? .absent
         return (scope.includesChats && chat != .absent) || (includesThreads && thread != .absent)
     }
 
@@ -930,7 +937,8 @@ struct ConversationListLoadStatus: View {
     }
 
     var isVisible: Bool {
-        !isPullRefreshing && (!canFetchHistory || connectionMessage != nil || isLoading || hasFailure)
+        !isPullRefreshing
+            && (!canFetchHistory || connectionMessage != nil || isLoading || hasFailure)
     }
 
     var body: some View {
@@ -951,7 +959,9 @@ struct ConversationListLoadStatus: View {
                     Label("Couldn't load conversations. Retry", systemImage: "arrow.clockwise")
                 }
                 .listRowSeparator(.hidden)
-            } else if let message = connectionMessage ?? (isLoading && hasBaseline ? "Refreshing…" : nil) {
+            } else if let message = connectionMessage
+                ?? (isLoading && hasBaseline ? "Refreshing…" : nil)
+            {
                 HStack(spacing: ChahuaTheme.Spacing.small) {
                     ProgressView().controlSize(.small)
                     Text(message)

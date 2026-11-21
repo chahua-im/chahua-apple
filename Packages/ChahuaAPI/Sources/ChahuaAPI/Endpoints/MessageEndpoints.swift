@@ -167,7 +167,8 @@ extension ChahuaClient {
     public func getMessage(chatID: String, messageID: MessageID) async throws -> MessageResponse {
         try await send(
             HTTPRequestSpec(
-                method: .get, path: ["chats", chatID, "messages", messageID.description], capturesRetryAfter: true),
+                method: .get, path: ["chats", chatID, "messages", messageID.description],
+                capturesRetryAfter: true),
             decoding: MessageResponse.self
         )
     }

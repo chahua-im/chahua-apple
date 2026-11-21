@@ -1468,6 +1468,82 @@ final class RealtimeCoordinatorTests: XCTestCase {
         XCTAssertEqual(legacyCallsAfterReconnect, 0)
     }
 
+    func testNativeForegroundResumeRefreshesListBeforeReplayedPreviewsOnRetainedSocket()
+        async throws
+    {
+        let api = RealtimeTestHTTP()
+        let old = try TimelineTestFixtures.message(id: 10, chatID: "1", senderID: 2, at: 10)
+        let head = try TimelineTestFixtures.message(id: 40, chatID: "1", senderID: 2, at: 40)
+        let settings = ChatSettings(showMembershipMessages: true)
+        let defaults = NotificationSettingsResponse(
+            muteGroupChatsByDefault: false, muteDirectChatsByDefault: false)
+        await api.configureDifference(pages: [
+            .init(
+                cursor: "baseline", complete: false, reset: "noBaseline",
+                chatSettings: settings, notificationSettings: defaults),
+            .init(
+                cursor: "installed", complete: true,
+                chatSettings: settings, notificationSettings: defaults,
+                chats: [
+                    .init(
+                        id: "1", unreadCount: 0, lastMessage: old.replyPreview,
+                        archived: false, kind: .group)
+                ]),
+        ])
+        let (store, cache) = try makeSyncStore(api)
+        let socket = RealtimeTestSocket()
+        let provider = RealtimeTestProvider(sockets: [socket])
+        let coordinator = RealtimeCoordinator(
+            provider: provider, store: store, onInvalidToken: {})
+        defer { coordinator.setSession(uid: nil) }
+        let scene = UUID()
+        coordinator.setSceneActive(id: scene, active: true)
+        coordinator.setSession(uid: 1)
+        await eventually {
+            store.state.chats.first?.lastMessage?.id == old.id && !coordinator.needsRecovery
+        }
+        try await cache.resetSyncChat(chatID: "1", cursor: "base", purge: false)
+        await socket.emit(.messageSyncHello(1))
+        await eventually {
+            await socket.frames.contains(.resume([.init(chatID: "1", cursor: "base")], true, nil))
+        }
+        await socket.emit(.messageSyncReady(chatID: "1", cursor: "base"))
+        await socket.emit(.messageSyncResumed)
+        await eventually { store.syncResumed }
+        coordinator.setSceneActive(id: scene, active: false)
+        await api.configureDifference(
+            pages: [
+                .init(
+                    cursor: "current", complete: true,
+                    chatSettings: settings, notificationSettings: defaults,
+                    chats: [
+                        .init(
+                            id: "1", unreadCount: 0, lastMessage: head.replyPreview,
+                            archived: false, kind: .group)
+                    ])
+            ], holdFirst: true)
+        coordinator.setSceneActive(id: scene, active: true)
+        let replay = try TimelineTestFixtures.message(id: 20, chatID: "1", senderID: 2, at: 20)
+        await socket.emit(
+            .messageSyncBatch(
+                .init(
+                    chatID: "1", from: "base", to: "replayed",
+                    changes: [.upsert(message: replay, appeared: true)])))
+        await eventually { await api.hasHeldDifference }
+        await eventually {
+            (try? await cache.syncManifest()) == [.init(chatID: "1", cursor: "replayed")]
+        }
+        XCTAssertEqual(store.state.chats.first?.lastMessage?.id, old.id)
+        await api.releaseDifference()
+        await eventually {
+            store.state.chats.first?.lastMessage?.id == head.id && !coordinator.needsRecovery
+        }
+        let cursors = await api.differenceCursors
+        XCTAssertEqual(cursors, [nil, "baseline", "installed"])
+        let opens = await provider.opens
+        XCTAssertEqual(opens, 1)
+    }
+
     func testInactiveOpenDefersBulkRecoveryUntilActivationWithoutReconnecting() async {
         let api = RealtimeTestHTTP()
         let socket = RealtimeTestSocket()

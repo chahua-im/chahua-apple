@@ -46,7 +46,9 @@ public enum RealtimeServerEvent: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey { case type, payload }
     private enum SyncPayloadKeys: String, CodingKey {
-        case version, chatID = "chatId", cursor, reason
+        case version
+        case chatID = "chatId"
+        case cursor, reason
     }
 
     public init(from decoder: any Decoder) throws {

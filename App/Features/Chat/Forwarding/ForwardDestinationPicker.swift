@@ -229,7 +229,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
             guard !store.canFetchHistory else { return nil }
             switch store.currentSavedSendDecision(for: destination.id) {
             case true?: return nil
-            case false?: return AppLanguage.localized("Sending is not allowed in this conversation.")
+            case false?:
+                return AppLanguage.localized("Sending is not allowed in this conversation.")
             case nil: return AppLanguage.localized("Connect to check whether you can send.")
             }
         }
@@ -256,7 +257,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
 
     func targets(matching query: String) -> [ConversationListItem] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (store.state.chats.map(ConversationListItem.chat)
+        return
+            (store.state.chats.map(ConversationListItem.chat)
             + store.state.threads.map(ConversationListItem.thread))
             .filter { target in
                 guard !query.isEmpty else { return true }
@@ -314,7 +316,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
     }
 
     private func current(_ token: Int) -> Bool {
-        isOpen && generation == token && accountID != nil && store.currentUserProfile?.uid == accountID
+        isOpen && generation == token && accountID != nil
+            && store.currentUserProfile?.uid == accountID
             && store.sessionRevision == sessionRevision && !Task.isCancelled
     }
 
@@ -354,8 +357,7 @@ final class ForwardDestinationPickerModel: ObservableObject {
             }
         }
         guard current(token) else { return }
-        if chatsFailed { await store.refreshActiveChats() }
-        else { await store.loadActiveChats() }
+        if chatsFailed { await store.refreshActiveChats() } else { await store.loadActiveChats() }
     }
 
     private func loadThreads(token: Int) async {
@@ -366,8 +368,11 @@ final class ForwardDestinationPickerModel: ObservableObject {
             }
         }
         guard current(token) else { return }
-        if threadsFailed { await store.refreshActiveThreads() }
-        else { await store.loadActiveThreads() }
+        if threadsFailed {
+            await store.refreshActiveThreads()
+        } else {
+            await store.loadActiveThreads()
+        }
     }
 
     func choose(_ target: ForwardDestination) {
@@ -464,7 +469,8 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 switch error {
                 case .tooMany: throw Failure.tooMany
                 case .unavailable:
-                    throw store.canFetchHistory ? Failure.topicUnavailable : Failure.threadNotDownloaded
+                    throw store.canFetchHistory
+                        ? Failure.topicUnavailable : Failure.threadNotDownloaded
                 }
             }
         }
@@ -515,7 +521,9 @@ final class ForwardDestinationPickerModel: ObservableObject {
                 guard current(token) else { throw CancellationError() }
                 if loadSources != nil, !store.canFetchHistory {
                     let saved = try await resolveSources(token: token)
-                    guard Set(saved.map(\.id)) == Set(selection.map(\.id)) else { throw Failure.stale }
+                    guard Set(saved.map(\.id)) == Set(selection.map(\.id)) else {
+                        throw Failure.stale
+                    }
                 }
                 guard current(token) else { throw CancellationError() }
                 try validate(selection)

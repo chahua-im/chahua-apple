@@ -30,7 +30,9 @@ public enum MessageSyncChange: Decodable, Sendable {
 
     private enum Kind: String, Decodable { case upsert, delete }
     private enum CodingKeys: String, CodingKey {
-        case kind, message, appeared, messageID = "messageId", threadRootID = "threadRootId"
+        case kind, message, appeared
+        case messageID = "messageId"
+        case threadRootID = "threadRootId"
     }
 
     public init(from decoder: any Decoder) throws {

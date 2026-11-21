@@ -11,7 +11,8 @@ import UniformTypeIdentifiers
 /// Saves a viewer item's original bytes: to Photos on iOS, through a Save panel on macOS.
 @MainActor
 enum ImageDetailSave {
-    static func save(_ item: MessageImageItem, mediaContext: AppMediaContext?) async throws -> Bool {
+    static func save(_ item: MessageImageItem, mediaContext: AppMediaContext?) async throws -> Bool
+    {
         guard item.isImage || item.isVideo else {
             throw ImageDetailSaveError.unavailable(isVideo: false)
         }
@@ -22,13 +23,15 @@ enum ImageDetailSave {
                 throw ImageDetailSaveError.photoLibraryAccessDenied
             }
             try Task.checkCancellation()
-            let original = try await ImageDetailOriginal.prepare(from: item, mediaContext: mediaContext)
+            let original = try await ImageDetailOriginal.prepare(
+                from: item, mediaContext: mediaContext)
             defer { original.removeTemporaryFile() }
             try await saveToPhotoLibrary(original, isVideo: item.isVideo)
             return true
         #elseif os(macOS)
             try Task.checkCancellation()
-            let original = try await ImageDetailOriginal.prepare(from: item, mediaContext: mediaContext)
+            let original = try await ImageDetailOriginal.prepare(
+                from: item, mediaContext: mediaContext)
             defer { original.removeTemporaryFile() }
             return try await saveWithPanel(original, item: item)
         #else
@@ -162,8 +165,9 @@ private struct ImageDetailOriginal {
         try Task.checkCancellation()
         // Cached image representations may be re-encoded. They can be viewed offline
         // but are not proof of the original bytes promised by Save.
-        guard mediaContext?.loadPolicy.allowsNetwork(
-            isVideo: item.isVideo, userInitiated: true) == true
+        guard
+            mediaContext?.loadPolicy.allowsNetwork(
+                isVideo: item.isVideo, userInitiated: true) == true
         else {
             throw ImageDetailSaveError.notDownloaded
         }

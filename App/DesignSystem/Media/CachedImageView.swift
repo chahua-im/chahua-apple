@@ -38,7 +38,9 @@ struct CachedImageView<Content: View>: View {
                         content(.success(image))
                     }
                 }
-                .id(ImageRequest(url: url, context: ObjectIdentifier(context), cacheOnly: cacheOnly))
+                .id(
+                    ImageRequest(url: url, context: ObjectIdentifier(context), cacheOnly: cacheOnly)
+                )
         }
     }
 
