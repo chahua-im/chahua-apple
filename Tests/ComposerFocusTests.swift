@@ -992,6 +992,49 @@ final class ComposerFocusTests: XCTestCase {
             h.state.text, "send this again", "Pending submission must not disable typing.")
     }
 
+    #if os(iOS)
+        func testSendButtonSubmitsLatestDraftAfterKeyboardDismissal() async throws {
+            let h = try await mount(text: "draft")
+            var sent: [String] = []
+            h.state.onSubmit = {
+                sent.append($0)
+                return true
+            }
+            try h.selectEnd()
+            try h.insertIntoFocusedEditor(" final")
+            h.blur()
+            try await pause()
+            XCTAssertFalse(h.hasFocusedEditor)
+            XCTAssertEqual(h.state.text, "draft final")
+
+            XCTAssertTrue(h.pressSendButton())
+            try await pause()
+
+            XCTAssertEqual(sent, ["draft final"])
+            XCTAssertFalse(h.hasFocusedEditor)
+            XCTAssertEqual(h.state.text, "draft final", "Keep the draft until enqueue commits.")
+        }
+
+        func testSendButtonSubmitsRestoredDraftBeforeFirstFocus() async throws {
+            let h = try await mount(text: "", focus: false)
+            var sent: [String] = []
+            h.state.onSubmit = {
+                sent.append($0)
+                return true
+            }
+            h.state.text = "restored draft"
+            try await pause()
+            XCTAssertFalse(h.hasFocusedEditor)
+
+            XCTAssertTrue(h.pressSendButton())
+            try await pause()
+
+            XCTAssertEqual(sent, ["restored draft"])
+            XCTAssertFalse(h.hasFocusedEditor)
+            XCTAssertEqual(h.state.text, "restored draft", "Keep the draft until enqueue commits.")
+        }
+    #endif
+
     func testMarkedTextStaysLocalUntilCommitted() async throws {
         let h = try await mount(text: "prefix ")
         try h.selectEnd()
@@ -1372,21 +1415,25 @@ final class ComposerFocusTests: XCTestCase {
         }
     }
 
-    private func mount(text: String, enabled: Bool = true, caption: Bool = false) async throws
+    private func mount(
+        text: String, enabled: Bool = true, caption: Bool = false, focus: Bool = true
+    ) async throws
         -> FocusComposerHarness
     {
         let harness = try FocusComposerHarness(text: text, enabled: enabled, caption: caption)
         addTeardownBlock { @MainActor in await harness.close() }
         try await pause()
         #if os(macOS)
-            if caption {
+            if caption && focus {
                 try harness.focus()
                 try await pause()
             }
         #else
             if caption { try await Task.sleep(for: .milliseconds(400)) }
-            try harness.focus()
-            try await pause()
+            if focus {
+                try harness.focus()
+                try await pause()
+            }
         #endif
         return harness
     }

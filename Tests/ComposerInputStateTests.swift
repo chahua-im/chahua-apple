@@ -181,7 +181,7 @@
             XCTAssertFalse(harness.input.isComposing)
         }
 
-        func testExplicitSubmissionConsumesOwnedPreeditAfterFocusLoss() {
+        func testExplicitSubmissionCommitsOwnedPreeditThenUsesLatestSettledDraft() {
             let harness = NativeComposerHarness(text: "draft ")
             defer { harness.input.detach() }
             harness.mark("ni")
@@ -190,7 +190,27 @@
             harness.input.nativeInput = nil
             XCTAssertTrue(harness.input.prepareExplicitSubmission())
             XCTAssertEqual(harness.persisted, "draft ni")
+            harness.restore("restored draft")
+            XCTAssertTrue(harness.input.prepareExplicitSubmission())
+            XCTAssertEqual(harness.persisted, "restored draft")
+        }
+
+        func testExplicitSubmissionRejectsUnavailablePendingEdit() {
+            let harness = NativeComposerHarness(text: "draft")
+            defer { harness.input.detach() }
+            harness.input.receiveEditorText("draft edit")
+            harness.input.nativeInput = nil
             XCTAssertFalse(harness.input.prepareExplicitSubmission())
+            XCTAssertEqual(harness.persisted, "draft")
+        }
+
+        func testExplicitSubmissionRejectsUnavailablePendingComposition() {
+            let harness = NativeComposerHarness(text: "")
+            defer { harness.input.detach() }
+            harness.mark("ni")
+            harness.input.nativeInput = nil
+            XCTAssertFalse(harness.input.prepareExplicitSubmission(allowEmptyUnfocused: true))
+            XCTAssertEqual(harness.persisted, "")
         }
 
         func testMarkedEditingEndDefersCompositionPublicationUntilSettlement() throws {

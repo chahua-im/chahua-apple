@@ -173,8 +173,11 @@ final class ComposerInputState: ObservableObject {
                 snapshot = .committed(ComposerMentionText.wireText(endingMentionText))
             }
         }
-        if allowEmptyUnfocused, !isComposing, !hasPendingEdit,
-            (editorText ?? draft?.wrappedValue ?? "").isEmpty, case .unavailable = snapshot
+        // An unfocused editor may have no snapshot. The settled draft remains
+        // authoritative, but pending edits or IME preedit must never fall back to it.
+        if !isComposing, !hasPendingComposition, !hasPendingEdit,
+            case .unavailable = snapshot, let text = draft?.wrappedValue,
+            !text.isEmpty || allowEmptyUnfocused
         {
             return true
         }
