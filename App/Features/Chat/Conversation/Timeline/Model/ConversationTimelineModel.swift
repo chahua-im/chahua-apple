@@ -460,6 +460,7 @@ final class ConversationTimelineModel: ObservableObject {
                 if generation == requestGeneration {
                     initialTask = nil
                     scheduleSavedRefreshRetry()
+                    prefetchSavedEdges()
                 }
             }
             do {
@@ -604,7 +605,7 @@ final class ConversationTimelineModel: ObservableObject {
 
     private func installSavedHistory(
         _ page: CachedHistoryPage?, position: TimelineInitialPosition,
-        journal: [RealtimeServerEvent] = [], alignToStart: Bool = false
+        journal: [RealtimeServerEvent] = []
     ) {
         savedBounds = page.flatMap { savedRange(for: $0) }
         savedHidesMembership = page.map { savedPolicyHidesMembership($0) } ?? true
@@ -622,6 +623,10 @@ final class ConversationTimelineModel: ObservableObject {
         resetViewportForReplacement()
         state.olderSaved = savedEdge(page, side: .older)
         state.newerSaved = savedEdge(page, side: .newer)
+        state.olderBoundaryIsKnownStart =
+            page.map { !$0.messages.isEmpty && $0.syncOlderCursor == nil }
+            ?? false
+        if page?.context?.verifiedEmpty == true { state.olderBoundaryIsKnownStart = true }
         // The disk-read journal uses the new section's position, not the old viewport.
         switch position {
         case .message:
@@ -631,7 +636,7 @@ final class ConversationTimelineModel: ObservableObject {
                 state.newerSaved == nil
                 && savedUnreadBoundary(after: after) == nil
         case .liveEdge:
-            state.live.followsLatest = !alignToStart && state.newerSaved == nil
+            state.live.followsLatest = state.newerSaved == nil
         }
         for event in journal { reduce(event, replay: true) }
         state.content = .ready
@@ -660,15 +665,7 @@ final class ConversationTimelineModel: ObservableObject {
                 : .reveal(.unreadSeparator, animated: false, highlight: false)
             state.live.followsLatest = unreadBeforeMessageID == nil && state.newerSaved == nil
         case .liveEdge:
-            if alignToStart,
-                let first = window.messages.first(where: { rowID(forServerID: $0.id) != nil })
-            {
-                scroll = rowID(forServerID: first.id).map {
-                    .reveal($0, animated: false, highlight: false)
-                }
-            } else {
-                scroll = .bottom(animated: false)
-            }
+            scroll = .bottom(animated: false)
         }
         publish(position: scroll, reset: true)
     }
@@ -1366,6 +1363,7 @@ final class ConversationTimelineModel: ObservableObject {
                     recoveryTask = nil
                     recoveryIsAutomatic = false
                     scheduleSavedRefreshRetry()
+                    prefetchSavedEdges()
                 }
             }
             await refreshDisplayedHistory(generation: requestGeneration, ignoringPath: ignoringPath)
@@ -1512,6 +1510,7 @@ final class ConversationTimelineModel: ObservableObject {
             preHistoryAcknowledgementKeys.removeAll()
             state.olderSaved = nil
             state.newerSaved = nil
+            state.olderBoundaryIsKnownStart = page.syncOlderCursor == nil
             for event in journal { reduce(event, replay: true) }
             // Arrivals are now in the ordered cache or the journal, not the saved overlay.
             deferredCreates.removeAll()
@@ -1845,6 +1844,7 @@ final class ConversationTimelineModel: ObservableObject {
     ) {
         if revision == snapshotRevision, !viewport.isValid(forRowCount: rows.count) {
             viewportRevision = nil
+            state.olderEdgeIsVisible = false
             selectionRange.present(nil)
             rangeScrollReference = nil
             selectionRange.edges = .init()
@@ -1857,6 +1857,8 @@ final class ConversationTimelineModel: ObservableObject {
         canReuseLatestWindowAfterPendingChange = false
         let previousAnchorID = visibleAnchorID
         lastViewport = viewport
+        state.olderEdgeIsVisible =
+            pendingScroll == nil && viewport.distanceToTop <= Self.pinnedToBottomTolerance
         if viewportRevision != revision { viewportRevision = revision }
         trackSelectionRange(viewport, reason: reason)
         visibleAnchorID = nil
@@ -1889,10 +1891,29 @@ final class ConversationTimelineModel: ObservableObject {
         if pinned, isAtLiveEdge, pendingScroll == nil { nextLive.followsLatest = true }
         if nextLive != state.live { state.live = nextLive }
         updateReadCandidate()
-        guard reason == .user, state.content == .ready, recoveryTask == nil else { return }
-        let threshold = Self.edgePrefetchScreens * viewport.height
-        if viewport.distanceToTop < threshold { loadEdge(.older) }
-        if viewport.distanceToBottom < threshold { loadEdge(.newer) }
+        guard state.content == .ready, recoveryTask == nil else { return }
+        if reason == .user {
+            // A queued reveal does not disable user-driven paging. Only automatic
+            // local filling waits for navigation to settle in prefetchSavedEdges().
+            let threshold = Self.edgePrefetchScreens * viewport.height
+            if viewport.distanceToTop < threshold { loadEdge(.older) }
+            if viewport.distanceToBottom < threshold { loadEdge(.newer) }
+        } else {
+            prefetchSavedEdges()
+        }
+    }
+
+    /// Layout can fill a short cached window, but must never initiate HTTP pagination.
+    /// Each installation needs a current host measurement; hidden-only pages can reuse it.
+    private func prefetchSavedEdges() {
+        guard state.content == .ready, initialTask == nil, recoveryTask == nil,
+            pendingScroll == nil, viewportRevision == snapshotRevision,
+            lastViewport.isValid(forRowCount: rows.count),
+            window.isSaved || !canFetchHistory()
+        else { return }
+        let threshold = Self.edgePrefetchScreens * lastViewport.height
+        if lastViewport.distanceToTop < threshold { loadSavedEdge(.older) }
+        if lastViewport.distanceToBottom < threshold { loadSavedEdge(.newer) }
     }
 
     func scrollRequestDidFinish(id: Int) {
@@ -2091,16 +2112,18 @@ final class ConversationTimelineModel: ObservableObject {
 
     enum EdgeSide { case older, newer }
     func retryOlder() {
-        if window.isSaved, state.olderSaved != nil {
-            browseSavedEdge(.older)
+        if window.isSaved {
+            if state.older == .failed { state.older = .idle }
+            loadSavedEdge(.older)
         } else if canRetryHistory() {
             state.older = .idle
             loadEdge(.older, ignoringPath: true)
         }
     }
     func retryNewer() {
-        if window.isSaved, state.newerSaved != nil {
-            browseSavedEdge(.newer)
+        if window.isSaved {
+            if state.newer == .failed { state.newer = .idle }
+            loadSavedEdge(.newer)
         } else if canRetryHistory() {
             state.newer = .idle
             loadEdge(.newer, ignoringPath: true)
@@ -2124,7 +2147,7 @@ final class ConversationTimelineModel: ObservableObject {
     private func loadEdge(_ side: EdgeSide, ignoringPath: Bool = false) {
         guard state.content == .ready, recoveryTask == nil, edge(side) == .idle else { return }
         if window.isSaved || (!ignoringPath && !canFetchHistory()) {
-            loadSavedEdge(side, explicitly: false)
+            loadSavedEdge(side)
             return
         }
         let query: ListMessagesQuery
@@ -2158,16 +2181,10 @@ final class ConversationTimelineModel: ObservableObject {
         }
     }
 
-    func browseSavedEdge(_ side: EdgeSide) {
-        cancelServerUnreadSeek()
-        if window.isSaved, state.historyConnection == .refreshing { invalidateRequests() }
-        if edge(side) == .failed { setEdge(side, .idle) }
-        loadSavedEdge(side, explicitly: true)
-    }
-
-    private func loadSavedEdge(_ side: EdgeSide, explicitly: Bool) {
+    private func loadSavedEdge(_ side: EdgeSide) {
         guard state.content == .ready, recoveryTask == nil, initialTask == nil,
-            edge(side) == .idle, historyCache?.isAvailable == true
+            state.older != .loading, state.newer != .loading, edge(side) == .idle,
+            historyCache?.isAvailable == true
         else { return }
         let bounds =
             savedBounds
@@ -2183,29 +2200,26 @@ final class ConversationTimelineModel: ObservableObject {
         switch (side, direction) {
         case (.older, .some(.more)): position = .before(bounds.lowerBound)
         case (.newer, .some(.more)): position = .after(bounds.upperBound)
-        case (.older, .some(.section)) where explicitly:
-            position = .previousSection(bounds.lowerBound)
-        case (.newer, .some(.section)) where explicitly: position = .nextSection(bounds.upperBound)
         default: return
         }
-        if direction == .section, state.older == .loading || state.newer == .loading { return }
         setEdge(side, .loading)
         let requestGeneration = generation
         let task = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if generation == requestGeneration {
+                    if edge(side) == .loading { setEdge(side, .idle) }
+                    if side == .older { olderTask = nil } else { newerTask = nil }
+                    prefetchSavedEdges()
+                }
+            }
             do {
                 let accepted = try await loadSavedPage(position, generation: requestGeneration) {
                     page, journal in
-                    if direction == .section, !page.messages.isEmpty {
-                        self.installSavedHistory(
-                            page, position: .liveEdge, journal: journal,
-                            alignToStart: side == .newer)
-                    } else {
-                        self.mergeSavedPage(
-                            page, journal: journal, side: side, previousBounds: bounds)
-                    }
+                    self.mergeSavedPage(
+                        page, journal: journal, side: side, previousBounds: bounds)
                 }
-                if generation == requestGeneration { setEdge(side, accepted ? .idle : .failed) }
+                if generation == requestGeneration, !accepted { setEdge(side, .failed) }
             } catch {
                 if generation == requestGeneration { setEdge(side, .idle) }
             }
@@ -2243,10 +2257,18 @@ final class ConversationTimelineModel: ObservableObject {
         for event in journal { reduce(event, replay: true) }
         state.history = .saved
         state.historyConnection = canFetchHistory() ? nil : .offline
+        let progressed =
+            side == .older
+            ? (savedBounds?.lowerBound ?? existing.lowerBound) < existing.lowerBound
+            : (savedBounds?.upperBound ?? existing.upperBound) > existing.upperBound
+        // A cache policy change or empty page must not re-read the same bound indefinitely.
+        let next = savedEdge(page, side: side)
         if side == .older {
-            state.olderSaved = savedEdge(page, side: side)
+            state.olderSaved = progressed || next != .more ? next : nil
+            state.olderBoundaryIsKnownStart =
+                !page.messages.isEmpty && page.syncOlderCursor == nil
         } else {
-            state.newerSaved = savedEdge(page, side: side)
+            state.newerSaved = progressed || next != .more ? next : nil
         }
         publish()
     }
@@ -2391,6 +2413,7 @@ final class ConversationTimelineModel: ObservableObject {
                     && self.acceptsServer(message)
             }
         }
+        state.olderBoundaryIsKnownStart = window.olderCursor == nil
     }
 
     private func accepts(_ message: MessageResponse) -> Bool {
@@ -2711,6 +2734,7 @@ final class ConversationTimelineModel: ObservableObject {
         bottomVisibleMessageDate = nil
         visibleAnchorID = nil
         viewportRevision = nil
+        state.olderEdgeIsVisible = false
     }
 
     private func invalidateRequests(keepingSavedRefreshRetryBudget: Bool = false) {
@@ -2796,6 +2820,7 @@ final class ConversationTimelineModel: ObservableObject {
             lastEntries = entries
             snapshotRevision &+= 1
             viewportRevision = nil
+            state.olderEdgeIsVisible = false
             if selectionRange.direction != nil {
                 prepareRangeCandidates()
                 refreshSelectionRange()

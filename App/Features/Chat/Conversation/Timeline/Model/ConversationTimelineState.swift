@@ -44,7 +44,8 @@ struct ConversationTimelineState: Equatable {
         case loading
         case retryOlder
         case retryNetworkHistory
-        case saved(SavedEdge)
+        case offlineBoundary
+        case beginning
     }
 
     struct Live: Equatable {
@@ -70,17 +71,27 @@ struct ConversationTimelineState: Equatable {
     /// HTTP recovery failed; the previous window remains browsable.
     var reconciliationFailed = false
     var hasUnverifiedLatestSeed = false
+    var olderBoundaryIsKnownStart = false
+    var olderEdgeIsVisible = false
 
-    /// One recovery control above an isolated list seed, without hiding offline saved sections.
+    /// Recovery remains available for an isolated seed; boundary chrome requires the actual top.
     var olderEdgePresentation: OlderEdgePresentation {
         if hasUnverifiedLatestSeed, history == .saved {
             if historyConnection == .refreshing { return .loading }
             if reconciliationFailed, historyConnection != .offline { return .retryNetworkHistory }
         }
+        guard olderEdgeIsVisible else { return .none }
         switch older {
         case .loading: return .loading
         case .failed: return .retryOlder
-        case .idle: return olderSaved.map { .saved($0) } ?? .none
+        case .idle:
+            if olderBoundaryIsKnownStart { return .beginning }
+            if historyConnection == .offline, olderSaved != .more,
+                history == .saved || history == .server || history == .notDownloaded
+            {
+                return .offlineBoundary
+            }
+            return .none
         }
     }
 

@@ -94,6 +94,13 @@ final class ConversationTimelineModelTests: XCTestCase {
             XCTAssertEqual(model.rows.compactMap(\.messageID), [message.id])
             XCTAssertEqual(model.state.hasUnverifiedLatestSeed, isolated)
             XCTAssertEqual(model.state.olderEdgePresentation, .none)
+            XCTAssertFalse(model.state.olderEdgeIsVisible)
+            reportVisible([message.id], to: model, distanceToTop: 0)
+            XCTAssertEqual(model.state.olderBoundaryIsKnownStart, !isolated)
+            XCTAssertEqual(
+                model.state.olderEdgePresentation, isolated ? .offlineBoundary : .beginning)
+            reportVisible([message.id], to: model, distanceToTop: 400)
+            XCTAssertEqual(model.state.olderEdgePresentation, .none)
             XCTAssertTrue(source.queries.isEmpty)
             model.close()
         }
@@ -299,7 +306,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(source.queries.count, 1)
     }
 
-    func testSavedHistoryPagesWithinASectionAndRequiresExplicitGapNavigation() async throws {
+    func testSettledViewportPagesContiguousCacheAndStopsAtGapWithoutNavigation() async throws {
         let (cache, local) = try await makeHistoryCache()
         let key = ConversationKey(chatID: "chat")
         let epoch = try await local.cacheEpoch()
@@ -331,27 +338,158 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertFalse(model.isAtLiveEdge)
         XCTAssertEqual(model.state.olderSaved, .more)
 
-        let contiguous = expectation(description: "contiguous saved page")
+        let initialRevision = model.updates.value.revision
+        let contiguous = expectation(description: "contiguous cached page")
         let more = model.$rows.filter {
             $0.first(where: { $0.messageID != nil })?.messageID == MessageID(100)
         }
         .prefix(1).sink { _ in contiguous.fulfill() }
-        model.browseSavedEdge(.older)
+        reportVisible(
+            [MessageID(110)], to: model, reason: .layout, distanceToTop: 600)
         await fulfillment(of: [contiguous], timeout: 3)
         more.cancel()
         XCTAssertEqual(model.state.olderSaved, .section)
-        reportVisible([MessageID(100)], to: model, reason: .user, distanceToTop: 0)
-        XCTAssertEqual(remoteMessages(model).first?.id, MessageID(100))
-
-        let older = expectation(description: "older saved section")
-        let section = model.$rows.filter { $0.contains(where: { $0.messageID == MessageID(7) }) }
-            .prefix(1).sink { _ in older.fulfill() }
-        model.browseSavedEdge(.older)
-        await fulfillment(of: [older], timeout: 3)
-        section.cancel()
-        XCTAssertEqual(remoteMessages(model).map(\.id), [MessageID(7), MessageID(8), MessageID(9)])
+        XCTAssertFalse(model.state.olderBoundaryIsKnownStart)
+        XCTAssertNil(
+            model.updates.value.pendingScroll, "Appending cache must preserve the host anchor")
+        reportVisible([MessageID(100)], to: model, distanceToTop: 600)
+        XCTAssertEqual(model.state.olderEdgePresentation, .none, "Prefetch is not the actual top")
+        reportVisible(
+            [MessageID(100)], to: model, revision: initialRevision, distanceToTop: 0)
+        XCTAssertEqual(model.state.olderEdgePresentation, .none, "Stale layout must be ignored")
+        for reason: TimelineViewportChangeReason in [.layout, .programmatic, .user] {
+            reportVisible([MessageID(100)], to: model, reason: reason, distanceToTop: 0)
+            model.retryOlder()
+        }
+        XCTAssertEqual(model.state.olderEdgePresentation, .offlineBoundary)
+        XCTAssertEqual(remoteMessages(model).map(\.id), (100...159).map { MessageID(UInt64($0)) })
+        await model.jumpToMessage(MessageID(8))
         XCTAssertEqual(model.state.newerSaved, .section)
+        for reason: TimelineViewportChangeReason in [.layout, .programmatic, .user] {
+            reportVisible([MessageID(8)], to: model, reason: reason, distanceToBottom: 0)
+            model.retryNewer()
+        }
+        XCTAssertEqual(remoteMessages(model).map(\.id), [7, 8, 9].map { MessageID(UInt64($0)) })
         XCTAssertTrue(source.queries.isEmpty)
+    }
+
+    func testSettledShortInitialWindowAutomaticallyLoadsNewerCachedPages() async throws {
+        let (cache, local) = try await makeHistoryCache()
+        let key = ConversationKey(chatID: "chat")
+        let epoch = try await local.cacheEpoch()
+        try await local.cacheHistory(
+            key, query: .init(max: 50),
+            response: historyPage(ids: 101...110, olderCursor: MessageID(101), newerCursor: nil),
+            epoch: epoch)
+        try await local.cacheHistory(
+            key, query: .init(before: MessageID(101), max: 50),
+            response: historyPage(ids: 51...100, olderCursor: MessageID(51), newerCursor: nil),
+            epoch: epoch)
+        try await local.cacheHistory(
+            key, query: .init(before: MessageID(51), max: 50),
+            response: historyPage(ids: 1...50, olderCursor: nil, newerCursor: nil), epoch: epoch)
+        let source = ScriptedTimelineSource(pages: [])
+        let model = ConversationTimelineModel(
+            chatID: "chat", currentUserID: 1, isGroupChat: false,
+            source: source, messageStore: source.store, historyCache: cache,
+            canFetchHistory: { false })
+        defer { model.close() }
+        await model.loadInitial(position: .message(MessageID(1)))
+        XCTAssertEqual(remoteMessages(model).map(\.id), (1...25).map { MessageID(UInt64($0)) })
+        XCTAssertTrue(model.state.olderBoundaryIsKnownStart)
+        for upperBound in [75, 110] {
+            let installed = expectation(description: "cached newer page through \(upperBound)")
+            let observer = model.$rows.filter {
+                $0.last(where: { $0.messageID != nil })?.messageID == MessageID(UInt64(upperBound))
+            }.prefix(1).sink { _ in installed.fulfill() }
+            // No user gesture is required, including after an installation.
+            reportVisible(
+                [MessageID(1), MessageID(25)], to: model, reason: .layout, distanceToBottom: 0)
+            await fulfillment(of: [installed], timeout: 3)
+            observer.cancel()
+            XCTAssertNil(model.updates.value.pendingScroll)
+        }
+        reportVisible([MessageID(1)], to: model, distanceToBottom: 0, distanceToTop: 0)
+        model.retryNewer()
+        XCTAssertNil(model.state.newerSaved)
+        XCTAssertEqual(model.state.olderEdgePresentation, .beginning)
+        XCTAssertEqual(remoteMessages(model).map(\.id), (1...110).map { MessageID(UInt64($0)) })
+        XCTAssertTrue(source.queries.isEmpty)
+    }
+
+    func testAutomaticCachedPagingIsSingleFlightRevisionSafeAndStopsAtExhaustion() async throws {
+        for knownStart in [false, true] {
+            let (cache, local) = try await makeHistoryCache()
+            let key = ConversationKey(chatID: "chat")
+            let epoch = try await local.cacheEpoch()
+            try await local.cacheHistory(
+                key, query: .init(max: 50),
+                response: historyPage(
+                    ids: 111...160, olderCursor: MessageID(111), newerCursor: nil), epoch: epoch)
+            for lowerBound in [61, 11, 1] {
+                let upperBound = lowerBound == 1 ? 10 : lowerBound + 49
+                try await local.cacheHistory(
+                    key, query: .init(before: MessageID(UInt64(upperBound + 1)), max: 50),
+                    response: historyPage(
+                        ids: lowerBound...upperBound,
+                        olderCursor: knownStart && lowerBound == 1
+                            ? nil : MessageID(UInt64(lowerBound)),
+                        newerCursor: nil), epoch: epoch)
+            }
+            let source = ScriptedTimelineSource(pages: [])
+            let model = ConversationTimelineModel(
+                chatID: "chat", currentUserID: 1, isGroupChat: false,
+                source: source, messageStore: source.store, historyCache: cache,
+                canFetchHistory: { false })
+            await model.open()
+            let initialRevision = model.updates.value.revision
+            let exhausted = expectation(description: "all contiguous cached pages installed")
+            var measuredRevisions: Set<Int> = []
+            var installedLowerBounds: [MessageID] = []
+            let observer = model.updates.sink { snapshot in
+                guard measuredRevisions.insert(snapshot.revision).inserted,
+                    let anchor = snapshot.rows.compactMap(\.messageID).first
+                else { return }
+                installedLowerBounds.append(anchor)
+                XCTAssertEqual(
+                    self.remoteMessages(model).map(\.id),
+                    (1...160).map { MessageID(UInt64($0)) }.filter { $0 >= anchor })
+                // Hosts may report installation while the old page is still loading.
+                for _ in 0..<4 {
+                    self.reportVisible(
+                        [anchor], to: model, revision: snapshot.revision, distanceToTop: 0)
+                }
+                if anchor == MessageID(1) { exhausted.fulfill() }
+            }
+            await fulfillment(of: [exhausted], timeout: 3)
+            observer.cancel()
+            XCTAssertEqual(installedLowerBounds, [111, 61, 11, 1].map { MessageID(UInt64($0)) })
+            XCTAssertNil(model.updates.value.pendingScroll)
+            reportVisible(
+                [MessageID(1)], to: model, revision: initialRevision, distanceToTop: 0)
+            reportVisible([MessageID(1)], to: model, distanceToTop: 0)
+            model.retryOlder()
+            XCTAssertNil(model.state.olderSaved)
+            XCTAssertEqual(model.state.olderBoundaryIsKnownStart, knownStart)
+            XCTAssertEqual(
+                model.state.olderEdgePresentation, knownStart ? .beginning : .offlineBoundary)
+            XCTAssertEqual(remoteMessages(model).map(\.id), (1...160).map { MessageID(UInt64($0)) })
+            XCTAssertTrue(source.queries.isEmpty)
+            model.close()
+        }
+    }
+
+    func testSettledServerViewportDoesNotAutomaticallyFetchHistory() async throws {
+        let (model, source, _) = try makeModel(pages: [
+            .success(try historyPage(ids: 10...11, olderCursor: MessageID(10), newerCursor: nil))
+        ])
+        defer { model.close() }
+        await model.open()
+        for reason: TimelineViewportChangeReason in [.layout, .programmatic] {
+            reportVisible([MessageID(10)], to: model, reason: reason, distanceToTop: 0)
+        }
+        XCTAssertEqual(source.queries.count, 1)
+        XCTAssertEqual(model.state.older, .idle)
     }
 
     func testDiskPressurePausesHistoryGrowthButDoesNotSkipRedaction() async throws {
@@ -1402,6 +1540,7 @@ final class ConversationTimelineModelTests: XCTestCase {
         XCTAssertEqual(model.rows.compactMap(\.messageID), [MessageID(10), MessageID(11)])
 
         // Paging is still live while the failure banner is showing.
+        XCTAssertNotNil(model.updates.value.pendingScroll)
         model.viewportDidChange(
             .init(
                 firstVisibleIndex: 0, lastVisibleIndex: 1, distanceToTop: 0,
@@ -1474,6 +1613,7 @@ final class ConversationTimelineModelTests: XCTestCase {
                 try historyPage(ids: 8...9, olderCursor: MessageID(8), newerCursor: MessageID(9))),
         ])
         await model.loadInitial()
+        XCTAssertNotNil(model.updates.value.pendingScroll)
 
         model.viewportDidChange(
             .init(

@@ -205,16 +205,19 @@
                 Button("Couldn’t refresh messages — Retry") {
                     Task { await model.retryNetworkHistory() }
                 }.padding()
-            case .saved(let saved):
-                let title: LocalizedStringKey =
-                    saved == .section ? "Older saved section" : "Load older saved messages"
-                Button(title) {
-                    model.browseSavedEdge(.older)
-                }
-                .buttonStyle(.bordered)
-                .background(.regularMaterial, in: Capsule())
-                .padding()
+            case .offlineBoundary:
+                edgeLabel("Connect to load older messages.")
+            case .beginning:
+                edgeLabel("Beginning of conversation")
             }
+        }
+
+        private func edgeLabel(_ title: LocalizedStringKey) -> some View {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(ChahuaTheme.secondaryText)
+                .padding()
+                .allowsHitTesting(false)
         }
 
         @ViewBuilder
@@ -223,15 +226,6 @@
                 ProgressView().controlSize(.small).padding()
             } else if model.state.newer == .failed {
                 Button("Couldn’t load newer messages — Retry") { model.retryNewer() }.padding()
-            } else if let saved = model.state.newerSaved {
-                let title: LocalizedStringKey =
-                    saved == .section ? "Newer saved section" : "Load newer saved messages"
-                Button(title) {
-                    model.browseSavedEdge(.newer)
-                }
-                .buttonStyle(.bordered)
-                .background(.regularMaterial, in: Capsule())
-                .padding()
             }
         }
 

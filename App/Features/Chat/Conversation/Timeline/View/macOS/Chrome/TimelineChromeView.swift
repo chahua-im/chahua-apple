@@ -28,10 +28,8 @@
         private let initialFailure = TimelineInitialFailurePanel()
         private let emptyHistory = timelineChromeLabel(style: .body)
         private let initialBanner = TimelineBannerView(cornerRadius: 0)
-        private let olderEdge = TimelineEdgeView(
-            title: AppLanguage.localized("Couldn’t load older messages — Retry"))
-        private let newerEdge = TimelineEdgeView(
-            title: AppLanguage.localized("Couldn’t load newer messages — Retry"))
+        private let olderEdge = TimelineEdgeView(frame: .zero)
+        private let newerEdge = TimelineEdgeView(frame: .zero)
         private let repositionProgress = TimelineLoadingPanel()
         private let repositionFailure = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
         private let historyStatus = TimelineBannerView(cornerRadius: ChahuaTheme.Radius.small)
@@ -62,9 +60,8 @@
                 guard let self, let model = self.model else { return }
                 switch model.state.olderEdgePresentation {
                 case .retryNetworkHistory: self.perform(.reconcile)
-                case .saved: model.browseSavedEdge(.older)
                 case .retryOlder: model.retryOlder()
-                case .none, .loading: break
+                case .none, .loading, .offlineBoundary, .beginning: break
                 }
             }
             newerEdge.onRetry = { [weak self] in self?.model?.retryNewer() }
@@ -131,20 +128,25 @@
                 initialBanner.hide()
             }
             switch showsTable ? state.olderEdgePresentation : .none {
-            case .none: olderEdge.update(.idle, savedTitle: nil)
-            case .loading: olderEdge.update(.loading, savedTitle: nil)
-            case .retryOlder: olderEdge.update(.failed, savedTitle: nil)
-            case .retryNetworkHistory:
+            case .none: olderEdge.update(.hidden)
+            case .loading: olderEdge.update(.loading)
+            case .retryOlder:
                 olderEdge.update(
-                    .idle, savedTitle: AppLanguage.localized("Couldn’t refresh messages — Retry"))
-            case .saved(let saved):
-                olderEdge.update(.idle, savedTitle: savedTitle(saved, side: .older))
+                    .retry(AppLanguage.localized("Couldn’t load older messages — Retry")))
+            case .retryNetworkHistory:
+                olderEdge.update(.retry(AppLanguage.localized("Couldn’t refresh messages — Retry")))
+            case .offlineBoundary:
+                olderEdge.update(.label(AppLanguage.localized("Connect to load older messages.")))
+            case .beginning:
+                olderEdge.update(.label(AppLanguage.localized("Beginning of conversation")))
             }
-            newerEdge.update(
-                showsTable ? state.newer : .idle,
-                savedTitle: showsTable
-                    ? savedTitle(
-                        state.newerSaved, side: .newer) : nil)
+            switch showsTable ? state.newer : .idle {
+            case .idle: newerEdge.update(.hidden)
+            case .loading: newerEdge.update(.loading)
+            case .failed:
+                newerEdge.update(
+                    .retry(AppLanguage.localized("Couldn’t load newer messages — Retry")))
+            }
             repositionProgress.setLoading(showsTable && isRepositioning)
             if showsTable, state.missingOfflineMessage != nil {
                 repositionFailure.configure(
@@ -199,18 +201,6 @@
                 busy: next.activityJumpInProgress || isRepositioning,
                 badgeColor: next.badgeColor)
             needsLayout = true
-        }
-
-        private func savedTitle(
-            _ edge: ConversationTimelineState.SavedEdge?, side: ConversationTimelineModel.EdgeSide
-        ) -> String? {
-            switch (side, edge) {
-            case (.older, .some(.more)): AppLanguage.localized("Load older saved messages")
-            case (.older, .some(.section)): AppLanguage.localized("Older saved section")
-            case (.newer, .some(.more)): AppLanguage.localized("Load newer saved messages")
-            case (.newer, .some(.section)): AppLanguage.localized("Newer saved section")
-            case (_, nil): nil
-            }
         }
 
         override func layout() {
@@ -507,40 +497,62 @@
 
     @MainActor
     private final class TimelineEdgeView: NSView {
+        enum Content {
+            case hidden
+            case loading
+            case retry(String)
+            case label(String)
+        }
+
         var onRetry: (() -> Void)?
         private let progress = NSProgressIndicator()
-        private let retryTitle: String
-        private let retry: TimelineChromeButton
+        private let retry = TimelineChromeButton(title: "")
+        private let label = timelineChromeLabel()
         override var isFlipped: Bool { true }
 
-        init(title: String) {
-            retryTitle = title
-            retry = TimelineChromeButton(title: title)
-            super.init(frame: .zero)
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
             progress.style = .spinning
             progress.controlSize = .small
             progress.isDisplayedWhenStopped = false
             progress.setAccessibilityLabel(AppLanguage.localized("Loading messages"))
             retry.font = .preferredFont(forTextStyle: .body)
             retry.onAction = { [weak self] in self?.onRetry?() }
+            label.textColor = .secondaryLabelColor
+            label.alignment = .center
             addSubview(progress)
             addSubview(retry)
+            addSubview(label)
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        func update(_ edge: ConversationTimelineState.Edge, savedTitle: String?) {
-            isHidden = edge == .idle && savedTitle == nil
-            progress.isHidden = edge != .loading
-            retry.isHidden = edge == .loading || (edge == .idle && savedTitle == nil)
-            retry.title = edge == .failed ? retryTitle : (savedTitle ?? "")
-            retry.setAccessibilityLabel(retry.title)
-            needsLayout = true
-            if edge == .loading {
+        func update(_ content: Content) {
+            isHidden = false
+            progress.isHidden = true
+            retry.isHidden = true
+            label.isHidden = true
+            progress.stopAnimation(nil)
+            switch content {
+            case .hidden:
+                isHidden = true
+            case .loading:
+                progress.isHidden = false
                 progress.startAnimation(nil)
-            } else {
-                progress.stopAnimation(nil)
+            case .retry(let title):
+                retry.isHidden = false
+                retry.title = title
+                retry.setAccessibilityLabel(title)
+            case .label(let text):
+                label.isHidden = false
+                label.stringValue = text
             }
+            needsLayout = true
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard !isHidden, !retry.isHidden else { return nil }
+            return super.hitTest(point)
         }
 
         override func layout() {
@@ -549,6 +561,7 @@
                 x: max(0, (bounds.width - 16) / 2), y: 16, width: 16, height: 16)
             let width = min(max(0, bounds.width - 32), retry.titleWidth)
             retry.frame = NSRect(x: (bounds.width - width) / 2, y: 12, width: width, height: 24)
+            label.frame = NSRect(x: 16, y: 12, width: max(0, bounds.width - 32), height: 24)
         }
     }
 
