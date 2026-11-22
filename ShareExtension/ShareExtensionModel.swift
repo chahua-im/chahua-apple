@@ -4,6 +4,7 @@ import Combine
 import CoreGraphics
 import Foundation
 import ImageIO
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -25,10 +26,15 @@ final class ShareExtensionModel: ObservableObject {
     @Published private(set) var media: [ShareMedia] = []
     @Published private(set) var contentSummary = "Preparing shared content…"
     @Published private(set) var errorMessage: String?
-    @Published private(set) var uploadProgress: Double = 0
     @Published private(set) var isUploading = false
-    @Published private(set) var uploadErrorMessage: String?
     @Published private(set) var compressionEnabled = true
+    @Published private(set) var isPreparingContent = false
+    @Published private(set) var isLoadingDestinations = false
+    @Published private(set) var payloadErrorMessage: String?
+    @Published private(set) var destinationErrorMessage: String?
+    @Published private(set) var isCheckingPermission = false
+    @Published private(set) var destinationPermissionMessage: String?
+    @Published private(set) var canWriteToDestination = false
 
     var hasImages: Bool {
         media.contains { $0.contentType.lowercased().hasPrefix("image/") }
@@ -39,11 +45,9 @@ final class ShareExtensionModel: ObservableObject {
     }
 
     var canSend: Bool {
-        state == .ready
-            && (lockedDestination ?? selectedDestination) != nil
-            && !isUploading
-            && uploadErrorMessage == nil
-            && (media.isEmpty || attachmentIDs.count == media.count)
+        state == .ready && contentAcquired && !isPreparingContent && payloadErrorMessage == nil
+            && selectedDestination != nil
+            && !isCheckingPermission && canWriteToDestination
             && (media.isEmpty
                 ? !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty : true)
     }
@@ -53,31 +57,63 @@ final class ShareExtensionModel: ObservableObject {
     }
 
     private let providers: [NSItemProvider]
-    private let temporaryFiles = ShareTemporaryFiles()
+    private var temporaryFiles = ShareTemporaryFiles()
     private var api: (any ChahuaAPIClient)?
-    private var maximumFileSize: Int64?
-    private var draft = ShareDraft()
     private var contentAcquired = false
     private var attachmentIDs: [String] = []
     private var pendingMessageRequest: ShareMessageRequest?
     private var sendID = UUID().uuidString
     private var generation = 0
     private var sendTask: Task<Void, Never>?
-    private var uploadTask: Task<Void, Never>?
-    private var uploadID: UUID?
-    private var authenticatedUserID: Int32?
+    private var permissionTask: Task<Void, Never>?
+    private var preparationTask: Task<Void, Never>?
+    private var sessionToken: String?
     private var lockedDestination: ShareDestination?
+    private var loadTask: Task<Void, Never>?
+    private var permissionID = UUID()
+    private let startupStartedAt = ContinuousClock.now
+    private var measuredMilestones: Set<String> = []
+    private static let startupLogger = Logger(
+        subsystem: "app.chahua.chat.share", category: "Startup")
 
     init(extensionItems: [NSExtensionItem]) {
         providers = extensionItems.flatMap { $0.attachments ?? [] }
     }
 
     func load() async {
+        loadTask?.cancel()
+        preparationTask?.cancel()
+        permissionTask?.cancel()
+        permissionID = UUID()
+        canWriteToDestination = false
+        destinationPermissionMessage = nil
+        isCheckingPermission = false
+        selectedDestination = nil
+        destinations = []
         generation += 1
         let currentGeneration = generation
         state = .preparing
         errorMessage = nil
-        uploadProgress = 0
+        payloadErrorMessage = nil
+        destinationErrorMessage = nil
+        isPreparingContent = !contentAcquired
+        isLoadingDestinations = true
+        let task = Task { await self.performLoad(generation: currentGeneration) }
+        loadTask = task
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard self?.generation == currentGeneration else { return }
+                self?.cancel()
+            }
+        }
+    }
+
+    private func performLoad(generation currentGeneration: Int) async {
+        defer {
+            if generation == currentGeneration { loadTask = nil }
+        }
         do {
             let token = try SharedSessionCredentials.loadToken()?.trimmingCharacters(
                 in: .whitespacesAndNewlines)
@@ -88,52 +124,23 @@ final class ShareExtensionModel: ObservableObject {
             }
             let api = ChahuaClient(
                 configuration: try ShareExtensionConfiguration.apiConfiguration, token: token)
-            let me = try await api.me()
-            try Task.checkCancellation()
-            guard generation == currentGeneration else { return }
-            if let authenticatedUserID, authenticatedUserID != me.uid {
+            if let sessionToken, sessionToken != token {
                 guard lockedDestination == nil else {
                     throw ShareExtensionError.accountChangedAfterSend
                 }
-                uploadTask?.cancel()
-                uploadTask = nil
-                uploadID = nil
-                isUploading = false
-                temporaryFiles.removeAll()
-                selectedDestination = nil
-                destinations = []
-                draft = ShareDraft()
-                media = []
-                caption = ""
-                contentAcquired = false
                 attachmentIDs = []
-                uploadErrorMessage = nil
                 pendingMessageRequest = nil
                 sendID = UUID().uuidString
             }
-            self.authenticatedUserID = me.uid
+            self.sessionToken = token
             self.api = api
 
-            async let loadedDestinations = Self.loadDestinations(using: api)
-            let config = try await api.attachmentConfig()
-            try Task.checkCancellation()
-            guard generation == currentGeneration else { return }
-            maximumFileSize = config.maxFileSizeBytes
-            if !contentAcquired {
-                try await acquireContent(maximumFileSize: config.maxFileSizeBytes)
-            }
-            let destinations = try await loadedDestinations
-            try Task.checkCancellation()
-            guard generation == currentGeneration else { return }
-            self.destinations = destinations
-            if destinations.isEmpty {
-                state = .failed
-                contentSummary = "No writable chats or threads are available."
-                errorMessage = "You don’t have a chat or thread that can receive this share."
-                return
-            }
+            // Normal requests validate the session. Do not add a /me startup round trip.
             state = .ready
-            ensureMediaUploaded()
+            async let payload: Void = preparePayload(using: api, generation: currentGeneration)
+            async let destinations: Void = loadDestinations(
+                using: api, generation: currentGeneration)
+            _ = await (payload, destinations)
         } catch is CancellationError {
             return
         } catch {
@@ -142,9 +149,45 @@ final class ShareExtensionModel: ObservableObject {
         }
     }
 
+    private func preparePayload(using api: any ChahuaAPIClient, generation currentGeneration: Int)
+        async
+    {
+        do {
+            if !contentAcquired {
+                try await acquireContent(generation: currentGeneration)
+            }
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { return }
+            isPreparingContent = false
+            recordStartupMilestone("payload_ready")
+        } catch is CancellationError {
+            return
+        } catch {
+            guard generation == currentGeneration else { return }
+            isPreparingContent = false
+            if Self.isAuthenticationError(error) {
+                present(error: error, whileLoading: true)
+            } else {
+                payloadErrorMessage = Self.message(for: error)
+            }
+        }
+    }
+
+    // The extension cannot observe the system share-sheet tap. This clock starts at model
+    // creation, the first extension entry point; use a system trace for pre-entry launch time.
+    func recordStartupMilestone(_ milestone: String) {
+        guard measuredMilestones.insert(milestone).inserted else { return }
+        let elapsed = startupStartedAt.duration(to: .now)
+        let milliseconds =
+            Double(elapsed.components.seconds) * 1_000
+            + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+        Self.startupLogger.notice(
+            "\(milestone, privacy: .public) elapsed_ms=\(milliseconds, privacy: .public)")
+    }
+
     func retry() {
         guard state != .sending, state != .sent else { return }
-        if pendingMessageRequest != nil {
+        if state == .ready, errorMessage != nil {
             send()
         } else {
             Task { await load() }
@@ -152,61 +195,116 @@ final class ShareExtensionModel: ObservableObject {
     }
 
     func selectDestination(_ destination: ShareDestination) {
-        guard canChangeDestination, destinations.contains(destination) else { return }
+        guard let api, canChangeDestination, destinations.contains(destination) else { return }
         selectedDestination = destination
-        ensureMediaUploaded()
+        canWriteToDestination = false
+        destinationPermissionMessage = nil
+        isCheckingPermission = true
+        permissionTask?.cancel()
+        let id = UUID()
+        permissionID = id
+        permissionTask = Task { [weak self] in
+            await self?.checkPermission(for: destination, using: api, permissionID: id)
+        }
     }
 
-    func retryUpload() {
-        guard state == .ready, !isUploading, !media.isEmpty, pendingMessageRequest == nil else {
-            return
+    func retryPermission() {
+        guard let selectedDestination else { return }
+        selectDestination(selectedDestination)
+    }
+
+    func retryPreparation() {
+        guard let api, state == .ready, !isPreparingContent else { return }
+        isPreparingContent = true
+        payloadErrorMessage = nil
+        let currentGeneration = generation
+        preparationTask = Task {
+            await self.preparePayload(using: api, generation: currentGeneration)
         }
-        ensureMediaUploaded()
+    }
+
+    private func checkPermission(
+        for destination: ShareDestination, using api: any ChahuaAPIClient, permissionID: UUID
+    ) async {
+        do {
+            let info = try await api.groupInfo(chatID: destination.chatID)
+            guard info.id == destination.chatID else { throw APIError.unexpectedResponse }
+            var canWrite = info.myRole != nil
+            if info.kind == .dm {
+                canWrite = false
+                if let peer = info.peer {
+                    let relationship = try await api.friendRelationship(peerUID: peer.uid)
+                    guard relationship.peerUid == peer.uid else {
+                        throw APIError.unexpectedResponse
+                    }
+                    canWrite = info.myRole != nil && relationship.canDm
+                }
+            } else if info.myRole != .admin {
+                // The subscribed-thread page establishes an existing thread. Main messages
+                // and replies still have different speaking rules.
+                canWrite =
+                    canWrite
+                    && (destination.threadID.isEmpty
+                        ? info.effectiveSpeakingMode?.allowsMainMessages == true
+                        : info.effectiveSpeakingMode?.allowsThreadReplies == true)
+            }
+            try Task.checkCancellation()
+            guard self.permissionID == permissionID else { return }
+            canWriteToDestination = canWrite
+            isCheckingPermission = false
+            destinationPermissionMessage = canWrite ? nil : "You can’t send to this destination."
+        } catch is CancellationError {
+            return
+        } catch {
+            guard self.permissionID == permissionID else { return }
+            isCheckingPermission = false
+            if Self.isAuthenticationError(error) {
+                present(error: error, whileLoading: false)
+            } else {
+                destinationPermissionMessage = Self.message(for: error)
+            }
+        }
     }
 
     func setCompressionEnabled(_ enabled: Bool) {
         guard canEditContent, enabled != compressionEnabled else { return }
         compressionEnabled = enabled
-        uploadTask?.cancel()
-        uploadTask = nil
-        uploadID = nil
         attachmentIDs = []
-        uploadProgress = 0
-        isUploading = false
-        uploadErrorMessage = nil
-        // draft.media and the previews keep the acquired provider originals for either setting.
-        ensureMediaUploaded()
+        // Keep acquired originals for either compression setting; upload only on Send.
     }
 
     func send() {
         guard let api, let destination = lockedDestination ?? selectedDestination, canSend else {
             return
         }
-        let request: ShareMessageRequest
-        if let pendingMessageRequest {
-            request = pendingMessageRequest
-        } else {
-            request = ShareMessageRequest(
-                destination: destination,
-                body: CreateMessageBody(
-                    messageType: .text,
-                    clientGeneratedId: sendID,
-                    message: Self.message(from: caption),
-                    attachmentIds: attachmentIDs
-                ))
-            pendingMessageRequest = request
-            lockedDestination = destination
-        }
+        lockedDestination = destination
         sendTask?.cancel()
         state = .sending
         errorMessage = nil
         sendTask = Task { [weak self] in
-            await self?.performSend(using: api, request: request)
+            await self?.performSend(using: api, destination: destination)
         }
     }
 
-    private func performSend(using api: any ChahuaAPIClient, request: ShareMessageRequest) async {
+    private func performSend(using api: any ChahuaAPIClient, destination: ShareDestination) async {
+        let currentGeneration = generation
         do {
+            let request: ShareMessageRequest
+            if let pendingMessageRequest {
+                request = pendingMessageRequest
+            } else {
+                try await uploadMedia(using: api, generation: currentGeneration)
+                try Task.checkCancellation()
+                guard generation == currentGeneration else { return }
+                request = ShareMessageRequest(
+                    destination: destination,
+                    body: CreateMessageBody(
+                        messageType: .text, clientGeneratedId: sendID,
+                        message: Self.message(from: caption), attachmentIds: attachmentIDs))
+                // Freeze the exact request only after upload succeeds. A retry after a lost
+                // response keeps the same body and idempotency identifier.
+                pendingMessageRequest = request
+            }
             switch request.destination.kind {
             case .chat:
                 _ = try await api.sendMessage(
@@ -215,25 +313,39 @@ final class ShareExtensionModel: ObservableObject {
                 _ = try await api.sendThreadMessage(
                     chatID: request.destination.chatID, threadID: threadID, body: request.body)
             }
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { return }
             state = .sent
             contentSummary = "Sent to \(request.destination.title)."
             errorMessage = nil
         } catch is CancellationError {
+            guard generation == currentGeneration else { return }
             state = .ready
+            if pendingMessageRequest == nil { lockedDestination = nil }
         } catch {
+            guard generation == currentGeneration else { return }
             state = .ready
-            errorMessage = Self.message(for: error)
+            if pendingMessageRequest == nil { lockedDestination = nil }
+            if Self.isAuthenticationError(error) {
+                present(error: error, whileLoading: false)
+            } else {
+                errorMessage = Self.message(for: error)
+            }
         }
     }
 
     func cancel() {
         generation += 1
         sendTask?.cancel()
-        uploadTask?.cancel()
-        uploadID = nil
+        permissionTask?.cancel()
+        preparationTask?.cancel()
+        permissionID = UUID()
+        loadTask?.cancel()
+        loadTask = nil
         isUploading = false
         sendTask = nil
-        uploadTask = nil
+        permissionTask = nil
+        preparationTask = nil
         temporaryFiles.removeAll()
     }
 
@@ -245,91 +357,63 @@ final class ShareExtensionModel: ObservableObject {
         temporaryFiles.removeAll()
     }
 
-    private func acquireContent(maximumFileSize: Int64) async throws {
-        temporaryFiles.removeAll()
-        let result = try await ShareContentAcquirer.acquire(
-            providers: providers, directory: temporaryFiles.directory,
-            maximumFileSize: maximumFileSize)
-        if result.draft.isEmpty {
-            throw ShareExtensionError.noSupportedContent(result.failures)
-        }
-        guard result.failures.isEmpty else {
-            throw ShareExtensionError.incompleteAcquisition(result.failures)
-        }
-        draft = result.draft
-        media = draft.media
-        caption = draft.messageText ?? ""
-        contentAcquired = true
-        contentSummary = draft.summary
-    }
-
-    private func ensureMediaUploaded() {
-        guard let api, !media.isEmpty, attachmentIDs.count != media.count, !isUploading else {
-            return
-        }
-        let id = UUID()
-        let media = media
-        let startIndex = attachmentIDs.count
-        let compressionEnabled = compressionEnabled
-        uploadTask?.cancel()
-        uploadID = id
-        isUploading = true
-        uploadErrorMessage = nil
-        uploadProgress = Double(startIndex) / Double(media.count)
-        uploadTask = Task { [weak self] in
-            await self?.uploadMedia(
-                using: api, media: media, compressionEnabled: compressionEnabled,
-                startingAt: startIndex, uploadID: id)
-        }
-    }
-
-    private func uploadMedia(
-        using api: any ChahuaAPIClient, media: [ShareMedia], compressionEnabled: Bool,
-        startingAt startIndex: Int,
-        uploadID: UUID
-    ) async {
+    private func acquireContent(generation currentGeneration: Int) async throws {
+        // Separate attempts own separate directories. A late provider callback from a cancelled
+        // attempt must not replace the new draft or delete its files.
+        let files = ShareTemporaryFiles()
         do {
-            guard let maximumFileSize else { throw ShareExtensionError.unavailable }
-            for index in startIndex..<media.count {
-                try Task.checkCancellation()
-                guard self.uploadID == uploadID else { return }
-                let item = try await ShareContentAcquirer.prepare(
-                    media[index], compressionEnabled: compressionEnabled)
-                try Task.checkCancellation()
-                guard self.uploadID == uploadID else { return }
-                guard item.byteCount <= maximumFileSize else {
-                    throw ShareExtensionError.fileTooLarge(maximumFileSize)
-                }
-                let allocation = try await api.requestAttachmentUpload(
-                    fileName: item.fileName, contentType: item.contentType, purpose: .media,
-                    size: item.byteCount,
-                    width: item.width, height: item.height, order: index)
-                try Task.checkCancellation()
-                guard self.uploadID == uploadID else { return }
-                try await ShareAttachmentUploader.upload(file: item.url, allocation: allocation) {
-                    [weak self] progress in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.uploadID == uploadID else { return }
-                        self.uploadProgress = (Double(index) + progress) / Double(media.count)
-                    }
-                }
-                try Task.checkCancellation()
-                guard self.uploadID == uploadID else { return }
-                attachmentIDs.append(allocation.attachmentId)
+            let result = try await ShareContentAcquirer.acquire(
+                providers: providers, directory: files.directory, maximumFileSize: .max)
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { throw CancellationError() }
+            if result.draft.isEmpty {
+                throw ShareExtensionError.noSupportedContent(result.failures)
             }
-            guard self.uploadID == uploadID else { return }
-            uploadProgress = 1
-            isUploading = false
-            uploadTask = nil
-        } catch is CancellationError {
-            guard self.uploadID == uploadID else { return }
-            isUploading = false
-            uploadTask = nil
+            guard result.failures.isEmpty else {
+                throw ShareExtensionError.incompleteAcquisition(result.failures)
+            }
+            temporaryFiles.removeAll()
+            temporaryFiles = files
+            let draft = result.draft
+            media = draft.media
+            // Preserve caption edits made while cloud-backed media was loading.
+            if let sharedText = draft.messageText {
+                caption = caption.isEmpty ? sharedText : sharedText + "\n" + caption
+            }
+            contentAcquired = true
+            contentSummary = draft.summary
         } catch {
-            guard self.uploadID == uploadID else { return }
-            isUploading = false
-            uploadTask = nil
-            uploadErrorMessage = Self.message(for: error)
+            files.removeAll()
+            throw error
+        }
+    }
+
+    private func uploadMedia(using api: any ChahuaAPIClient, generation currentGeneration: Int)
+        async throws
+    {
+        guard !media.isEmpty, attachmentIDs.count != media.count else { return }
+        isUploading = true
+        defer { isUploading = false }
+        let maximumFileSize = try await api.attachmentConfig().maxFileSizeBytes
+        for index in attachmentIDs.count..<media.count {
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { throw CancellationError() }
+            let item = try await ShareContentAcquirer.prepare(
+                media[index], compressionEnabled: compressionEnabled)
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { throw CancellationError() }
+            guard item.byteCount <= maximumFileSize else {
+                throw ShareExtensionError.fileTooLarge(maximumFileSize)
+            }
+            let allocation = try await api.requestAttachmentUpload(
+                fileName: item.fileName, contentType: item.contentType, purpose: .media,
+                size: item.byteCount, width: item.width, height: item.height, order: index)
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { throw CancellationError() }
+            try await ShareAttachmentUploader.upload(file: item.url, allocation: allocation)
+            try Task.checkCancellation()
+            guard generation == currentGeneration else { throw CancellationError() }
+            attachmentIDs.append(allocation.attachmentId)
         }
     }
 
@@ -373,102 +457,91 @@ final class ShareExtensionModel: ObservableObject {
         return "Chahua couldn’t complete the request. Retry this share."
     }
 
-    private static func loadDestinations(using api: any ChahuaAPIClient) async throws
-        -> [ShareDestination]
+    private func loadDestinations(using api: any ChahuaAPIClient, generation currentGeneration: Int)
+        async
     {
-        async let chats = allChats(using: api)
-        async let threads = allThreads(using: api)
-        let (chatItems, threadItems) = try await (chats, threads)
-        let chatByID = Dictionary(uniqueKeysWithValues: chatItems.map { ($0.id, $0) })
-        let chatIDs = Set(chatItems.map(\.id)).union(threadItems.map(\.chatId))
-        var access: [String: ShareChatAccess] = [:]
-        for id in chatIDs {
-            let info = try await api.groupInfo(chatID: id)
-            guard info.id == id else { throw APIError.unexpectedResponse }
-            var canWrite = info.myRole != nil
-            if info.kind == .dm {
-                canWrite = false
-                if let peer = info.peer {
-                    let relationship = try await api.friendRelationship(peerUID: peer.uid)
-                    guard relationship.peerUid == peer.uid else {
-                        throw APIError.unexpectedResponse
-                    }
-                    canWrite = info.myRole != nil && relationship.canDm
+        // One recent page from each list. Do not walk cursors or preflight every chat.
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                do {
+                    let page = try await api.listChats(query: .init(limit: 20, archived: false))
+                    try Task.checkCancellation()
+                    guard self.generation == currentGeneration, self.state == .ready else { return }
+                    self.destinations.append(
+                        contentsOf: page.chats.map { chat in
+                            let title =
+                                chat.kind == .dm
+                                ? chat.peer?.username ?? chat.name ?? "Chat" : chat.name ?? "Chat"
+                            return .chat(
+                                chatID: chat.id, title: title,
+                                subtitle: chat.lastMessage.map {
+                                    Self.previewText($0, fallback: "Message")
+                                },
+                                activityDate: chat.lastMessageAt ?? .distantPast,
+                                avatarURL: (chat.kind == .dm ? chat.peer?.avatarUrl : chat.avatar)
+                                    .flatMap(URL.init(string:)),
+                                avatarName: title)
+                        })
+                    self.destinations.sort(by: Self.destinationOrder)
+                } catch {
+                    self.presentDestinationError(error, generation: currentGeneration)
                 }
             }
-            let item = chatByID[id]
-            let peer = info.peer ?? item?.peer
-            let title =
-                item?.kind == .dm || info.kind == .dm
-                ? peer?.username ?? item?.name ?? info.name ?? "Chat"
-                : item?.name ?? info.name ?? "Chat"
-            let avatarURL = (info.kind == .dm ? peer?.avatarUrl : info.avatar ?? item?.avatar)
-                .flatMap(URL.init(string:))
-            access[id] = ShareChatAccess(
-                canWrite: canWrite, title: title, kind: info.kind, avatarURL: avatarURL,
-                avatarName: title)
+            group.addTask { @MainActor in
+                do {
+                    let page = try await api.listThreads(query: .init(limit: 20, archived: false))
+                    try Task.checkCancellation()
+                    guard self.generation == currentGeneration, self.state == .ready else { return }
+                    self.destinations.append(
+                        contentsOf: page.threads.map { thread in
+                            let root = thread.threadRootMessage
+                            let rootName = root.sender.name?.trimmingCharacters(
+                                in: .whitespacesAndNewlines)
+                            let badge: ShareDestination.AvatarBadge? =
+                                thread.chatKind == .dm
+                                ? .thread
+                                : rootName?.isEmpty == false
+                                    ? .person(
+                                        url: root.sender.avatarUrl.flatMap(URL.init(string:)),
+                                        name: rootName!)
+                                    : nil
+                            let title =
+                                thread.chatKind == .dm
+                                ? thread.peer?.username ?? thread.chatName : thread.chatName
+                            return .thread(
+                                chatID: thread.chatId, threadID: root.id.description,
+                                title: Self.previewText(root, fallback: "Message"),
+                                subtitle: Self.previewText(
+                                    thread.lastReply ?? root, fallback: "Message"),
+                                activityDate: thread.lastReplyAt,
+                                avatarURL: (thread.chatKind == .dm
+                                    ? thread.peer?.avatarUrl : thread.chatAvatar)
+                                    .flatMap(URL.init(string:)),
+                                avatarName: title, avatarBadge: badge)
+                        })
+                    self.destinations.sort(by: Self.destinationOrder)
+                } catch {
+                    self.presentDestinationError(error, generation: currentGeneration)
+                }
+            }
         }
+        guard generation == currentGeneration else { return }
+        isLoadingDestinations = false
+    }
 
-        var destinations: [ShareDestination] = []
-        destinations.reserveCapacity(chatItems.count + threadItems.count)
-        for chat in chatItems where access[chat.id]?.canWrite == true {
-            let detail = access[chat.id]!
-            destinations.append(
-                .chat(
-                    chatID: chat.id, title: detail.title,
-                    subtitle: chat.lastMessage.map { Self.previewText($0, fallback: "Message") },
-                    activityDate: chat.lastMessageAt ?? .distantPast,
-                    avatarURL: detail.avatarURL, avatarName: detail.avatarName))
-        }
-        for thread in threadItems where access[thread.chatId]?.canWrite == true {
-            let detail = access[thread.chatId]!
-            let root = thread.threadRootMessage
-            let rootName = root.sender.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let badge: ShareDestination.AvatarBadge? =
-                detail.kind == .dm
-                ? .thread
-                : rootName?.isEmpty == false
-                    ? .person(
-                        url: root.sender.avatarUrl.flatMap(URL.init(string:)), name: rootName!)
-                    : nil
-            destinations.append(
-                .thread(
-                    chatID: thread.chatId, threadID: root.id.description,
-                    title: Self.previewText(root, fallback: "Message"),
-                    subtitle: Self.previewText(thread.lastReply ?? root, fallback: "Message"),
-                    activityDate: thread.lastReplyAt,
-                    avatarURL: detail.avatarURL, avatarName: detail.avatarName, avatarBadge: badge))
-        }
-        return destinations.sorted {
-            if $0.activityDate != $1.activityDate { return $0.activityDate > $1.activityDate }
-            if $0.chatID != $1.chatID { return $0.chatID < $1.chatID }
-            return $0.threadID < $1.threadID
+    private func presentDestinationError(_ error: Error, generation currentGeneration: Int) {
+        guard !(error is CancellationError), generation == currentGeneration else { return }
+        if Self.isAuthenticationError(error) {
+            present(error: error, whileLoading: true)
+        } else {
+            destinationErrorMessage = Self.message(for: error)
         }
     }
 
-    private static func allChats(using api: any ChahuaAPIClient) async throws -> [ChatListItem] {
-        var chats: [ChatListItem] = []
-        var after: String?
-        repeat {
-            let page = try await api.listChats(
-                query: .init(limit: 100, after: after, archived: false))
-            chats.append(contentsOf: page.chats)
-            after = page.nextCursor
-        } while after != nil
-        return chats
-    }
-
-    private static func allThreads(using api: any ChahuaAPIClient) async throws -> [ThreadListItem]
-    {
-        var threads: [ThreadListItem] = []
-        var before: String?
-        repeat {
-            let page = try await api.listThreads(
-                query: .init(limit: 100, before: before, archived: false))
-            threads.append(contentsOf: page.threads)
-            before = page.nextCursor
-        } while before != nil
-        return threads
+    private static func destinationOrder(_ lhs: ShareDestination, _ rhs: ShareDestination) -> Bool {
+        if lhs.activityDate != rhs.activityDate { return lhs.activityDate > rhs.activityDate }
+        if lhs.chatID != rhs.chatID { return lhs.chatID < rhs.chatID }
+        return lhs.threadID < rhs.threadID
     }
     private static func previewText(_ preview: MessagePreview, fallback: String = "") -> String {
         let rendered = MessagePreviewRenderer.render(
@@ -538,14 +611,6 @@ struct ShareDestination: Identifiable, Hashable {
 private struct ShareMessageRequest {
     let destination: ShareDestination
     let body: CreateMessageBody
-}
-
-private struct ShareChatAccess {
-    let canWrite: Bool
-    let title: String
-    let kind: ChatKind
-    let avatarURL: URL?
-    let avatarName: String
 }
 
 nonisolated private struct ShareDraft: Sendable {
@@ -656,8 +721,7 @@ nonisolated private enum ShareContentAcquirer {
                     $0.conforms(to: .image) || $0.conforms(to: .movie)
                 })
         else { return nil }
-        // Image limits apply after preparation; the existing file-backed copy retains originals.
-        // Videos still enforce the server limit during acquisition.
+        // Retain provider originals here; the server limit is checked after preparation on Send.
         let copyLimit = type.conforms(to: .image) ? Int64.max : maximumFileSize
         let copied = try await copyFileRepresentation(
             from: provider, type: type, directory: directory, maximumFileSize: copyLimit)
@@ -846,10 +910,7 @@ nonisolated private enum ShareContentAcquirer {
 }
 
 private enum ShareAttachmentUploader {
-    static func upload(
-        file: URL, allocation: OutgoingUploadAllocation,
-        onProgress: @escaping @Sendable (Double) -> Void
-    ) async throws {
+    static func upload(file: URL, allocation: OutgoingUploadAllocation) async throws {
         let url = allocation.uploadURL
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil,
             url.user == nil, url.password == nil,
@@ -872,8 +933,7 @@ private enum ShareAttachmentUploader {
         configuration.timeoutIntervalForResource = 900
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
-        let delegate = ShareUploadProgress(onProgress: onProgress)
-        onProgress(0)
+        let delegate = ShareUploadDelegate()
         let (_, response) = try await session.upload(
             for: request, fromFile: file, delegate: delegate)
         try Task.checkCancellation()
@@ -883,24 +943,10 @@ private enum ShareAttachmentUploader {
         guard (200..<300).contains(response.statusCode) else {
             throw ShareExtensionError.uploadStatus(response.statusCode)
         }
-        onProgress(1)
     }
 }
 
-private final class ShareUploadProgress: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    let onProgress: @Sendable (Double) -> Void
-
-    init(onProgress: @escaping @Sendable (Double) -> Void) {
-        self.onProgress = onProgress
-    }
-
-    func urlSession(
-        _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
-        totalBytesSent: Int64, totalBytesExpectedToSend: Int64
-    ) {
-        guard totalBytesExpectedToSend > 0 else { return }
-        onProgress(min(1, max(0, Double(totalBytesSent) / Double(totalBytesExpectedToSend))))
-    }
+private final class ShareUploadDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
 
     func urlSession(
         _ session: URLSession, task: URLSessionTask,

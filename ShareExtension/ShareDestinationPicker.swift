@@ -7,10 +7,7 @@ struct ShareExtensionRootView: View {
     let onComplete: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @FocusState private var isSearchFocused: Bool
     @FocusState private var isCaptionFocused: Bool
-    @State private var showsSearch = false
-    @State private var searchText = ""
     @ScaledMetric(relativeTo: .body) private var previewHeight: CGFloat = 152
 
     var body: some View {
@@ -42,6 +39,14 @@ struct ShareExtensionRootView: View {
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled, model.state == .sent else { return }
             onComplete()
+        }
+        .onChange(of: model.destinations.isEmpty, initial: true) { _, isEmpty in
+            if !isEmpty, model.state == .ready {
+                model.recordStartupMilestone("picker_usable")
+            }
+        }
+        .onChange(of: model.canSend, initial: true) { _, canSend in
+            if canSend { model.recordStartupMilestone("send_ready") }
         }
     }
 
@@ -84,24 +89,7 @@ struct ShareExtensionRootView: View {
 
             Spacer(minLength: 0)
 
-            Button {
-                isCaptionFocused = false
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                    showsSearch.toggle()
-                    if !showsSearch { searchText = "" }
-                    if !showsSearch { isSearchFocused = false }
-                }
-                if showsSearch {
-                    isSearchFocused = true
-                }
-            } label: {
-                Image(systemName: showsSearch ? "xmark.circle.fill" : "magnifyingglass")
-                    .font(.body.weight(.semibold))
-                    .frame(width: 36, height: 36)
-            }
-            .buttonStyle(.plain)
-            .disabled(!model.canChangeDestination)
-            .accessibilityLabel(showsSearch ? "Hide search" : "Search destinations")
+            // Restore search when it can find destinations beyond the first recent page.
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)
@@ -147,7 +135,7 @@ struct ShareExtensionRootView: View {
                 .simultaneousGesture(TapGesture().onEnded { dismissInput() })
             } else {
                 ShareSharedContentPreview(media: model.media, message: model.caption)
-                    .frame(height: isSearchFocused ? 72 : previewHeight)
+                    .frame(height: previewHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
@@ -179,22 +167,6 @@ struct ShareExtensionRootView: View {
 
     private var destinationPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if showsSearch {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search chats and threads", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .focused($isSearchFocused)
-                        .submitLabel(.done)
-                        .accessibilityLabel("Search chats and threads")
-                        .onSubmit { isSearchFocused = false }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.horizontal, 16)
-            }
 
             Text("Recent chats and threads")
                 .font(.footnote.weight(.semibold))
@@ -202,10 +174,18 @@ struct ShareExtensionRootView: View {
                 .padding(.horizontal, 20)
                 .onTapGesture(perform: dismissInput)
 
-            if matchingDestinations.isEmpty {
-                ContentUnavailableView.search(text: searchText)
+            if model.destinations.isEmpty {
+                if model.isLoadingDestinations {
+                    ProgressView("Loading recent destinations…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if model.destinationErrorMessage == nil {
+                    ContentUnavailableView(
+                        "No recent destinations", systemImage: "bubble.left.and.bubble.right",
+                        description: Text("Open Chahua to find another chat or thread.")
+                    )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal, 20)
+                }
             } else {
                 ScrollView {
                     LazyVGrid(
@@ -215,7 +195,7 @@ struct ShareExtensionRootView: View {
                         alignment: .center,
                         spacing: 14
                     ) {
-                        ForEach(matchingDestinations) { destination in
+                        ForEach(model.destinations) { destination in
                             destinationTile(destination)
                         }
                     }
@@ -225,6 +205,10 @@ struct ShareExtensionRootView: View {
                 .scrollBounceBehavior(.basedOnSize)
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
+            }
+
+            if let error = model.destinationErrorMessage {
+                retryStatus(error, retryTitle: "Retry destinations", action: model.retry)
             }
         }
     }
@@ -252,19 +236,31 @@ struct ShareExtensionRootView: View {
 
     @ViewBuilder
     private var transferStatus: some View {
-        if model.isUploading {
-            HStack(spacing: 10) {
-                ProgressView(value: model.uploadProgress)
-                    .frame(maxWidth: .infinity)
-                Text("Uploading media…")
+        if model.isPreparingContent {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Preparing shared content…")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-        } else if let uploadError = model.uploadErrorMessage {
-            retryStatus(uploadError, retryTitle: "Retry upload", action: model.retryUpload)
-        } else if let error = model.errorMessage {
+        } else if let error = model.payloadErrorMessage {
+            retryStatus(error, retryTitle: "Retry preparation", action: model.retryPreparation)
+        }
+        if model.isCheckingPermission {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Checking permission…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        } else if let message = model.destinationPermissionMessage {
+            retryStatus(message, retryTitle: "Check again", action: model.retryPermission)
+        }
+        if let error = model.errorMessage {
             retryStatus(error, retryTitle: "Retry Send", action: model.retry)
         }
     }
@@ -316,9 +312,8 @@ struct ShareExtensionRootView: View {
 
     private var failure: some View {
         unavailableState(
-            title: isEmptyDestinationState ? "No destinations available" : "Couldn’t prepare share",
-            systemImage: isEmptyDestinationState
-                ? "bubble.left.and.bubble.right" : "exclamationmark.triangle",
+            title: "Couldn’t prepare share",
+            systemImage: "exclamationmark.triangle",
             description: model.errorMessage ?? model.contentSummary,
             actionTitle: "Retry",
             action: model.retry
@@ -331,10 +326,14 @@ struct ShareExtensionRootView: View {
                 .frame(width: 64, height: 64)
             Text("Sending…")
                 .font(.title3.weight(.semibold))
-            Text("Your share is on its way to \(selectedDestinationTitle).")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            Text(
+                model.isUploading
+                    ? "Uploading media…"
+                    : "Your share is on its way to \(selectedDestinationTitle)."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
         }
         .padding(24)
         .accessibilityElement(children: .combine)
@@ -365,19 +364,6 @@ struct ShareExtensionRootView: View {
                 .regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous)
             )
             .accessibilityHint("Cancels this share")
-    }
-
-    private var matchingDestinations: [ShareDestination] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return model.destinations }
-        return model.destinations.filter { destination in
-            destination.title.localizedCaseInsensitiveContains(query)
-                || (destination.subtitle?.localizedCaseInsensitiveContains(query) ?? false)
-        }
-    }
-
-    private var isEmptyDestinationState: Bool {
-        model.errorMessage?.contains("don’t have a chat or thread") == true
     }
 
     private var selectedDestinationTitle: String {
@@ -480,7 +466,6 @@ struct ShareExtensionRootView: View {
 
     private func dismissInput() {
         isCaptionFocused = false
-        isSearchFocused = false
     }
 
     private func mainCardHeight(in availableHeight: CGFloat) -> CGFloat {
