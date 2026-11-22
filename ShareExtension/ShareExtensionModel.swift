@@ -57,6 +57,7 @@ final class ShareExtensionModel: ObservableObject {
     }
 
     private let providers: [NSItemProvider]
+    private let makeSession: () throws -> (token: String, api: any ChahuaAPIClient)?
     private var temporaryFiles = ShareTemporaryFiles()
     private var api: (any ChahuaAPIClient)?
     private var contentAcquired = false
@@ -70,18 +71,34 @@ final class ShareExtensionModel: ObservableObject {
     private var sessionToken: String?
     private var lockedDestination: ShareDestination?
     private var loadTask: Task<Void, Never>?
+    private var destinationTask: Task<Void, Never>?
     private var permissionID = UUID()
     private let startupStartedAt = ContinuousClock.now
     private var measuredMilestones: Set<String> = []
     private static let startupLogger = Logger(
         subsystem: "app.chahua.chat.share", category: "Startup")
 
-    init(extensionItems: [NSExtensionItem]) {
+    init(
+        extensionItems: [NSExtensionItem],
+        makeSession: @escaping () throws -> (token: String, api: any ChahuaAPIClient)? = {
+            guard
+                let token = try SharedSessionCredentials.loadToken()?.trimmingCharacters(
+                    in: .whitespacesAndNewlines), !token.isEmpty
+            else { return nil }
+            return (
+                token,
+                ChahuaClient(
+                    configuration: try ShareExtensionConfiguration.apiConfiguration, token: token)
+            )
+        }
+    ) {
         providers = extensionItems.flatMap { $0.attachments ?? [] }
+        self.makeSession = makeSession
     }
 
     func load() async {
         loadTask?.cancel()
+        destinationTask?.cancel()
         preparationTask?.cancel()
         permissionTask?.cancel()
         permissionID = UUID()
@@ -115,15 +132,11 @@ final class ShareExtensionModel: ObservableObject {
             if generation == currentGeneration { loadTask = nil }
         }
         do {
-            let token = try SharedSessionCredentials.loadToken()?.trimmingCharacters(
-                in: .whitespacesAndNewlines)
-            guard let token, !token.isEmpty else {
+            guard let (token, api) = try makeSession() else {
                 state = .missingAuthentication
                 contentSummary = "Sign in to Chahua to share this content."
                 return
             }
-            let api = ChahuaClient(
-                configuration: try ShareExtensionConfiguration.apiConfiguration, token: token)
             if let sessionToken, sessionToken != token {
                 guard lockedDestination == nil else {
                     throw ShareExtensionError.accountChangedAfterSend
@@ -185,12 +198,24 @@ final class ShareExtensionModel: ObservableObject {
             "\(milestone, privacy: .public) elapsed_ms=\(milliseconds, privacy: .public)")
     }
 
-    func retry() {
-        guard state != .sending, state != .sent else { return }
-        if state == .ready, errorMessage != nil {
-            send()
-        } else {
-            Task { await load() }
+    func retryStartup() {
+        guard state == .failed || state == .missingAuthentication else { return }
+        Task { await load() }
+    }
+
+    func retrySend() {
+        guard state == .ready, errorMessage != nil else { return }
+        send()
+    }
+
+    func retryDestinations() {
+        guard let api, state == .ready, !isLoadingDestinations else { return }
+        isLoadingDestinations = true
+        destinationErrorMessage = nil
+        let currentGeneration = generation
+        // Reload only lists. A failed send keeps its payload, recipient and idempotency key.
+        destinationTask = Task {
+            await self.loadDestinations(using: api, generation: currentGeneration)
         }
     }
 
@@ -341,6 +366,8 @@ final class ShareExtensionModel: ObservableObject {
         preparationTask?.cancel()
         permissionID = UUID()
         loadTask?.cancel()
+        destinationTask?.cancel()
+        destinationTask = nil
         loadTask = nil
         isUploading = false
         sendTask = nil
@@ -467,6 +494,7 @@ final class ShareExtensionModel: ObservableObject {
                     let page = try await api.listChats(query: .init(limit: 20, archived: false))
                     try Task.checkCancellation()
                     guard self.generation == currentGeneration, self.state == .ready else { return }
+                    self.destinations.removeAll { $0.kind == .chat }
                     self.destinations.append(
                         contentsOf: page.chats.map { chat in
                             let title =
@@ -492,6 +520,10 @@ final class ShareExtensionModel: ObservableObject {
                     let page = try await api.listThreads(query: .init(limit: 20, archived: false))
                     try Task.checkCancellation()
                     guard self.generation == currentGeneration, self.state == .ready else { return }
+                    self.destinations.removeAll {
+                        if case .thread = $0.kind { return true }
+                        return false
+                    }
                     self.destinations.append(
                         contentsOf: page.threads.map { thread in
                             let root = thread.threadRootMessage

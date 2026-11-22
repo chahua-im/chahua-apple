@@ -5425,6 +5425,9 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
     private var inviteCreateBodies: [CreateGroupInviteBody] = []
     private var pendingInviteCreates: [Int: CheckedContinuation<GroupInvite, Error>] = [:]
     private var inviteCreateObservers: [Int: CheckedContinuation<Void, Never>] = [:]
+    private(set) var sentMessageRequests: [(chatID: String, body: CreateMessageBody)] = []
+    private(set) var attachmentConfigRequests = 0
+    private(set) var attachmentUploadRequests = 0
 
     func updateGroup(chatID: String, body: UpdateGroupBody) async throws -> GroupInfoResponse {
         let index = groupUpdateBodies.count
@@ -6003,11 +6006,17 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
         }
         return try await authenticate(candidateJWT: "")
     }
-    func attachmentConfig() async throws -> AttachmentConfigResponse { throw APIError.unavailable }
+    func attachmentConfig() async throws -> AttachmentConfigResponse {
+        attachmentConfigRequests += 1
+        throw APIError.unavailable
+    }
     func requestAttachmentUpload(
         fileName: String, contentType: String, purpose: AttachmentUploadPurpose,
         size: Int64, width: Int, height: Int, order: Int
-    ) async throws -> OutgoingUploadAllocation { throw APIError.unavailable }
+    ) async throws -> OutgoingUploadAllocation {
+        attachmentUploadRequests += 1
+        throw APIError.unavailable
+    }
     func groupInfo(chatID: String) async throws -> GroupInfoResponse {
         if suspendsNextPolicyGroupInfo {
             suspendsNextPolicyGroupInfo = false
@@ -6253,6 +6262,7 @@ actor FakeChatAPI: ChahuaAPIClient, SessionAuthenticating, RealtimeConnectionPro
     }
 
     func sendMessage(chatID: String, body: CreateMessageBody) async throws -> MessageResponse {
+        sentMessageRequests.append((chatID, body))
         throw APIError.unavailable
     }
 

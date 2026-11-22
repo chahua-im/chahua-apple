@@ -208,7 +208,8 @@ struct ShareExtensionRootView: View {
             }
 
             if let error = model.destinationErrorMessage {
-                retryStatus(error, retryTitle: "Retry destinations", action: model.retry)
+                retryStatus(
+                    error, retryTitle: "Retry destinations", action: model.retryDestinations)
             }
         }
     }
@@ -261,7 +262,7 @@ struct ShareExtensionRootView: View {
             retryStatus(message, retryTitle: "Check again", action: model.retryPermission)
         }
         if let error = model.errorMessage {
-            retryStatus(error, retryTitle: "Retry Send", action: model.retry)
+            retryStatus(error, retryTitle: "Retry Send", action: model.retrySend)
         }
     }
 
@@ -306,7 +307,7 @@ struct ShareExtensionRootView: View {
             systemImage: "person.crop.circle.badge.exclamationmark",
             description: model.errorMessage ?? model.contentSummary,
             actionTitle: "Retry",
-            action: model.retry
+            action: model.retryStartup
         )
     }
 
@@ -316,7 +317,7 @@ struct ShareExtensionRootView: View {
             systemImage: "exclamationmark.triangle",
             description: model.errorMessage ?? model.contentSummary,
             actionTitle: "Retry",
-            action: model.retry
+            action: model.retryStartup
         )
     }
 
