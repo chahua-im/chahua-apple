@@ -47,6 +47,12 @@ Third-party code that must live in-repo (patched forks, non-SPM C/C++, binary xc
 - Document each new or retained platform-specific UI exception near its implementation: the requirement, the SwiftUI limitation that necessitates the exception, and why the native approach is needed. Do not add custom native UI solely to reproduce behavior SwiftUI already provides.
 - When a control needs different iOS and macOS implementations, keep a small shared wrapper that selects the platform implementation. Put each implementation in its platform subfolder rather than wrapping large view bodies in `#if os(...)`.
 
+### GitHub issue closure
+
+- When a change fixes a GitHub issue, include a closing keyword and the issue reference in the pull request description or commit message, for example `Fixes #23` or `Closes chahua-im/chahua-apple#23`. GitHub closes the issue when the fix merges into the default branch (`main`).
+- Use a closing keyword only when the change fully resolves the issue. Use `Refs #23` for partial work.
+- Do not use `Fixes issue://23`: GitHub does not recognize that reference for automatic closure.
+
 ## Design — circular controls and chips
 
 - Icon-only floating action buttons, including Jump to Bottom, must be perfect circles: equal width and height with a circular outline, background, and clipping shape. Do not substitute a squircle or a continuous rounded rectangle.

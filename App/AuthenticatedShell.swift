@@ -88,6 +88,11 @@ struct AuthenticatedShell: View {
         case thread(ChatListItem, MessageResponse)
     }
 
+    private enum DetailRoute: Hashable {
+        case thread(ConversationKey)
+        case group(GroupRoute)
+    }
+
     private var isBrowsingArchived: Bool { listPath.first == .archive }
 
     private var isBrowsingFriendRequests: Bool {
@@ -532,64 +537,16 @@ struct AuthenticatedShell: View {
                 isPresented: inspectorPresentation,
                 freezesPresentation: groupExitGuard.isProtected
             ) {
-                NavigationStack(path: $groupPath) {
-                    Group {
-                        if let key = threadPath.last {
-                            threadDestination(key)
-                        } else {
-                            detailContent
-                        }
-                    }
-                    .modifier(
-                        ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
-                            ChatFloatingHeader(
-                                title: threadPath.isEmpty
-                                    ? selectedTitle
-                                    : openedThread?.title ?? AppLanguage.localized("Thread"),
-                                subtitle: threadPath.isEmpty ? headerSubtitle : nil,
-                                onBack: !threadPath.isEmpty
-                                    ? popThread : isSplit ? nil : { selectConversation(nil) },
-                                onClose: nil,
-                                onOpenInfo: isSplit && selectedInfoChat != nil
-                                    ? {
-                                        setInspectorPresented(!showsInspector)
-                                    }
-                                    : infoAction,
-                                onSearch: searchAction,
-                                notificationChat: headerNotificationChat,
-                                notificationDefaults: chatStore.state.notificationDefaults,
-                                onUpdateNotifications: { chat, request in
-                                    Task { await updateHeaderNotifications(chat, request: request) }
-                                },
-                                isUpdatingMute: isUpdatingHeaderMute,
-                                isInspectorPresented: showsInspector,
-                                onForward: forwardThreadAction?.conversation == headerThreadKey
-                                    ? forwardThreadAction?.perform : nil,
-                                trailingIsControl: headerThreadKey != nil,
-                                backBadgeCount: backBadgeCount,
-                                backBadgeShowsMessageCount:
-                                    chatStore.state.mainUnread?.showUnreadMessageCount ?? false,
-                                leadingAvatar: headerLeading(for: headerThreadKey)
-                            ) {
-                                headerTrailing(for: headerThreadKey)
+                NavigationStack(path: detailPath) {
+                    splitConversationSurface(thread: nil, isSplit: isSplit)
+                        .navigationDestination(for: DetailRoute.self) { route in
+                            switch route {
+                            case .thread(let key):
+                                splitConversationSurface(thread: key, isSplit: isSplit)
+                            case .group(let route):
+                                groupDestination(route)
                             }
-                            .presenceScope(
-                                ChatPresenceDisplay.scope(
-                                    for: threadPath.isEmpty ? selectedInfoChat : nil),
-                                store: chatStore
-                            )
-                            .padding(.horizontal, chatHeaderHorizontalInset)
-                            #if os(iOS)
-                                .padding(.vertical, 12)
-                            #endif
                         }
-                    )
-                    #if os(iOS)
-                        .toolbar(.hidden, for: .navigationBar)
-                    #endif
-                    .navigationDestination(for: GroupRoute.self) { route in
-                        groupDestination(route)
-                    }
                 }
             } inspector: {
                 inspectorContent
@@ -599,6 +556,87 @@ struct AuthenticatedShell: View {
                 if !path.isEmpty { showsInspector = false }
             }
         }
+    }
+
+    // Threads are destinations, not replacements for the root detail. The native
+    // stack retains each timeline controller, including its measured scroll geometry,
+    // just as it does when opening forwarded records.
+    private var detailPath: Binding<[DetailRoute]> {
+        Binding(
+            get: {
+                threadPath.map(DetailRoute.thread)
+                    + groupPath.map(DetailRoute.group)
+            },
+            set: { path in
+                requestNavigation {
+                    threadPath = path.compactMap {
+                        guard case .thread(let key) = $0 else { return nil }
+                        return key
+                    }
+                    groupPath = path.compactMap {
+                        guard case .group(let route) = $0 else { return nil }
+                        return route
+                    }
+                }
+            })
+    }
+
+    private func splitConversationSurface(thread: ConversationKey?, isSplit: Bool) -> some View {
+        Group {
+            if let thread {
+                threadDestination(thread)
+            } else {
+                detailContent
+            }
+        }
+        .modifier(
+            ChatHeaderOverlay(isVisible: selectedConversationID != nil) {
+                ChatFloatingHeader(
+                    title: thread == nil
+                        ? selectedTitle
+                        : openedThread?.title ?? AppLanguage.localized("Thread"),
+                    subtitle: thread == nil ? headerSubtitle : nil,
+                    onBack: thread != nil
+                        ? popThread : isSplit ? nil : { selectConversation(nil) },
+                    onClose: nil,
+                    onOpenInfo: isSplit && selectedInfoChat != nil
+                        ? {
+                            setInspectorPresented(!showsInspector)
+                        }
+                        : infoAction,
+                    onSearch: searchAction,
+                    notificationChat: headerNotificationChat,
+                    notificationDefaults: chatStore.state.notificationDefaults,
+                    onUpdateNotifications: { chat, request in
+                        Task { await updateHeaderNotifications(chat, request: request) }
+                    },
+                    isUpdatingMute: isUpdatingHeaderMute,
+                    isInspectorPresented: showsInspector,
+                    onForward: forwardThreadAction?.conversation == headerThreadKey
+                        ? forwardThreadAction?.perform : nil,
+                    trailingIsControl: headerThreadKey != nil,
+                    backBadgeCount: backBadgeCount,
+                    backBadgeShowsMessageCount:
+                        chatStore.state.mainUnread?.showUnreadMessageCount ?? false,
+                    leadingAvatar: headerLeading(for: headerThreadKey)
+                ) {
+                    headerTrailing(for: headerThreadKey)
+                }
+                .presenceScope(
+                    ChatPresenceDisplay.scope(for: thread == nil ? selectedInfoChat : nil),
+                    store: chatStore
+                )
+                .padding(.horizontal, chatHeaderHorizontalInset)
+                #if os(iOS)
+                    .padding(.vertical, 12)
+                #endif
+            }
+        )
+        // The shell's Back belongs to the detail pane, not the macOS window toolbar.
+        .navigationBarBackButtonHidden(true)
+        #if os(iOS)
+            .toolbar(.hidden, for: .navigationBar)
+        #endif
     }
 
     #if os(iOS)

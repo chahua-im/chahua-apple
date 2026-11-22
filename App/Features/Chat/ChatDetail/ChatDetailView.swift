@@ -13,7 +13,8 @@ struct ChatDetailView: View {
     // Retain the command handle without subscribing to list/presence/read traffic.
     private let store: ChatStore
     @StateObject private var observation: ChatDetailObservation
-    @StateObject private var model: ConversationTimelineModel
+    @StateObject private var timelineLifetime: ChatDetailTimelineLifetime
+    private var model: ConversationTimelineModel { timelineLifetime.model }
     @ObservedObject private var reactions: MessageReactionController
     @ObservedObject private var pins: ChatPinController
     @ObservedObject private var savedMessages: SavedMessageController
@@ -80,7 +81,6 @@ struct ChatDetailView: View {
     @State private var systemMessageTarget: MessageResponse?
     @State private var systemTargetError: String?
     @State private var systemTargetTask: Task<Void, Never>?
-    @State private var keepsTimelineForPushedDetail = false
     @State private var showsForwardStarted = false
     @State private var selectionToDelete: TimelineBubbleActions?
     @State private var selectionDeleteTask: Task<Void, Never>?
@@ -164,33 +164,35 @@ struct ChatDetailView: View {
         } else {
             fetchReadReceipt = nil
         }
-        _model = StateObject(
-            wrappedValue: ConversationTimelineModel(
-                chatID: chat.id,
-                currentUserID: currentUserID,
-                isGroupChat: chat.kind == .group,
-                source: store,
-                messageStore: store.conversationMessages,
-                threadID: threadID,
-                historyCache: store.historyCache,
-                canFetchHistory: { [weak store] in store?.canFetchHistory == true },
-                canRetryHistory: { [weak store] in store?.canRetryHistory() == true },
-                markRead: { messageID in
-                    try await store.recordAutomaticRead(
-                        .init(chatID: chat.id, threadID: threadID), target: messageID)
-                },
-                fetchReadReceipt: fetchReadReceipt,
-                fetchUnreadMentions: { scope in
-                    try await store.unreadMentions(chatID: chat.id, threadID: scope)
-                },
-                fetchUnreadReactions: { scope, after in
-                    try await store.unreadReactions(chatID: chat.id, threadID: scope, after: after)
-                },
-                acknowledgeReactions: { scope, readThrough in
-                    try await store.acknowledgeReactions(
-                        chatID: chat.id, threadID: scope, readThrough: readThrough)
-                }
-            ))
+        _timelineLifetime = StateObject(
+            wrappedValue: ChatDetailTimelineLifetime(
+                model: ConversationTimelineModel(
+                    chatID: chat.id,
+                    currentUserID: currentUserID,
+                    isGroupChat: chat.kind == .group,
+                    source: store,
+                    messageStore: store.conversationMessages,
+                    threadID: threadID,
+                    historyCache: store.historyCache,
+                    canFetchHistory: { [weak store] in store?.canFetchHistory == true },
+                    canRetryHistory: { [weak store] in store?.canRetryHistory() == true },
+                    markRead: { messageID in
+                        try await store.recordAutomaticRead(
+                            .init(chatID: chat.id, threadID: threadID), target: messageID)
+                    },
+                    fetchReadReceipt: fetchReadReceipt,
+                    fetchUnreadMentions: { scope in
+                        try await store.unreadMentions(chatID: chat.id, threadID: scope)
+                    },
+                    fetchUnreadReactions: { scope, after in
+                        try await store.unreadReactions(
+                            chatID: chat.id, threadID: scope, after: after)
+                    },
+                    acknowledgeReactions: { scope, readThrough in
+                        try await store.acknowledgeReactions(
+                            chatID: chat.id, threadID: scope, readThrough: readThrough)
+                    }
+                )))
     }
 
     private var latestChat: ChatListItem {
@@ -237,11 +239,12 @@ struct ChatDetailView: View {
             }
             .task {
                 guard observation.isCurrentSession else { return }
-                if keepsTimelineForPushedDetail, model.state.content == .ready {
-                    keepsTimelineForPushedDetail = false
-                } else {
-                    await model.open(position: openingPosition)
-                }
+                // A push retains both this model and its native measured viewport.
+                // Back must not close/reopen the window or repeat an entry seek.
+                // The retained observation still handles resets/privacy invalidation;
+                // if it discarded the window, perform the normal fresh open instead.
+                guard model.state.content != .ready else { return }
+                await model.open(position: openingPosition)
             }
             .task(
                 id: ThreadRootRequest(
@@ -410,11 +413,8 @@ struct ChatDetailView: View {
                 selectionDeleteTask = nil
                 forwardRequest = nil
                 isTimelineVisible = false
-                if keepsTimelineForPushedDetail {
-                    model.setReadTrackingActive(false)
-                } else {
-                    model.close(acknowledgingActivity: scenePhase == .active)
-                }
+                timelineLifetime.acknowledgingActivity = scenePhase == .active
+                model.setReadTrackingActive(false)
                 store.unregisterTimeline(model)
                 if isCurrentSession {
                     Task { await drafts.flushDraft(chatID: chat.id, threadID: threadID) }
@@ -1153,7 +1153,6 @@ struct ChatDetailView: View {
             forwardRequest = ForwardSelection(sources: [message])
         }
         actions.openForwardedMessages = { message in
-            keepsTimelineForPushedDetail = true
             recordRequest = RecordSelection(id: message.id, chatID: message.chatId)
         }
         if let imageDetailPresenter {
@@ -1878,7 +1877,6 @@ struct ChatDetailView: View {
                 else {
                     throw APIError.unexpectedResponse
                 }
-                keepsTimelineForPushedDetail = true
                 systemMessageTarget = message
             } catch {
                 guard isCurrentSession, !Task.isCancelled,
@@ -1890,6 +1888,23 @@ struct ChatDetailView: View {
         }
     }
 
+}
+
+/// SwiftUI disappearance also covers pushes. Close only when the detail's identity
+/// is released, after its native controller is no longer a return destination.
+@MainActor
+private final class ChatDetailTimelineLifetime: ObservableObject {
+    let model: ConversationTimelineModel
+    var acknowledgingActivity = false
+    var objectWillChange: ObservableObjectPublisher { model.objectWillChange }
+
+    init(model: ConversationTimelineModel) {
+        self.model = model
+    }
+
+    isolated deinit {
+        model.close(acknowledgingActivity: acknowledgingActivity)
+    }
 }
 
 /// SwiftUI must observe in-memory media checkpoints as well as durable queue snapshots.
