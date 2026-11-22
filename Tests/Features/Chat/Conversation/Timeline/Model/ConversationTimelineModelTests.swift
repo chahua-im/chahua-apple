@@ -3583,7 +3583,6 @@ final class ConversationTimelineModelTests: XCTestCase {
     private func makeHistoryCache() async throws -> (AccountHistoryCache, ChahuaLocalStore) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "TimelineHistory-\(UUID().uuidString)")
-        addTeardownBlock { try FileManager.default.removeItem(at: root) }
         let local = try await Task.detached {
             try ChahuaLocalStore(directory: root, userID: 1)
         }.value
@@ -3591,6 +3590,16 @@ final class ConversationTimelineModelTests: XCTestCase {
         owner.setSession(uid: 1)
         let cache = AccountHistoryCache(owner: owner)
         cache.setSession(uid: 1)
+        addTeardownBlock {
+            // Retire asynchronous cache work and SQLite before removing its files.
+            // Keeping the queue open lets pending writes race directory cleanup.
+            await cache.fenceForSignOut()
+            await MainActor.run { owner.setSession(uid: nil) }
+            try await Task.detached {
+                try local.close()
+                try FileManager.default.removeItem(at: root)
+            }.value
+        }
         return (cache, local)
     }
 

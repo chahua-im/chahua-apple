@@ -8,8 +8,6 @@
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).outbox-refresh</string>
 	</array>
-	<key>ChahuaAPNSEnvironment</key>
-	<string>$(APNS_ENVIRONMENT)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -26,6 +24,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ChahuaAPNSEnvironment</key>
+	<string>$(APNS_ENVIRONMENT)</string>
 	<key>ChahuaSharedKeychainAccessGroup</key>
 	<string>$(CHAHUA_SHARED_KEYCHAIN_ACCESS_GROUP)</string>
 	<key>LSApplicationCategoryType</key>
@@ -39,13 +39,15 @@
 	<string>Take photos to send in messages.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record and send voice messages.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Just Use it</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save images to your Photo Library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Just Use it</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
+		<string>processing</string>
+		<string>remote-notification</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
@@ -63,14 +65,14 @@
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>app.chahua.chat.composer-media-slot</string>
-			<key>UTTypeDescription</key>
-			<string>Chahua composer media slot</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>Chahua composer media slot</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.chahua.chat.composer-media-slot</string>
 		</dict>
 	</array>
 </dict>

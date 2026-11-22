@@ -1,6 +1,7 @@
 #if os(macOS)
     import AppKit
     import ChahuaAPI
+    import CoreGraphics
     import SwiftUI
     import UserNotifications
     import XCTest
@@ -9,6 +10,23 @@
 
     @MainActor
     final class ConversationScrollReturnMacTests: XCTestCase {
+        override func setUpWithError() throws {
+            try super.setUpWithError()
+            // A headless CI process can create NSWindow objects without a usable
+            // desktop. Skip before mounting the shell, not after a timeline timeout.
+            let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+            try XCTSkipUnless(
+                session?[kCGSessionOnConsoleKey as String] as? Bool == true
+                    && session?[kCGSessionLoginDoneKey as String] as? Bool == true
+                    && NSScreen.screens.contains {
+                        CGDisplayIsActive(
+                            CGDirectDisplayID(
+                                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                                    as? NSNumber)?.uint32Value ?? 0)) != 0
+                    },
+                "Scroll-return tests require a logged-in graphical session with an active display")
+        }
+
         func testChatToThreadBackRetainsScrollPosition() async throws {
             try await withShell { shell in
                 let chat = try await self.position(shell, page: .chat, messageID: 1050, inset: 12)
@@ -167,6 +185,18 @@
             }
 
             do {
+                // Match native activity tests: a connected desktop alone does not
+                // guarantee that this process can present a visible AppKit window.
+                NSApplication.shared.unhide(nil)
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                for _ in 0..<50 {
+                    if window.isVisible, window.occlusionState.contains(.visible) { break }
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                try XCTSkipUnless(
+                    window.isVisible && window.occlusionState.contains(.visible),
+                    "Scroll-return tests require a visible AppKit window")
                 await store.loadActiveChats()
                 _ = try await settledTable(in: shell, page: .chat)
                 try await body(shell)
