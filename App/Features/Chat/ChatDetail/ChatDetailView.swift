@@ -32,6 +32,9 @@ struct ChatDetailView: View {
     @Environment(\.isVoicePlaybackHeaderCovered) private var isVoiceHeaderCovered
     #if os(iOS)
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+        // Only iOS uses dismiss for guarded Back. Observing it on macOS also
+        // invalidates the retained chat while a forwarded destination is open.
+        @Environment(\.dismiss) private var dismiss
     #endif
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
@@ -44,7 +47,6 @@ struct ChatDetailView: View {
     @StateObject private var pendingEditor = PendingEditPresentation()
     @StateObject private var localEditExitGuard = FormExitGuard()
     @Environment(\.messageEditExitCoordinator) private var editExitCoordinator
-    @Environment(\.dismiss) private var dismiss
     private var editExitGuard: FormExitGuard {
         editExitCoordinator?.exitGuard ?? localEditExitGuard
     }
