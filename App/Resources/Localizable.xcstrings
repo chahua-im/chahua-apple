@@ -1,50 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Loop" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Loop"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "循环播放"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "循環播放"
-          }
-        }
-      }
-    },
-    "Sticker Pack" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sticker Pack"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "贴纸包"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "貼紙包"
-          }
-        }
-      }
-    },
     "" : {
       "localizations" : {
         "zh-Hans" : {
@@ -62,12 +18,12 @@
       }
     },
     " · " : {
-      "shouldTranslate" : false,
-      "comment" : "Language-neutral punctuation, numeric notation, or already-localized interpolated values; no translatable words."
+      "comment" : "Language-neutral punctuation, numeric notation, or already-localized interpolated values; no translatable words.",
+      "shouldTranslate" : false
     },
     "—" : {
-      "shouldTranslate" : false,
-      "comment" : "Language-neutral punctuation, numeric notation, or already-localized interpolated values; no translatable words."
+      "comment" : "Language-neutral punctuation, numeric notation, or already-localized interpolated values; no translatable words.",
+      "shouldTranslate" : false
     },
     "·" : {
       "comment" : "A period. Language-neutral punctuation, numeric notation, or already-localized interpolated values; no translatable words.",
@@ -940,8 +896,8 @@
       "shouldTranslate" : false
     },
     "%lld/3" : {
-      "shouldTranslate" : false,
-      "comment" : "Language-neutral punctuation, numeric notation, or already-localized interpolated values; no translatable words."
+      "comment" : "Language-neutral punctuation, numeric notation, or already-localized interpolated values; no translatable words.",
+      "shouldTranslate" : false
     },
     "+%lld" : {
       "comment" : "A plus sign with a number above it, used to indicate that a message contains more attachments than can be shown in a single tile.",
@@ -6188,6 +6144,9 @@
         }
       }
     },
+    "Destination Group" : {
+
+    },
     "Developer authentication" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -9939,6 +9898,28 @@
         }
       }
     },
+    "Loop" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loop"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "循环播放"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "循環播放"
+          }
+        }
+      }
+    },
     "Make the first one." : {
       "localizations" : {
         "en" : {
@@ -12880,6 +12861,9 @@
           }
         }
       }
+    },
+    "Prerequisite Group" : {
+
     },
     "Preview" : {
       "comment" : "The section of the sticker upload sheet that displays the sticker preview.",
@@ -17391,6 +17375,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "貼紙媒體 URL 無效。"
+          }
+        }
+      }
+    },
+    "Sticker Pack" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sticker Pack"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "贴纸包"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "貼紙包"
           }
         }
       }

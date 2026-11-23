@@ -20,8 +20,8 @@
 		C0F2000130460000003200C0 /* ChahuaMarkdown in Frameworks */ = {isa = PBXBuildFile; productRef = C0F2000230460000003200C0 /* ChahuaMarkdown */; };
 		C0F3000130460000003200C0 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; platformFilters = (macos, ); productRef = C0F3000230460000003200C0 /* Sparkle */; };
 		C0F4000130460000003200C0 /* ShareExtension/ShareExtensionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F4000230460000003200C0 /* ShareExtension/ShareExtensionModel.swift */; };
-		C0F4000330460000003200C0 /* SharedSessionCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F4000430460000003200C0 /* SharedSessionCredentials.swift */; };
-		C0F4000530460000003200C0 /* StillImagePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F4000630460000003200C0 /* StillImagePreparation.swift */; };
+		C0F4000330460000003200C0 /* Shared/SharedSessionCredentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F4000430460000003200C0 /* Shared/SharedSessionCredentials.swift */; };
+		C0F4000530460000003200C0 /* Shared/StillImagePreparation.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0F4000630460000003200C0 /* Shared/StillImagePreparation.swift */; };
 		C0F4000730460000003200C0 /* libwebp in Frameworks */ = {isa = PBXBuildFile; productRef = C0F1000330460000003200C0 /* libwebp */; };
 /* End PBXBuildFile section */
 
@@ -73,8 +73,8 @@
 		C0F0001530460000003200C0 /* ShareExtension-Local-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "ShareExtension-Local-Info.plist"; sourceTree = "<group>"; };
 		C0F3000430460000003200C0 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		C0F4000230460000003200C0 /* ShareExtension/ShareExtensionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareExtension/ShareExtensionModel.swift; sourceTree = SOURCE_ROOT; };
-		C0F4000430460000003200C0 /* SharedSessionCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/SharedSessionCredentials.swift; sourceTree = SOURCE_ROOT; };
-		C0F4000630460000003200C0 /* StillImagePreparation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/StillImagePreparation.swift; sourceTree = SOURCE_ROOT; };
+		C0F4000430460000003200C0 /* Shared/SharedSessionCredentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/SharedSessionCredentials.swift; sourceTree = SOURCE_ROOT; };
+		C0F4000630460000003200C0 /* Shared/StillImagePreparation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shared/StillImagePreparation.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -140,8 +140,8 @@
 			isa = PBXGroup;
 			children = (
 				C0F4000230460000003200C0 /* ShareExtension/ShareExtensionModel.swift */,
-				C0F4000430460000003200C0 /* SharedSessionCredentials.swift */,
-				C0F4000630460000003200C0 /* StillImagePreparation.swift */,
+				C0F4000430460000003200C0 /* Shared/SharedSessionCredentials.swift */,
+				C0F4000630460000003200C0 /* Shared/StillImagePreparation.swift */,
 			);
 			name = "Extension Test Sources";
 			sourceTree = "<group>";
@@ -377,8 +377,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				C0F4000130460000003200C0 /* ShareExtension/ShareExtensionModel.swift in Sources */,
-				C0F4000330460000003200C0 /* SharedSessionCredentials.swift in Sources */,
-				C0F4000530460000003200C0 /* StillImagePreparation.swift in Sources */,
+				C0F4000330460000003200C0 /* Shared/SharedSessionCredentials.swift in Sources */,
+				C0F4000530460000003200C0 /* Shared/StillImagePreparation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
