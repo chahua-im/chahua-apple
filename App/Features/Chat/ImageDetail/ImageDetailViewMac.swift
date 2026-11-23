@@ -1089,7 +1089,7 @@
         private var userInitiated: Bool
         private let loader = ImageDetailImageLoader()
         private let imageDocument = MessageImageDetailMacDocument()
-        private let progress = NSProgressIndicator()
+        private let progress = WindowBoundProgressIndicator()
         private let statusLabel = NSTextField(labelWithString: "")
         private var subscription: AnyCancellable?
         private var magnificationObservation: NSKeyValueObservation?

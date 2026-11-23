@@ -6,6 +6,10 @@ import XCTest
 
 @testable import chahua_apple
 
+#if os(macOS)
+    import AppKit
+#endif
+
 // The test target compiles the extension model and its shared helpers directly,
 // without linking the app extension or using the user's Keychain session.
 
@@ -65,6 +69,18 @@ final class ShareExtensionModelTests: XCTestCase {
     }
 
     func testDestinationRetryAfterMediaFailureDoesNotRestartUploadPreparation() async throws {
+        #if os(macOS)
+            // The CI timeout stack showed all 64 dispatch workers blocked in NSAnimation.
+            // Off-window loading views must not starve the real item-provider callback below.
+            let detachedIndicators = (0..<80).map { _ in
+                let indicator = WindowBoundProgressIndicator()
+                indicator.style = .spinning
+                indicator.isDisplayedWhenStopped = false
+                indicator.startAnimation(nil)
+                return indicator
+            }
+            defer { detachedIndicators.forEach { $0.stopAnimation(nil) } }
+        #endif
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("share-retry-\(UUID().uuidString).png")
         try makeMediaPNG(red: 255, green: 0, blue: 0).write(to: file)

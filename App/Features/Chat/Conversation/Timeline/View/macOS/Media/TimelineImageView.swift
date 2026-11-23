@@ -26,7 +26,7 @@
         private var animatedForeground: AnimatedImageView?
         private let backdrop = CALayer()
         private let backdropCover = CALayer()
-        private let progress = NSProgressIndicator(frame: .zero)
+        private let progress = WindowBoundProgressIndicator(frame: .zero)
         private let errorImage = NSImageView(frame: .zero)
         private var unavailableLabel: NSTextField?
         private var retryButton: NSButton?
