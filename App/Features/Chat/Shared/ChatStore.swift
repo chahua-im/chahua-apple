@@ -658,10 +658,6 @@ final class ChatStore: ObservableObject {
             syncPreviewGate = .waitingForList
         }
         foregroundActive = active
-        // Fence in-flight publications without presenting an unsubscribe as offline.
-        presenceRequestID = nil
-        unreadRequestID = nil
-        unreadFullRequestID = nil
         outgoingQueue.requestForegroundActive(active)
         if !active {
             drafts.scheduleBackgroundFlush()
@@ -2693,7 +2689,7 @@ final class ChatStore: ObservableObject {
             fallbackConversationStates()
         case .presenceSnapshot(let snapshot):
             guard let presenceRequestID, snapshot.requestId == presenceRequestID,
-                foregroundActive, state.realtimeStatus == .connected
+                state.realtimeStatus == .connected
             else { return }
             // Snapshots are absolute: missing/unauthorized entities must not retain
             // a previous online dot or member count.
@@ -3181,7 +3177,7 @@ final class ChatStore: ObservableObject {
     /// unmount/remount callbacks. Overlapping status stays visible while loading.
     func beginPresenceRequest(_ requestID: UInt64) {
         let scope = presenceScope
-        presenceRequestID = foregroundActive ? requestID : nil
+        presenceRequestID = requestID
         // A watch refresh is not an offline transition. Retain overlapping IDs
         // while loading, but remove data whose UI consumer left the scope.
         let users = Set(scope.userIDs)
@@ -3211,13 +3207,6 @@ final class ChatStore: ObservableObject {
         updated.userPresence.removeAll()
         updated.groupPresence.removeAll()
         state = updated
-    }
-
-    /// A long interruption invalidates visible indicators, not the app-icon badge.
-    func expireInactiveIndicators() {
-        clearPresence()
-        state.conversationUnreadSummaries.removeAll()
-        state.mainUnread = nil
     }
 
     func registerTimeline(_ model: ConversationTimelineModel) {
@@ -3458,26 +3447,23 @@ final class ChatStore: ObservableObject {
             payload.full || unreadFullRequestID == payload.requestId
         else { return }
         if payload.full { unreadFullRequestID = payload.requestId }
-        // An inactive watch has no list views. Its empty full frame is not a
-        // zero-count snapshot for the foreground lists, including Archive.
-        if foregroundActive {
-            var summaries = payload.full ? [] : state.conversationUnreadSummaries
-            for summary in payload.summaries where Self.unreadSummaryKeys.contains(summary.key) {
-                if let index = summaries.firstIndex(where: { $0.key == summary.key }) {
-                    summaries[index] = summary
-                } else {
-                    summaries.append(summary)
-                }
+        // List summaries stay subscribed independently of our session's activity.
+        var summaries = payload.full ? [] : state.conversationUnreadSummaries
+        for summary in payload.summaries where Self.unreadSummaryKeys.contains(summary.key) {
+            if let index = summaries.firstIndex(where: { $0.key == summary.key }) {
+                summaries[index] = summary
+            } else {
+                summaries.append(summary)
             }
-            if state.conversationUnreadSummaries != summaries {
-                state.conversationUnreadSummaries = summaries
-            }
+        }
+        if state.conversationUnreadSummaries != summaries {
+            state.conversationUnreadSummaries = summaries
         }
         if payload.full || payload.appBadgeCount != nil {
             let appBadgeCount = payload.appBadgeCount.map { max(0, $0) }
             if state.appBadgeCount != appBadgeCount { state.appBadgeCount = appBadgeCount }
         }
-        if foregroundActive && (payload.full || payload.mainUnread != nil) {
+        if payload.full || payload.mainUnread != nil {
             if state.mainUnread != payload.mainUnread { state.mainUnread = payload.mainUnread }
         }
     }

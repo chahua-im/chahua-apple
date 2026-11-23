@@ -20,11 +20,6 @@ final class RealtimeCoordinator: ObservableObject {
     private let onInvalidToken: @MainActor @Sendable () async -> Void
     private let sleep: Sleep
     private let jitter: @Sendable () -> Double
-    private let now: () -> ContinuousClock.Instant
-    // Bound stale display state even when the socket survives in the background.
-    private static let inactiveIndicatorRetention: Duration = .seconds(60)
-    private var inactiveIndicatorDeadline: ContinuousClock.Instant?
-    private var inactiveIndicatorExpiry: Task<Void, Never>?
     private var uid: Int32?
     private var activeScenes = Set<UUID>()
     private var userIsActive = true
@@ -81,15 +76,13 @@ final class RealtimeCoordinator: ObservableObject {
         store: ChatStore,
         onInvalidToken: @escaping @MainActor @Sendable () async -> Void,
         sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
-        jitter: @escaping @Sendable () -> Double = { Double.random(in: 0...0.2) },
-        now: @escaping () -> ContinuousClock.Instant = { .now }
+        jitter: @escaping @Sendable () -> Double = { Double.random(in: 0...0.2) }
     ) {
         self.provider = provider
         self.store = store
         self.onInvalidToken = onInvalidToken
         self.sleep = sleep
         self.jitter = jitter
-        self.now = now
         presenceObservation = Publishers.Merge(
             store.presenceScopeChanges,
             store.presencePrivacyInvalidations
@@ -153,13 +146,12 @@ final class RealtimeCoordinator: ObservableObject {
         if active { activeScenes.insert(id) } else { activeScenes.remove(id) }
         let isActive = !activeScenes.isEmpty
         guard wasActive != isActive else { return }
-        updateInactiveIndicatorRetention(active: isActive)
         store.setForegroundActive(isActive)
         if previousAppState != appState, let connection {
             enqueuePresence(
                 .appState(appState), on: connection, generation: generation, attempt: attempt)
         }
-        schedulePresenceWatch()
+        if isActive { schedulePresenceWatch() }
         scheduleConversationWatches(includeUnread: true)
         if isActive {
             if store.syncMode == .active { needsRecovery = true }
@@ -179,26 +171,6 @@ final class RealtimeCoordinator: ObservableObject {
             recovery?.cancel()
             recovery = nil
             store.cancelRealtimeRecovery()
-        }
-    }
-
-    private func updateInactiveIndicatorRetention(active: Bool) {
-        inactiveIndicatorExpiry?.cancel()
-        inactiveIndicatorExpiry = nil
-        if active {
-            // Check synchronously: iOS can resume before a suspended timer runs.
-            if let deadline = inactiveIndicatorDeadline, now() >= deadline {
-                store.expireInactiveIndicators()
-            }
-            inactiveIndicatorDeadline = nil
-        } else {
-            inactiveIndicatorDeadline = now().advanced(by: Self.inactiveIndicatorRetention)
-            inactiveIndicatorExpiry = Task { [weak self, sleep] in
-                do { try await sleep(Self.inactiveIndicatorRetention) } catch { return }
-                guard let self, !Task.isCancelled, self.activeScenes.isEmpty else { return }
-                self.store.expireInactiveIndicators()
-                self.inactiveIndicatorExpiry = nil
-            }
         }
     }
 
@@ -349,7 +321,8 @@ final class RealtimeCoordinator: ObservableObject {
             guard let self, !Task.isCancelled else { return }
             self.presenceWatchTask = nil
             guard self.uid != nil, let socket = self.connection else { return }
-            let scope = self.activeScenes.isEmpty ? PresenceScope() : self.store.presenceScope
+            // Receiving other users' presence does not advertise this session as active.
+            let scope = self.store.presenceScope
             guard !scope.isEmpty || self.hasPresenceWatch else { return }
             self.hasPresenceWatch = !scope.isEmpty
             self.nextPresenceRequestID += 1
@@ -378,14 +351,14 @@ final class RealtimeCoordinator: ObservableObject {
                 let requestID = self.nextConversationRequestID
                 self.store.beginConversationUnreadWatch(requestID: requestID)
                 #if os(macOS)
-                    // Dock badges stay live with no windows; only visible-list views
-                    // and per-conversation state watches depend on foreground activity.
+                    // Dock badges stay live with no windows. On iOS, keep the
+                    // existing foreground-only app-icon subscription policy.
                     let appBadge = true
                 #else
                     let appBadge = active
                 #endif
                 self.enqueuePresence(
-                    .unread(requestID, active ? ChatStore.unreadSummaryViews : [], appBadge),
+                    .unread(requestID, ChatStore.unreadSummaryViews, appBadge),
                     on: socket, generation: self.generation, attempt: self.attempt)
             }
             self.nextConversationRequestID &+= 1
@@ -541,9 +514,6 @@ final class RealtimeCoordinator: ObservableObject {
         pendingSend?.cancel()
         pongDeadline?.cancel()
         recovery?.cancel()
-        inactiveIndicatorExpiry?.cancel()
-        inactiveIndicatorExpiry = nil
-        inactiveIndicatorDeadline = nil
         presenceWatchTask?.cancel()
         presenceWatchTask = nil
         hasPresenceWatch = false
