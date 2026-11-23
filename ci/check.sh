@@ -116,12 +116,18 @@ compile() {
 # Bound individual tests as well as the Jenkins job: native AppKit event tracking
 # can block the main thread, preventing an async test's own deadline from running.
 test() {
-  local ios_destination
+  local ios_destination ios_profile_runtime macos_profile_runtime
+  # Xcode can wrap instrumented SwiftPM C products (including libwebp) in dynamic
+  # frameworks for hosted tests without linking the profiling runtime. Resolve the
+  # archive from the selected toolchain and pass it to every test link. Unlike a
+  # Clang-only driver flag, the archive works with both Clang and Swift link drivers.
 
   prepare_build_root
   rm -rf "$BUILD_ROOT/TestResults"
   mkdir -p "$BUILD_ROOT/TestResults"
   ios_destination="$(select_ios_destination)"
+  ios_profile_runtime="$(xcrun --sdk iphonesimulator clang --print-file-name=libclang_rt.profile_iossim.a)"
+  macos_profile_runtime="$(xcrun --sdk macosx clang --print-file-name=libclang_rt.profile_osx.a)"
 
   xcodebuild test \
     -project "$PROJECT" \
@@ -136,6 +142,7 @@ test() {
     -maximum-test-execution-time-allowance 120 \
     -clonedSourcePackagesDirPath "$BUILD_ROOT/SourcePackages/iOS" \
     -resultBundlePath "$BUILD_ROOT/TestResults/chahua-ios.xcresult" \
+    OTHER_LDFLAGS="\$(inherited) \"$ios_profile_runtime\"" \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO
 
@@ -152,6 +159,7 @@ test() {
     -default-test-execution-time-allowance 60 \
     -maximum-test-execution-time-allowance 120 \
     -resultBundlePath "$BUILD_ROOT/TestResults/chahua-macos.xcresult" \
+    OTHER_LDFLAGS="\$(inherited) \"$macos_profile_runtime\"" \
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY=- \
     CODE_SIGN_ENTITLEMENTS= \
