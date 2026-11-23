@@ -79,7 +79,11 @@ final class ShareExtensionModelTests: XCTestCase {
                 indicator.startAnimation(nil)
                 return indicator
             }
-            defer { detachedIndicators.forEach { $0.stopAnimation(nil) } }
+            defer {
+                for indicator in detachedIndicators {
+                    indicator.stopAnimation(nil)
+                }
+            }
         #endif
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("share-retry-\(UUID().uuidString).png")
