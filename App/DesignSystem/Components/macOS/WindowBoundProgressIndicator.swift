@@ -2,9 +2,9 @@
     import AppKit
 
     /// AppKit timeline and media hosts need a native indicator, not a SwiftUI host per row.
-    /// NSProgressIndicator can retain a blocking animation worker after an offscreen start.
-    /// Defer animation until attachment and stop it on hide/detach so discarded loading views
-    /// cannot exhaust the process-wide dispatch pool and stall unrelated item providers.
+    /// AppKit's default threaded animation reserves dispatch workers and can starve item
+    /// providers when many indicators are active. Use native timer-based animation, and
+    /// suspend it while hidden/detached so offscreen loading views do no animation work.
     @MainActor
     final class WindowBoundProgressIndicator: NSProgressIndicator {
         private var animationRequested = false
@@ -13,6 +13,16 @@
             NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification,
             NSWindow.didChangeOcclusionStateNotification,
         ]
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            usesThreadedAnimation = false
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            usesThreadedAnimation = false
+        }
 
         override func startAnimation(_ sender: Any?) {
             animationRequested = true
