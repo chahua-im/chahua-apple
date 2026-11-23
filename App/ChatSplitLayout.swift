@@ -660,6 +660,7 @@ struct ChatHeaderOverlay<Header: View>: ViewModifier {
                                     Color.clear
                                         .onAppear { headerHeight = geometry.size.height }
                                         .onChange(of: geometry.size.height) { _, height in
+                                            ScrollPerformanceTrace.event("Header.Height")
                                             headerHeight = height
                                         }
                                 }

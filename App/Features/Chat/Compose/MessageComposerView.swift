@@ -218,6 +218,8 @@ struct MessageComposerView: View {
     }
 
     var body: some View {
+        let _ = ScrollPerformanceTrace.logChanges(Self.self)
+        let _ = ScrollPerformanceTrace.event("Composer.Body")
         VStack(spacing: 0) {
             ComposerMentionSuggestions(
                 input: input, wireText: text,
@@ -1101,7 +1103,10 @@ struct ChatComposerOverlay<Composer: View>: ViewModifier {
                     let bottom = geometry.frame(in: .global).maxY
                     Color.clear
                         .onAppear { viewportBottom = bottom }
-                        .onChange(of: bottom) { _, bottom in viewportBottom = bottom }
+                        .onChange(of: bottom) { _, bottom in
+                            ScrollPerformanceTrace.event("Composer.ViewportBottom")
+                            viewportBottom = bottom
+                        }
                 }
                 #if os(iOS)
                     .ignoresSafeArea(.container, edges: .bottom)
@@ -1114,7 +1119,10 @@ struct ChatComposerOverlay<Composer: View>: ViewModifier {
                             let top = geometry.frame(in: .global).minY
                             Color.clear
                                 .onAppear { composerTop = top }
-                                .onChange(of: top) { _, top in composerTop = top }
+                                .onChange(of: top) { _, top in
+                                    ScrollPerformanceTrace.event("Composer.Top")
+                                    composerTop = top
+                                }
                         }
                     }
             }

@@ -37,6 +37,8 @@ struct ForwardedRecordsView: View {
     }
 
     var body: some View {
+        let _ = ScrollPerformanceTrace.logChanges(Self.self)
+        let _ = ScrollPerformanceTrace.event("Forwarded.Body")
         profileContent
             .modifier(ForwardedRecordsHeader())
             .environment(\.chatComposerInset, 0)

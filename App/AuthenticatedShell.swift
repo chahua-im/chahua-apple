@@ -223,6 +223,8 @@ struct AuthenticatedShell: View {
     }
 
     var body: some View {
+        ScrollPerformanceTrace.logChanges(Self.self)
+        ScrollPerformanceTrace.event("Shell.Body")
         bindNavigationActions()
         return GeometryReader { geometry in
             let wantsSplit = geometry.size.width >= ChatSplitMetrics.splitThreshold

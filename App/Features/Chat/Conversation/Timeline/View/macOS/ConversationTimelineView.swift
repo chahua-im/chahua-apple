@@ -78,6 +78,7 @@
         }
 
         private func configure(_ controller: TimelineViewController) {
+            ScrollPerformanceTrace.event("MacTimeline.Configure")
             controller.configure(
                 actions: actions,
                 interactionContext: interactionContext,

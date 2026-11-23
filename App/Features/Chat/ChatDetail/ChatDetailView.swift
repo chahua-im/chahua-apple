@@ -397,6 +397,7 @@ struct ChatDetailView: View {
     }
 
     var body: some View {
+        ScrollPerformanceTrace.logChanges(Self.self)
         ScrollPerformanceTrace.event("Detail.Body")
         return
             mutationFeedbackSurface
