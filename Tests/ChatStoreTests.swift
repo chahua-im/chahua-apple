@@ -777,6 +777,7 @@ final class ChatStoreTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 1400, height: 850),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(NSSize(width: 1400, height: 850))
@@ -841,6 +842,7 @@ final class ChatStoreTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 700, height: 1000),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.makeKeyAndOrderFront(nil)
@@ -922,6 +924,7 @@ final class ChatStoreTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 700, height: 800),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.makeKeyAndOrderFront(nil)
@@ -1012,6 +1015,7 @@ final class ChatStoreTests: XCTestCase {
                 let window = NSWindow(
                     contentRect: CGRect(x: 0, y: 0, width: 560, height: 700),
                     styleMask: [.titled], backing: .buffered, defer: false)
+                window.animationBehavior = .none
                 window.isReleasedWhenClosed = false
                 window.contentViewController = host
                 window.makeKeyAndOrderFront(nil)
@@ -3447,6 +3451,7 @@ final class ChatStoreTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 600, height: 650),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(CGSize(width: 600, height: 650))

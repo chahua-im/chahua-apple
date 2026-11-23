@@ -128,6 +128,7 @@ import ChahuaAPI
                 contentRect: NSRect(x: 0, y: 0, width: 300, height: 560),
                 styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.titlebarAppearsTransparent = true
             window.contentViewController = host
@@ -177,6 +178,7 @@ import ChahuaAPI
             root.addSubview(controls)
             let window = NSWindow(
                 contentRect: root.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = root
             window.makeKeyAndOrderFront(nil)
@@ -198,6 +200,7 @@ import ChahuaAPI
                 contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
@@ -251,6 +254,7 @@ import ChahuaAPI
                 contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true

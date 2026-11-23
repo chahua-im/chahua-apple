@@ -1786,6 +1786,7 @@ final class RealtimeCoordinatorTests: XCTestCase {
             defer { observation.cancel() }
             let window = NSWindow(
                 contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             defer { window.close() }
             // Like make/update/dismantleNSView, attachment is synchronous in the

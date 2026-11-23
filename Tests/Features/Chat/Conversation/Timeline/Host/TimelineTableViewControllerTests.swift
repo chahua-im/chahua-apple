@@ -46,6 +46,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 600, height: 800),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = controller
             window.setContentSize(NSSize(width: 600, height: 800))
@@ -187,6 +188,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 600, height: 1000),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(NSSize(width: 600, height: 1000))
@@ -272,6 +274,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 600, height: 800),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = controller
             window.setContentSize(NSSize(width: 600, height: 800))
@@ -356,6 +359,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 1200, height: 600),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(NSSize(width: 1200, height: 600))
@@ -477,6 +481,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 900, height: 500),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(NSSize(width: 900, height: 500))
@@ -663,6 +668,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = controller
             window.setContentSize(NSSize(width: 400, height: 400))
@@ -1059,6 +1065,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 320, height: 900),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = controller
             window.setContentSize(NSSize(width: 320, height: 900))
@@ -1227,6 +1234,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: widths[0], height: 1100),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.appearance = NSAppearance(named: .aqua)
             window.backgroundColor = .white
@@ -1262,6 +1270,7 @@
             let window = NSWindow(
                 contentRect: controller.view.frame, styleMask: styleMask, backing: .buffered,
                 defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = controller
             window.orderFront(nil)
@@ -1400,6 +1409,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = controller
             window.setContentSize(NSSize(width: 800, height: 600))
@@ -1491,6 +1501,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(NSSize(width: 800, height: 500))
@@ -1635,6 +1646,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = controller
             window.setContentSize(NSSize(width: 800, height: 500))

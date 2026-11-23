@@ -54,6 +54,9 @@ final class BubbleMediaLayoutTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 420, height: 460),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            // Headless window transitions can retain NSAnimation dispatch workers.
+            // These tests need a real window, but do not test its opening/closing animation.
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView?.addSubview(media)
             window.orderFront(nil)

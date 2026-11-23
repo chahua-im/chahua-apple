@@ -98,6 +98,7 @@ final class FriendRequestProfileContextTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 560, height: 700),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.makeKeyAndOrderFront(nil)

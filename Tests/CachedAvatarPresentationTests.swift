@@ -652,6 +652,7 @@ private final class AvatarPresentationHost {
                 backing: .buffered,
                 defer: false
             )
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
         #else
             controller = UIHostingController(rootView: root)
@@ -670,6 +671,7 @@ private final class AvatarPresentationHost {
             controller.view = view
             window = NSWindow(
                 contentRect: bounds, styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
         }
     #else

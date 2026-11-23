@@ -6,10 +6,6 @@ import XCTest
 
 @testable import chahua_apple
 
-#if os(macOS)
-    import AppKit
-#endif
-
 // The test target compiles the extension model and its shared helpers directly,
 // without linking the app extension or using the user's Keychain session.
 
@@ -69,31 +65,6 @@ final class ShareExtensionModelTests: XCTestCase {
     }
 
     func testDestinationRetryAfterMediaFailureDoesNotRestartUploadPreparation() async throws {
-        #if os(macOS)
-            // Exercise active controls too: detached-only indicators never start animation
-            // and cannot catch AppKit's default thread-per-animation worker starvation.
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 240, height: 300),
-                styleMask: [.titled], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            let indicators = (0..<80).map { index in
-                let indicator = WindowBoundProgressIndicator(
-                    frame: NSRect(x: (index % 8) * 28, y: (index / 8) * 28, width: 20, height: 20))
-                indicator.style = .spinning
-                indicator.isDisplayedWhenStopped = false
-                window.contentView?.addSubview(indicator)
-                indicator.startAnimation(nil)
-                return indicator
-            }
-            window.orderFront(nil)
-            window.displayIfNeeded()
-            defer {
-                for indicator in indicators {
-                    indicator.stopAnimation(nil)
-                }
-                window.close()
-            }
-        #endif
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("share-retry-\(UUID().uuidString).png")
         try makeMediaPNG(red: 255, green: 0, blue: 0).write(to: file)

@@ -64,6 +64,7 @@ final class MessageTextLayoutTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 24, height: 20),
                 styleMask: [.borderless], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = view
             window.orderFront(nil)
@@ -463,6 +464,7 @@ final class MessageTextLayoutTests: XCTestCase {
                 contentRect: NSRect(x: 0, y: 0, width: 160, height: 100),
                 styleMask: [.borderless], backing: .buffered, defer: false
             )
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             let previousCursor = NSCursor.current
             defer {
@@ -922,6 +924,7 @@ final class MessageTextLayoutTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(origin: .zero, size: prepared.geometry.size),
                 styleMask: [.borderless], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = text
             window.makeFirstResponder(text)
@@ -1157,6 +1160,7 @@ final class MessageTextLayoutTests: XCTestCase {
             let window = NSWindow(
                 contentRect: viewport.frame, styleMask: [.borderless], backing: .buffered,
                 defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = viewport
             window.orderFront(nil)
@@ -1443,6 +1447,7 @@ final class MessageTextLayoutTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(origin: .zero, size: prepared.geometry.size),
                 styleMask: [.borderless], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = text
             defer { window.close() }

@@ -67,6 +67,7 @@ import XCTest
             let window = NSWindow(
                 contentRect: CGRect(origin: .zero, size: layout.size),
                 styleMask: [.borderless], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = native
             window.orderFront(nil)
@@ -369,6 +370,7 @@ import XCTest
                     let window = NSWindow(
                         contentRect: CGRect(origin: .zero, size: layout.size),
                         styleMask: [.borderless], backing: .buffered, defer: false)
+                    window.animationBehavior = .none
                     window.isReleasedWhenClosed = false
                     window.contentViewController = host
                     window.setContentSize(layout.size)
@@ -511,6 +513,7 @@ import XCTest
             let cell = TimelineTableCellView(frame: CGRect(origin: .zero, size: first.layout.size))
             let window = NSWindow(
                 contentRect: cell.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = cell
             window.orderFront(nil)
@@ -931,6 +934,7 @@ final class TimelineReactionChipTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(origin: .zero, size: layout.size),
                 styleMask: [.borderless], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = native
             window.orderFront(nil)

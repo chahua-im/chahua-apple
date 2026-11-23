@@ -93,7 +93,7 @@ final class StickerMediaSurfaceView: StickerNativeView {
         private var scrollObservation: NSKeyValueObservation?
     #else
         private let statusLabel = NSTextField(wrappingLabelWithString: "")
-        private let progress = WindowBoundProgressIndicator(frame: .zero)
+        private let progress = NSProgressIndicator(frame: .zero)
         private let retryButton = NSButton(title: "", target: nil, action: nil)
         private weak var observedClipView: NSClipView?
         override var isFlipped: Bool { true }

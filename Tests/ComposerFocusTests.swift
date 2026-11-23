@@ -333,6 +333,7 @@ final class ComposerFocusTests: XCTestCase {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: 720),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(NSSize(width: 800, height: 720))
@@ -575,6 +576,7 @@ final class ComposerFocusTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: width, height: metrics.height(for: width)),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = host
             window.makeKeyAndOrderFront(nil)
@@ -616,6 +618,7 @@ final class ComposerFocusTests: XCTestCase {
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 320, height: 240),
                 styleMask: [.titled], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             let host = NSHostingController(rootView: Color.clear)
             window.contentViewController = host
@@ -1549,6 +1552,7 @@ private final class FocusComposerHarness {
                 contentRect: NSRect(x: 0, y: 0, width: 800, height: height), styleMask: [.titled],
                 backing: .buffered,
                 defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(NSSize(width: 800, height: height))

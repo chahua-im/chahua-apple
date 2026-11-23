@@ -948,6 +948,7 @@ enum ScopeTestFixtures {
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
                 styleMask: [.borderless], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             defer { window.close() }
             let root = try XCTUnwrap(window.contentView)

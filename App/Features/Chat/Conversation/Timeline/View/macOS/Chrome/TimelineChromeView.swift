@@ -351,7 +351,7 @@
 
     @MainActor
     private final class TimelineLoadingPanel: NSView {
-        private let progress = WindowBoundProgressIndicator()
+        private let progress = NSProgressIndicator()
         private let material = timelineChromeMaterial(cornerRadius: ChahuaTheme.Radius.medium)
         override var isFlipped: Bool { true }
 
@@ -431,7 +431,7 @@
         private let background: NSVisualEffectView
         private let label = timelineChromeLabel()
         private let button = TimelineChromeButton(title: "")
-        private let progress = WindowBoundProgressIndicator()
+        private let progress = NSProgressIndicator()
         private var isLoading = false
         override var isFlipped: Bool { true }
 
@@ -505,7 +505,7 @@
         }
 
         var onRetry: (() -> Void)?
-        private let progress = WindowBoundProgressIndicator()
+        private let progress = NSProgressIndicator()
         private let retry = TimelineChromeButton(title: "")
         private let label = timelineChromeLabel()
         override var isFlipped: Bool { true }

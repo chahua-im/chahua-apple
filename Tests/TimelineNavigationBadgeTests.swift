@@ -13,6 +13,7 @@
             let window = NSWindow(
                 contentRect: canvas.bounds, styleMask: [.borderless], backing: .buffered,
                 defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentView = canvas
             defer { window.close() }

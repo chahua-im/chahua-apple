@@ -20,7 +20,7 @@
         private let reactionSurface = TimelineMenuSurface(cornerRadius: 26, opaque: true)
         private let actionSurface = TimelineMenuSurface(cornerRadius: 14)
         private let pendingSurface = TimelineMenuSurface(cornerRadius: 14)
-        private let progress = WindowBoundProgressIndicator()
+        private let progress = NSProgressIndicator()
         private let sourceHighlight = CAShapeLayer()
         private var pickerView: TimelineReactionPickerView?
         private var pickerPlaceholder: TimelineReactionPickerPlaceholder?

@@ -322,6 +322,7 @@
             let window = NSWindow(
                 contentRect: NSRect(x: origin.x + x, y: origin.y + 40, width: 240, height: 180),
                 styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             NSApplication.shared.unhide(nil)
             NSApplication.shared.activate(ignoringOtherApps: true)

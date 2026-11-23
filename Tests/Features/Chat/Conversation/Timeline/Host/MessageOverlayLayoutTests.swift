@@ -26,6 +26,7 @@
             let window = NSWindow(
                 contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
                 styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.animationBehavior = .none
             window.isReleasedWhenClosed = false
             window.contentViewController = host
             window.setContentSize(CGSize(width: 800, height: 600))
@@ -120,6 +121,7 @@
                     contentRect: CGRect(origin: .zero, size: size),
                     styleMask: [.titled, .closable], backing: .buffered,
                     defer: false)
+                window.animationBehavior = .none
                 window.isReleasedWhenClosed = false
                 window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                 window.contentViewController = host
